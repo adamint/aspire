@@ -64,8 +64,7 @@ export class TestRunSessionManager {
                 options.dcpServer,
                 options.terminalProvider,
                 options.removeAspireDebugSession,
-                lease.sessionId,
-                'test');
+                lease.sessionId);
 
             options.addAspireDebugSession(aspireDebugSession);
             this.leasedDebugSessionDisposers.set(lease.id, () => aspireDebugSession.dispose());

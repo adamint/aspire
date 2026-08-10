@@ -565,16 +565,16 @@ export class AppHostDataRepository {
         this._updateLoadingContext();
     }
 
-    async fetchAppHostsOnce(cancellationToken?: vscode.CancellationToken, includeResources = true): Promise<AppHostDisplayInfo[]> {
+    async fetchRunningAppHostsOnce(cancellationToken?: vscode.CancellationToken): Promise<AppHostDisplayInfo[]> {
         const appHosts = await this._runCliJson<AppHostDisplayInfo[] | AppHostDisplayInfo>(
             'aspire ps',
             this._withNoLogo(['ps', '--format', 'json']),
             { cancellationToken });
-        const appHostList = Array.isArray(appHosts) ? appHosts : [appHosts];
-        if (!includeResources) {
-            return appHostList.map(appHost => ({ ...appHost, resources: undefined }));
-        }
+        return Array.isArray(appHosts) ? appHosts : [appHosts];
+    }
 
+    async fetchAppHostsOnce(): Promise<AppHostDisplayInfo[]> {
+        const appHostList = await this.fetchRunningAppHostsOnce();
         const appHostsWithResources = await Promise.allSettled(appHostList.map(async appHost => ({
             ...appHost,
             resources: await this._fetchAppHostResourcesOnce(appHost.appHostPath),

@@ -177,11 +177,6 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Aspire panel - running app hosts tree view
   const dataRepository = new AppHostDataRepository(terminalProvider, appHostDiscoveryService, configInfoProvider);
-  appHostLaunchService.setEditorSessionProvider(() => aspireExtensionContext.aspireDebugSessions);
-  appHostLaunchService.setRunningAppHostProvider(async token => {
-    const appHosts = await dataRepository.fetchAppHostsOnce(token, false);
-    return appHosts.map(appHost => ({ appHostPath: appHost.appHostPath }));
-  });
   const appHostTreeProvider = new AspireAppHostTreeProvider(dataRepository, terminalProvider, appHostLaunchService, context.globalState);
   const appHostTreeView = vscode.window.createTreeView('aspire-vscode.appHosts', {
     treeDataProvider: appHostTreeProvider,
@@ -351,7 +346,7 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(cliUpdateCommandRegistration, cliUpdateSelfCommandRegistration, settingsCommandRegistration, openLocalSettingsCommandRegistration, openGlobalSettingsCommandRegistration, runAppHostCommandRegistration, debugAppHostCommandRegistration);
   context.subscriptions.push(installCliRegistration, verifyCliInstalledRegistration);
 
-  const debugConfigProvider = new AspireDebugConfigurationProvider(appHostDiscoveryService, appHostLaunchService);
+  const debugConfigProvider = new AspireDebugConfigurationProvider(appHostDiscoveryService);
   context.subscriptions.push(
     vscode.debug.registerDebugConfigurationProvider('aspire', debugConfigProvider, vscode.DebugConfigurationProviderTriggerKind.Dynamic)
   );
@@ -386,6 +381,11 @@ export async function activate(context: vscode.ExtensionContext) {
   const appHostLifecycleToolService = new AppHostLifecycleToolService({
     launchService: appHostLaunchService,
     discoveryService: appHostDiscoveryService,
+    getEditorSessions: () => aspireExtensionContext.aspireDebugSessions,
+    getRunningAppHosts: async token => {
+      const appHosts = await dataRepository.fetchRunningAppHostsOnce(token);
+      return appHosts.map(appHost => ({ appHostPath: appHost.appHostPath }));
+    },
   });
   context.subscriptions.push(appHostLifecycleToolService);
   const appHostLifecycleToolRegistration = registerAppHostLifecycleTools(appHostLifecycleToolService);
@@ -431,7 +431,7 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(appHostLaunchService.onDidChangeLaunchingState(fireStateChanged));
   context.subscriptions.push(appHostTreeProvider.onDidChangeStoppingState(fireStateChanged));
   context.subscriptions.push(aspireExtensionContext.onDidChangeDebugSessions(fireStateChanged));
-  const e2eStateFileBridge = createE2eStateFileBridge(context, aspireExtensionContext, dataRepository, appHostLaunchService, appHostTreeProvider, terminalProvider, onDidChangeStateEmitter.event, appHostLifecycleToolRegistration.tools);
+  const e2eStateFileBridge = createE2eStateFileBridge(context, aspireExtensionContext, dataRepository, appHostLaunchService, appHostTreeProvider, terminalProvider, onDidChangeStateEmitter.event);
   context.subscriptions.push(e2eStateFileBridge);
 
   await cliPathEnvironmentInitialization;

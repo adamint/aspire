@@ -50,7 +50,6 @@ suite('TestRunSessionManager', () => {
         });
         debugSessionEvents.start(createDebugSession(lease.sessionId));
 
-        assert.strictEqual(addedSessions[0].operationKind, 'test');
         await manager.releaseTestRunSession(lease.id);
         await manager.releaseTestRunSession(lease.id);
 

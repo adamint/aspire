@@ -1057,41 +1057,6 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         }
     });
 
-    test('responds to disconnect without reentering the Aspire parent stop', () => {
-        const parentDebugSession = {
-            id: 'aspire-session',
-            type: 'aspire',
-            name: 'Aspire',
-            workspaceFolder: undefined,
-            configuration: {
-                type: 'aspire',
-                request: 'launch',
-                name: 'Aspire',
-                program: '/workspace/apphost.cs',
-                command: 'run',
-            },
-            customRequest: sinon.stub(),
-            getDebugProtocolBreakpoint: sinon.stub(),
-        };
-        const terminalProvider = {
-            isCliDebugLoggingEnabled: () => false,
-        };
-        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
-        const messages: any[] = [];
-        const stopDebuggingStub = sinon.stub(vscode.debug, 'stopDebugging').resolves();
-        const subscription = aspireDebugSession.onDidSendMessage(message => messages.push(message));
-
-        try {
-            aspireDebugSession.handleMessage({ command: 'disconnect', seq: 7 });
-
-            assert.strictEqual(messages.some(message => message.command === 'disconnect'), true);
-            assert.strictEqual(stopDebuggingStub.called, false);
-        }
-        finally {
-            subscription.dispose();
-        }
-    });
-
     test('starts resource debug sessions from the workspace folder containing the project', async () => {
         const parentDebugSession = {
             id: 'aspire-session',

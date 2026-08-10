@@ -88,14 +88,6 @@ export interface Notification {
     dismiss(): Promise<void>;
 }
 
-export interface ModalDialog {
-    getMessage(): Promise<string>;
-    getDetails(): Promise<string>;
-    getButtons(): Promise<WebElement[]>;
-    pushButton(title: string): Promise<void>;
-    close(): Promise<void>;
-}
-
 export interface TerminalView {
     getCurrentChannel(): Promise<string>;
     getText(): Promise<string>;
@@ -127,4 +119,3 @@ export const InputBox = extester.InputBox as { create(timeout?: number): Promise
 export const BottomBarPanel = extester.BottomBarPanel as new () => { openTerminalView(): Promise<TerminalView> };
 export const EditorView = extester.EditorView as new () => EditorView;
 export const WebView = extester.WebView as new () => WebView;
-export const ModalDialog = extester.ModalDialog as new () => ModalDialog;

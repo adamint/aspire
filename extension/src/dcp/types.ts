@@ -199,7 +199,6 @@ export interface AspireResourceExtendedDebugConfiguration extends vscode.DebugCo
 }
 
 export type AspireCommandType = 'run' | 'deploy' | 'publish' | 'do';
-export type AspireOperationKind = AspireCommandType | 'test' | 'unknown';
 
 export interface AspireExtendedDebugConfiguration extends vscode.DebugConfiguration {
     program: string;
@@ -209,8 +208,6 @@ export interface AspireExtendedDebugConfiguration extends vscode.DebugConfigurat
     args?: string[];
     step?: string;
     skipCliAvailabilityCheck?: boolean;
-    /** Internal per-activation token stamped by `AppHostLaunchService`. */
-    launchedByExtension?: string;
     env?: { [key: string]: string };
 }
 
