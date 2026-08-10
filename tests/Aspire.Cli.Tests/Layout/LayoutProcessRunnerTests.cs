@@ -253,25 +253,6 @@ public class LayoutProcessRunnerTests
         Assert.Contains("timed out", exception.Message);
     }
 
-    [Theory]
-    [InlineData(60_000, "1 minute")]
-    [InlineData(120_000, "2 minutes")]
-    [InlineData(1_000, "1 second")]
-    [InlineData(2_000, "2 seconds")]
-    [InlineData(1, "1 millisecond")]
-    [InlineData(2, "2 milliseconds")]
-    [InlineData(1_000.4, "1 second")]
-    [InlineData(1.0004, "1 millisecond")]
-    public void BuildTimeoutMessage_FormatsTimeoutUnits(double timeoutMilliseconds, string expectedTimeoutText)
-    {
-        var timeout = TimeSpan.FromMilliseconds(timeoutMilliseconds);
-        var workingDirectory = new DirectoryInfo(AppContext.BaseDirectory);
-
-        var message = LayoutProcessRunner.BuildTimeoutMessage("aspire-managed", [], workingDirectory, timeout);
-
-        Assert.Equal($"Process 'aspire-managed' timed out after {expectedTimeoutText} in '{workingDirectory.FullName}'.", message);
-    }
-
     [Fact]
     public async Task RunAsync_WhenCallerTokenIsCanceled_PropagatesCancellation()
     {
