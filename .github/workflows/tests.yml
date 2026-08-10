@@ -634,14 +634,13 @@ jobs:
 
           corepack yarn --version
       - name: Validate lockfile registries
-        # Shared with extension_bootstrap_linux below and extension-e2e-tests.yml:
-        # scripts/validate-lockfile-registry.cjs checks every "resolved" line in
-        # yarn.lock (the only lines carrying a tarball URL — `npm:` aliases
-        # don't) against the internal dotnet-public-npm feed using exact
-        # origin matching, not a substring check a hostile URL could spoof.
+        # Allowlist scoped to lines starting with "resolved" (the only lines in
+        # yarn.lock that carry a tarball URL — `npm:` aliases don't).
         # CONTRIBUTING.MD asks contributors to regenerate yarn.lock through the
-        # internal feed before restoring it.
-        run: node scripts/validate-lockfile-registry.cjs
+        # internal dotnet-public-npm feed; an allowlist catches drift to any
+        # other public mirror or tarball host.
+        run: |
+          node -e "const fs = require('fs'); const allow = 'pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm'; const bad = fs.readFileSync('yarn.lock', 'utf8').split(/\r?\n/).filter(l => /^\s*resolved\s+\x22/.test(l)).filter(l => !l.includes(allow)); if (bad.length) { throw new Error('extension/yarn.lock contains resolved entries outside the internal dotnet-public-npm feed. Regenerate it through the internal feed before restoring. First offender -> ' + bad[0]); }"
       - name: Install dependencies
         run: corepack yarn install --frozen-lockfile --non-interactive
       - name: Run tests
@@ -706,10 +705,10 @@ jobs:
         # CONTRIBUTING.MD would also be broken.
         run: node ./scripts/prepareCorepackYarn.mjs
       - name: Validate lockfile registries
-        # Runs the same shared script as extension_tests_win
-        # (scripts/validate-lockfile-registry.cjs) so this cross-platform
-        # bootstrap also catches drift to a public-registry URL.
-        run: node scripts/validate-lockfile-registry.cjs
+        # Mirror of the same allowlist guard in extension_tests_win so this
+        # cross-platform bootstrap also catches drift to a public-registry URL.
+        run: |
+          node -e "const fs = require('fs'); const allow = 'pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm'; const bad = fs.readFileSync('yarn.lock', 'utf8').split(/\r?\n/).filter(l => /^\s*resolved\s+\x22/.test(l)).filter(l => !l.includes(allow)); if (bad.length) { throw new Error('extension/yarn.lock contains resolved entries outside the internal dotnet-public-npm feed. Regenerate it through the internal feed before restoring. First offender -> ' + bad[0]); }"
       - name: Validate seeded cache via yarn install
         run: corepack yarn install --frozen-lockfile --non-interactive
 

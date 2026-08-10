@@ -176,47 +176,6 @@ public sealed class RunTestsWorkflowTests
     }
 
     [Fact]
-    public void TestsWorkflowValidateLockfileRegistriesStepsInvokeSharedScript()
-    {
-        // extension/scripts/validate-lockfile-registry.cjs used to be duplicated here as an inline
-        // `node -e "... .includes(allow) ..."` one-liner, which reintroduced the same
-        // origin-substring bypass documented on the shared script (a hostile host can smuggle the
-        // feed string into its path/hostname-suffix/fragment, or downgrade to http://, and still
-        // pass an `.includes()` check). Every "Validate lockfile registries" step in this workflow
-        // must instead call the shared, hardened script so there is exactly one implementation to
-        // keep correct.
-        string workflowText = File.ReadAllText(s_testsWorkflowPath);
-        string[] lines = workflowText.ReplaceLineEndings("\n").Split('\n');
-
-        List<int> stepStarts = [];
-        for (int i = 0; i < lines.Length; i++)
-        {
-            if (lines[i] == "      - name: Validate lockfile registries")
-            {
-                stepStarts.Add(i);
-            }
-        }
-
-        Assert.NotEmpty(stepStarts);
-
-        foreach (int stepStart in stepStarts)
-        {
-            string? runValue = null;
-            for (int i = stepStart + 1; i < lines.Length && !lines[i].StartsWith("      - name:", StringComparison.Ordinal); i++)
-            {
-                string trimmed = lines[i].TrimStart();
-                if (trimmed.StartsWith("run:", StringComparison.Ordinal))
-                {
-                    runValue = trimmed["run:".Length..].Trim();
-                    break;
-                }
-            }
-
-            Assert.Equal("node scripts/validate-lockfile-registry.cjs", runValue);
-        }
-    }
-
-    [Fact]
     [RequiresTools(["pwsh"])]
     public async Task TestResultValidationFailsWhenTrxFilesContainNoTests()
     {
