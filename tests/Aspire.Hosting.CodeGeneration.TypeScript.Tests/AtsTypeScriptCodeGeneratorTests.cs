@@ -1819,7 +1819,7 @@ public partial class AtsTypeScriptCodeGeneratorTests
         // Extract just the merged options interface for snapshot verification. The fixture's
         // withDataVolume overloads are owned by the test assembly, so they merge into that
         // assembly's interface rather than into the core one of the same base name.
-        var interfaceName = $"{TestOptionsPrefix}WithDataVolumeOptions";
+        var interfaceName = $"{TestOptionsPrefix}$WithDataVolumeOptions";
         var interfaceStart = code.IndexOf($"export interface {interfaceName}", StringComparison.Ordinal);
         Assert.True(interfaceStart >= 0, $"{interfaceName} interface not found in generated code");
 
@@ -2295,7 +2295,7 @@ public partial class AtsTypeScriptCodeGeneratorTests
         }
     }
 
-    [GeneratedRegex(@"^export (?:interface|enum|type) (\w+)", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^export (?:interface|enum|type) ([\w$]+)", RegexOptions.Multiline)]
     private static partial Regex DeclaredNameRegex();
 
     [GeneratedRegex(@"enum \w+ \{[^}]*\}")]
@@ -2304,7 +2304,9 @@ public partial class AtsTypeScriptCodeGeneratorTests
     [GeneratedRegex(@"'[^']*'|""[^""]*""")]
     private static partial Regex StringLiteralRegex();
 
-    [GeneratedRegex(@"\b[A-Z][A-Za-z0-9_]*\b")]
+    // '$' is part of an identifier, not a boundary: package-qualified options interfaces use it as
+    // the qualifier terminator, so \b would split one symbol into two undeclared halves.
+    [GeneratedRegex(@"(?<![\w$])[A-Z][A-Za-z0-9_$]*")]
     private static partial Regex IdentifierRegex();
 
     [Fact]
@@ -2628,8 +2630,8 @@ public partial class AtsTypeScriptCodeGeneratorTests
             => projector.ResolveOptionsInterfaceName(
                 projector.Resolved.Context.Capabilities.Single(c => c.CapabilityId == $"{packageName}/runAsEmulator"));
 
-        Assert.Equal("Aspire_x002E_Hosting_x002E_Azure_x002E_EventHubsRunAsEmulatorOptions", EmulatorInterfaceName(hubsAlone, CollisionPackageA));
-        Assert.Equal("Aspire_x002E_Hosting_x002E_Azure_x002E_ServiceBusRunAsEmulatorOptions", EmulatorInterfaceName(busAlone, CollisionPackageB));
+        Assert.Equal("Aspire_x002E_Hosting_x002E_Azure_x002E_EventHubs$RunAsEmulatorOptions", EmulatorInterfaceName(hubsAlone, CollisionPackageA));
+        Assert.Equal("Aspire_x002E_Hosting_x002E_Azure_x002E_ServiceBus$RunAsEmulatorOptions", EmulatorInterfaceName(busAlone, CollisionPackageB));
 
         Assert.Equal(
             EmulatorInterfaceName(hubsAlone, CollisionPackageA),
@@ -2697,8 +2699,22 @@ public partial class AtsTypeScriptCodeGeneratorTests
         var joined = TypeScriptApiProjector.GetOptionsInterfaceName("runAsEmulator", "Contoso.FooBar");
 
         Assert.NotEqual(dotted, joined);
-        Assert.Equal("Contoso_x002E_Foo_x002E_BarRunAsEmulatorOptions", dotted);
-        Assert.Equal("Contoso_x002E_FooBarRunAsEmulatorOptions", joined);
+        Assert.Equal("Contoso_x002E_Foo_x002E_Bar$RunAsEmulatorOptions", dotted);
+        Assert.Equal("Contoso_x002E_FooBar$RunAsEmulatorOptions", joined);
+    }
+
+    /// <summary>
+    /// Two individually injective encodings still alias if they are simply concatenated, so the
+    /// qualifier has to be terminated.
+    /// </summary>
+    [Fact]
+    public void OptionsInterfaceQualifiersDoNotAliasAcrossTheQualifierBoundary()
+    {
+        // Contoso + fooBar and ContosoFoo + bar both produce ContosoFooBarOptions without a seam,
+        // and the collision guard only inspects unqualified names, so nothing would catch it.
+        Assert.NotEqual(
+            TypeScriptApiProjector.GetOptionsInterfaceName("fooBar", "Contoso"),
+            TypeScriptApiProjector.GetOptionsInterfaceName("bar", "ContosoFoo"));
     }
 
     /// <summary>
@@ -2732,7 +2748,7 @@ public partial class AtsTypeScriptCodeGeneratorTests
     {
         var name = TypeScriptApiProjector.GetOptionsInterfaceName("runAsEmulator", "3rdParty.Aspire");
 
-        Assert.Equal("_x0033_rdParty_x002E_AspireRunAsEmulatorOptions", name);
+        Assert.Equal("_x0033_rdParty_x002E_Aspire$RunAsEmulatorOptions", name);
         Assert.True(name[0] is '_' or '$' || char.IsLetter(name[0]), $"'{name}' is not a valid TypeScript identifier.");
         Assert.NotEqual(name, TypeScriptApiProjector.GetOptionsInterfaceName("runAsEmulator", "_3rdParty.Aspire"));
     }
@@ -2748,9 +2764,9 @@ public partial class AtsTypeScriptCodeGeneratorTests
         var aspireRedis = TypeScriptApiProjector.GetOptionsInterfaceName("runAsEmulator", "Aspire.Redis");
         var bareRedis = TypeScriptApiProjector.GetOptionsInterfaceName("runAsEmulator", "Redis");
 
-        Assert.Equal("Aspire_x002E_Hosting_x002E_RedisRunAsEmulatorOptions", hostingRedis);
-        Assert.Equal("Aspire_x002E_RedisRunAsEmulatorOptions", aspireRedis);
-        Assert.Equal("RedisRunAsEmulatorOptions", bareRedis);
+        Assert.Equal("Aspire_x002E_Hosting_x002E_Redis$RunAsEmulatorOptions", hostingRedis);
+        Assert.Equal("Aspire_x002E_Redis$RunAsEmulatorOptions", aspireRedis);
+        Assert.Equal("Redis$RunAsEmulatorOptions", bareRedis);
         Assert.Equal(3, new[] { hostingRedis, aspireRedis, bareRedis }.Distinct(StringComparer.Ordinal).Count());
     }
 
@@ -2767,7 +2783,7 @@ public partial class AtsTypeScriptCodeGeneratorTests
     {
         var name = TypeScriptApiProjector.GetOptionsInterfaceName("withDescription", "Contoso.Aspire.Hosting.Widgets");
 
-        Assert.Equal("Contoso_x002E_Aspire_x002E_Hosting_x002E_WidgetsWithDescriptionOptions", name);
+        Assert.Equal("Contoso_x002E_Aspire_x002E_Hosting_x002E_Widgets$WithDescriptionOptions", name);
     }
 
     /// <summary>
@@ -2798,15 +2814,15 @@ public partial class AtsTypeScriptCodeGeneratorTests
             documentedOptions,
             item =>
             {
-                Assert.Equal("Aspire_x002E_Hosting_x002E_Azure_x002E_EventHubsRunAsEmulatorOptions", item.Name);
+                Assert.Equal("Aspire_x002E_Hosting_x002E_Azure_x002E_EventHubs$RunAsEmulatorOptions", item.Name);
                 Assert.Equal(CollisionPackageA, item.OwningAssemblyName);
             });
 
         var serviceBusDeclaration = Assert.Single(
             model.Declarations,
-            declaration => declaration.Content.Contains("Aspire_x002E_Hosting_x002E_Azure_x002E_ServiceBusRunAsEmulatorOptions", StringComparison.Ordinal));
+            declaration => declaration.Content.Contains("Aspire_x002E_Hosting_x002E_Azure_x002E_ServiceBus$RunAsEmulatorOptions", StringComparison.Ordinal));
 
-        Assert.Equal($"{CollisionPackageB}:options:Aspire_x002E_Hosting_x002E_Azure_x002E_ServiceBusRunAsEmulatorOptions", serviceBusDeclaration.Id);
+        Assert.Equal($"{CollisionPackageB}:options:Aspire_x002E_Hosting_x002E_Azure_x002E_ServiceBus$RunAsEmulatorOptions", serviceBusDeclaration.Id);
         Assert.Equal(CollisionPackageB, serviceBusDeclaration.OwningAssemblyName);
     }
 
@@ -2835,8 +2851,8 @@ public partial class AtsTypeScriptCodeGeneratorTests
     /// </para>
     /// </remarks>
     [Theory]
-    [InlineData(CollisionPackageA, "Aspire_x002E_Hosting_x002E_Azure_x002E_EventHubsRunAsEmulatorOptions")]
-    [InlineData(CollisionPackageB, "Aspire_x002E_Hosting_x002E_Azure_x002E_ServiceBusRunAsEmulatorOptions")]
+    [InlineData(CollisionPackageA, "Aspire_x002E_Hosting_x002E_Azure_x002E_EventHubs$RunAsEmulatorOptions")]
+    [InlineData(CollisionPackageB, "Aspire_x002E_Hosting_x002E_Azure_x002E_ServiceBus$RunAsEmulatorOptions")]
     public void ApiExportNamesACollidingOptionsInterfaceTheWayGenerationDoes(string packageName, string expectedInterfaceName)
     {
         var fullContext = CreateEmulatorCollisionContext();

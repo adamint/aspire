@@ -749,7 +749,12 @@ internal sealed partial class TypeScriptApiProjector
     /// Matches the name a declaration fragment declares, for example the <c>RedisResource</c> in
     /// <c>export interface RedisResource extends ResourceBuilderBase {</c>.
     /// </summary>
-    [GeneratedRegex(@"^export (?:interface|enum|type) (\w+)", RegexOptions.Multiline)]
+    /// <remarks>
+    /// <c>$</c> is matched as well as <c>\w</c> because package-qualified options interfaces embed
+    /// it as the qualifier terminator, and capturing only the qualifier would leave the real name
+    /// out of the declared set.
+    /// </remarks>
+    [GeneratedRegex(@"^export (?:interface|enum|type) ([\w$]+)", RegexOptions.Multiline)]
     private static partial Regex DeclaredTypeNameRegex();
 
     private static string BuildInterfaceBody(
@@ -1678,7 +1683,7 @@ internal sealed partial class TypeScriptApiProjector
     /// The core hosting package keeps unqualified names even inside a collision group. Other
     /// packages in those groups carry an encoding of their full assembly name, so
     /// <c>Aspire.Hosting.Azure.EventHubs</c> yields
-    /// <c>Aspire_x002E_Hosting_x002E_Azure_x002E_EventHubsRunAsEmulatorOptions</c>. The TypeScript
+    /// <c>Aspire_x002E_Hosting_x002E_Azure_x002E_EventHubs$RunAsEmulatorOptions</c>. The TypeScript
     /// API compatibility path guards this selective list so a new cross-package collision cannot
     /// silently preserve an unsafe unqualified name.
     /// </para>
@@ -1693,7 +1698,13 @@ internal sealed partial class TypeScriptApiProjector
             return unqualifiedName;
         }
 
-        return $"{GetOptionsInterfaceQualifier(owningAssemblyName)}{unqualifiedName}";
+        // '$' terminates the qualifier. Concatenating two individually injective encodings is not
+        // injective at the seam -- assembly `Contoso` with method `fooBar` and assembly `ContosoFoo`
+        // with method `bar` both yield ContosoFooBarOptions -- and the collision guard only inspects
+        // unqualified names, so two package exports could contribute conflicting declarations under
+        // one symbol. Every non-alphanumeric code unit in the qualifier is escaped, so '$' can never
+        // occur inside it: the first '$' is always the seam, whatever the method name contains.
+        return $"{GetOptionsInterfaceQualifier(owningAssemblyName)}{OptionsInterfaceQualifierSeparator}{unqualifiedName}";
     }
 
     /// <summary>
@@ -1717,6 +1728,8 @@ internal sealed partial class TypeScriptApiProjector
     /// identifiers may not start with one.
     /// </para>
     /// </remarks>
+    private const string OptionsInterfaceQualifierSeparator = "$";
+
     private static string GetOptionsInterfaceQualifier(string owningAssemblyName)
     {
         if (string.IsNullOrEmpty(owningAssemblyName) ||

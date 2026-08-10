@@ -1538,12 +1538,12 @@ export interface ArgOptions {
     defaultValue?: string;
 }
 
-export interface Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithDataVolumeOptions {
+export interface Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_Tests$WithDataVolumeOptions {
     name?: string;
     isReadOnly?: boolean;
 }
 
-export interface Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithPersistenceOptions {
+export interface Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_Tests$WithPersistenceOptions {
     mode?: TestPersistenceMode;
 }
 
@@ -47378,7 +47378,7 @@ export interface TestRedisResource {
      * Configures the Redis resource with persistence
      * @param options Additional options.
      */
-    withPersistence(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithPersistenceOptions): TestRedisResourcePromise;
+    withPersistence(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_Tests$WithPersistenceOptions): TestRedisResourcePromise;
     /**
      * Adds an optional string parameter
      * @param options Additional options.
@@ -47445,7 +47445,7 @@ export interface TestRedisResource {
      * Adds a data volume with persistence
      * @param options Additional options.
      */
-    withDataVolume(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithDataVolumeOptions): TestRedisResourcePromise;
+    withDataVolume(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_Tests$WithDataVolumeOptions): TestRedisResourcePromise;
     /** Adds a label to the resource */
     withMergeLabel(label: string): TestRedisResourcePromise;
     /** Adds a categorized label to the resource */
@@ -48251,7 +48251,7 @@ export interface TestRedisResourcePromise extends PromiseLike<TestRedisResource>
      * Configures the Redis resource with persistence
      * @param options Additional options.
      */
-    withPersistence(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithPersistenceOptions): TestRedisResourcePromise;
+    withPersistence(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_Tests$WithPersistenceOptions): TestRedisResourcePromise;
     /**
      * Adds an optional string parameter
      * @param options Additional options.
@@ -48318,7 +48318,7 @@ export interface TestRedisResourcePromise extends PromiseLike<TestRedisResource>
      * Adds a data volume with persistence
      * @param options Additional options.
      */
-    withDataVolume(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithDataVolumeOptions): TestRedisResourcePromise;
+    withDataVolume(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_Tests$WithDataVolumeOptions): TestRedisResourcePromise;
     /** Adds a label to the resource */
     withMergeLabel(label: string): TestRedisResourcePromise;
     /** Adds a categorized label to the resource */
@@ -50765,7 +50765,7 @@ class TestRedisResourceImpl extends ResourceBuilderBase<TestRedisResourceHandle>
      * Configures the Redis resource with persistence
      * @param options Additional options.
      */
-    withPersistence(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithPersistenceOptions): TestRedisResourcePromise {
+    withPersistence(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_Tests$WithPersistenceOptions): TestRedisResourcePromise {
         const mode = options?.mode;
         return new TestRedisResourcePromiseImpl(this._withPersistenceInternal(mode), this._client);
     }
@@ -51182,7 +51182,7 @@ class TestRedisResourceImpl extends ResourceBuilderBase<TestRedisResourceHandle>
      * Adds a data volume with persistence
      * @param options Additional options.
      */
-    withDataVolume(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithDataVolumeOptions): TestRedisResourcePromise {
+    withDataVolume(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_Tests$WithDataVolumeOptions): TestRedisResourcePromise {
         const name = options?.name;
         const isReadOnly = options?.isReadOnly;
         return new TestRedisResourcePromiseImpl(this._withDataVolumeInternal(name, isReadOnly), this._client);
@@ -51721,7 +51721,7 @@ class TestRedisResourcePromiseImpl implements TestRedisResourcePromise {
         return new TestDatabaseResourcePromiseImpl(this._promise.then(obj => obj.addTestChildDatabase(name, options)), this._client);
     }
 
-    withPersistence(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithPersistenceOptions): TestRedisResourcePromise {
+    withPersistence(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_Tests$WithPersistenceOptions): TestRedisResourcePromise {
         return new TestRedisResourcePromiseImpl(this._promise.then(obj => obj.withPersistence(options)), this._client);
     }
 
@@ -51825,7 +51825,7 @@ class TestRedisResourcePromiseImpl implements TestRedisResourcePromise {
         return new TestRedisResourcePromiseImpl(this._promise.then(obj => obj.withMultiParamHandleCallback(callback)), this._client);
     }
 
-    withDataVolume(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithDataVolumeOptions): TestRedisResourcePromise {
+    withDataVolume(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_Tests$WithDataVolumeOptions): TestRedisResourcePromise {
         return new TestRedisResourcePromiseImpl(this._promise.then(obj => obj.withDataVolume(options)), this._client);
     }
 

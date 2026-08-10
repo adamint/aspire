@@ -659,7 +659,7 @@ export interface TestMutableCollectionContext {
 export interface TestRedisResource extends ResourceBuilderBase {
     toJSON(): MarshalledHandle;
     addTestChildDatabase(name: string, options?: AddTestChildDatabaseOptions): TestDatabaseResourcePromise;
-    withPersistence(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithPersistenceOptions): TestRedisResourcePromise;
+    withPersistence(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_Tests$WithPersistenceOptions): TestRedisResourcePromise;
     withOptionalString(options?: WithOptionalStringOptions): TestRedisResourcePromise;
     withConfig(config: TestConfigDto): TestRedisResourcePromise;
     getTags(): Promise<AspireList<string>>;
@@ -685,7 +685,7 @@ export interface TestRedisResource extends ResourceBuilderBase {
     withCancellableOperation(operation: (arg: CancellationToken) => Promise<void>): TestRedisResourcePromise;
     waitForReadyAsync(timeout: number, options?: WaitForReadyAsyncOptions): Promise<boolean>;
     withMultiParamHandleCallback(callback: (arg1: TestCallbackContext, arg2: TestEnvironmentContext) => Promise<void>): TestRedisResourcePromise;
-    withDataVolume(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithDataVolumeOptions): TestRedisResourcePromise;
+    withDataVolume(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_Tests$WithDataVolumeOptions): TestRedisResourcePromise;
     withMergeLabel(label: string): TestRedisResourcePromise;
     withMergeLabelCategorized(label: string, category: string): TestRedisResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): TestRedisResourcePromise;
@@ -699,7 +699,7 @@ export interface TestRedisResource extends ResourceBuilderBase {
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:interface:TestRedisResourcePromise
 export interface TestRedisResourcePromise extends PromiseLike<TestRedisResource> {
     addTestChildDatabase(name: string, options?: AddTestChildDatabaseOptions): TestDatabaseResourcePromise;
-    withPersistence(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithPersistenceOptions): TestRedisResourcePromise;
+    withPersistence(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_Tests$WithPersistenceOptions): TestRedisResourcePromise;
     withOptionalString(options?: WithOptionalStringOptions): TestRedisResourcePromise;
     withConfig(config: TestConfigDto): TestRedisResourcePromise;
     getTags(): Promise<AspireList<string>>;
@@ -725,7 +725,7 @@ export interface TestRedisResourcePromise extends PromiseLike<TestRedisResource>
     withCancellableOperation(operation: (arg: CancellationToken) => Promise<void>): TestRedisResourcePromise;
     waitForReadyAsync(timeout: number, options?: WaitForReadyAsyncOptions): Promise<boolean>;
     withMultiParamHandleCallback(callback: (arg1: TestCallbackContext, arg2: TestEnvironmentContext) => Promise<void>): TestRedisResourcePromise;
-    withDataVolume(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithDataVolumeOptions): TestRedisResourcePromise;
+    withDataVolume(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_Tests$WithDataVolumeOptions): TestRedisResourcePromise;
     withMergeLabel(label: string): TestRedisResourcePromise;
     withMergeLabelCategorized(label: string, category: string): TestRedisResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): TestRedisResourcePromise;
@@ -824,14 +824,14 @@ export interface AddTestRedisOptions {
     port?: number;
 }
 
-// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithDataVolumeOptions
-export interface Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithDataVolumeOptions {
+// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_Tests$WithDataVolumeOptions
+export interface Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_Tests$WithDataVolumeOptions {
     name?: string;
     isReadOnly?: boolean;
 }
 
-// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithPersistenceOptions
-export interface Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithPersistenceOptions {
+// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_Tests$WithPersistenceOptions
+export interface Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_Tests$WithPersistenceOptions {
     mode?: TestPersistenceMode;
 }
 
