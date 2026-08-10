@@ -329,6 +329,51 @@ public class VsCodeExtensionMarketplaceClientTests
     }
 
     [Fact]
+    public async Task GetLatestVersionsAsync_SkipsVersionsWhosePropertiesMemberIsNotAnArray()
+    {
+        // An absent "properties" member is how the gallery marks a stable release. A member that is
+        // present but not an array is a malformed response instead, so the channel is unknown and the
+        // version has to be skipped rather than compared against the stable feed.
+        const string responseJson = """
+            {
+              "results": [
+                {
+                  "extensions": [
+                    {
+                      "extensionName": "aspire-vscode",
+                      "publisher": {
+                        "publisherName": "microsoft-aspire"
+                      },
+                      "versions": [
+                        {
+                          "version": "1.16.0",
+                          "properties": {
+                            "key": "Microsoft.VisualStudio.Code.PreRelease",
+                            "value": "true"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+            """;
+        using var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(responseJson, Encoding.UTF8, "application/json")
+        };
+        using var handler = new MockHttpMessageHandler((_, _) => Task.FromResult(response));
+        using var httpClient = new HttpClient(handler);
+        var client = new VsCodeExtensionMarketplaceClient(httpClient, TimeProvider.System);
+
+        var versions = await client.GetLatestVersionsAsync(TestContext.Current.CancellationToken);
+
+        Assert.Null(versions.StableVersion);
+        Assert.Null(versions.PreReleaseVersion);
+    }
+
+    [Fact]
     public async Task GetLatestVersionsAsync_TreatsAVersionWithNoPreReleaseFlagAsStable()
     {
         // A property whose key is not the pre-release key -- here not even a string -- leaves the

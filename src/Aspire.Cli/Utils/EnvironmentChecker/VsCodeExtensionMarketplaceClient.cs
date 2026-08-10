@@ -282,11 +282,23 @@ internal sealed class VsCodeExtensionMarketplaceClient : IVsCodeExtensionMarketp
     /// </summary>
     private static bool? GetPreReleaseFlag(JsonElement versionEntry)
     {
-        if (versionEntry.ValueKind != JsonValueKind.Object ||
-            !versionEntry.TryGetProperty("properties", out var properties) ||
-            properties.ValueKind != JsonValueKind.Array)
+        if (versionEntry.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        // An absent "properties" member is how the gallery says "stable" -- the flag is only emitted
+        // for pre-release versions. A member that is present but not an array is a different thing: the
+        // response carries something the parser cannot read, and calling that stable would compare a
+        // pre-release build against the stable feed.
+        if (!versionEntry.TryGetProperty("properties", out var properties))
         {
             return false;
+        }
+
+        if (properties.ValueKind != JsonValueKind.Array)
+        {
+            return null;
         }
 
         foreach (var property in properties.EnumerateArray())

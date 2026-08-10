@@ -598,9 +598,12 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
                 }
 
                 // metadata is optional in the stored schema. The entry is still kept, because
-                // relativeLocation alone answers which folder the profile loads; only its channel and
-                // origin are left unknown. Dropping the entry would hand that question back to the
-                // directory scan, which can only pick the highest version on disk.
+                // relativeLocation alone answers which folder the profile loads. Recording nulls for
+                // channel and origin does not make them unknown: the caller reads them as "the index
+                // carried no signal" and falls back to whatever the extracted manifest retained, which
+                // for a manifest with no pre-release flag is stable. Dropping the entry instead would
+                // hand the which-folder question back to the directory scan, which can only pick the
+                // highest version on disk.
                 var hasMetadata = entry.TryGetProperty("metadata", out var metadata) &&
                     metadata.ValueKind is JsonValueKind.Object;
 
