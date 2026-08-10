@@ -1375,9 +1375,17 @@ internal sealed class ProjectLocator(
                 continue;
             }
 
-            // Rebuild the parent from the left spelling of the preceding segments. Any of those
-            // that differed resolved to one directory, so either spelling opens it.
-            var parent = string.Join(Path.DirectorySeparatorChar, leftSegments[..index]);
+            // Rebuild the path through the differing segment from the left spelling and take its
+            // parent. Any preceding segment that differed resolved to one directory, so either
+            // spelling opens it. Joining only the preceding segments would drop the root
+            // separator: "C:\Foo" would rebuild as "C:", which names the process's current
+            // directory on drive C rather than the drive root, and enumerate the wrong directory.
+            var parent = Path.GetDirectoryName(string.Join(Path.DirectorySeparatorChar, leftSegments[..(index + 1)]));
+
+            if (string.IsNullOrEmpty(parent))
+            {
+                continue;
+            }
 
             try
             {
