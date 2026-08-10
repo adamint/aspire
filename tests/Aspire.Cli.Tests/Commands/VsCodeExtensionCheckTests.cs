@@ -683,14 +683,24 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
         var extensions = CreateDefaultExtensionsRoot(home);
-        // A source VS Code did write, in any shape, settles the question. Treating a malformed one as
-        // absent would let the weaker publisherId inference override metadata that is present but
-        // untrustworthy, and send the outbound request this signal exists to gate.
+        // A source VS Code did write, in any shape, settles the question. The manifest claims a gallery
+        // install, so treating the index's malformed source as absent would fall back to that claim and
+        // send the outbound request this signal exists to gate.
         CreateInstalledExtensionWithMetadata(
             extensions,
             "1.2.3",
             """
-            { "source": 7, "publisherId": "5f5636e7-69ed-4afe-b5d6-8d231fb3d3ee" }
+            { "source": "gallery", "publisherId": "5f5636e7-69ed-4afe-b5d6-8d231fb3d3ee" }
+            """);
+        CreateProfileExtensionIndex(
+            extensions,
+            """
+            [{
+              "identifier": { "id": "microsoft-aspire.aspire-vscode" },
+              "version": "1.2.3",
+              "relativeLocation": "microsoft-aspire.aspire-vscode-1.2.3",
+              "metadata": { "isPreReleaseVersion": false, "source": 7 }
+            }]
             """);
         var environment = CreateVsCodeEnvironmentWithoutReportedVersion();
         var marketplaceClient = CreateUnusedMarketplaceClient();
@@ -858,14 +868,14 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
         var extensions = CreateDefaultExtensionsRoot(home);
-        // A side-loaded VSIX that the gallery matched carries a publisherId in the extracted manifest,
-        // which on its own reads as a Marketplace install. The profile index records the real origin,
-        // so it has to override the manifest rather than merely being a fallback for it.
+        // An extracted manifest can keep a stale gallery claim from an earlier install of the same
+        // folder. The profile index records the origin VS Code actually used, so it has to override
+        // the manifest rather than merely being a fallback for it.
         CreateInstalledExtensionWithMetadata(
             extensions,
             "1.2.3",
             """
-            { "publisherId": "5f5636e7-69ed-4afe-b5d6-8d231fb3d3ee" }
+            { "source": "gallery", "publisherId": "5f5636e7-69ed-4afe-b5d6-8d231fb3d3ee" }
             """);
         CreateProfileExtensionIndex(
             extensions,
@@ -1686,9 +1696,9 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         Assert.Equal(0, marketplaceClient.CallCount);
     }
 
-    // The default desktop root of a Marketplace build. Tests point VSCODE_EXTENSIONS here rather than
-    // at an arbitrary directory because the override is product-agnostic: only a path that matches a
-    // known Microsoft-gallery folder is treated as one.
+    // The default desktop root of a Marketplace build, which is what the check scans when no override
+    // is set. Tests that want a Marketplace-capable root use this one and leave VSCODE_EXTENSIONS
+    // alone, because an overridden root names a directory rather than a product and never qualifies.
     private static DirectoryInfo CreateDefaultExtensionsRoot(DirectoryInfo home)
         => Directory.CreateDirectory(Path.Combine(home.FullName, ".vscode", "extensions"));
 
