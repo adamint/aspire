@@ -95,12 +95,17 @@ suite('E2E shard matrix', () => {
      * deduplicated before being compared with the canonical set.
      */
     function matrixSpecPaths(workflow: string): string[] {
-        return [...new Set([...matrixIncludeBlock(workflow).matchAll(/^\s*spec:\s*(\S+)\s*$/gm)].map(match => parseWorkflowScalar(match[1])))].sort();
+        return [...new Set(matrixRows(workflow)
+            .map(row => row.spec)
+            .filter((spec): spec is string => spec !== undefined))]
+            .sort();
     }
 
     function matrixRows(workflow: string): MatrixRow[] {
         const rows: MatrixRow[] = [];
         let currentRow: MatrixRow | undefined;
+        let includeRowIndent: number | undefined;
+        let currentRowIndent = 0;
 
         // Parse matrix entries shaped like:
         //   - name: Linux
@@ -110,11 +115,18 @@ suite('E2E shard matrix', () => {
         // This deliberately extracts only the fields the guard owns rather than becoming a
         // general YAML parser for workflow syntax.
         for (const line of matrixIncludeBlock(workflow).split(/\r?\n/)) {
-            const rowStart = /^\s*-\s+([A-Za-z0-9_-]+):\s*(.*?)\s*$/.exec(line);
+            const rowStart = /^(\s*)-\s+([A-Za-z0-9_-]+):\s*(.*?)\s*$/.exec(line);
             if (rowStart !== null) {
+                const rowIndent = rowStart[1].length;
+                includeRowIndent ??= rowIndent;
+                if (rowIndent !== includeRowIndent) {
+                    continue;
+                }
+
                 appendCurrentRow();
                 currentRow = {};
-                setMatrixRowField(currentRow, rowStart[1], rowStart[2]);
+                currentRowIndent = rowIndent;
+                setMatrixRowField(currentRow, rowStart[2], rowStart[3]);
                 continue;
             }
 
@@ -122,12 +134,16 @@ suite('E2E shard matrix', () => {
                 continue;
             }
 
-            const field = /^\s*(name|shardName|spec|disabledIssue):\s*(.*?)\s*$/.exec(line);
+            const field = /^(\s*)(name|shardName|spec|disabledIssue):\s*(.*?)\s*$/.exec(line);
             if (field === null) {
                 continue;
             }
 
-            setMatrixRowField(currentRow, field[1], field[2]);
+            // Only direct children of the include row populate matrix fields. A nested mapping like
+            // `options:\n  spec: ...` is not `${{ matrix.spec }}` and should not satisfy coverage.
+            if (field[1].length === currentRowIndent + 2) {
+                setMatrixRowField(currentRow, field[2], field[3]);
+            }
         }
 
         appendCurrentRow();
@@ -335,6 +351,26 @@ suite('E2E shard matrix', () => {
             () => assertMatrixMatchesSpecs(workflow, ['edgeCases.e2e.test.ts', 'azureFunctions.e2e.test.ts']),
             assert.AssertionError,
             'A spec-like workflow input outside the matrix must not satisfy the E2E shard guard.');
+    });
+
+    test('rejects a spec that is nested under a matrix row property', () => {
+        const workflow = [
+            'jobs:',
+            '  extension_e2e:',
+            '    strategy:',
+            '      matrix:',
+            '        include:',
+            '          - name: Linux',
+            '            shardName: edge-cases',
+            '            options:',
+            '              spec: out/test-e2e/test-e2e/edgeCases.e2e.test.js',
+            '',
+        ].join('\n');
+
+        assert.throws(
+            () => assertMatrixMatchesSpecs(workflow, ['edgeCases.e2e.test.ts']),
+            assert.AssertionError,
+            'A nested spec property is not matrix.spec and must not count as a covered E2E shard.');
     });
 
     test('rejects a disabled matrix row that is not explicitly tracked', () => {
