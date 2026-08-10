@@ -105,6 +105,11 @@ export function logHotReloadDiagnostics(resourceIdentifier: string, diagnostics:
     // settings only establish what is expected. Whether Hot Reload actually attaches depends on the
     // launch succeeding and on the target debugger engine supporting applying changes, and only Dev Kit
     // can answer that.
+    //
+    // The channel really is named '.NET Hot Reload', not 'C# Hot Reload'. Dev Kit's hot reload logger
+    // creates it as `vscode.window.createOutputChannel(".NET Hot Reload", { log: true })`, and the
+    // 'csdevkit.debug.showHotReloadPanel' command reveals that same channel. 'C# Hot Reload' is the
+    // wording of the 'csharp.experimental.debug.hotReload' setting description, not a channel name.
     extensionLogOutputChannel.info(
         `Hot Reload is configured for ${resourceIdentifier} and can apply once C# Dev Kit starts the session, where the debug engine supports it. ${gesture} across .NET resources at once. ` +
         "Dev Kit reports what it actually applied in the '.NET Hot Reload' output channel.");

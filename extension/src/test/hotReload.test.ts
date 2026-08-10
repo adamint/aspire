@@ -372,6 +372,14 @@ suite('Hot Reload Tests', () => {
             assert.ok(
                 notice.includes('where Dev Kit supports it'),
                 `Notice must not present Hot Reload as unconditional: ${notice}`);
+            // Dev Kit's hot reload logger creates its channel as
+            // `vscode.window.createOutputChannel(".NET Hot Reload", { log: true })`, and that is the channel
+            // 'csdevkit.debug.showHotReloadPanel' reveals. 'C# Hot Reload' is only how the
+            // 'csharp.experimental.debug.hotReload' setting describes itself, so pointing users at that name
+            // would send them looking for a channel that does not exist.
+            assert.ok(
+                notice.includes('.NET Hot Reload output'),
+                `Notice must name the output channel Dev Kit actually creates: ${notice}`);
         }
     });
 
