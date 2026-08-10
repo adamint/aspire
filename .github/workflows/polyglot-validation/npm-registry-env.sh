@@ -33,8 +33,17 @@
 #              no --registry flag, so the environment is the only lever. Without this, Berry uses its
 #              built-in default of https://registry.yarnpkg.com. See
 #              https://yarnpkg.com/configuration/yarnrc#npmRegistryServer.
-#   corepack   COREPACK_NPM_REGISTRY - AppHosts declare `packageManager`, so if corepack shims are
-#              active it fetches the pinned manager itself before any install begins.
+#   corepack   COREPACK_ENABLE_NETWORK=0 - AppHosts declare `packageManager`, so if corepack shims
+#              are active it fetches the pinned manager itself before any install begins, and that
+#              fetch cannot be pointed at the approved feed. Two independent reasons:
+#              COREPACK_NPM_REGISTRY only reaches Azure Artifacts' `/<package>/<version>` metadata
+#              route, which the feed answers 404 for even when the package exists (see the npm
+#              mirror note in extension/CONTRIBUTING.md), and Yarn is not fetched over npm at all --
+#              corepack 0.34.7 with `packageManager: yarn@3.6.4` reports
+#              `can't reach https://repo.yarnpkg.com/3.6.4/packages/yarnpkg-cli/bin/yarn.js`.
+#              Exporting COREPACK_NPM_REGISTRY would advertise a source corepack cannot use while
+#              leaving the yarn path on the public host, so forbid hydration instead. The image
+#              preinstalls the exact managers, so nothing legitimate needs to download one.
 
 #   npm scopes  NPM_CONFIG_USERCONFIG / NPM_CONFIG_GLOBALCONFIG - see below.
 
@@ -56,7 +65,7 @@ export npm_config_registry="$NPM_REGISTRY"
 export NPM_CONFIG_REGISTRY="$NPM_REGISTRY"
 export BUN_CONFIG_REGISTRY="$NPM_REGISTRY"
 export YARN_NPM_REGISTRY_SERVER="$NPM_REGISTRY"
-export COREPACK_NPM_REGISTRY="$NPM_REGISTRY"
+export COREPACK_ENABLE_NETWORK=0
 
 # ---------------------------------------------------------------------------------------------
 # Why the default registry alone is not enough
@@ -78,6 +87,30 @@ printf 'registry=%s\n' "$NPM_REGISTRY" > "$NPM_REGISTRY_CONFIG_DIR/npmrc"
 : > "$NPM_REGISTRY_CONFIG_DIR/globalrc"
 export NPM_CONFIG_USERCONFIG="$NPM_REGISTRY_CONFIG_DIR/npmrc"
 export NPM_CONFIG_GLOBALCONFIG="$NPM_REGISTRY_CONFIG_DIR/globalrc"
+
+# ---------------------------------------------------------------------------------------------
+# Bun needs its own isolation
+#
+# Bun does not honor NPM_CONFIG_USERCONFIG, and BUN_CONFIG_REGISTRY replaces only the default
+# registry, so neither setting above covers a per-scope key. Measured with bun 1.3.14 against a
+# project depending on @types/semver, with an ambient `@types:registry=http://scoped.example.invalid/`
+# in $HOME/.npmrc and BUN_CONFIG_REGISTRY, npm_config_registry and NPM_CONFIG_USERCONFIG all
+# pointing at a registry that works:
+#
+#   HOME=<dir holding that .npmrc>                       -> error: FailedToOpenSocket downloading
+#                                                             package manifest @types/semver
+#   HOME=<clean dir>                                     -> 1 package installed
+#
+# Bun does read XDG_CONFIG_HOME, and it supersedes HOME once set. Same project, same bad key:
+#
+#   HOME=<bad>,  XDG_CONFIG_HOME=<clean>                 -> 1 package installed
+#   HOME=<clean>, XDG_CONFIG_HOME=<bad>                  -> FailedToOpenSocket
+#   HOME=<bad>,  XDG_CONFIG_HOME=<this script's dir>     -> 1 package installed
+#
+# So own that directory. The .npmrc here is dot-prefixed because that is the name bun looks for in a
+# config home; NPM_CONFIG_USERCONFIG above names an explicit path and does not have to match it.
+printf 'registry=%s\n' "$NPM_REGISTRY" > "$NPM_REGISTRY_CONFIG_DIR/.npmrc"
+export XDG_CONFIG_HOME="$NPM_REGISTRY_CONFIG_DIR"
 
 # Trailing slashes are not significant to any of these managers, and they do not all echo the value
 # back verbatim, so compare against a single normalized form.
@@ -228,6 +261,45 @@ check_yarn_scoped_registries() {
     return "$failed"
 }
 
+# Bun has no config-read command, so unlike the managers above it cannot be asked what it resolved.
+# XDG_CONFIG_HOME moves bun's config home off $HOME, but a bun that stopped honouring XDG would fall
+# back there silently and pick a scoped registry back up. Read the files bun would fall back to and
+# fail closed on any registry key in them that is not the approved feed, so that drift is loud here
+# instead of invisible until a package arrives from the wrong host.
+#
+# $HOME/.npmrc uses npm syntax:
+#   @types:registry=https://scoped.example.invalid/
+# $HOME/.bunfig.toml uses TOML, where a scope key is the bare scope name with no leading '@':
+#   [install]
+#   registry = "https://scoped.example.invalid/"
+#   [install.scopes]
+#   "types" = "https://scoped.example.invalid/"
+#
+# Both forms end the line with the URL, so one capture per line covers them. Only values that are
+# themselves URLs are considered, which skips npm auth lines such as
+# `//pkgs.dev.azure.com/...:_authToken=<token>` whose key contains a host but whose value is a token.
+check_bun_ambient_config() {
+    local failed=0
+    local file value
+
+    for file in "$HOME/.npmrc" "$HOME/.bunfig.toml"; do
+        [ -f "$file" ] || continue
+
+        while IFS= read -r value; do
+            if [ "${value%/}" != "${APPROVED_NPM_REGISTRY%/}" ]; then
+                echo "  ❌ bun falls back to '$file', which points a registry at '$value' instead of the approved feed '$APPROVED_NPM_REGISTRY'"
+                failed=1
+            fi
+        done < <(sed -n 's|^[[:space:]]*[^#;[][^=]*=[[:space:]]*"\{0,1\}\(https\{0,1\}://[^"[:space:]]*\)"\{0,1\}[[:space:]]*$|\1|p' "$file")
+    done
+
+    if [ "$failed" -eq 0 ]; then
+        echo "  ✅ bun has no ambient registry override outside $XDG_CONFIG_HOME"
+    fi
+
+    return "$failed"
+}
+
 verify_registry_configuration() {
     local failed=0
     local yarn_version
@@ -237,6 +309,10 @@ verify_registry_configuration() {
     if command -v npm &> /dev/null; then
         check_manager_registry "npm" "$(config_in_neutral_directory npm config get registry)" || failed=1
         check_scoped_registries || failed=1
+    fi
+
+    if command -v bun &> /dev/null; then
+        check_bun_ambient_config || failed=1
     fi
 
     if command -v pnpm &> /dev/null; then

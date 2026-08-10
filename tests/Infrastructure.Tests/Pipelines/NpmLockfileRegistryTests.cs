@@ -42,6 +42,14 @@ public class NpmLockfileRegistryTests
     // The trailing slash matters: without it "/dnceng/public/_packaging/dotnet-public-npm-evil/"
     // would satisfy the prefix test.
     private const string ApprovedFeedPathPrefix = "/dnceng/public/_packaging/dotnet-public-npm/";
+    private static readonly Regex s_registryKey = new(
+        @"^\s*(?<key>(@[^\s:]+:)?registry|npmRegistryServer|npmPublishRegistry)\s*[=:]\s*(?<value>\S+)\s*$",
+        RegexOptions.Multiline);
+
+    private static readonly Regex s_bunConfigComment = new(@"^\s*#.*$", RegexOptions.Multiline);
+
+    private static readonly Regex s_bunConfigUrl = new(@"""(?<value>https?://[^""]*)""");
+
     private const string ApprovedNpmRegistry = "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/";
 
     /// <summary>
@@ -146,22 +154,81 @@ public class NpmLockfileRegistryTests
     [Fact]
     public void PolyglotFixtures_DoNotOverrideTheRegistry()
     {
-        // Matches an .npmrc `registry=` or `@scope:registry=` key and a .yarnrc.yml
-        // `npmRegistryServer:` / `npmScopes.<scope>.npmRegistryServer:` key, in both cases capturing
-        // everything after the delimiter so an unapproved value is reported rather than skipped.
-        var registryKey = new Regex(
-            @"^\s*(?<key>(@[^\s:]+:)?registry|npmRegistryServer|npmPublishRegistry)\s*[=:]\s*(?<value>\S+)\s*$",
-            RegexOptions.Multiline);
-
         var overrides = EnumeratePolyglotFiles()
-            .Where(path => Path.GetFileName(path) is ".npmrc" or ".yarnrc" or ".yarnrc.yml")
-            .SelectMany(path => registryKey.Matches(File.ReadAllText(path))
-                .Where(match => !IsApprovedFeedUrl(match.Groups["value"].Value.Trim('"', '\'')))
-                .Select(match => $"{Path.GetRelativePath(RepoRoot.Path, path).Replace(Path.DirectorySeparatorChar, '/')} -> {match.Groups["key"].Value}={match.Groups["value"].Value}"))
+            .SelectMany(path => FindRegistryOverrides(path)
+                .Select(finding => $"{Path.GetRelativePath(RepoRoot.Path, path).Replace(Path.DirectorySeparatorChar, '/')} -> {finding}"))
             .Order(StringComparer.Ordinal)
             .ToArray();
 
         Assert.Equal([], overrides);
+    }
+
+    /// <summary>
+    /// The scan above only ever runs against fixtures that are already correct, so it would keep
+    /// passing if it stopped recognizing a config format. Feed it each format directly.
+    /// </summary>
+    [Theory]
+    [InlineData(".npmrc", "registry=https://registry.npmjs.org/", true)]
+    [InlineData(".npmrc", "@types:registry=https://scoped.example.invalid/", true)]
+    [InlineData(".npmrc", "registry=APPROVED_FEED", false)]
+    [InlineData(".yarnrc.yml", "npmRegistryServer: \"https://registry.yarnpkg.com\"", true)]
+    // bunfig.toml names a scope with the bare scope name and no `registry` word at all, so a
+    // key-based pattern cannot see it.
+    [InlineData("bunfig.toml", "[install.scopes]\n\"types\" = \"https://scoped.example.invalid/\"", true)]
+    [InlineData("bunfig.toml", "[install.scopes]\n\"types\" = { url = \"https://scoped.example.invalid/\" }", true)]
+    [InlineData("bunfig.toml", "[install]\nregistry = \"APPROVED_FEED\"", false)]
+    [InlineData("bunfig.toml", "# registry = \"https://registry.npmjs.org/\"", false)]
+    public void RegistryOverrideScan_RecognizesEveryConfigFormat(string fileName, string content, bool expectedOverride)
+    {
+        var workspace = Directory.CreateTempSubdirectory("aspire-registry-override-scan");
+
+        try
+        {
+            var path = Path.Combine(workspace.FullName, fileName);
+            File.WriteAllText(path, content.Replace("APPROVED_FEED", ApprovedNpmRegistry, StringComparison.Ordinal) + "\n");
+
+            var findings = FindRegistryOverrides(path).ToArray();
+
+            Assert.True(
+                expectedOverride == (findings.Length > 0),
+                $"{fileName} containing '{content}' should{(expectedOverride ? "" : " not")} be reported as a registry override, but the scan returned [{string.Join(", ", findings)}].");
+        }
+        finally
+        {
+            workspace.Delete(recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Reports every registry value in a package-manager config file that is not the approved feed.
+    /// </summary>
+    /// <remarks>
+    /// npm and Yarn name the setting, so those are matched by key: an .npmrc `registry=` or
+    /// `@scope:registry=`, and a .yarnrc.yml `npmRegistryServer:` /
+    /// `npmScopes.&lt;scope&gt;.npmRegistryServer:`. bunfig.toml does not — a scope entry is the bare
+    /// scope name assigned either a URL or a table containing one — so every quoted URL outside a
+    /// comment is flagged there instead. Bun's config has no setting that legitimately holds some
+    /// other URL, so that is fail-closed rather than over-broad.
+    /// </remarks>
+    private static IEnumerable<string> FindRegistryOverrides(string path)
+    {
+        var fileName = Path.GetFileName(path);
+
+        if (fileName is not (".npmrc" or ".yarnrc" or ".yarnrc.yml" or "bunfig.toml" or ".bunfig.toml"))
+        {
+            return [];
+        }
+
+        var text = File.ReadAllText(path);
+
+        var matches = fileName.EndsWith("bunfig.toml", StringComparison.Ordinal)
+            ? s_bunConfigUrl.Matches(s_bunConfigComment.Replace(text, string.Empty))
+            : s_registryKey.Matches(text);
+
+        return matches
+            .Where(match => !IsApprovedFeedUrl(match.Groups["value"].Value.Trim('"', '\'')))
+            .Select(match => match.Value.Trim())
+            .ToArray();
     }
 
     /// <summary>
@@ -352,12 +419,22 @@ public class NpmLockfileRegistryTests
             new[]
             {
                 "BUN_CONFIG_REGISTRY",
-                "COREPACK_NPM_REGISTRY",
                 "NPM_CONFIG_REGISTRY",
                 "YARN_NPM_REGISTRY_SERVER",
                 "npm_config_registry",
             },
             ExportedRegistryVariables(script));
+
+        // Corepack is the exception: it cannot be pointed at the approved feed at all. Azure
+        // Artifacts answers 404 for the `/<package>/<version>` metadata route corepack calls (see
+        // the npm mirror note in extension/CONTRIBUTING.md), and yarn is not fetched over npm in the
+        // first place — corepack 0.34.7 resolving `packageManager: yarn@3.6.4` reports
+        // `can't reach https://repo.yarnpkg.com/3.6.4/packages/yarnpkg-cli/bin/yarn.js`. Exporting
+        // COREPACK_NPM_REGISTRY would therefore claim coverage it does not have while leaving the
+        // yarn path pointed at a public host, so the script must forbid hydration instead.
+        // The assertion above already fails if COREPACK_NPM_REGISTRY comes back, because it would
+        // appear in the exported set; this is the other half, that hydration is actually forbidden.
+        Assert.Matches(@"(?m)^export COREPACK_ENABLE_NETWORK=0$", script);
     }
 
     /// <summary>
@@ -483,6 +560,121 @@ public class NpmLockfileRegistryTests
                 expectedExitCode == result.ExitCode,
                 $"Expected exit code {expectedExitCode} for yarn stub '{yarnStub}' but got {result.ExitCode}.{Environment.NewLine}{result.Output}");
             Assert.Contains(expectedOutput, result.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            workspace.Delete(recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Bun ignores <c>NPM_CONFIG_USERCONFIG</c> and <c>BUN_CONFIG_REGISTRY</c> replaces only the
+    /// default registry, so the preflight has to take bun's config home away from <c>$HOME</c> and
+    /// then fail closed on whatever remains there.
+    /// </summary>
+    /// <remarks>
+    /// Measured with bun 1.3.14 on a project depending on <c>@types/semver</c>, with
+    /// <c>@types:registry=http://scoped.example.invalid/</c> in <c>$HOME/.npmrc</c> and
+    /// <c>BUN_CONFIG_REGISTRY</c>, <c>npm_config_registry</c> and <c>NPM_CONFIG_USERCONFIG</c> all
+    /// pointing at a registry that works: the install fails with
+    /// <c>FailedToOpenSocket downloading package manifest @types/semver</c>. Pointing
+    /// <c>XDG_CONFIG_HOME</c> at a directory the preflight owns makes the same install succeed, and
+    /// pointing it at the directory holding the bad key makes it fail again — so bun reads its
+    /// <c>.npmrc</c> and <c>bunfig.toml</c> from <c>XDG_CONFIG_HOME</c> once that is set.
+    /// </remarks>
+    [Theory]
+    [InlineData(".npmrc", "@types:registry=https://scoped.example.invalid/", 1, "instead of the approved feed")]
+    [InlineData(".npmrc", "registry=https://registry.npmjs.org/", 1, "https://registry.npmjs.org/")]
+    [InlineData(".npmrc", "//pkgs.dev.azure.com/dnceng/:_authToken=not-a-url", 0, "no ambient registry override")]
+    [InlineData(".npmrc", "registry=APPROVED_FEED", 0, "no ambient registry override")]
+    [InlineData(".bunfig.toml", "[install.scopes]\n\"types\" = \"https://scoped.example.invalid/\"", 1, "scoped.example.invalid")]
+    [InlineData(".bunfig.toml", "[install]\nregistry = \"APPROVED_FEED\"", 0, "no ambient registry override")]
+    [RequiresTools(["bash"])]
+    public async Task RegistryEnvScript_FailsClosedOnAmbientBunRegistryOverride(string fileName, string fileBody, int expectedExitCode, string expectedOutput)
+    {
+        var workspace = Directory.CreateTempSubdirectory("aspire-bun-ambient-config");
+
+        try
+        {
+            var fakeHome = Path.Combine(workspace.FullName, "home");
+            Directory.CreateDirectory(fakeHome);
+            await File.WriteAllTextAsync(
+                Path.Combine(fakeHome, fileName),
+                fileBody.Replace("APPROVED_FEED", ApprovedNpmRegistry, StringComparison.Ordinal) + "\n");
+
+            // awk lifts the function verbatim out of the shipped script, so the test exercises the
+            // same bytes CI runs rather than a transcription of them.
+            var driverPath = Path.Combine(workspace.FullName, "driver.sh");
+            await File.WriteAllTextAsync(driverPath, """
+                set -uo pipefail
+                APPROVED_NPM_REGISTRY="$1"
+                XDG_CONFIG_HOME="$2"
+                script="$3"
+                eval "$(awk '/^check_bun_ambient_config\(\)/,/^}$/' "$script")"
+                check_bun_ambient_config
+                """);
+
+            var result = await RunBashAsync(
+                driverPath,
+                [ApprovedNpmRegistry, Path.Combine(workspace.FullName, "owned"), Path.Combine(RepoRoot.Path, RegistryEnvScriptPath)],
+                new Dictionary<string, string?>
+                {
+                    ["HOME"] = fakeHome
+                });
+
+            Assert.True(
+                expectedExitCode == result.ExitCode,
+                $"Expected exit code {expectedExitCode} for {fileName} containing '{fileBody}' but got {result.ExitCode}.{Environment.NewLine}{result.Output}");
+            Assert.Contains(expectedOutput, result.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            workspace.Delete(recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Running the preflight's isolation block has to leave bun looking at a config home the script
+    /// owns, holding the approved feed and nothing else.
+    /// </summary>
+    /// <remarks>
+    /// Asserting on the source text would pass for a block that exports the variable without ever
+    /// writing the file bun reads, so execute the shipped lines and inspect what they produced.
+    /// </remarks>
+    [Fact]
+    [RequiresTools(["bash"])]
+    public async Task RegistryEnvScript_GivesBunAConfigHomeItOwns()
+    {
+        var workspace = Directory.CreateTempSubdirectory("aspire-bun-config-home");
+
+        try
+        {
+            var driverPath = Path.Combine(workspace.FullName, "driver.sh");
+            await File.WriteAllTextAsync(driverPath, """
+                set -uo pipefail
+                NPM_REGISTRY="$1"
+                script="$2"
+                eval "$(awk '/^NPM_REGISTRY_CONFIG_DIR=/,/^export XDG_CONFIG_HOME=/' "$script")"
+                echo "OWNED=$([ "$XDG_CONFIG_HOME" = "$NPM_REGISTRY_CONFIG_DIR" ] && echo yes || echo no)"
+                echo "NPMRC<<"
+                cat "$XDG_CONFIG_HOME/.npmrc"
+                echo ">>"
+                """);
+
+            var result = await RunBashAsync(
+                driverPath,
+                [ApprovedNpmRegistry, Path.Combine(RepoRoot.Path, RegistryEnvScriptPath)],
+                new Dictionary<string, string?>());
+
+            Assert.True(result.ExitCode == 0, $"Isolation block failed.{Environment.NewLine}{result.Output}");
+            Assert.Contains("OWNED=yes", result.Output, StringComparison.Ordinal);
+
+            var npmrc = result.Output
+                .Split("NPMRC<<", StringSplitOptions.None)[1]
+                .Split(">>", StringSplitOptions.None)[0]
+                .Trim();
+
+            Assert.Equal($"registry={ApprovedNpmRegistry}", npmrc);
         }
         finally
         {
