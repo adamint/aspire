@@ -106,7 +106,7 @@ export function logHotReloadDiagnostics(resourceIdentifier: string, diagnostics:
     // launch succeeding and on the target debugger engine supporting applying changes, and only Dev Kit
     // can answer that.
     extensionLogOutputChannel.info(
-        `Hot Reload is configured for ${resourceIdentifier} and applies once C# Dev Kit starts the session. ${gesture} across .NET resources at once. ` +
+        `Hot Reload is configured for ${resourceIdentifier} and can apply once C# Dev Kit starts the session, where the debug engine supports it. ${gesture} across .NET resources at once. ` +
         "Dev Kit reports what it actually applied in the '.NET Hot Reload' output channel.");
 }
 

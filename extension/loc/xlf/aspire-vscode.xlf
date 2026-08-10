@@ -11,10 +11,10 @@
       <source xml:lang="en">.NET Hot Reload can apply code edits to running Aspire resources without restarting them, but it is turned off in C# Dev Kit. Enable it to update &apos;csharp.experimental.debug.hotReload&apos; in your user settings.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.hotReloadActiveNoticeSaveDisabled">
-      <source xml:lang="en">.NET Hot Reload is turned on in C# Dev Kit, so it applies to the .NET resources you debug in this Aspire app, but &apos;csharp.debug.hotReloadOnSave&apos; is turned off, so saving does not apply edits. Use the Hot Reload button to apply pending edits. Dev Kit reports what it actually applied in the .NET Hot Reload output.</source>
+      <source xml:lang="en">.NET Hot Reload is turned on in C# Dev Kit, so it can apply to the .NET resources you debug in this Aspire app, where Dev Kit supports it, but &apos;csharp.debug.hotReloadOnSave&apos; is turned off, so saving does not apply edits. Use the Hot Reload button to apply pending edits. Dev Kit reports what it actually applied in the .NET Hot Reload output.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.hotReloadActiveNotice">
-      <source xml:lang="en">.NET Hot Reload is turned on in C# Dev Kit, so it applies to the .NET resources you debug in this Aspire app. Saving a file asks Dev Kit to apply supported edits to a debugged resource without restarting it, and the Hot Reload button applies pending edits. Dev Kit reports what it actually applied in the .NET Hot Reload output.</source>
+      <source xml:lang="en">.NET Hot Reload is turned on in C# Dev Kit, so it can apply to the .NET resources you debug in this Aspire app, where Dev Kit supports it. Saving a file asks Dev Kit to apply supported edits to a debugged resource without restarting it, and the Hot Reload button applies pending edits. Dev Kit reports what it actually applied in the .NET Hot Reload output.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.debugSessionAlreadyExists">
       <source xml:lang="en">A debug session is already active for id {0}.</source>

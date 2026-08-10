@@ -140,7 +140,7 @@ suite('Hot Reload Tests', () => {
         assert.deepStrictEqual(info.getCalls().map(call => String(call.args[0])), [
             'Hot Reload state for api: workspaceTrusted=true, settingContributed=true, '
             + 'csharp.experimental.debug.hotReload=true, csharp.debug.hotReloadOnSave=true',
-            'Hot Reload is configured for api and applies once C# Dev Kit starts the session. '
+            'Hot Reload is configured for api and can apply once C# Dev Kit starts the session, where the debug engine supports it. '
             + "Saving a file asks Dev Kit to apply the edit ('csharp.debug.hotReloadOnSave'); the toolbar button applies pending edits "
             + "across .NET resources at once. Dev Kit reports what it actually applied in the '.NET Hot Reload' output channel."
         ]);
@@ -363,14 +363,15 @@ suite('Hot Reload Tests', () => {
         // This notice is presented before vscode.debug.startDebugging, from a probe that can only read the
         // global setting: it does not know whether the debug engine will support applying changes, and
         // sibling resources launched with noDebug are excluded from Hot Reload outright. Claiming the app's
-        // .NET project resources are covered would therefore be a promise the extension cannot keep.
+        // .NET project resources are covered would therefore be a promise the extension cannot keep, and
+        // even for a resource it does debug the notice can only say Hot Reload may apply.
         for (const notice of [hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled]) {
             assert.ok(
-                notice.includes('is turned on in C# Dev Kit') && notice.includes('the .NET resources you debug'),
+                notice.includes('is turned on in C# Dev Kit') && notice.includes('can apply to the .NET resources you debug'),
                 `Notice must scope its claim to the setting and to debugged resources: ${notice}`);
             assert.ok(
-                !notice.includes('is enabled for .NET project resources in this Aspire app'),
-                `Notice must not claim coverage of every project resource: ${notice}`);
+                notice.includes('where Dev Kit supports it'),
+                `Notice must not present Hot Reload as unconditional: ${notice}`);
         }
     });
 
