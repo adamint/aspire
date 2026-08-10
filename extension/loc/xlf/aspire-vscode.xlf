@@ -865,6 +865,9 @@
     <trans-unit id="aspire-vscode.strings.aspireCliCommandFailed">
       <source xml:lang="en">{0} exited with code {1}{2}</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.attachDebuggerExecutableLaunchProfile">
+      <source xml:lang="en">{0} runs through the &apos;{1}&apos; launch profile, which uses commandName &apos;Executable&apos;, so the running process is the one that profile starts rather than the project&apos;s own output. Attach to it from the Run and Debug view instead.</source>
+    </trans-unit>
     <trans-unit id="aspire-vscode.strings.appHostCandidateDescription">
       <source xml:lang="en">{0} · {1}</source>
     </trans-unit>

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { extensionLogOutputChannel } from '../../utils/logging';
-import { noCsharpBuildTask, buildFailedWithExitCode, noOutputFromMsbuild, failedToGetTargetPath, invalidLaunchConfiguration, buildFailedForProjectWithError, processExitedWithCode, lookingForDevkitBuildTask, csharpDevKitNotInstalled, failedToInspectRuntimeConfig, dotNetRunFallbackDisablesDebugger, dotNetRunFileBasedExecutableProfileFallback, executableLaunchProfileMissingExecutablePath, attachDebuggerConfigurationName, attachDebuggerProcessNameUnresolved, attachDebuggerTargetNameProbeAssumesDefaultConfiguration } from '../../loc/strings';
+import { noCsharpBuildTask, buildFailedWithExitCode, noOutputFromMsbuild, failedToGetTargetPath, invalidLaunchConfiguration, buildFailedForProjectWithError, processExitedWithCode, lookingForDevkitBuildTask, csharpDevKitNotInstalled, failedToInspectRuntimeConfig, dotNetRunFallbackDisablesDebugger, dotNetRunFileBasedExecutableProfileFallback, executableLaunchProfileMissingExecutablePath, attachDebuggerConfigurationName, attachDebuggerProcessNameUnresolved, attachDebuggerTargetNameProbeAssumesDefaultConfiguration, attachDebuggerExecutableLaunchProfile } from '../../loc/strings';
 import { ChildProcessWithoutNullStreams, execFile, spawn } from 'child_process';
 import * as util from 'util';
 import * as path from 'path';
@@ -482,6 +482,19 @@ async function createDotNetAttachDebugSessionConfiguration(resource: DebuggableR
     const attachInfo = getDotNetAttachDebuggerResourceInfo(resource);
     if (!attachInfo) {
         throw new AttachDebuggerConfigurationError('ResourceNotAttachable', invalidLaunchConfiguration(JSON.stringify(resource)));
+    }
+
+    // An Executable profile does not run the project's own output: the extension launches the profile's
+    // executablePath with its commandLineArgs (see configureExecutableLaunchProfile), so a process named
+    // after the project's TargetName was never started and attaching by that name would find nothing.
+    // Only the default profile can be checked - the resource contract does not carry which profile the
+    // AppHost actually selected - so this refuses the case where nothing else was chosen and explains why,
+    // rather than offering an attach that cannot succeed.
+    const defaultLaunchProfile = determineDefaultLaunchProfile(await readLaunchSettings(attachInfo.projectPath));
+    if (defaultLaunchProfile.profile?.commandName === LaunchProfileCommandName.executable) {
+        throw new AttachDebuggerConfigurationError(
+            'ResourceNotAttachable',
+            attachDebuggerExecutableLaunchProfile(attachInfo.resourceLabel, defaultLaunchProfile.profileName ?? ''));
     }
 
     let processName = attachInfo.reportedTargetName;

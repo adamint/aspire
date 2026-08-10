@@ -10,7 +10,7 @@ import * as io from '../utils/io';
 import { ResourceDebuggerExtension } from '../debugger/debuggerExtensions';
 import { AppHostParentOutputFilter, AspireDebugSession } from '../debugger/AspireDebugSession';
 import { extensionLogOutputChannel } from '../utils/logging';
-import { attachDebuggerTargetNameProbeAssumesDefaultConfiguration } from '../loc/strings';
+import { attachDebuggerTargetNameProbeAssumesDefaultConfiguration, attachDebuggerExecutableLaunchProfile } from '../loc/strings';
 
 class TestDotNetService {
     private _hasDevKit: boolean;
@@ -175,6 +175,53 @@ suite('Dotnet Debugger Extension Tests', () => {
                 && (error as Error & { errorKind?: string }).errorKind === 'ResourceNotAttachable');
 
         assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
+    });
+
+    test('attach configuration refuses a project whose default launch profile runs an executable', async () => {
+        const fs = require('fs');
+        const path = require('path');
+
+        // A real launchSettings.json on disk, because the refusal is decided by reading the file the way
+        // `dotnet run` does rather than from anything the resource snapshot carries.
+        const fixtureRoot = path.join(__dirname, '..', '..', '.test-fixtures', 'attach-executable-profile');
+        const projectDirectory = path.join(fixtureRoot, 'MyClassLibFunction');
+        fs.mkdirSync(path.join(projectDirectory, 'Properties'), { recursive: true });
+        fs.writeFileSync(path.join(projectDirectory, 'Properties', 'launchSettings.json'), JSON.stringify({
+            profiles: {
+                'Aspire_my-function': {
+                    commandName: 'Executable',
+                    executablePath: 'dotnet',
+                    commandLineArgs: 'exec RuntimeSupport.dll MyClassLibFunction::MyClassLibFunction.Function::FunctionHandler',
+                },
+            },
+        }));
+
+        try {
+            const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/MyClassLibFunction.dll', null, true, true);
+
+            await assert.rejects(
+                extension.createAttachDebugSessionConfigurationCallback!({
+                    name: 'my-function',
+                    displayName: 'My Function',
+                    resourceType: 'Project',
+                    state: 'Running',
+                    properties: {
+                        'executable.pid': '1234',
+                        'executable.path': 'dotnet',
+                        'project.path': path.join(projectDirectory, 'MyClassLibFunction.csproj'),
+                        'project.targetName': 'MyClassLibFunction',
+                    },
+                }),
+                (error: unknown) => error instanceof Error
+                    && error.name === 'AttachDebuggerConfigurationError'
+                    && (error as Error & { errorKind?: string }).errorKind === 'ResourceNotAttachable'
+                    && error.message === attachDebuggerExecutableLaunchProfile('My Function', 'Aspire_my-function'));
+
+            assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
+        }
+        finally {
+            fs.rmSync(fixtureRoot, { recursive: true, force: true });
+        }
     });
 
     test('failed AppHost start writes error to debug console', async () => {
