@@ -28,8 +28,9 @@ export function getPrimaryAppHostProjectPath(): string {
 /**
  * The `app.js` of the Node resource the AppHost fixture registers as `e2e-node`.
  *
- * Only the resource-debugger shard gets this fixture, so this throws rather than returning undefined:
- * a shard that asks for it and silently gets nothing would report a pass while proving nothing.
+ * Any E2E run that includes the resource debugger spec gets this fixture, so this throws rather than
+ * returning undefined: a spec that asks for it and silently gets nothing would report a pass while
+ * proving nothing.
  */
 export function getNodeAppScriptPath(): string {
     return getRequiredPathFromEnvironment('ASPIRE_EXTENSION_E2E_NODE_APP_SCRIPT');

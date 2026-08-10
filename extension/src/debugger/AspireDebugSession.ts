@@ -167,7 +167,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     }
     finally {
       try {
-        await this.stopParentDebugSessionOnce();
+        await this.requestParentDebugSessionStopWithDeadline();
       }
       catch (error) {
         stopFailures.push(error);
@@ -275,6 +275,18 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     return this._parentStopPromise;
   }
 
+  private requestParentDebugSessionStopWithDeadline(): Promise<void> {
+    let parentStop: Promise<void>;
+    try {
+      parentStop = Promise.resolve(this.stopParentDebugSessionOnce());
+    }
+    catch (error) {
+      parentStop = Promise.reject(error);
+    }
+
+    return AspireDebugSession.withStopDeadline({ sessionId: this._session.id, promise: parentStop }, 'Aspire parent debug session');
+  }
+
   /**
    * Requests the Aspire parent stop and resolves once it has settled, bounded by the same deadline
    * the resource stops get.
@@ -286,16 +298,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
    * fails or hangs must not strand disposal, so the reason is logged and disposal proceeds.
    */
   private stopParentDebugSessionWithDeadline(): Promise<void> {
-    let parentStop: Promise<void>;
-    try {
-      parentStop = Promise.resolve(this.stopParentDebugSessionOnce());
-    }
-    catch (error) {
-      parentStop = Promise.reject(error);
-    }
-
-    return AspireDebugSession
-      .withStopDeadline({ sessionId: this._session.id, promise: parentStop }, 'Aspire parent debug session')
+    return this.requestParentDebugSessionStopWithDeadline()
       .catch(error => {
         extensionLogOutputChannel.warn(`Failed to stop the Aspire parent debug session ${this._session.id}: ${error}`);
       });

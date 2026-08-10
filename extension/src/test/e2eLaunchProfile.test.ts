@@ -552,6 +552,21 @@ suite('E2E launch profile', () => {
         assert.ok(nodeProofTest.indexOf(']);') > nodeProofTest.indexOf('waitForProcessExit(childPid'));
     });
 
+    test('includes the Node fixture when the full E2E spec glob matches resource debugger tests', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const paths = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'helpers', 'paths.ts'), 'utf8');
+
+        const matchedSpecsIndex = runner.indexOf('const matchedTestSpecs =');
+        const resourceDebuggerMatchIndex = runner.indexOf("const resourceDebuggerSpecMatched = matchedTestSpecs.some(file => path.basename(file) === 'resourceDebugger.e2e.test.js');");
+        const includeFixtureIndex = runner.indexOf("const includeNodeResourceFixture = shardName === 'resource-debugger' || resourceDebuggerSpecMatched;");
+
+        assert.ok(matchedSpecsIndex >= 0, 'The runner must resolve the effective spec glob before fixture selection.');
+        assert.ok(resourceDebuggerMatchIndex > matchedSpecsIndex, 'Fixture selection must inspect the actual matched spec files, not just the shard name.');
+        assert.ok(includeFixtureIndex > resourceDebuggerMatchIndex, 'The resource-debugger spec must get its Node fixture even when shardName remains all.');
+        assert.ok(paths.includes('Any E2E run that includes the resource debugger spec gets this fixture'));
+    });
+
     test('patches ExTester launch arguments without replacement-token expansion', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');

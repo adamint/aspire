@@ -88,10 +88,11 @@ const COMMAND_INERT_PATH_ALPHABET = isWindows ? '._-+@~:\\/' : '._-+,=:@%/';
 const primaryAppHostProject = path.join(workspaceRoot, 'AspireE2E.AppHost', 'AspireE2E.AppHost.csproj');
 const nodeAppProjectName = 'AspireE2E.NodeApp';
 const nodeAppScript = path.join(workspaceRoot, nodeAppProjectName, 'app.js');
-// The Node resource is only added to the shared AppHost fixture for the shard that debugs it. Every
-// other shard asserts on the resource tree, so an extra resource there would be an unrelated change
-// in their expected state.
-const includeNodeResourceFixture = shardName === 'resource-debugger';
+const resourceDebuggerSpecMatched = matchedTestSpecs.some(file => path.basename(file) === 'resourceDebugger.e2e.test.js');
+// The documented full-suite command leaves shardName as "all". Include the Node fixture whenever
+// resourceDebugger.e2e.test.js is in the actual spec set so that test can rely on the same AppHost
+// shape whether it runs by shard or through the full default glob.
+const includeNodeResourceFixture = shardName === 'resource-debugger' || resourceDebuggerSpecMatched;
 const workspaceNuGetConfigPath = path.join(workspaceRoot, 'NuGet.config');
 const enableAzureFunctionsE2E = process.env.ASPIRE_EXTENSION_E2E_ENABLE_AZURE_FUNCTIONS === 'true';
 let cliPathForCleanup;
