@@ -320,6 +320,32 @@ public sealed class RunTestsWorkflowTests
     }
 
     [Theory]
+    [InlineData(1)]
+    [InlineData(9)]
+    public async Task TestResultValidationFailsIgnoredRunWithUntoleratedExitCode(int exitCode)
+    {
+        string scratchDirectory = CreateScratchDirectory();
+        try
+        {
+            string testResultsDirectory = Path.Combine(scratchDirectory, "testresults");
+            Directory.CreateDirectory(testResultsDirectory);
+            File.WriteAllText(Path.Combine(scratchDirectory, "test-exit-code.txt"), exitCode.ToString());
+            WriteTrxFile(Path.Combine(testResultsDirectory, "results.trx"), totalTests: 5);
+
+            using var command = new PowerShellCommand(CreateTestResultValidationScript(scratchDirectory, allowZeroTests: true, ignoreTestFailures: true), _output).WithTimeout(TimeSpan.FromMinutes(1));
+
+            CommandResult result = await command.ExecuteAsync(scratchDirectory);
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("is not a tolerated test outcome", result.Output);
+        }
+        finally
+        {
+            DeleteScratchDirectory(scratchDirectory);
+        }
+    }
+
+    [Theory]
     [InlineData(3)]
     [InlineData(7)]
     public async Task TestResultValidationFailsIncompleteTrxInNormalCiEvenWhenExitCodeWouldBeTolerated(int exitCode)
