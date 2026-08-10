@@ -14,7 +14,7 @@ suite('CLI process termination', () => {
         sinon.restore();
     });
 
-    test('forcefully terminates the Windows process tree for an already-exited leader', () => {
+    test('does not forcefully terminate the Windows process tree for an already-exited leader', () => {
         sinon.stub(process, 'platform').value('win32');
         const childProcess = createFakeCliProcess(4242, 0);
         const taskkillUnref = sinon.stub();
@@ -29,14 +29,10 @@ suite('CLI process termination', () => {
 
         terminateCliProcess(childProcess, 'Aspire CLI', { force: true });
 
-        sinon.assert.calledOnce(spawnStub);
-        assert.strictEqual(spawnStub.firstCall.args[0], 'taskkill.exe');
-        assert.deepStrictEqual(spawnStub.firstCall.args[1], ['/pid', '4242', '/t', '/f']);
-        assert.deepStrictEqual(spawnStub.firstCall.args[2], {
-            stdio: 'ignore',
-            windowsHide: true,
-        });
-        sinon.assert.calledOnce(taskkillUnref);
+        // After Node has observed exit, taskkill would resolve PID 4242 against the current process
+        // table rather than a durable handle to the former CLI tree.
+        sinon.assert.notCalled(spawnStub);
+        sinon.assert.notCalled(taskkillUnref);
         sinon.assert.notCalled(childProcess.kill);
     });
 });

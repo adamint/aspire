@@ -169,14 +169,10 @@ export function terminateCliProcess(childProcess: ChildProcessWithoutNullStreams
             return;
         }
 
-        // Windows does not tie child lifetimes to the parent process. An exited CLI leader can
-        // still have an AppHost/resource tree underneath its recorded PID, so sweep it with
-        // taskkill during forceful shutdown instead of treating the leader's exit as proof that
-        // teardown completed. Non-force callers keep the historical no-op behavior because a short
-        // helper CLI can legitimately exit before its close handler observes it.
-        if (!options?.force) {
-            return;
-        }
+        // Windows taskkill walks the live process table from the PID. Once Node has reported the
+        // process exit, that PID can be reassigned to an unrelated process, so there is no safe
+        // process-tree sweep left to perform from this helper.
+        return;
     }
 
     if (options?.force) {
