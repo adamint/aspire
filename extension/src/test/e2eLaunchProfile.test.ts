@@ -181,9 +181,9 @@ suite('E2E launch profile', () => {
         const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
         const internalFeed = 'https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/';
 
-        assert.strictEqual(packageJson.devDependencies['vscode-extension-tester'], '8.24.0');
+        assert.strictEqual(packageJson.devDependencies['vscode-extension-tester'], '8.23.0');
         assert.strictEqual(packageJson.resolutions.undici, '7.29.0');
-        assert.ok(lockfile.includes('vscode-extension-tester@8.24.0'));
+        assert.ok(lockfile.includes('vscode-extension-tester@8.23.0'));
         assert.ok(lockfile.includes('undici@7.29.0'));
         assert.ok(lockfile.split(/\r?\n/).filter(l => /^\s*resolved\s+"/.test(l)).every(l => l.includes(internalFeed)));
         assert.ok(workflow.includes('NPM_REGISTRY: https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/'));
@@ -194,7 +194,7 @@ suite('E2E launch profile', () => {
         assert.ok(!workflow.includes('registry=https://'));
     });
 
-    test('defaults to the maximum VS Code version supported by pinned ExTester', () => {
+    test('defaults to the current VS Code version while the internal feed lacks newer ExTester', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
         const installedPackageJson = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'node_modules', 'vscode-extension-tester', 'package.json'), 'utf8'));
@@ -202,14 +202,15 @@ suite('E2E launch profile', () => {
             loadCodeVersion(version: string): string;
         };
         const previousCodeVersion = process.env.CODE_VERSION;
+        const currentVsCodeVersion = '1.131.0';
 
-        assert.ok(runner.includes("process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || 'max'"));
-        assert.strictEqual(installedPackageJson.version, '8.24.0');
-        assert.strictEqual(installedPackageJson.supportedVersions['vscode-max'], '1.131.0');
+        assert.ok(runner.includes(`process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '${currentVsCodeVersion}'`));
+        assert.strictEqual(installedPackageJson.version, '8.23.0');
+        assert.notStrictEqual(installedPackageJson.supportedVersions['vscode-max'], currentVsCodeVersion);
 
         try {
             delete process.env.CODE_VERSION;
-            assert.strictEqual(extester.loadCodeVersion('max'), installedPackageJson.supportedVersions['vscode-max']);
+            assert.strictEqual(extester.loadCodeVersion(currentVsCodeVersion), currentVsCodeVersion);
         }
         finally {
             if (previousCodeVersion === undefined) {
@@ -799,7 +800,7 @@ suite('E2E launch profile', () => {
         assert.ok(resolverStart >= 0);
         assert.ok(resolverBody.includes("normalizedVersion === 'min' || normalizedVersion === 'max'"));
         assert.ok(resolverBody.includes('/^\\d+\\.\\d+(\\.\\d+)?$/.test(normalizedVersion)'));
-        assert.ok(resolverBody.includes("a concrete version such as '1.130.0'"));
+        assert.ok(resolverBody.includes("a concrete version such as '1.131.0'"));
         assert.ok(resolverBody.includes('throw new Error('));
     });
 
