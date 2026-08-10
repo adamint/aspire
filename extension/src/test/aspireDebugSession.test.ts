@@ -1330,6 +1330,76 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         }
     });
 
+    test('stopDebugging records the AppHost stop timeout and still stops the Aspire parent when the AppHost Thenable never settles', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const appHostDebugSession = {
+            id: 'apphost-session',
+            type: 'coreclr',
+            name: 'AppHost',
+            configuration: {
+                type: 'coreclr',
+                request: 'launch',
+                name: 'AppHost',
+            },
+        };
+        const terminalProvider = {
+            isCliDebugLoggingEnabled: () => false,
+        };
+        const stopDebuggingStub = sinon.stub(vscode.debug, 'stopDebugging').callsFake(session => {
+            if (session === appHostDebugSession) {
+                return new Promise<void>(() => { });
+            }
+
+            return Promise.resolve();
+        });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        (aspireDebugSession as any)._appHostDebugSession = {
+            id: appHostDebugSession.id,
+            session: appHostDebugSession as unknown as vscode.DebugSession,
+            stopSession: () => vscode.debug.stopDebugging(appHostDebugSession as unknown as vscode.DebugSession),
+        };
+        (aspireDebugSession as any)._resourceDebugSessions = [];
+
+        try {
+            const stopPromise = aspireDebugSession.stopDebugging().then(
+                () => undefined,
+                error => error as unknown);
+
+            await clock.tickAsync(10_000);
+            const stopError = await Promise.race([
+                stopPromise,
+                Promise.resolve('pending' as const),
+            ]);
+
+            assert.notStrictEqual(stopError, 'pending', 'Expected stopDebugging to finish after the AppHost stop deadline.');
+            assert.ok(stopError instanceof Error);
+            assert.match(stopError.message, /Timed out after 10000ms waiting for AppHost debug session apphost-session to stop/);
+            // The hung AppHost stop must not prevent the Aspire parent from being stopped, otherwise
+            // the E2E control channel stays open after shutdown.
+            assert.strictEqual(stopDebuggingStub.callCount, 2);
+            assert.strictEqual(stopDebuggingStub.firstCall.args[0], appHostDebugSession);
+            assert.strictEqual(stopDebuggingStub.secondCall.args[0], parentDebugSession);
+        }
+        finally {
+            clock.restore();
+        }
+    });
+
     test('stopDebugging does not stop the Aspire parent session twice when AppHost stop disposes the Aspire session', async () => {
         const parentDebugSession = {
             id: 'aspire-session',

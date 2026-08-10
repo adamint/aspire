@@ -158,20 +158,26 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
     // Global/E2E stop requests target the synthetic Aspire session. Stop the real AppHost session
     // explicitly before the parent so we do not rely on VS Code cascading termination before the
-    // AppHost registry refresh runs.
-    try {
-      await this._appHostDebugSession?.stopSession();
-    }
-    catch (error) {
-      stopFailures.push(error);
-    }
-    finally {
+    // AppHost registry refresh runs. The adapter's stopSession() is an external Thenable that can
+    // hang, so it gets the same deadline as the resource and parent stops - otherwise a stuck AppHost
+    // adapter would never reach the parent stop below and would strand the E2E control channel.
+    const appHostDebugSession = this._appHostDebugSession;
+    if (appHostDebugSession) {
       try {
-        await this.requestParentDebugSessionStopWithDeadline();
+        await AspireDebugSession.withStopDeadline(
+          { sessionId: appHostDebugSession.id, promise: Promise.resolve(appHostDebugSession.stopSession()) },
+          'AppHost debug session');
       }
       catch (error) {
         stopFailures.push(error);
       }
+    }
+
+    try {
+      await this.requestParentDebugSessionStopWithDeadline();
+    }
+    catch (error) {
+      stopFailures.push(error);
     }
 
     if (stopFailures.length === 1) {
