@@ -486,11 +486,6 @@ The current layout continues to work — this is a non-blocking warning.</target
         <target state="new">Aspire extension for VS Code is installed</target>
         <note />
       </trans-unit>
-      <trans-unit id="VsCodeExtensionLatestVersionCheckTimedOutDetails">
-        <source>Could not check for Aspire extension updates because the VS Code Marketplace request timed out.</source>
-        <target state="new">Could not check for Aspire extension updates because the VS Code Marketplace request timed out.</target>
-        <note />
-      </trans-unit>
       <trans-unit id="VsCodeExtensionLatestVersionCheckUnavailableDetails">
         <source>Could not check for Aspire extension updates because the VS Code Marketplace is unavailable.</source>
         <target state="new">Could not check for Aspire extension updates because the VS Code Marketplace is unavailable.</target>
@@ -515,26 +510,6 @@ The current layout continues to work — this is a non-blocking warning.</target
         <source>Aspire extension for VS Code {0} is out of date (latest: {1})</source>
         <target state="new">Aspire extension for VS Code {0} is out of date (latest: {1})</target>
         <note>{0} is the installed extension version. {1} is the latest extension version.</note>
-      </trans-unit>
-      <trans-unit id="VsCodeExtensionVersionUnknownDetails">
-        <source>The extension did not report a usable version.</source>
-        <target state="new">The extension did not report a usable version.</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="VsCodeExtensionVersionUnknownFix">
-        <source>Run 'aspire doctor' from a VS Code terminal, or reinstall the Aspire extension so its manifest can be read.</source>
-        <target state="new">Run 'aspire doctor' from a VS Code terminal, or reinstall the Aspire extension so its manifest can be read.</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="VsCodeExtensionVersionUnknownMessage">
-        <source>Aspire extension for VS Code is installed, but its version could not be determined</source>
-        <target state="new">Aspire extension for VS Code is installed, but its version could not be determined</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="VsCodeExtensionVersionUnknownSearchedDetailsFormat">
-        <source>Looked for the extension manifest in: {0}.</source>
-        <target state="new">Looked for the extension manifest in: {0}.</target>
-        <note>{0} is a comma-separated list of extension directories that were searched.</note>
       </trans-unit>
     </body>
   </file>

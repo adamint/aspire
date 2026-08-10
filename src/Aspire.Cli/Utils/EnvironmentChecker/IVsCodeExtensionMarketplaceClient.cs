@@ -6,19 +6,15 @@ using Semver;
 namespace Aspire.Cli.Utils.EnvironmentChecker;
 
 /// <summary>
-/// Retrieves the latest published Aspire VS Code extension versions from the Marketplace.
+/// Retrieves the latest Aspire VS Code extension versions published to the Marketplace.
 /// </summary>
 internal interface IVsCodeExtensionMarketplaceClient
 {
-    /// <summary>
-    /// Gets the latest stable and pre-release extension versions.
-    /// </summary>
     Task<VsCodeExtensionMarketplaceVersions> GetLatestVersionsAsync(CancellationToken cancellationToken);
 }
 
 /// <summary>
-/// The latest extension version published on each Marketplace release channel. A channel is
-/// <see langword="null" /> when the Marketplace has never published a version on it.
+/// The latest extension version published on each Marketplace release channel.
 /// </summary>
 internal sealed record VsCodeExtensionMarketplaceVersions(
     SemVersion? StableVersion,

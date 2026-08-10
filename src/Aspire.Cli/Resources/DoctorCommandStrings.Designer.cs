@@ -186,56 +186,11 @@ namespace Aspire.Cli.Resources {
         }
 
         /// <summary>
-        ///   Looks up a localized string similar to Could not check for Aspire extension updates because the VS Code Marketplace request timed out..
-        /// </summary>
-        public static string VsCodeExtensionLatestVersionCheckTimedOutDetails {
-            get {
-                return ResourceManager.GetString("VsCodeExtensionLatestVersionCheckTimedOutDetails", resourceCulture);
-            }
-        }
-
-        /// <summary>
         ///   Looks up a localized string similar to Could not check for Aspire extension updates because the VS Code Marketplace is unavailable..
         /// </summary>
         public static string VsCodeExtensionLatestVersionCheckUnavailableDetails {
             get {
                 return ResourceManager.GetString("VsCodeExtensionLatestVersionCheckUnavailableDetails", resourceCulture);
-            }
-        }
-
-        /// <summary>
-        ///   Looks up a localized string similar to Aspire extension for VS Code is installed, but its version could not be determined.
-        /// </summary>
-        public static string VsCodeExtensionVersionUnknownMessage {
-            get {
-                return ResourceManager.GetString("VsCodeExtensionVersionUnknownMessage", resourceCulture);
-            }
-        }
-
-        /// <summary>
-        ///   Looks up a localized string similar to Run &apos;aspire doctor&apos; from a VS Code terminal, or reinstall the Aspire extension so its manifest can be read..
-        /// </summary>
-        public static string VsCodeExtensionVersionUnknownFix {
-            get {
-                return ResourceManager.GetString("VsCodeExtensionVersionUnknownFix", resourceCulture);
-            }
-        }
-
-        /// <summary>
-        ///   Looks up a localized string similar to The extension did not report a usable version..
-        /// </summary>
-        public static string VsCodeExtensionVersionUnknownDetails {
-            get {
-                return ResourceManager.GetString("VsCodeExtensionVersionUnknownDetails", resourceCulture);
-            }
-        }
-
-        /// <summary>
-        ///   Looks up a localized string similar to Looked for the extension manifest in: {0}..
-        /// </summary>
-        public static string VsCodeExtensionVersionUnknownSearchedDetailsFormat {
-            get {
-                return ResourceManager.GetString("VsCodeExtensionVersionUnknownSearchedDetailsFormat", resourceCulture);
             }
         }
 

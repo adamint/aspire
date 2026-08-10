@@ -3,19 +3,16 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import {
     ASPIRE_CLI_PATH_ENV_VAR,
+    ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR,
+    ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR,
     CliPathEnvironmentCollection,
     CliPathEnvironmentDependencies,
     createAspireCliPathProcessEnvironment,
-    getAspireExtensionChannel,
-    getAspireExtensionSource,
     getForwardableAspireCliPath,
     initializeCliPathEnvironmentSync,
     registerCliPathEnvironmentSync,
     syncAspireCliPathEnvironment,
-    syncAspireExtensionVersionEnvironment,
-    ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR,
-    ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR,
-    ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR,
+    syncAspireExtensionEnvironment,
 } from '../utils/cliPathEnvironment';
 import {
     isConfiguredCliPathRejectedForForwarding,
@@ -53,6 +50,28 @@ function makeDeps(overrides: Partial<CliPathEnvironmentDependencies> = {}): CliP
 function normalizeCandidate(candidate: string): string {
     return candidate.replace(/\\/g, '/');
 }
+
+suite('cliPathEnvironment.syncAspireExtensionEnvironment tests', () => {
+    test('contributes the running extension version and channel', () => {
+        const collection = createFakeCollection();
+
+        syncAspireExtensionEnvironment(collection, '1.17.0', true);
+
+        assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), '1.17.0');
+        assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR), 'pre-release');
+    });
+
+    test('clears stale extension signals when the manifest version is unavailable', () => {
+        const collection = createFakeCollection();
+        collection.entries.set(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR, '1.16.0');
+        collection.entries.set(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR, 'stable');
+
+        syncAspireExtensionEnvironment(collection, undefined, false);
+
+        assert.strictEqual(collection.entries.has(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), false);
+        assert.strictEqual(collection.entries.has(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR), false);
+    });
+});
 
 suite('cliPathEnvironment.getForwardableAspireCliPath tests', () => {
     test('returns the configured path when it is absolute and exists', () => {
@@ -419,123 +438,5 @@ suite('cliPathEnvironment.registerCliPathEnvironmentSync tests', () => {
         completeResolution!();
         await initialization;
         assert.strictEqual(initializationCompleted, true);
-    });
-});
-
-suite('cliPathEnvironment.syncAspireExtensionVersionEnvironment tests', () => {
-    test('reads pre-release channel from VS Code marketplace metadata', () => {
-        assert.strictEqual(getAspireExtensionChannel({
-            __metadata: {
-                isPreReleaseVersion: true,
-                publisherId: 'publisher-id',
-            },
-        }), 'pre-release');
-    });
-
-    test('never reports a marketplace source, whatever the manifest claims', () => {
-        // The extension host has no trustworthy install-origin signal. `__metadata` is normally
-        // deleted before the extension sees it, and where it survives a side-loaded VSIX can ship its
-        // own `source` in package.json, because VS Code's ManifestMetadata has no `source` field and
-        // the extracted manifest is written by merging into whatever was already there. Reporting
-        // unknown hands the decision to the CLI, which reads the authoritative profile index.
-        assert.strictEqual(getAspireExtensionSource(), 'unknown');
-    });
-
-    test('reads the pre-release channel from the extension description', () => {
-        // Current VS Code deletes __metadata from the manifest before building the description the
-        // extension host sees, and exposes the channel as `preRelease` instead. Without this the
-        // channel silently reports stable for every pre-release install.
-        assert.strictEqual(getAspireExtensionChannel({ version: '1.17.0', preRelease: true }), 'pre-release');
-        assert.strictEqual(getAspireExtensionChannel({ version: '1.17.0', preRelease: false }), 'stable');
-    });
-
-    test('reports an unknown channel for a present but non-boolean pre-release flag', () => {
-        // Reporting stable for a flag VS Code did not write would compare a possibly pre-release
-        // install against the stable feed. The CLI declines the comparison on an unknown channel.
-        assert.strictEqual(getAspireExtensionChannel({
-            version: '1.17.0',
-            __metadata: { isPreReleaseVersion: 'true' },
-        }), 'unknown');
-    });
-
-    test('reports the stable channel when neither signal is present', () => {
-        assert.strictEqual(getAspireExtensionChannel({ version: '1.17.0' }), 'stable');
-    });
-
-    test('contributes the running extension version', () => {
-        const collection = createFakeCollection();
-
-        assert.strictEqual(syncAspireExtensionVersionEnvironment(collection, '1.16.0', 'stable', 'unknown', () => { }), '1.16.0');
-        assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), '1.16.0');
-    });
-
-    test('contributes pre-release versions verbatim so the CLI can pick the pre-release feed', () => {
-        const collection = createFakeCollection();
-
-        assert.strictEqual(syncAspireExtensionVersionEnvironment(collection, '1.17.0-preview.1.25601.3', 'pre-release', 'marketplace', () => { }), '1.17.0-preview.1.25601.3');
-        assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), '1.17.0-preview.1.25601.3');
-        assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR), 'pre-release');
-        assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR), 'marketplace');
-    });
-
-    test('contributes stable marketplace channel when no pre-release flag is present', () => {
-        const collection = createFakeCollection();
-
-        assert.strictEqual(syncAspireExtensionVersionEnvironment(collection, '1.17.0', 'stable', 'marketplace', () => { }), '1.17.0');
-        assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), '1.17.0');
-        assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR), 'stable');
-        assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR), 'marketplace');
-    });
-
-    test('contributes unknown source for dev or VSIX installs', () => {
-        const collection = createFakeCollection();
-
-        assert.strictEqual(syncAspireExtensionVersionEnvironment(collection, '1.17.0', 'stable', 'unknown', () => { }), '1.17.0');
-        assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR), 'unknown');
-    });
-
-    test('clears the variable when the manifest reports no version', () => {
-        const collection = createFakeCollection();
-        collection.replace(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR, '1.0.0');
-        collection.replace(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR, 'stable');
-        collection.replace(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR, 'marketplace');
-
-        assert.strictEqual(syncAspireExtensionVersionEnvironment(collection, undefined, 'stable', 'unknown', () => { }), undefined);
-        assert.strictEqual(collection.entries.has(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), false);
-        assert.strictEqual(collection.entries.has(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR), false);
-        assert.strictEqual(collection.entries.has(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR), false);
-    });
-
-    test('clears the variable when the manifest version is blank', () => {
-        const collection = createFakeCollection();
-        collection.replace(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR, '1.0.0');
-        collection.replace(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR, 'stable');
-        collection.replace(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR, 'marketplace');
-
-        assert.strictEqual(syncAspireExtensionVersionEnvironment(collection, '   ', 'stable', 'unknown', () => { }), undefined);
-        assert.strictEqual(collection.entries.has(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), false);
-        assert.strictEqual(collection.entries.has(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR), false);
-        assert.strictEqual(collection.entries.has(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR), false);
-    });
-
-    test('does not disturb the CLI path contribution or its description', () => {
-        const collection = createFakeCollection();
-        syncAspireCliPathEnvironment(collection, makeDeps({ getConfiguredPath: () => '/abs/aspire' }));
-        const description = collection.description;
-
-        syncAspireExtensionVersionEnvironment(collection, '1.16.0', 'stable', 'unknown', () => { });
-
-        assert.strictEqual(collection.entries.get(ASPIRE_CLI_PATH_ENV_VAR), '/abs/aspire');
-        assert.strictEqual(collection.description, description);
-    });
-
-    test('is contributed even when no CLI path can be forwarded', () => {
-        const collection = createFakeCollection();
-        syncAspireCliPathEnvironment(collection, makeDeps({ getConfiguredPath: () => 'aspire' }));
-
-        syncAspireExtensionVersionEnvironment(collection, '1.16.0', 'stable', 'unknown', () => { });
-
-        assert.strictEqual(collection.entries.has(ASPIRE_CLI_PATH_ENV_VAR), false);
-        assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), '1.16.0');
     });
 });

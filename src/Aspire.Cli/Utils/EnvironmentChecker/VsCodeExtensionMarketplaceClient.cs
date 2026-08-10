@@ -1,232 +1,65 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Semver;
 
 namespace Aspire.Cli.Utils.EnvironmentChecker;
 
-internal sealed class VsCodeExtensionMarketplaceClient : IVsCodeExtensionMarketplaceClient
+/// <summary>
+/// Queries the Visual Studio Marketplace for Aspire VS Code extension versions.
+/// </summary>
+internal sealed class VsCodeExtensionMarketplaceClient(HttpClient httpClient) : IVsCodeExtensionMarketplaceClient
 {
-    internal const string ExtensionId = VsCodeExtensionCheck.ExtensionId;
-
     private const string MarketplaceQueryUrl = "https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery";
-
-    // The gallery is an Azure DevOps service, so every request must name an API version or the
-    // service rejects it with HTTP 400 VssVersionNotSpecifiedException before running the query.
-    // The version travels in the Accept header rather than the query string so the request URI
-    // stays a bare endpoint.
-    // See https://learn.microsoft.com/azure/devops/integrate/concepts/rest-api-versioning.
-    private const string MarketplaceAcceptHeader = "application/json; api-version=3.0-preview.1";
-
-    private const int MaximumResponseSize = 1024 * 1024;
-    private static readonly TimeSpan s_defaultTimeout = TimeSpan.FromSeconds(5);
-
-    private readonly HttpClient _httpClient;
-    private readonly TimeProvider _timeProvider;
-    private readonly TimeSpan _timeout;
-
-    public VsCodeExtensionMarketplaceClient(HttpClient httpClient)
-        : this(httpClient, TimeProvider.System)
-    {
-    }
-
-    internal VsCodeExtensionMarketplaceClient(
-        HttpClient httpClient,
-        TimeProvider timeProvider,
-        TimeSpan? timeout = null)
-    {
-        _httpClient = httpClient;
-        _timeProvider = timeProvider;
-        _timeout = timeout ?? s_defaultTimeout;
-    }
+    private const string PreReleasePropertyName = "Microsoft.VisualStudio.Code.PreRelease";
 
     public async Task<VsCodeExtensionMarketplaceVersions> GetLatestVersionsAsync(CancellationToken cancellationToken)
     {
-        using var request = CreateRequest();
-        using var timeoutCancellation = new CancellationTokenSource(_timeout, _timeProvider);
-        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken,
-            timeoutCancellation.Token);
-
-        try
-        {
-            // ResponseHeadersRead returns as soon as the response headers arrive, so the body is
-            // still streaming after SendAsync completes. Both the send and the body read observe the
-            // private timeout token, so the whole operation has to sit inside the translation: a
-            // server that returns headers and then stalls would otherwise surface a bare
-            // OperationCanceledException, and doctor drops the check on cancellation instead of
-            // reporting the documented timeout warning.
-            using var response = await _httpClient.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
-                linkedCancellation.Token);
-
-            response.EnsureSuccessStatusCode();
-            var responseBytes = await ReadBoundedResponseAsync(response.Content, linkedCancellation.Token);
-
-            return ParseVersions(responseBytes);
-        }
-        catch (OperationCanceledException exception) when (
-            timeoutCancellation.IsCancellationRequested &&
-            !cancellationToken.IsCancellationRequested)
-        {
-            throw new TimeoutException(
-                $"The VS Code Marketplace request timed out after {_timeout.TotalSeconds:g} seconds.",
-                exception);
-        }
-    }
-
-    private static HttpRequestMessage CreateRequest()
-    {
-        // The Marketplace extension query API accepts a static anonymous payload. Keep this request
-        // free of machine, user, installation, and path data so doctor does not introduce a new
-        // telemetry or privacy surface.
+        // The numeric filter and flag values are the Marketplace protocol used by VS Code:
+        // ExtensionName (7), Target (8), ExcludeWithFlags (12), IncludeVersionProperties (0x10),
+        // ExcludeNonValidated (0x20), and IncludeLatestPrereleaseAndStableVersionOnly (0x10000).
+        // See https://github.com/microsoft/vscode/blob/main/src/vs/platform/extensionManagement/common/extensionGalleryManifestService.ts.
         const string requestBody = """
             {
-              "filters": [
-                {
-                  "criteria": [
-                    {
-                      "filterType": 7,
-                      "value": "microsoft-aspire.aspire-vscode"
-                    },
-                    {
-                      "filterType": 8,
-                      "value": "Microsoft.VisualStudio.Code"
-                    },
-                    {
-                      "filterType": 12,
-                      "value": "4096"
-                    }
-                  ]
-                }
-              ],
+              "filters": [{
+                "criteria": [
+                  { "filterType": 7, "value": "microsoft-aspire.aspire-vscode" },
+                  { "filterType": 8, "value": "Microsoft.VisualStudio.Code" },
+                  { "filterType": 12, "value": "4096" }
+                ]
+              }],
               "assetTypes": [],
               "flags": 65584
             }
             """;
-        var request = new HttpRequestMessage(HttpMethod.Post, MarketplaceQueryUrl)
+        using var request = new HttpRequestMessage(HttpMethod.Post, MarketplaceQueryUrl)
         {
             Content = new StringContent(requestBody, Encoding.UTF8, "application/json")
         };
-        request.Headers.Accept.ParseAdd(MarketplaceAcceptHeader);
+        request.Headers.Accept.ParseAdd("application/json; api-version=3.0-preview.1");
 
-        // VS Code identifies itself with X-Market-Client-Id and a per-installation X-Market-User-Id.
-        // The gallery does not require either for an anonymous query, so they are deliberately
-        // omitted: sending them would make doctor either impersonate VS Code or emit an identifier
-        // the CLI does not otherwise send.
-        request.Headers.Add("X-TFS-FedAuthRedirect", "Suppress");
-        request.Headers.UserAgent.ParseAdd($"Aspire-CLI/{GetAssemblyVersion()}");
+        using var response = await httpClient.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var responseJson = await JsonDocument.ParseAsync(responseStream, cancellationToken: cancellationToken);
 
-        return request;
+        return ParseVersions(responseJson.RootElement);
     }
 
-    private static string GetAssemblyVersion()
-        => typeof(VsCodeExtensionMarketplaceClient).Assembly
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-            .InformationalVersion
-            .Split('+', 2)[0]
-            ?? "0.0.0";
-
-    private static async Task<ReadOnlyMemory<byte>> ReadBoundedResponseAsync(
-        HttpContent content,
-        CancellationToken cancellationToken)
+    private static VsCodeExtensionMarketplaceVersions ParseVersions(JsonElement root)
     {
-        if (content.Headers.ContentLength > MaximumResponseSize)
-        {
-            throw new InvalidDataException(
-                $"The VS Code Marketplace response exceeded the {MaximumResponseSize} byte limit.");
-        }
+        // The response nests the two requested channel entries as:
+        //   { "results": [{ "extensions": [{ "versions": [
+        //       { "version": "1.3.0" },
+        //       { "version": "1.4.0", "properties": [{
+        //           "key": "Microsoft.VisualStudio.Code.PreRelease", "value": "true" }] }
+        //   ] }] }] }
+        SemVersion? stableVersion = null;
+        SemVersion? preReleaseVersion = null;
 
-        await using var stream = await content.ReadAsStreamAsync(cancellationToken);
-        var bytes = new byte[MaximumResponseSize + 1];
-        var totalBytesRead = 0;
-
-        while (totalBytesRead < bytes.Length)
-        {
-            var bytesRead = await stream.ReadAsync(
-                bytes.AsMemory(totalBytesRead, bytes.Length - totalBytesRead),
-                cancellationToken);
-            if (bytesRead == 0)
-            {
-                break;
-            }
-
-            totalBytesRead += bytesRead;
-        }
-
-        if (totalBytesRead > MaximumResponseSize)
-        {
-            throw new InvalidDataException(
-                $"The VS Code Marketplace response exceeded the {MaximumResponseSize} byte limit.");
-        }
-
-        return bytes.AsMemory(0, totalBytesRead);
-    }
-
-    private static VsCodeExtensionMarketplaceVersions ParseVersions(ReadOnlyMemory<byte> responseBytes)
-    {
-        // The gallery response nests the matched extension under results[].extensions[], and the
-        // requested flags limit "versions" to the latest stable and latest pre-release entries:
-        //   { "results": [ { "extensions": [ {
-        //       "publisher": { "publisherName": "microsoft-aspire" },
-        //       "extensionName": "aspire-vscode",
-        //       "versions": [
-        //         { "version": "1.16.0", "properties": [] },
-        //         { "version": "1.0.0", "properties": [
-        //             { "key": "Microsoft.VisualStudio.Code.PreRelease", "value": "true" } ] } ] } ] } ] }
-        // Stable entries omit the PreRelease property rather than setting it to "false", the two
-        // entries arrive in no guaranteed order, and the latest pre-release can be older than the
-        // latest stable, so each channel is reduced independently by precedence.
-        using var document = JsonDocument.Parse(responseBytes);
-        if (!TryFindExtension(document.RootElement, out var extension))
-        {
-            throw new InvalidDataException(
-                $"The VS Code Marketplace response did not contain extension '{ExtensionId}'.");
-        }
-
-        SemVersion? latestStableVersion = null;
-        SemVersion? latestPreReleaseVersion = null;
-        if (extension.TryGetProperty("versions", out var versions) &&
-            versions.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var versionEntry in versions.EnumerateArray())
-            {
-                if (versionEntry.ValueKind != JsonValueKind.Object ||
-                    !versionEntry.TryGetProperty("version", out var versionElement) ||
-                    versionElement.ValueKind != JsonValueKind.String ||
-                    !SemVersion.TryParse(versionElement.GetString(), SemVersionStyles.Strict, out var version))
-                {
-                    continue;
-                }
-
-                // A flag that is present but unreadable cannot be filed into either channel. Filing it
-                // as stable, which is what an absent flag means, would let a pre-release version set
-                // StableVersion and hand a stable user an update warning naming a build their channel
-                // will never receive.
-                switch (GetPreReleaseFlag(versionEntry))
-                {
-                    case true:
-                        latestPreReleaseVersion = SelectLaterVersion(latestPreReleaseVersion, version);
-                        break;
-                    case false:
-                        latestStableVersion = SelectLaterVersion(latestStableVersion, version);
-                        break;
-                }
-            }
-        }
-
-        return new VsCodeExtensionMarketplaceVersions(latestStableVersion, latestPreReleaseVersion);
-    }
-
-    private static bool TryFindExtension(JsonElement root, out JsonElement extension)
-    {
-        if (root.ValueKind == JsonValueKind.Object &&
-            root.TryGetProperty("results", out var results) &&
-            results.ValueKind == JsonValueKind.Array)
+        if (root.TryGetProperty("results", out var results) && results.ValueKind == JsonValueKind.Array)
         {
             foreach (var result in results.EnumerateArray())
             {
@@ -237,106 +70,67 @@ internal sealed class VsCodeExtensionMarketplaceClient : IVsCodeExtensionMarketp
                     continue;
                 }
 
-                foreach (var candidate in extensions.EnumerateArray())
+                foreach (var extension in extensions.EnumerateArray())
                 {
-                    if (candidate.ValueKind != JsonValueKind.Object)
+                    if (extension.ValueKind != JsonValueKind.Object ||
+                        !extension.TryGetProperty("versions", out var versions) ||
+                        versions.ValueKind != JsonValueKind.Array)
                     {
                         continue;
                     }
 
-                    // Every read below is value-kind guarded before GetString. JsonElement.GetString
-                    // throws InvalidOperationException (not JsonException) when a property is present
-                    // but is not a JSON string, and that exception is not one of the failures
-                    // CheckAsync translates into the documented "Marketplace unavailable" warning, so
-                    // a response such as { "extensionName": 1 } would drop the whole vscode-extension
-                    // check from doctor's output instead of degrading gracefully.
-                    var extensionName =
-                        candidate.TryGetProperty("extensionName", out var extensionNameElement) &&
-                        extensionNameElement.ValueKind == JsonValueKind.String
-                            ? extensionNameElement.GetString()
-                            : null;
-                    var publisherName =
-                        candidate.TryGetProperty("publisher", out var publisher) &&
-                        publisher.ValueKind == JsonValueKind.Object &&
-                        publisher.TryGetProperty("publisherName", out var publisherNameElement) &&
-                        publisherNameElement.ValueKind == JsonValueKind.String
-                            ? publisherNameElement.GetString()
-                            : null;
-                    if (string.Equals(extensionName, "aspire-vscode", StringComparison.OrdinalIgnoreCase) &&
-                        string.Equals(publisherName, "microsoft-aspire", StringComparison.OrdinalIgnoreCase))
+                    foreach (var versionEntry in versions.EnumerateArray())
                     {
-                        extension = candidate;
-                        return true;
+                        if (versionEntry.ValueKind != JsonValueKind.Object ||
+                            !versionEntry.TryGetProperty("version", out var versionElement) ||
+                            versionElement.ValueKind != JsonValueKind.String ||
+                            !SemVersion.TryParse(versionElement.GetString(), SemVersionStyles.Strict, out var version))
+                        {
+                            continue;
+                        }
+
+                        if (IsPreRelease(versionEntry))
+                        {
+                            preReleaseVersion = SelectLatest(preReleaseVersion, version);
+                        }
+                        else
+                        {
+                            stableVersion = SelectLatest(stableVersion, version);
+                        }
                     }
                 }
             }
         }
 
-        extension = default;
-        return false;
+        return new VsCodeExtensionMarketplaceVersions(stableVersion, preReleaseVersion);
     }
 
-    /// <summary>
-    /// Returns whether a gallery version entry is a pre-release, or <see langword="null"/> when the
-    /// entry carries the flag but its value cannot be read.
-    /// </summary>
-    private static bool? GetPreReleaseFlag(JsonElement versionEntry)
+    private static bool IsPreRelease(JsonElement versionEntry)
     {
-        if (versionEntry.ValueKind != JsonValueKind.Object)
-        {
-            return null;
-        }
-
-        // An absent "properties" member is how the gallery says "stable" -- the flag is only emitted
-        // for pre-release versions. A member that is present but not an array is a different thing: the
-        // response carries something the parser cannot read, and calling that stable would compare a
-        // pre-release build against the stable feed.
-        if (!versionEntry.TryGetProperty("properties", out var properties))
+        if (!versionEntry.TryGetProperty("properties", out var properties) ||
+            properties.ValueKind != JsonValueKind.Array)
         {
             return false;
         }
 
-        if (properties.ValueKind != JsonValueKind.Array)
-        {
-            return null;
-        }
-
         foreach (var property in properties.EnumerateArray())
         {
-            // The gallery emits the flag as a stringly-typed key/value pair:
-            //   { "key": "Microsoft.VisualStudio.Code.PreRelease", "value": "true" }
-            // The key is value-kind guarded before GetString for the same reason as TryFindExtension:
-            // a non-string "key" would raise InvalidOperationException, which CheckAsync does not
-            // translate into the "Marketplace unavailable" warning.
-            if (property.ValueKind != JsonValueKind.Object ||
-                !property.TryGetProperty("key", out var key) ||
-                key.ValueKind != JsonValueKind.String ||
-                !string.Equals(
-                    key.GetString(),
-                    "Microsoft.VisualStudio.Code.PreRelease",
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            // The key matched, so this entry does carry the flag. Anything unreadable from here is
-            // reported as unknown rather than skipped past, because falling through to the "no flag"
-            // result below would silently classify a pre-release version as stable.
-            if (property.TryGetProperty("value", out var value) &&
+            if (property.ValueKind == JsonValueKind.Object &&
+                property.TryGetProperty("key", out var key) &&
+                key.ValueKind == JsonValueKind.String &&
+                string.Equals(key.GetString(), PreReleasePropertyName, StringComparison.OrdinalIgnoreCase) &&
+                property.TryGetProperty("value", out var value) &&
                 value.ValueKind == JsonValueKind.String &&
                 bool.TryParse(value.GetString(), out var isPreRelease))
             {
                 return isPreRelease;
             }
-
-            return null;
         }
 
-        // A stable version carries no pre-release property at all.
         return false;
     }
 
-    private static SemVersion SelectLaterVersion(SemVersion? current, SemVersion candidate)
+    private static SemVersion SelectLatest(SemVersion? current, SemVersion candidate)
         => current is null || SemVersion.ComparePrecedence(candidate, current) > 0
             ? candidate
             : current;

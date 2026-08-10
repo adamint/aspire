@@ -36,7 +36,6 @@ public sealed class DoctorCommandTests(ITestOutputHelper output)
         await auto.PrepareDockerEnvironmentAsync(counter, workspace);
 
         await auto.InstallAspireCliAsync(strategy, counter);
-        await IsolateVsCodeExtensionsAsync(auto, counter);
 
         // Generate and trust dev certs inside the container (Docker images don't have them by default)
         await auto.TypeAsync("dotnet dev-certs https --trust 2>/dev/null || dotnet dev-certs https");
@@ -71,7 +70,6 @@ public sealed class DoctorCommandTests(ITestOutputHelper output)
         await auto.PrepareDockerEnvironmentAsync(counter, workspace);
 
         await auto.InstallAspireCliAsync(strategy, counter);
-        await IsolateVsCodeExtensionsAsync(auto, counter);
 
         // Generate and trust dev certs inside the container (Docker images don't have them by default)
         await auto.TypeAsync("dotnet dev-certs https --trust 2>/dev/null || dotnet dev-certs https");
@@ -116,7 +114,6 @@ public sealed class DoctorCommandTests(ITestOutputHelper output)
 
         await auto.PrepareDockerEnvironmentAsync(counter, workspace);
         await auto.InstallAspireCliAsync(strategy, counter);
-        await IsolateVsCodeExtensionsAsync(auto, counter);
 
         output.WriteLine($"Testing aspire doctor missing-tool detection for: {toolchain}");
 
@@ -152,22 +149,5 @@ public sealed class DoctorCommandTests(ITestOutputHelper output)
             timeout: TimeSpan.FromSeconds(60),
             description: $"doctor to report missing {toolchain} tooling");
         await auto.WaitForAnyPromptAsync(counter);
-    }
-
-    private static Task IsolateVsCodeExtensionsAsync(
-        Hex1bTerminalAutomator auto,
-        SequenceCounter counter)
-    {
-        // Keep doctor deterministic even when the test host contributes VS Code terminal
-        // variables. An empty override root preserves missing-extension behavior without
-        // allowing doctor to inspect ambient installs or contact the live Marketplace.
-        //
-        // The ASPIRE_VSCODE_EXTENSION_* trio has to go too, and not just because it is noise:
-        // the check reads the reported version before it ever looks at an extension root, so a
-        // run started from a VS Code terminal with the Aspire extension installed would take the
-        // reported-install path, skip the empty root entirely, and query the live Marketplace.
-        return auto.RunCommandAsync(
-            """mkdir -p "$PWD/.doctor-vscode-extensions" && export VSCODE_EXTENSIONS="$PWD/.doctor-vscode-extensions" && unset VSCODE_AGENT_FOLDER VSCODE_GIT_ASKPASS_NODE VSCODE_GIT_ASKPASS_MAIN VSCODE_CLIENT_COMMAND ASPIRE_VSCODE_EXTENSION_VERSION ASPIRE_VSCODE_EXTENSION_CHANNEL ASPIRE_VSCODE_EXTENSION_SOURCE""",
-            counter);
     }
 }

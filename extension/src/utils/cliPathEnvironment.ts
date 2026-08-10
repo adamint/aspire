@@ -23,41 +23,8 @@ import { aspireCliPathEnvironmentDescription } from '../loc/strings';
  * the configured CLI's bundle.
  */
 export const ASPIRE_CLI_PATH_ENV_VAR = 'AspireCliPath';
-
-/**
- * Name of the env var carrying this extension's version to the terminals VS Code creates for the
- * extension, which is also how tasks and debug sessions configured with `"console":
- * "integratedTerminal"` receive it. EnvironmentVariableCollection does not reach a debug process
- * launched into the internal console; see https://github.com/microsoft/vscode/issues/114818.
- *
- * `aspire doctor` uses it to compare the running extension against the
- * Marketplace. Nothing on disk can answer that question: several extension roots
- * can hold the extension at once (desktop plus `.vscode-server` for
- * Remote/WSL/devcontainers), `--extensions-dir` is invisible to a child process,
- * and portable mode relocates the whole root. The extension host already knows
- * which instance is loaded, so it reports the version instead of making the CLI
- * reverse-engineer it. Read on the CLI side by
- * `src/Aspire.Cli/Utils/EnvironmentChecker/VsCodeExtensionCheck.cs`.
- */
 export const ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR = 'ASPIRE_VSCODE_EXTENSION_VERSION';
 export const ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR = 'ASPIRE_VSCODE_EXTENSION_CHANNEL';
-export const ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR = 'ASPIRE_VSCODE_EXTENSION_SOURCE';
-
-export type AspireVsCodeExtensionChannel = 'stable' | 'pre-release' | 'unknown';
-export type AspireVsCodeExtensionSource = 'marketplace' | 'unknown';
-
-interface AspireVsCodePackageMetadata {
-    isPreReleaseVersion?: unknown;
-    publisherId?: unknown;
-    source?: unknown;
-}
-
-interface AspireVsCodePackageJson {
-    version?: unknown;
-    preRelease?: unknown;
-    __metadata?: AspireVsCodePackageMetadata;
-}
-
 
 /**
  * Configuration key under the `aspire` namespace whose value the user-facing
@@ -243,8 +210,29 @@ export function syncAspireCliPathEnvironment(
 
     collection.description = aspireCliPathEnvironmentDescription;
     collection.replace(ASPIRE_CLI_PATH_ENV_VAR, forwardablePath);
-    deps.log?.(`Forwarding ${ASPIRE_CLI_PATH_ENV_VAR}=${forwardablePath} to VS Code terminals.`);
+    deps.log?.(`Forwarding ${ASPIRE_CLI_PATH_ENV_VAR}=${forwardablePath} to terminals, tasks, and debug processes.`);
     return forwardablePath;
+}
+
+/**
+ * Contributes the running extension's version and Marketplace channel to terminals created by
+ * VS Code. `aspire doctor` uses these signals because the extension host knows which extension
+ * instance is active, while several desktop and remote extension roots can coexist on disk.
+ */
+export function syncAspireExtensionEnvironment(
+    collection: CliPathEnvironmentCollection,
+    version: string | undefined,
+    preRelease: boolean,
+): void {
+    const trimmedVersion = version?.trim();
+    if (trimmedVersion === undefined || trimmedVersion.length === 0) {
+        collection.delete(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR);
+        collection.delete(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR);
+        return;
+    }
+
+    collection.replace(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR, trimmedVersion);
+    collection.replace(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR, preRelease ? 'pre-release' : 'stable');
 }
 
 /**
@@ -287,88 +275,6 @@ export function registerCliPathEnvironmentSync(
 
     subscriptions.push(disposable);
     return disposable;
-}
-
-/**
- * Contributes the running extension's version to the terminals VS Code creates
- * so `aspire doctor` can identify the active installation. Tasks and debug
- * sessions configured with `"console": "integratedTerminal"` inherit it because
- * they run in a terminal; a debug process launched into the internal console
- * does not.
- *
- * Deliberately independent of `syncAspireCliPathEnvironment`: that function
- * clears the collection description and deletes its variable when no forwardable
- * CLI path exists, and the version signal is valid regardless of which CLI (if
- * any) is being forwarded.
- *
- * Returns the value that was applied, or `undefined` when the variable was
- * cleared, so callers and tests can verify the decision without inspecting the
- * collection internals.
- */
-export function syncAspireExtensionVersionEnvironment(
-    collection: CliPathEnvironmentCollection,
-    version: string | undefined,
-    channel: AspireVsCodeExtensionChannel = 'stable',
-    source: AspireVsCodeExtensionSource = 'unknown',
-    log: ((message: string) => void) | undefined = defaultDeps.log,
-): string | undefined {
-    const trimmedVersion = version?.trim();
-    if (trimmedVersion === undefined || trimmedVersion.length === 0) {
-        collection.delete(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR);
-        collection.delete(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR);
-        collection.delete(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR);
-        log?.(`Not forwarding ${ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR}: the extension manifest reported no version.`);
-        return undefined;
-    }
-
-    collection.replace(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR, trimmedVersion);
-    collection.replace(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR, channel);
-    collection.replace(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR, source);
-    log?.(`Forwarding ${ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR}=${trimmedVersion}, ${ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR}=${channel}, and ${ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR}=${source} to VS Code terminals.`);
-    return trimmedVersion;
-}
-
-export function getAspireExtensionChannel(packageJSON: AspireVsCodePackageJson | undefined): AspireVsCodeExtensionChannel {
-    // `context.extension.packageJSON` is the `IExtensionDescription`, not the raw manifest, and the
-    // scanner deletes `__metadata` from the manifest before building it. `preRelease` is the field
-    // the description carries instead, so it is read first and `__metadata.isPreReleaseVersion` is
-    // only a fallback for older VS Code builds that still exposed the raw metadata.
-    // See https://github.com/microsoft/vscode/blob/main/src/vs/platform/extensionManagement/common/extensionsScannerService.ts
-    // (`delete manifest.__metadata` in `scanExtension`, and `preRelease` in `toExtensionDescription`).
-    if (typeof packageJSON?.preRelease === 'boolean') {
-        return packageJSON.preRelease ? 'pre-release' : 'stable';
-    }
-
-    const isPreReleaseVersion = packageJSON?.__metadata?.isPreReleaseVersion;
-    if (typeof isPreReleaseVersion === 'boolean') {
-        return isPreReleaseVersion ? 'pre-release' : 'stable';
-    }
-
-    // An absent flag means stable: VS Code coerces it with `!!metadata.isPreReleaseVersion`, and
-    // gallery installs predating the flag were written without it. A flag that is present but not a
-    // boolean ({ "isPreReleaseVersion": "true" }) is a different case -- reporting stable there would
-    // have the CLI compare a possibly pre-release install against the stable feed, so the channel is
-    // reported as unknown and the CLI declines the comparison instead.
-    return isPreReleaseVersion === undefined ? 'stable' : 'unknown';
-}
-
-export function getAspireExtensionSource(): AspireVsCodeExtensionSource {
-    // Nothing the extension host exposes proves how the extension was installed, so the honest answer
-    // is always 'unknown'. That is not a dead end: the CLI treats an unknown reported source as
-    // "resolve it from disk", where the profile's extensions.json is readable and authoritative.
-    //
-    // `__metadata.source` is not a substitute for it, in either direction. VS Code deletes
-    // `__metadata` from the manifest before building the description the extension host sees, so it
-    // is normally absent; and where it does survive it is not trustworthy, because VS Code's
-    // `ManifestMetadata` is `Partial<{ targetPlatform, installedTimestamp, size }>` -- no `source` --
-    // and the extracted package.json is written with
-    // `manifest.__metadata = { ...manifest.__metadata, ...metaData }`, so a `source` a VSIX ships in
-    // its own package.json survives untouched. VS Code reads `source` only from the profile index for
-    // exactly that reason. `publisherId` is no better: VS Code looks a side-loaded VSIX up in the
-    // gallery on install and stores the matched publisherId on it.
-    // See https://github.com/microsoft/vscode/blob/main/src/vs/platform/extensionManagement/common/extensionsScannerService.ts
-    // (`ManifestMetadata`, `updateManifestMetadata`, and `delete manifest.__metadata` in `scanExtension`).
-    return 'unknown';
 }
 
 /**
