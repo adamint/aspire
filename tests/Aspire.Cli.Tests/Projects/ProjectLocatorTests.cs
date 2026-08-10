@@ -35,14 +35,19 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
     private static async Task<FileInfo> CreateSingleFileAppHostAsync(DirectoryInfo directory)
     {
         var appHostFile = new FileInfo(Path.Combine(directory.FullName, "apphost.cs"));
-        await File.WriteAllTextAsync(
-            appHostFile.FullName,
-            """
+        var contents = """
             #:sdk Aspire.AppHost.Sdk
             using Aspire.Hosting;
             var builder = DistributedApplication.CreateBuilder(args);
             builder.Build().Run();
-            """);
+            """;
+
+        Assert.Equal("#:sdk Aspire.AppHost.Sdk", new StringReader(contents).ReadLine());
+        Assert.StartsWith("#:sdk Aspire.AppHost.Sdk", contents, StringComparison.Ordinal);
+
+        await File.WriteAllTextAsync(
+            appHostFile.FullName,
+            contents);
 
         return appHostFile;
     }
