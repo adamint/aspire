@@ -145,7 +145,7 @@ internal static class PackageJsonMerger
         MergeDependencySection(existing, scaffold, DevDependenciesKey, logger, projectOwnedPackage, rewrittenSpecs);
         if (projectAlreadyLinted && !compilerIsUnchanged)
         {
-            ReconcileProjectLinterWithUpgradedCompiler(existing, scaffold, logger);
+            ReconcileProjectLinterWithUpgradedCompiler(existing, scaffold, logger, rewrittenSpecs);
         }
 
         ReconcileNpmOverrides(existing, rewrittenSpecs, logger);
@@ -436,12 +436,6 @@ internal static class PackageJsonMerger
     }
 
     /// <summary>
-    /// Merges a dependency section (e.g., "dependencies", "devDependencies") from scaffold into existing
-    /// using semver-aware comparison. New packages are added; existing packages are upgraded only when
-    /// the scaffold specifies a newer version. Unparseable version ranges (union ranges, workspace
-    /// references, etc.) are preserved as-is.
-    /// </summary>
-    /// <summary>
     /// Re-points npm <c>overrides</c> entries at the specs this merge just rewrote.
     /// </summary>
     /// <remarks>
@@ -516,7 +510,7 @@ internal static class PackageJsonMerger
     /// The removal pass is no help either: it only runs for a project that had no linter, so a
     /// brownfield project that did have one has nothing left to catch this.
     /// </remarks>
-    private static void ReconcileProjectLinterWithUpgradedCompiler(JsonObject existing, JsonObject scaffold, ILogger logger)
+    private static void ReconcileProjectLinterWithUpgradedCompiler(JsonObject existing, JsonObject scaffold, ILogger logger, Dictionary<string, string> rewrittenSpecs)
     {
         var scaffoldLinter = FindDependencyVersion(scaffold, TypeScriptEslintPackage);
         var projectLinter = FindDependencyVersion(existing, TypeScriptEslintPackage);
@@ -537,6 +531,9 @@ internal static class PackageJsonMerger
             : DevDependenciesKey;
 
         ((JsonObject)existing[section]!)[TypeScriptEslintPackage] = scaffoldLinter;
+        // Assigned rather than TryAdd: this runs after the floor merge and is the last word on the
+        // spec, so an override has to follow this value and not an earlier one.
+        rewrittenSpecs[TypeScriptEslintPackage] = scaffoldLinter;
 
         logger.LogWarning(
             "Replaced the '{Package}' spec '{ExistingVersion}' with '{DesiredVersion}' because this merge upgraded TypeScript and the existing spec is not a form this tool can check against the new compiler.",
@@ -545,6 +542,17 @@ internal static class PackageJsonMerger
             scaffoldLinter);
     }
 
+    /// <summary>
+    /// Merges a dependency section (e.g., "dependencies", "devDependencies") from scaffold into existing
+    /// using semver-aware comparison. New packages are added; existing packages are upgraded only when
+    /// the scaffold specifies a newer version. Unparseable version ranges (union ranges, workspace
+    /// references, etc.) are preserved as-is.
+    /// </summary>
+    /// <remarks>
+    /// Every direct spec this writes is recorded in <paramref name="rewrittenSpecs"/>, additions
+    /// included: npm compares an <c>overrides</c> entry against whatever direct spec the manifest
+    /// ends up with, and does not care whether that spec was upgraded or introduced here.
+    /// </remarks>
     private static void MergeDependencySection(JsonObject existing, JsonObject scaffold, string sectionName, ILogger logger, string? projectOwnedPackage = null, Dictionary<string, string>? rewrittenSpecs = null)
     {
         var scaffoldDeps = scaffold[sectionName]?.AsObject();
@@ -576,12 +584,13 @@ internal static class PackageJsonMerger
                 // Preserve brownfield package shape: if a scaffolded devDependency already exists
                 // as a runtime dependency, upgrade it in place instead of duplicating it.
                 if (sectionName == DevDependenciesKey &&
-                    TryMergeExistingDependency(existing, DependenciesKey, packageName, desiredVersion))
+                    TryMergeExistingDependency(existing, DependenciesKey, packageName, desiredVersion, rewrittenSpecs))
                 {
                     continue;
                 }
 
                 existingDeps[packageName] = desiredVersion;
+                rewrittenSpecs?.TryAdd(packageName, desiredVersion);
             }
             else
             {
@@ -596,7 +605,7 @@ internal static class PackageJsonMerger
         }
     }
 
-    private static bool TryMergeExistingDependency(JsonObject existing, string sectionName, string packageName, string desiredVersion)
+    private static bool TryMergeExistingDependency(JsonObject existing, string sectionName, string packageName, string desiredVersion, Dictionary<string, string>? rewrittenSpecs = null)
     {
         if (existing[sectionName] is not JsonObject existingDeps)
         {
@@ -614,6 +623,7 @@ internal static class PackageJsonMerger
             && NpmVersionHelper.ShouldUpgrade(existingVersion, desiredVersion))
         {
             existingDeps[packageName] = desiredVersion;
+            rewrittenSpecs?.TryAdd(packageName, desiredVersion);
         }
 
         return true;

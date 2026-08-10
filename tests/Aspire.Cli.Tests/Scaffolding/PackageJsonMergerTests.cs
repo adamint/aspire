@@ -1695,6 +1695,85 @@ public class PackageJsonMergerTests
     }
 
     /// <summary>
+    /// npm compares an override against whatever direct spec the manifest ends up with, and does not
+    /// care how it got there. An override beside no direct dependency at all is valid until this
+    /// merge introduces one, so the three paths that write a direct spec - an addition, an upgrade
+    /// made in the section the project chose, and the linter replacement that follows an upgraded
+    /// compiler - all have to be reconciled, not just the plain in-place upgrade.
+    /// </summary>
+    [Fact]
+    public void Merge_BrownfieldWithAnOverrideForAPackageTheMergeAdds_MovesTheOverrideToTheAddedSpec()
+    {
+        const string Existing = """
+            {
+              "name": "brownfield",
+              "overrides": {
+                "typescript": "^5.9.3"
+              }
+            }
+            """;
+
+        var result = MergeJson(Existing, ScaffoldWithLintToolchain);
+
+        Assert.Equal("6.0.3", GetDep(result, "devDependencies", "typescript"));
+        Assert.Equal("6.0.3", ParseJson(result)["overrides"]?["typescript"]?.GetValue<string>());
+    }
+
+    /// <summary>
+    /// The scaffold declares typescript as a devDependency, but a project that put it in
+    /// dependencies keeps it there and is upgraded in place. That rewrite is just as visible to npm
+    /// as one made in the scaffold's own section.
+    /// </summary>
+    [Fact]
+    public void Merge_BrownfieldWithAnOverrideForADependencyUpgradedInTheOtherSection_MovesTheOverride()
+    {
+        const string Existing = """
+            {
+              "name": "brownfield",
+              "dependencies": {
+                "typescript": "^5.9.3"
+              },
+              "overrides": {
+                "typescript": "^5.9.3"
+              }
+            }
+            """;
+
+        var result = MergeJson(Existing, ScaffoldWithLintToolchain);
+
+        Assert.Equal("6.0.3", GetDep(result, "dependencies", "typescript"));
+        Assert.Null(GetDep(result, "devDependencies", "typescript"));
+        Assert.Equal("6.0.3", ParseJson(result)["overrides"]?["typescript"]?.GetValue<string>());
+    }
+
+    /// <summary>
+    /// The linter replacement runs after the floor merge and is the last word on the spec, so an
+    /// override on typescript-eslint has to follow that value rather than the one the project wrote.
+    /// </summary>
+    [Fact]
+    public void Merge_BrownfieldWithAnOverrideForTheReplacedLinter_MovesTheOverrideToTheReplacement()
+    {
+        const string Existing = """
+            {
+              "name": "brownfield",
+              "devDependencies": {
+                "typescript": "5.9.3",
+                "typescript-eslint": ">=8.57.1 <8.58.0"
+              },
+              "overrides": {
+                "typescript-eslint": ">=8.57.1 <8.58.0"
+              }
+            }
+            """;
+
+        var result = MergeJson(Existing, ScaffoldWithLintToolchain);
+
+        Assert.Equal("6.0.3", GetDep(result, "devDependencies", "typescript"));
+        Assert.Equal("8.58.0", GetDep(result, "devDependencies", "typescript-eslint"));
+        Assert.Equal("8.58.0", ParseJson(result)["overrides"]?["typescript-eslint"]?.GetValue<string>());
+    }
+
+    /// <summary>
     /// npm applies the same rule to an object entry's "." key, which is a spec for the package
     /// itself rather than for its dependencies. Reproduced against the real resolver: with
     /// <c>devDependencies.typescript "6.0.3"</c> and
