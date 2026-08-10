@@ -1097,6 +1097,15 @@ public class NpmLockfileRegistryTests
     [InlineData(".npmrc", "registry=APPROVED_FEED", 0, "no ambient registry override")]
     [InlineData(".bunfig.toml", "[install.scopes]\n\"types\" = \"https://scoped.example.invalid/\"", 1, "scoped.example.invalid")]
     [InlineData(".bunfig.toml", "[install]\nregistry = \"APPROVED_FEED\"", 0, "no ambient registry override")]
+    // TOML literal strings are single-quoted, and both TOML and .npmrc accept a trailing comment on
+    // a value line. Matching only double-quoted or bare values to end-of-line missed all three.
+    [InlineData(".bunfig.toml", "[install.scopes]\ntypes = 'https://scoped.example.invalid/'", 1, "scoped.example.invalid")]
+    [InlineData(".bunfig.toml", "[install]\nregistry = \"https://registry.npmjs.org/\" # inline comment", 1, "registry.npmjs.org")]
+    [InlineData(".npmrc", "registry=https://registry.npmjs.org/ ; trailing comment", 1, "registry.npmjs.org")]
+    // A commented-out override is not an override, so stripping comments must not turn one into a
+    // finding.
+    [InlineData(".bunfig.toml", "# registry = \"https://registry.npmjs.org/\"", 0, "no ambient registry override")]
+    [InlineData(".npmrc", "; registry=https://registry.npmjs.org/\nregistry=APPROVED_FEED", 0, "no ambient registry override")]
     [RequiresTools(["bash"])]
     public async Task RegistryEnvScript_FailsClosedOnAmbientBunRegistryOverride(string fileName, string fileBody, int expectedExitCode, string expectedOutput)
     {

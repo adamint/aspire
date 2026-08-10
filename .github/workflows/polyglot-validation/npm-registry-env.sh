@@ -269,18 +269,29 @@ check_yarn_scoped_registries() {
 #
 # $HOME/.npmrc uses npm syntax:
 #   @types:registry=https://scoped.example.invalid/
-# $HOME/.bunfig.toml uses TOML, where a scope key is the bare scope name with no leading '@':
+# $HOME/.bunfig.toml uses TOML, where a scope key is the bare scope name with no leading '@' and a
+# value may be a basic (double-quoted) or literal (single-quoted) string:
 #   [install]
 #   registry = "https://scoped.example.invalid/"
 #   [install.scopes]
 #   "types" = "https://scoped.example.invalid/"
+#   types = 'https://scoped.example.invalid/'
 #
-# Both forms end the line with the URL, so one capture per line covers them. Only values that are
-# themselves URLs are considered, which skips npm auth lines such as
-# `//pkgs.dev.azure.com/...:_authToken=<token>` whose key contains a host but whose value is a token.
+# Rather than model either grammar, strip comments and then flag every URL that remains, which is
+# what NpmLockfileRegistryTests.FindRegistryOverrides does for the fixture-side copies of these same
+# files. A key-anchored, end-of-line-anchored match missed a literal string and any value carrying a
+# trailing comment - both legal, and both silently reported as "no ambient registry override".
+# Comments start with '#' in both formats and '.npmrc' also accepts ';'; a registry URL has no
+# fragment, so cutting at a '#' that begins a line or follows whitespace cannot truncate a real
+# value. The two sed expressions are separate because BSD sed has no BRE alternation.
+#
+# Only values that are themselves URLs are considered, which skips npm auth lines such as
+# `//pkgs.dev.azure.com/...:_authToken=<token>`: the key is protocol-relative, so it carries no
+# scheme to match, and the value is a token rather than a URL.
 check_bun_ambient_config() {
     local failed=0
     local file value
+    local url_pattern="https?://[^]\"'[:space:],}]*"
 
     for file in "$HOME/.npmrc" "$HOME/.bunfig.toml"; do
         [ -f "$file" ] || continue
@@ -290,7 +301,7 @@ check_bun_ambient_config() {
                 echo "  ❌ bun falls back to '$file', which points a registry at '$value' instead of the approved feed '$APPROVED_NPM_REGISTRY'"
                 failed=1
             fi
-        done < <(sed -n 's|^[[:space:]]*[^#;[][^=]*=[[:space:]]*"\{0,1\}\(https\{0,1\}://[^"[:space:]]*\)"\{0,1\}[[:space:]]*$|\1|p' "$file")
+        done < <(sed -e 's|^[#;].*$||' -e 's|[[:space:]][#;].*$||' "$file" | grep -Eo "$url_pattern" || true)
     done
 
     if [ "$failed" -eq 0 ]; then
