@@ -7,15 +7,6 @@
     <trans-unit id="aspire-vscode.strings.resourceCountDescription">
       <source xml:lang="en">({0} resources)</source>
     </trans-unit>
-    <trans-unit id="aspire-vscode.strings.hotReloadDisabledNotice">
-      <source xml:lang="en">.NET Hot Reload can apply code edits to running Aspire resources without restarting them, but it is turned off in C# Dev Kit. Enable it to update &apos;csharp.experimental.debug.hotReload&apos; in your user settings.</source>
-    </trans-unit>
-    <trans-unit id="aspire-vscode.strings.hotReloadActiveNoticeSaveDisabled">
-      <source xml:lang="en">.NET Hot Reload is turned on in C# Dev Kit, so it can apply to the .NET resources you debug in this Aspire app, where Dev Kit supports it, but &apos;csharp.debug.hotReloadOnSave&apos; is turned off, so saving does not apply edits. Use the Hot Reload button to apply pending edits. Dev Kit reports what it actually applied in the .NET Hot Reload output.</source>
-    </trans-unit>
-    <trans-unit id="aspire-vscode.strings.hotReloadActiveNotice">
-      <source xml:lang="en">.NET Hot Reload is turned on in C# Dev Kit, so it can apply to the .NET resources you debug in this Aspire app, where Dev Kit supports it. Saving a file asks Dev Kit to apply supported edits to a debugged resource without restarting it, and the Hot Reload button applies pending edits. Dev Kit reports what it actually applied in the .NET Hot Reload output.</source>
-    </trans-unit>
     <trans-unit id="aspire-vscode.strings.debugSessionAlreadyExists">
       <source xml:lang="en">A debug session is already active for id {0}.</source>
     </trans-unit>
@@ -114,6 +105,9 @@
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.buildFailedWithExitCode">
       <source xml:lang="en">Build failed with exit code {0}.</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.hotReloadDisabledNotice">
+      <source xml:lang="en">C# Dev Kit Hot Reload is disabled. When enabled, it can apply .NET code edits while debugging where supported.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.lookingForDevkitBuildTask">
       <source xml:lang="en">C# Dev Kit is installed, looking for C# Dev Kit build task...</source>
@@ -250,6 +244,9 @@
     <trans-unit id="aspire-vscode.strings.doYouWantToSetDefaultApphost">
       <source xml:lang="en">Do you want to set {0} as the default AppHost for this workspace?</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.resourceCommandDontShowAgain">
+      <source xml:lang="en">Don&apos;t show again</source>
+    </trans-unit>
     <trans-unit id="aspire-vscode.strings.dontShowAgainLabel">
       <source xml:lang="en">Don&apos;t show again</source>
     </trans-unit>
@@ -258,9 +255,6 @@
     </trans-unit>
     <trans-unit id="configuration.aspire.enableAspireDcpDebugLogging">
       <source xml:lang="en">Enable Developer Control Plane (DCP) debug logging for Aspire applications. Logs will be stored in the workspace&apos;s .aspire/dcp/logs-{debugSessionId} folder.</source>
-    </trans-unit>
-    <trans-unit id="aspire-vscode.strings.enableHotReloadLabel">
-      <source xml:lang="en">Enable Hot Reload</source>
     </trans-unit>
     <trans-unit id="configuration.aspire.enableAspireCliDebugLogging">
       <source xml:lang="en">Enable console debug logging for Aspire CLI commands executed by the extension.</source>
@@ -357,12 +351,6 @@
     </trans-unit>
     <trans-unit id="walkthrough.getStarted.title">
       <source xml:lang="en">Get started with Aspire</source>
-    </trans-unit>
-    <trans-unit id="aspire-vscode.strings.hotReloadEnableFailed">
-      <source xml:lang="en">Hot Reload could not be enabled. See the Aspire output channel for details.</source>
-    </trans-unit>
-    <trans-unit id="aspire-vscode.strings.hotReloadEnabledConfirmation">
-      <source xml:lang="en">Hot Reload is enabled. Start debugging again to use it.</source>
     </trans-unit>
     <trans-unit id="configuration.aspire.enableDebugConfigEnvironmentLogging">
       <source xml:lang="en">Include environment variables when logging debug session configurations. This can help diagnose environment-related issues but may expose sensitive information in logs.</source>
@@ -507,6 +495,9 @@
     </trans-unit>
     <trans-unit id="command.openTerminal">
       <source xml:lang="en">Open Aspire terminal</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.openSettingsLabel">
+      <source xml:lang="en">Open Settings</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.codespacesLink">
       <source xml:lang="en">Open codespaces URL</source>
@@ -655,9 +646,6 @@
     <trans-unit id="configuration.aspire.enableCodeLens">
       <source xml:lang="en">Show CodeLens actions (state, restart, stop, logs) inline above resource declarations in AppHost files.</source>
     </trans-unit>
-    <trans-unit id="aspire-vscode.strings.showHotReloadOutputLabel">
-      <source xml:lang="en">Show Hot Reload Output</source>
-    </trans-unit>
     <trans-unit id="aspire-vscode.strings.dashboardLaunchNotificationLabel">
       <source xml:lang="en">Show a notification</source>
     </trans-unit>
@@ -696,9 +684,6 @@
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.testRunSessionManagerNotInitialized">
       <source xml:lang="en">Test run session manager has not been initialized with DCP server connection information.</source>
-    </trans-unit>
-    <trans-unit id="aspire-vscode.strings.hotReloadOutputUnavailable">
-      <source xml:lang="en">The .NET Hot Reload output could not be opened. C# Dev Kit may be too old to provide it; open the &apos;.NET Hot Reload&apos; channel from the Output view instead.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.incompatibleAppHostError">
       <source xml:lang="en">The AppHost is not compatible. Consider upgrading the AppHost or Aspire CLI.</source>

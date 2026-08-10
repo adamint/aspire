@@ -11,12 +11,11 @@ import {
     resourceCommandLoadingDynamicInputs,
     resourceCommandInvalidNumber,
     resourceCommandMaxLength,
+    resourceCommandDontShowAgain,
     resourceCommandSecretWarning,
     yesLabel,
-    dontShowAgainLabel,
 } from '../loc/strings';
 import { ResourceCommandArgumentInputJson, ResourceCommandInputType, ResourceCommandJson } from './AppHostDataRepository';
-import { getNotificationSuppressionKey, isNotificationSuppressed, suppressNotification } from '../utils/notificationSuppression';
 
 export interface ResourceCommandArgumentValue {
     input: ResourceCommandArgumentInputJson;
@@ -38,8 +37,7 @@ interface SecretWarningItem extends vscode.QuickPickItem {
     suppressFutureWarnings: boolean;
 }
 
-const resourceCommandSecretWarningNotificationName = 'resourceCommandArguments.secretWarning';
-export const resourceCommandSecretWarningSuppressedKey = getNotificationSuppressionKey(resourceCommandSecretWarningNotificationName);
+export const resourceCommandSecretWarningSuppressedKey = 'resourceCommandArguments.secretWarningSuppressed';
 
 export interface ResourceCommandArgumentOptions {
     // Callers pass ExtensionContext.globalState here. The suppression is one extension-wide
@@ -138,12 +136,12 @@ export async function collectResourceCommandArguments(commandName: string, comma
 }
 
 export async function confirmSecretArgumentWarning(secretWarningState: vscode.Memento | undefined): Promise<boolean> {
-    if (isNotificationSuppressed(secretWarningState, resourceCommandSecretWarningNotificationName)) {
+    if (secretWarningState?.get<boolean>(resourceCommandSecretWarningSuppressedKey)) {
         return true;
     }
 
     const continueItem: SecretWarningItem = { label: resourceCommandContinue, suppressFutureWarnings: false };
-    const dontShowAgainItem: SecretWarningItem = { label: dontShowAgainLabel, suppressFutureWarnings: true };
+    const dontShowAgainItem: SecretWarningItem = { label: resourceCommandDontShowAgain, suppressFutureWarnings: true };
 
     // Keep this warning in the QuickInput flow instead of a notification toast. Resource commands
     // already prompt for arguments here, and using a toast as a blocking pre-prompt can leave a
@@ -156,7 +154,7 @@ export async function confirmSecretArgumentWarning(secretWarningState: vscode.Me
         });
 
     if (result?.suppressFutureWarnings) {
-        await suppressNotification(secretWarningState, resourceCommandSecretWarningNotificationName);
+        await secretWarningState?.update(resourceCommandSecretWarningSuppressedKey, true);
         return true;
     }
 

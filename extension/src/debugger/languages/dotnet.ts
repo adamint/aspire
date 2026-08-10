@@ -24,7 +24,7 @@ import {
 } from '../launchProfiles';
 import { AspireDebugSession } from '../AspireDebugSession';
 import { createAspireCliPathProcessEnvironment } from '../../utils/cliPathEnvironment';
-import { getHotReloadDiagnostics, logHotReloadDiagnostics, showHotReloadNotificationIfNeeded } from '../hotReload';
+import { getHotReloadDiagnostics, logHotReloadDiagnostics, showHotReloadDisabledAdvisoryIfNeeded } from '../hotReload';
 
 interface IDotNetService {
     getAndActivateDevKit(): Promise<boolean>
@@ -612,39 +612,19 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 debugConfiguration.env['DOTNET_LAUNCH_PROFILE'] = profileName;
             }
 
-            // The AppHost is orchestration infrastructure, not a .NET resource covered by this
-            // advisory. Keeping it out prevents a polyglot app from seeing Hot Reload UI and leaves
-            // the one-time notification available for the first eligible .NET resource.
-            if (launchOptions.isApphost) {
-                return;
-            }
+            if (!launchOptions.isApphost && debugConfiguration.noDebug !== true) {
+                // C# Dev Kit and vsdbg provide Hot Reload for the ordinary coreclr launch. Aspire only
+                // reports their effective settings and points users at the setting when it is disabled.
+                try {
+                    const hotReloadDiagnostics = getHotReloadDiagnostics();
+                    logHotReloadDiagnostics(`${projectPath} (run ${debugConfiguration.runId})`, hotReloadDiagnostics);
 
-            // Hot Reload for .NET resources is provided entirely by C# Dev Kit and vsdbg; Aspire
-            // launches a normal `coreclr` session and inherits it. Nothing here configures the
-            // feature — it only reports the state and, when the feature is switched off, says why
-            // it is unavailable. The whole block is guarded because it is the only part of this callback
-            // that reads a third-party optional extension, and Hot Reload is an enhancement:
-            // nothing it does may turn a working .NET debug session into a failed one.
-            try {
-                // Hot Reload is applied by the debugger, so `noDebug` decides whether any of this
-                // applies at all. Gated on the configuration's own `noDebug`, not
-                // `launchOptions.debug`: the `dotnet run` and file-based-executable fallbacks above
-                // force `noDebug = true` while `launchOptions.debug` stays true.
-                const isDebugSession = debugConfiguration.noDebug !== true;
-                const hotReloadDiagnostics = getHotReloadDiagnostics();
-                // The project file name alone does not identify the launch: two resources can run the same
-                // project, and two projects in one app can share a file name, so per-resource diagnostics
-                // would be indistinguishable exactly when several resources start at once. The run id is
-                // the only per-launch identifier this callback is given.
-                logHotReloadDiagnostics(`${projectPath} (run ${debugConfiguration.runId})`, hotReloadDiagnostics, isDebugSession);
-
-                // Deliberately NOT awaited. A VS Code notification stays up until the user interacts
-                // with it, and this callback runs before the debug session is created, so awaiting it
-                // would stall the resource behind an advisory message.
-                void showHotReloadNotificationIfNeeded(hotReloadDiagnostics, isDebugSession);
-            }
-            catch (err) {
-                extensionLogOutputChannel.warn(`Could not determine C# Dev Kit Hot Reload availability; continuing without it: ${err instanceof Error ? err.message : String(err)}`);
+                    // A notification stays open until the user answers it, so it must not block launch.
+                    void showHotReloadDisabledAdvisoryIfNeeded(hotReloadDiagnostics);
+                }
+                catch (err) {
+                    extensionLogOutputChannel.warn(`Could not read C# Dev Kit Hot Reload settings; continuing without diagnostics: ${err instanceof Error ? err.message : String(err)}`);
+                }
             }
         }
     };
