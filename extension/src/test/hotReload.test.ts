@@ -3,7 +3,7 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { getHotReloadDiagnostics, initializeHotReloadNotificationState, isHotReloadOnSaveEnabled, isHotReloadSettingEnabled, logHotReloadDiagnostics, showHotReloadNotificationIfNeeded } from '../debugger/hotReload';
 import { createHotReloadTestConfiguration, createTestMemento } from './common';
-import { dontShowAgainLabel, enableHotReloadLabel, hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled, hotReloadDisabledNotice, hotReloadEnabledConfirmation, hotReloadEnableFailed, showHotReloadOutputLabel } from '../loc/strings';
+import { dontShowAgainLabel, enableHotReloadLabel, hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled, hotReloadDisabledNotice, hotReloadEnabledConfirmation, hotReloadEnableFailed, hotReloadOutputUnavailable, showHotReloadOutputLabel } from '../loc/strings';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { getNotificationSuppressionKey, isNotificationSuppressed } from '../utils/notificationSuppression';
 
@@ -434,6 +434,7 @@ suite('Hot Reload Tests', () => {
         // Kit, so the real command registry rejects it here the same way it would for a user whose Dev Kit
         // is present but too old to contribute the panel.
         const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(showHotReloadOutputLabel as unknown as vscode.MessageItem);
+        const errorNotification = sinon.stub(vscode.window, 'showErrorMessage');
         const warn = sinon.stub(extensionLogOutputChannel, 'warn');
 
         const diagnostics = {
@@ -450,6 +451,10 @@ suite('Hot Reload Tests', () => {
             warn.getCalls().some(call => String(call.args[0]).includes("command 'csdevkit.debug.showHotReloadPanel' not found")),
             true,
             `Expected the real command registry to reject, got: ${JSON.stringify(warn.getCalls().map(call => call.args[0]))}`);
+
+        // The button the user clicked did nothing, so the log alone is not an answer: the failure has to reach
+        // the user who asked for the output.
+        assert.deepStrictEqual(errorNotification.getCalls().map(call => call.args[0]), [hotReloadOutputUnavailable]);
 
         initializeHotReloadNotificationState({ globalState });
         await showHotReloadNotificationIfNeeded(diagnostics, true);

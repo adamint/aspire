@@ -173,6 +173,7 @@
   "aspire-vscode.strings.showHotReloadOutputLabel": "Show Hot Reload Output",
   "aspire-vscode.strings.hotReloadEnabledConfirmation": "Hot Reload is enabled. Start debugging again to use it.",
   "aspire-vscode.strings.hotReloadEnableFailed": "Hot Reload could not be enabled. See the Aspire output channel for details.",
+  "aspire-vscode.strings.hotReloadOutputUnavailable": "The .NET Hot Reload output could not be opened. C# Dev Kit may be too old to provide it; open the '.NET Hot Reload' channel from the Output view instead.",
   "aspire-vscode.strings.cliNotAvailable": "Aspire CLI is not available on PATH. Please install it and restart VS Code.",
   "aspire-vscode.strings.cliFoundAtDefaultPath": "Aspire CLI found at {0}. The extension will use this path.",
   "aspire-vscode.strings.openCliInstallInstructions": "See CLI installation instructions",

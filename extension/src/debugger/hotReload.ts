@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { isCsDevKitInstalled } from '../capabilities';
 import { extensionLogOutputChannel } from '../utils/logging';
-import { enableHotReloadLabel, hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled, hotReloadDisabledNotice, hotReloadEnabledConfirmation, hotReloadEnableFailed, showHotReloadOutputLabel } from '../loc/strings';
+import { enableHotReloadLabel, hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled, hotReloadDisabledNotice, hotReloadEnabledConfirmation, hotReloadEnableFailed, hotReloadOutputUnavailable, showHotReloadOutputLabel } from '../loc/strings';
 import { clearNotificationShown, hasNotificationBeenShown, markNotificationShown } from '../utils/notificationSuppression';
 
 const hotReloadConfigurationSection = 'csharp.experimental.debug';
@@ -169,7 +169,20 @@ export function showHotReloadNotificationIfNeeded(diagnostics: HotReloadDiagnost
             const selection = await vscode.window.showInformationMessage(notice.message, ...notice.actions);
 
             if (selection === showHotReloadOutputLabel) {
-                await vscode.commands.executeCommand(showHotReloadPanelCommand);
+                try {
+                    await vscode.commands.executeCommand(showHotReloadPanelCommand);
+                }
+                catch (err) {
+                    extensionLogOutputChannel.warn(`Failed to show the Hot Reload output: ${err instanceof Error ? err.message : String(err)}`);
+
+                    // The command belongs to Dev Kit and is missing on versions that predate the panel, so a
+                    // click can reach a button that does nothing. Saying so beats silence, and naming the
+                    // channel leaves the user a way to reach the same output through the Output view. The
+                    // offer is released for the same reason the failed enable path releases it: this notice
+                    // is presented at most once per user, and an action that did nothing should not spend it.
+                    void vscode.window.showErrorMessage(hotReloadOutputUnavailable);
+                    await releaseNotificationOffer(notice.name);
+                }
             }
 
             if (selection === enableHotReloadLabel) {

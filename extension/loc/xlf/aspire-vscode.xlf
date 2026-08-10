@@ -697,6 +697,9 @@
     <trans-unit id="aspire-vscode.strings.testRunSessionManagerNotInitialized">
       <source xml:lang="en">Test run session manager has not been initialized with DCP server connection information.</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.hotReloadOutputUnavailable">
+      <source xml:lang="en">The .NET Hot Reload output could not be opened. C# Dev Kit may be too old to provide it; open the &apos;.NET Hot Reload&apos; channel from the Output view instead.</source>
+    </trans-unit>
     <trans-unit id="aspire-vscode.strings.incompatibleAppHostError">
       <source xml:lang="en">The AppHost is not compatible. Consider upgrading the AppHost or Aspire CLI.</source>
     </trans-unit>
