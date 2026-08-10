@@ -74,7 +74,8 @@ public class CodeGenerationResolverTests
     }
 
     [Fact]
-    public void LanguageSupportResolver_DiscoversInternalLanguageSupports()    {
+    public void LanguageSupportResolver_DiscoversInternalLanguageSupports()
+    {
         using var serviceProvider = CreateServiceProvider();
         var assemblyLoader = CreateAssemblyLoader();
         var resolver = new LanguageSupportResolver(serviceProvider, assemblyLoader, NullLogger<LanguageSupportResolver>.Instance);
