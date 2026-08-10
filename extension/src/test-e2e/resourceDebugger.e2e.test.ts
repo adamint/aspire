@@ -28,6 +28,7 @@ interface ResourceDebugProof {
     breakpoint: { sourcePath: string; line: number; text?: string };
     appHostDebugSession?: ResourceDebugSessionSnapshot;
     resourceDebugSession?: ResourceDebugSessionSnapshot;
+    supportedLaunchConfigurations: string[];
     debugSessions: ResourceDebugSessionSnapshot[];
     matchingStackFrame?: { source?: { path?: string }; line?: number; name?: string };
     topStackFrame?: { source?: { path?: string }; line?: number; name?: string };
@@ -74,22 +75,28 @@ suite('Aspire resource debugger E2E', function () {
         const appHostSession = proof.appHostDebugSession;
         const resourceSession = proof.resourceDebugSession;
         assert.ok(resourceSession, `Expected the stopped resource debug session: ${JSON.stringify(proof.debugSessions.map(toSessionSummary))}`);
+        assert.ok(appHostSession, `Expected a debug session that owns the AppHost: ${JSON.stringify(proof.debugSessions.map(toSessionSummary))}`);
 
         assert.strictEqual(resourceSession.type, 'pwa-node');
-        if (appHostSession) {
+        assert.notStrictEqual(resourceSession.id, appHostSession.id);
+        assert.ok(isSamePath(String(appHostSession.configuration.program ?? ''), getPrimaryAppHostProjectPath()));
+
+        // Which session owns a C# AppHost depends on the installed extensions, so assert both
+        // shapes exactly instead of tolerating a missing AppHost session. The CLI hands the AppHost
+        // launch to this extension only when it advertises the `project` capability
+        // (`DotNetCliRunner.ExecuteAsync` -> `HasCapabilityAsync(KnownCapabilities.Project)`), which
+        // the extension reports only when `ms-dotnettools.csharp` is installed. The E2E VS Code
+        // instance installs just the Aspire VSIX (see extension/scripts/run-e2e.js), so in CI the
+        // CLI runs the AppHost itself with `dotnet run` and the synthetic `aspire` parent owns it;
+        // a developer running this locally with the C# extension installed gets a real `coreclr`
+        // AppHost child session instead.
+        if (proof.supportedLaunchConfigurations.includes('project')) {
             assert.strictEqual(appHostSession.type, 'coreclr');
             assert.strictEqual(appHostSession.configuration.isApphost, true);
-            assert.notStrictEqual(resourceSession.id, appHostSession.id);
-            assert.ok(isSamePath(String(appHostSession.configuration.program ?? ''), getPrimaryAppHostProjectPath()));
         }
         else {
-            // Some CI runs use the .NET fallback launch path, which runs the AppHost under the
-            // synthetic Aspire session without a separate coreclr child session. The invariant this
-            // test owns is still that the resource debugger is not the Aspire session that launched
-            // it; a dedicated AppHost child session is asserted when the launch path creates one.
-            const aspireSession = proof.debugSessions.find(session => session.type === 'aspire');
-            assert.ok(aspireSession, `Expected an Aspire launcher session: ${JSON.stringify(proof.debugSessions.map(toSessionSummary))}`);
-            assert.notStrictEqual(resourceSession.id, aspireSession.id);
+            assert.strictEqual(appHostSession.type, 'aspire');
+            assert.strictEqual(appHostSession.configuration.isApphost, undefined);
         }
     });
 

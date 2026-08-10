@@ -605,6 +605,100 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         clock.restore();
     });
 
+    test('dispose does not complete until the Aspire parent session has stopped', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = {
+            isCliDebugLoggingEnabled: () => false,
+        };
+        const stopOrder: string[] = [];
+        let releaseParentStop!: () => void;
+        const parentStopGate = new Promise<void>(resolve => { releaseParentStop = resolve; });
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(async session => {
+            stopOrder.push((session as unknown as { id: string }).id);
+            if (session === (parentDebugSession as unknown as vscode.DebugSession)) {
+                await parentStopGate;
+                stopOrder.push('parent-session-settled');
+            }
+        });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+
+        let disposeCompleted = false;
+        const disposal = aspireDebugSession.dispose().then(() => { disposeCompleted = true; });
+
+        // Let every microtask the disposal path queues run. The parent stop is the only thing left
+        // outstanding, so disposal must still be pending here.
+        await new Promise(resolve => setTimeout(resolve, 0));
+
+        assert.deepStrictEqual(stopOrder, [parentDebugSession.id]);
+        assert.strictEqual(disposeCompleted, false);
+
+        releaseParentStop();
+        await disposal;
+
+        assert.deepStrictEqual(stopOrder, [parentDebugSession.id, 'parent-session-settled']);
+        assert.strictEqual(disposeCompleted, true);
+    });
+
+    test('dispose completes when the Aspire parent session stop never settles', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = {
+            isCliDebugLoggingEnabled: () => false,
+        };
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(session => {
+            if (session === (parentDebugSession as unknown as vscode.DebugSession)) {
+                return new Promise<void>(() => { });
+            }
+
+            return Promise.resolve();
+        });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+
+        let disposeCompleted = false;
+        const disposal = aspireDebugSession.dispose().then(() => { disposeCompleted = true; });
+
+        await clock.tickAsync(0);
+
+        assert.strictEqual(disposeCompleted, false);
+
+        // A wedged parent adapter must not strand disposal: the same stop deadline that bounds the
+        // resource stops applies here, after which disposal completes without a rejection.
+        await clock.tickAsync(10_000);
+        await disposal;
+
+        assert.strictEqual(disposeCompleted, true);
+
+        clock.restore();
+    });
+
     test('AppHost restart waits for resource-first disposal to finish', async () => {
         const parentDebugSession = {
             id: 'aspire-session',

@@ -80,9 +80,51 @@ suite('Resource debug proof request', () => {
                 name: 'Node.js: app.js',
                 configuration: { program: sourcePath },
             },
-        ]);
+        ], appHostPath);
 
         assert.strictEqual(appHostSession?.id, 'apphost-child');
+    });
+
+    test('falls back to the Aspire parent when the CLI launched the AppHost itself', () => {
+        // The session shape the E2E shard actually produces: the CLI hands the AppHost launch to the
+        // extension only when the `project` capability is advertised, which needs the C# extension,
+        // and the E2E VS Code instance installs only the Aspire VSIX. No `isApphost` session exists
+        // there, so requiring one makes the proof report no AppHost session at all.
+        const appHostSession = findAppHostDebugSession([
+            {
+                id: 'aspire-parent',
+                type: 'aspire',
+                name: 'Aspire run: AspireE2E.AppHost/AspireE2E.AppHost.csproj',
+                configuration: { program: appHostPath },
+            },
+            {
+                id: 'node-resource',
+                type: 'pwa-node',
+                name: 'Debug Node.js: AspireE2E.NodeApp/app.js',
+                configuration: { program: sourcePath },
+            },
+            {
+                id: 'node-resource-child',
+                type: 'pwa-node',
+                name: 'app.js [5744] « Debug Node.js: AspireE2E.NodeApp/app.js',
+                configuration: {},
+            },
+        ], appHostPath);
+
+        assert.strictEqual(appHostSession?.id, 'aspire-parent');
+    });
+
+    test('ignores an Aspire parent session that owns a different AppHost', () => {
+        const appHostSession = findAppHostDebugSession([
+            {
+                id: 'other-aspire-parent',
+                type: 'aspire',
+                name: 'Aspire',
+                configuration: { program: '/workspace/Other.AppHost/Other.AppHost.csproj' },
+            },
+        ], appHostPath);
+
+        assert.strictEqual(appHostSession, undefined);
     });
 
     test('clamps the per-phase timeout budgets to the requested timeout', () => {

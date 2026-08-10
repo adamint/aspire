@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 
 import { AspireExtensionContext } from '../AspireExtensionContext';
+import { getSupportedCapabilities } from '../capabilities';
 import { getLoggableDebugConfiguration, type AspireDebugSession } from '../debugger/AspireDebugSession';
 import { createDebugSessionConfiguration, getResourceDebuggerExtensions } from '../debugger/debuggerExtensions';
 import { spawnCliProcess } from '../debugger/languages/cli';
@@ -819,8 +820,23 @@ export interface DebugSessionSnapshot {
   configuration: Record<string, unknown>;
 }
 
-export function findAppHostDebugSession(debugSessions: readonly DebugSessionSnapshot[]): DebugSessionSnapshot | undefined {
-  return debugSessions.find(session => session.configuration.isApphost === true);
+/**
+ * Resolves the debug session that owns the AppHost process.
+ *
+ * When the extension launches the AppHost itself it creates a real child debugger session marked
+ * with `isApphost: true` by `createDebugSessionConfiguration`, and that session is the AppHost's.
+ * The CLI only delegates that launch when the extension advertises the language's launch capability
+ * (`DotNetCliRunner` gates it on `KnownCapabilities.Project` for a C# AppHost, which the extension
+ * reports only when `ms-dotnettools.csharp` is installed). The E2E VS Code instance installs just
+ * the Aspire VSIX, so there the CLI runs the AppHost with `dotnet run` and the synthetic `aspire`
+ * parent session is the only session that owns it - hence the fallback.
+ */
+export function findAppHostDebugSession(debugSessions: readonly DebugSessionSnapshot[], appHostPath: string): DebugSessionSnapshot | undefined {
+  return debugSessions.find(session => session.configuration.isApphost === true)
+    ?? debugSessions.find(session =>
+      session.type === 'aspire' &&
+      typeof session.configuration.program === 'string' &&
+      isSamePath(session.configuration.program, appHostPath));
 }
 
 interface DebugAdapterLaunchRequest {
@@ -1182,9 +1198,13 @@ ${JSON.stringify({
       },
       resourceCommandResult,
       debugSessions,
-      // The AppHost session is the real child debugger session for the AppHost, not the synthetic
-      // Aspire parent. It is marked by createDebugSessionConfiguration with isApphost=true.
-      appHostDebugSession: findAppHostDebugSession(debugSessions),
+      // Reported so an assertion can tell the two AppHost shapes apart instead of guessing: the CLI
+      // hands the AppHost launch to the extension only when the matching launch capability is
+      // advertised, so without it there is no `isApphost` session to find.
+      supportedLaunchConfigurations: getSupportedCapabilities(),
+      // The AppHost session is the real child debugger session when the extension launched the
+      // AppHost, and the synthetic Aspire parent when the CLI launched it.
+      appHostDebugSession: findAppHostDebugSession(debugSessions, appHostPath),
       resourceDebugSession,
       launchRequests,
       debugAdapterResponses,
