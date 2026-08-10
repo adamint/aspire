@@ -5,6 +5,7 @@ import * as vscode from 'vscode';
 import AspireDcpServer from '../dcp/AspireDcpServer';
 import * as debuggerExtensions from '../debugger/debuggerExtensions';
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
+import * as telemetry from '../utils/telemetry';
 import { DcpServerConnectionInfo, ErrorResponse } from '../dcp/types';
 
 type RunSessionResponse = { statusCode: number; body: ErrorResponse | undefined };
@@ -79,6 +80,8 @@ suite('DCP run_session shutdown tests', () => {
         const terminalProvider = { isCliDebugLoggingEnabled: () => false, isDebugConfigEnvironmentLoggingEnabled: () => false };
         sinon.stub(vscode.debug, 'stopDebugging').callsFake(async () => { });
         const showErrorMessage = sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined);
+        const telemetryEvent = sinon.stub(telemetry, 'sendTelemetryEvent');
+        const telemetryErrorEvent = sinon.stub(telemetry, 'sendTelemetryErrorEvent');
         const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
 
         sinon.stub(debuggerExtensions, 'getResourceDebuggerExtensions').returns([
@@ -119,5 +122,16 @@ suite('DCP run_session shutdown tests', () => {
             showErrorMessage.called,
             false,
             'Refusing a run because the user stopped the session must not raise a user-facing error');
+
+        // A cancelled run must be reported on the ordinary telemetry channel with the `canceled`
+        // bucket. Routing it through the error channel marks the whole AppHost session as having
+        // ended with an error just because the user pressed stop.
+        const endEvents = telemetryEvent.getCalls().filter(call => call.args[0] === 'aspire/vscode/debug/runsession/end');
+        const endErrorEvents = telemetryErrorEvent.getCalls().filter(call => call.args[0] === 'aspire/vscode/debug/runsession/end');
+
+        assert.strictEqual(endErrorEvents.length, 0, 'A run cancelled by the shutdown must not be reported as a telemetry error');
+        assert.strictEqual(endEvents.length, 1, 'A run cancelled by the shutdown must still be paired with an end event');
+        assert.strictEqual((endEvents[0].args[1] as Record<string, string>).exit_code_bucket, 'canceled');
+        assert.strictEqual((endEvents[0].args[1] as Record<string, string>).end_reason, 'debug_session_stopping');
     });
 });

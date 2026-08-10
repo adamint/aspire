@@ -343,6 +343,26 @@ export default class AspireDcpServer {
                     });
                 };
 
+                // The shutdown-cancellation counterpart of the above. A run the user cancelled by
+                // stopping the session is not a failure: it must not go through the error channel
+                // and must not set anyNonZeroExit, or a normal stop marks the whole AppHost session
+                // as ended with an error. `canceled` is the same bucket sendNotification() uses for
+                // an exit code of -1, which is the equivalent outcome on the termination path.
+                const emitRunSessionCanceledEnd = (endReason: string): void => {
+                    const aggregate = getOrCreateDebugSessionStats(debugSessionId);
+                    aggregate.totalChildSessions += 1;
+                    aggregate.distinctResourceTypes.add(supportedResourceType);
+
+                    sendTelemetryEvent('aspire/vscode/debug/runsession/end', {
+                        resource_type: supportedResourceType,
+                        mode,
+                        exit_code_bucket: 'canceled',
+                        end_reason: endReason,
+                    }, {
+                        duration_ms: Date.now() - runSessionStartTimeMs,
+                    });
+                };
+
                 if (!foundDebuggerExtension) {
                     emitRunSessionFailureEnd('unsupported_launch_config');
                     const error: ErrorDetails = {
@@ -398,7 +418,7 @@ export default class AspireDcpServer {
                     // session and resolve without one. Reporting it as DebugSessionFailed/500 would
                     // record debugger_did_not_start telemetry for a run nothing was wrong with.
                     const respondSessionStopping = (): void => {
-                        emitRunSessionFailureEnd('debug_session_stopping');
+                        emitRunSessionCanceledEnd('debug_session_stopping');
 
                         const error: ErrorDetails = {
                             code: 'DebugSessionStopping',
