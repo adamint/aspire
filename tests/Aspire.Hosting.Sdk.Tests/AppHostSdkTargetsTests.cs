@@ -557,6 +557,40 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task ProjectResourcesReachedThroughASymbolicLinkStillGetTheirTargetName()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Creating a directory symbolic link on Windows needs elevation or developer mode.");
+
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        // The resolved target path is matched back to its metadata source by project path, and the two sides do not
+        // have to spell that path the same way: the ProjectReference goes through the link, while MSBuild reports
+        // %(MSBuildSourceProjectFile) for whatever the link resolves to. AssemblyName differs from the project file
+        // name so a target name that came from anywhere but this reference is visible as a wrong value rather than
+        // as a coincidentally right one.
+        var result = await RunProjectMetadataSourceGenerationAsync(
+            workspace,
+            referencedProjectXml: """
+                  <PropertyGroup>
+                    <OutputType>Exe</OutputType>
+                    <TargetFramework>net8.0</TargetFramework>
+                    <AssemblyName>LinkedWorker</AssemblyName>
+                  </PropertyGroup>
+                """,
+            msbuildTarget: "ResolveReferences;WriteAspireProjectMetadataSources",
+            symlinkedReferenceDirectoryName: "LinkToWorker");
+
+        Assert.True(result.DotNetResult.ExitCode == 0, result.DotNetResult.Output);
+
+        var generatedSource = await File.ReadAllTextAsync(result.GeneratedPath);
+
+        // Pins that the reference really was reached through the link rather than through the directory it points
+        // at, so the assertion below is about a path the two sides could spell differently.
+        Assert.Contains("LinkToWorker", generatedSource, StringComparison.Ordinal);
+        Assert.Equal("""    public string? TargetName => @"LinkedWorker";""", GetGeneratedTargetNameMember(generatedSource));
+    }
+
+    [Fact]
     public async Task AspireProjectResourcesCaptureTheirBuildOutputForTheTargetNameHint()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
@@ -1375,7 +1409,8 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
         bool buildProjectInSolution = true,
         string msbuildTarget = "WriteAspireProjectMetadataSources",
         string? secondReferencedProjectXml = null,
-        string? secondProjectReferenceMetadataXml = null)
+        string? secondProjectReferenceMetadataXml = null,
+        string? symlinkedReferenceDirectoryName = null)
     {
         var repoRoot = GetRepoRoot();
 
@@ -1402,6 +1437,14 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
         await File.WriteAllTextAsync(Path.Combine(workerDirectory, "Program.cs"), """
             System.Console.WriteLine("worker");
             """);
+
+        if (symlinkedReferenceDirectoryName is not null)
+        {
+            // The reference is reached through a link while MSBuild reports %(MSBuildSourceProjectFile) for the
+            // directory the link points at, which is the shape that would break a correlation done by comparing
+            // the two spellings of the path.
+            Directory.CreateSymbolicLink(Path.Combine(workspace.Path, symlinkedReferenceDirectoryName), workerDirectory);
+        }
 
         if (referencedDirectoryBuildPropsXml is not null)
         {
@@ -1497,7 +1540,7 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
               </PropertyGroup>
 
               <ItemGroup>
-                <ProjectReference Include="../{{referencedProjectDirectoryName}}/Worker.csproj"
+                <ProjectReference Include="../{{symlinkedReferenceDirectoryName ?? referencedProjectDirectoryName}}/Worker.csproj"
                                   IsAspireProjectResource="true"
                                   ReferenceOutputAssembly="false"
                                   SkipGetTargetFrameworkProperties="true"
