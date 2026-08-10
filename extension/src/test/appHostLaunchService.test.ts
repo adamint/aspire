@@ -1134,6 +1134,29 @@ suite('AppHostLaunchService', () => {
         assert.strictEqual(service.getLaunchReservationToken(appHostPath), currentToken);
     });
 
+    test('a tokenless session termination leaves a newer tokened lifecycle reservation in place', () => {
+        // launch.json publish/deploy/do sessions are not reserved or stamped by the provider.
+        // If one terminates after a tool/run launch has reserved the same AppHost, the tokenless
+        // termination must not clear the newer launch's claim and reopen the duplicate-start race.
+        const appHostPath = '/repo/AppHost.csproj';
+        assert.strictEqual(service.tryReserveLaunch(appHostPath), true);
+        const currentToken = service.getLaunchReservationToken(appHostPath);
+        assert.ok(currentToken);
+
+        assert.ok(onDidTerminateDebugSessionCallback);
+        onDidTerminateDebugSessionCallback({
+            configuration: {
+                type: 'aspire',
+                program: appHostPath,
+                command: 'publish',
+            },
+        } as unknown as vscode.DebugSession);
+
+        assert.strictEqual(service.isLaunching(appHostPath), true, 'Expected the tokened lifecycle reservation to survive the tokenless session terminating');
+        assert.strictEqual(service.hasLifecycleLaunchClaim(appHostPath), true);
+        assert.strictEqual(service.getLaunchReservationToken(appHostPath), currentToken);
+    });
+
     test('a terminating session clears the reservation it holds itself', () => {
         // The guard must only skip superseded tokens: a session that owns the reservation still
         // has to clear it, or a launch that failed would leave the tree reporting "Starting..."
@@ -1228,6 +1251,8 @@ suite('AppHostLaunchService', () => {
 
         assert.strictEqual(service.tryReserveExternalLaunch(appHostPath), true);
         assert.strictEqual(service.isLaunching(appHostPath), true);
+        const reservationToken = service.getLaunchReservationToken(appHostPath);
+        assert.ok(reservationToken);
 
         assert.ok(onDidTerminateDebugSessionCallback);
         onDidTerminateDebugSessionCallback({
@@ -1236,6 +1261,7 @@ suite('AppHostLaunchService', () => {
                 program: directory,
                 command: 'run',
                 [appHostTelemetryTargetPathConfigKey]: appHostPath,
+                [appHostLaunchReservationTokenConfigKey]: reservationToken,
             },
         } as unknown as vscode.DebugSession);
 

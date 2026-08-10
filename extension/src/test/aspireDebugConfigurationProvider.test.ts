@@ -6,6 +6,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
+import { appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
 import { AspireDebugConfigurationProvider, type ExternalLaunchReservation } from '../debugger/AspireDebugConfigurationProvider';
 import { isAspireDebugConfigurationExtensionOwned, markAspireDebugConfigurationAsExtensionOwned, stripAspireDebugConfigurationProviderInternalProperties } from '../debugger/AspireDebugConfigurationProviderInternal';
 import type { AspireExtendedDebugConfiguration } from '../dcp/types';
@@ -165,6 +166,59 @@ suite('AspireDebugConfigurationProvider', () => {
         });
 
         assert.strictEqual(config?.program, folderPath);
+        assert.deepStrictEqual(launchReservation.reserved, [projectPath]);
+    });
+
+    test('cancels a workspace-folder launch when default candidate discovery transiently fails', async () => {
+        // A default F5 launch keeps `program` as the workspace folder. If discovery fails in
+        // this resolver pass, reserving that directory would not protect the concrete AppHost
+        // after discovery recovers for a lifecycle tool request.
+        const workspaceRoot = path.join(tempDir, 'workspace');
+        const appHostDirectory = path.join(workspaceRoot, 'AppHost');
+        fs.mkdirSync(appHostDirectory, { recursive: true });
+        const projectPath = path.join(appHostDirectory, 'AppHost.csproj');
+        fs.writeFileSync(projectPath, '<Project Sdk="Aspire.AppHost.Sdk" />');
+
+        const folder: vscode.WorkspaceFolder = { uri: vscode.Uri.file(workspaceRoot), name: 'workspace', index: 0 };
+        const folderPath = folder.uri.fsPath;
+        let defaultCandidateDiscoveryFails = true;
+        const discoveryService = {
+            resolveDebugTarget: async (filePath: string) => filePath,
+            tryFindWorkspaceDefaultCandidate: async () => {
+                if (defaultCandidateDiscoveryFails) {
+                    throw new Error('transient discovery failure');
+                }
+
+                return {
+                    path: projectPath,
+                    language: 'csharp',
+                    status: 'buildable',
+                };
+            },
+            tryFindCandidateForEditorFile: async () => undefined,
+        } as unknown as AppHostDiscoveryService;
+
+        const provider = new AspireDebugConfigurationProvider(discoveryService, launchReservation);
+        const failedConfig = await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, {
+            name: 'Debug AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: folderPath
+        });
+
+        assert.strictEqual(failedConfig, undefined);
+        assert.deepStrictEqual(launchReservation.reserved, []);
+
+        defaultCandidateDiscoveryFails = false;
+        const recoveredConfig = await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, {
+            name: 'Debug AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: folderPath
+        });
+
+        assert.strictEqual(recoveredConfig?.program, folderPath);
+        assert.strictEqual(recoveredConfig?.[appHostTelemetryTargetPathConfigKey], projectPath);
         assert.deepStrictEqual(launchReservation.reserved, [projectPath]);
     });
 

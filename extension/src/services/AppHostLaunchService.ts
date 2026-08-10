@@ -186,9 +186,12 @@ export class AppHostLaunchService implements vscode.Disposable {
                 const currentToken = this._reservationTokens.get(key);
                 // A session that presents a superseded token is not the launch that holds the
                 // reservation, so clearing here would drop a newer launch's claim and reopen the
-                // duplicate-launch window it exists to close. Sessions that carry no token at all
-                // predate no reservation of their own and keep the original behavior.
-                const ownsReservation = typeof sessionToken !== 'string' || currentToken === undefined || currentToken === sessionToken;
+                // duplicate-launch window it exists to close. Tokenless publish/deploy/do sessions
+                // were intentionally never reserved, so they can only own the slot when no tokened
+                // reservation is currently present.
+                const ownsReservation = typeof sessionToken === 'string'
+                    ? currentToken === undefined || currentToken === sessionToken
+                    : currentToken === undefined;
                 if (ownsReservation) {
                     this._lifecycleLaunchClaims.delete(key);
                     this.cancelExternalReservationExpiry(key);
