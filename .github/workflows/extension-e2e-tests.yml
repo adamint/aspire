@@ -509,6 +509,7 @@ jobs:
           }
 
       - name: Run extension E2E tests
+        if: ${{ !matrix.disabledIssue }}
         working-directory: extension
         env:
           ASPIRE_EXTENSION_E2E_VSIX: ${{ github.workspace }}/extension/out/aspire-extension.vsix

@@ -247,6 +247,15 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes("path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_AZURE_FUNCTIONS_VSIX')"));
     });
 
+    test('does not run disabled E2E matrix shards', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
+        const runStep = workflow.match(/^\s+- name: Run extension E2E tests[\s\S]*?^\s+run: \|/m)?.[0] ?? '';
+
+        assert.ok(workflow.includes("disabledIssue: 'https://github.com/microsoft/aspire/issues/19151'"));
+        assert.ok(runStep.includes('if: ${{ !matrix.disabledIssue }}'));
+    });
+
     test('keeps Linux E2E recordings for successful runs by default', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');

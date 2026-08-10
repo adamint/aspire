@@ -463,7 +463,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(stopDebuggingStub.thirdCall.args[0], parentDebugSession);
     });
 
-    test('dispose waits for resource sessions before CLI and parent shutdown', async () => {
+    test('dispose requests CLI shutdown before waiting for resource sessions', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
             type: 'aspire',
@@ -518,18 +518,28 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
                 stopSession: () => vscode.debug.stopDebugging(resourceDebugSession as unknown as vscode.DebugSession),
             },
         ];
-        (aspireDebugSession as any)._disposables.push({ dispose: () => stopOrder.push('cli stop') });
+        let cliStopRequested = false;
+        const cliStopDisposable = {
+            dispose: () => {
+                if (!cliStopRequested) {
+                    cliStopRequested = true;
+                    stopOrder.push('cli stop');
+                }
+            },
+        };
+        (aspireDebugSession as any)._cliStopDisposable = cliStopDisposable;
+        (aspireDebugSession as any)._disposables.push(cliStopDisposable);
 
         aspireDebugSession.dispose();
 
-        assert.deepStrictEqual(stopOrder, [resourceDebugSession.id]);
+        assert.deepStrictEqual(stopOrder, [resourceDebugSession.id, 'cli stop']);
         releaseResourceStop();
         await new Promise(resolve => setTimeout(resolve, 0));
 
         assert.deepStrictEqual(stopOrder, [
             resourceDebugSession.id,
-            'resource-session-settled',
             'cli stop',
+            'resource-session-settled',
             parentDebugSession.id,
         ]);
     });
@@ -587,11 +597,21 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
                 stopSession: () => vscode.debug.stopDebugging(resourceDebugSession as unknown as vscode.DebugSession),
             },
         ];
-        (aspireDebugSession as any)._disposables.push({ dispose: () => stopOrder.push('cli stop') });
+        let cliStopRequested = false;
+        const cliStopDisposable = {
+            dispose: () => {
+                if (!cliStopRequested) {
+                    cliStopRequested = true;
+                    stopOrder.push('cli stop');
+                }
+            },
+        };
+        (aspireDebugSession as any)._cliStopDisposable = cliStopDisposable;
+        (aspireDebugSession as any)._disposables.push(cliStopDisposable);
 
         aspireDebugSession.dispose();
 
-        assert.deepStrictEqual(stopOrder, [resourceDebugSession.id]);
+        assert.deepStrictEqual(stopOrder, [resourceDebugSession.id, 'cli stop']);
 
         await clock.tickAsync(10_000);
         await Promise.resolve();

@@ -83,6 +83,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   private _parentStopPromise: Thenable<void> | undefined;
   private _disposeCompletion: Promise<void> | undefined;
   private _resolveDisposeCompletion: (() => void) | undefined;
+  private _cliStopDisposable?: vscode.Disposable;
   // Timestamp for the `debug/apphost/end` duration measurement. Captured the first
   // time we observe a `launch` request so it covers the actual user-visible session
   // lifetime, not the moment the AspireDebugSession object was constructed.
@@ -584,14 +585,21 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       },
     );
 
-    this._disposables.push({
+    let cliStopRequested = false;
+    this._cliStopDisposable = {
       dispose: () => {
+        if (cliStopRequested) {
+          return;
+        }
+
+        cliStopRequested = true;
         this._rpcClient?.stopCli().catch((err) => {
           extensionLogOutputChannel.info(`stopCli failed (connection may already be closed): ${err}`);
         });
         extensionLogOutputChannel.info(`Requested Aspire CLI exit with args: ${args.join(' ')}`);
       }
-    });
+    };
+    this._disposables.push(this._cliStopDisposable);
 
     function isProgressEscapeSequence(line: string): boolean {
       // ConEmu/iTerm2 progress-reporting OSC sequence (`OSC 9;4;<state>;<value> ST`).
@@ -1000,8 +1008,11 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // Stop child debug sessions before any CLI/AppHost shutdown disposable can fire. The normal
     // VS Code stop path reaches dispose() through DAP `disconnect`/`terminate`, not through the
     // async stopDebugging() helper above, so dispose() has to preserve the same resource-first
-    // ordering on its own.
+    // ordering on its own. The CLI stop request cannot wait for those resource stops to settle,
+    // though: extension deactivation only keeps the shared RPC transport alive for a short grace
+    // period, while a wedged resource adapter has a longer per-resource deadline.
     const resourceStops = this.stopResourceDebugSessions();
+    this._cliStopDisposable?.dispose();
     if (resourceStops.length > 0) {
       void this.waitForResourceDebugSessionStops(resourceStops).then(finishDispose);
     }
