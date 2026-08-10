@@ -18,7 +18,6 @@ export const bunDebuggerExtension: ResourceDebuggerExtension = {
     resourceType: 'bun',
     debugAdapter: 'bun',
     extensionId: 'oven.bun-vscode',
-    terminationSignal: 'adapterExit',
     getDisplayName: (launchConfig) => getJavaScriptRuntimeDisplayName(launchConfig, 'bun', bunDisplayName, bunLabel),
     getSupportedFileTypes: () => [...jsRuntimeBaseFileTypes, '.jsx', '.tsx'],
     getProjectFile: (launchConfig) => getJavaScriptRuntimeTargetPath(asBunConfig(launchConfig)),

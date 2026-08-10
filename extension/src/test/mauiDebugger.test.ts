@@ -851,7 +851,6 @@ suite('MAUI Debugger Extension Tests', () => {
                     resourceType: 'project',
                     debugAdapter: 'coreclr',
                     extensionId: null,
-                    terminationSignal: 'adapterExit',
                     getDisplayName: () => 'Api',
                     getProjectFile: () => '/workspace/Api/Api.csproj',
                     getSupportedFileTypes: () => ['.csproj'],

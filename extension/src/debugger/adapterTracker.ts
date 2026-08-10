@@ -28,9 +28,6 @@ export function createDebugAdapterTracker(dcpServer: AspireDcpServer, debugAdapt
                 return undefined;
             }
             const debugSessionId = configuration.debugSessionId;
-            const sendNotification = configuration.isApphost
-                ? (notification: ServiceLogsNotification | ProcessRestartedNotification | SessionTerminatedNotification) => dcpServer.sendNotification(notification)
-                : dcpServer.createRunSessionNotificationHandler(configuration.runId);
 
             let debuggeeExitCode: number | undefined;
 
@@ -68,7 +65,7 @@ export function createDebugAdapterTracker(dcpServer: AspireDcpServer, debugAdapt
                                 log_message: removeTrailingNewline(output)
                             };
 
-                            sendNotification(notification);
+                            dcpServer.sendNotification(notification);
                         }
                     }
 
@@ -95,7 +92,7 @@ export function createDebugAdapterTracker(dcpServer: AspireDcpServer, debugAdapt
                             pid: message.body.systemProcessId
                         };
 
-                        sendNotification(processNotification);
+                        dcpServer.sendNotification(processNotification);
                     }
 
                     if (message.type === 'event' && message.event === 'exited' && typeof message.body?.exitCode === 'number') {
@@ -114,10 +111,10 @@ export function createDebugAdapterTracker(dcpServer: AspireDcpServer, debugAdapt
                         notification_type: 'sessionTerminated',
                         session_id: configuration.runId,
                         dcp_id: debugSessionId,
-                        ...(exitCode === undefined ? {} : { exit_code: exitCode })
+                        exit_code: exitCode ?? 0
                     };
 
-                    sendNotification(notification);
+                    dcpServer.sendNotification(notification);
                 }
             };
         }

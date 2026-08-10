@@ -20,12 +20,6 @@ export interface ResourceDebuggerExtension {
     resourceType: string;
     debugAdapter: string;
     extensionId: string | null;
-    /**
-     * Identifies the debugger event that proves the resource is actually done.
-     * Browser resources are owned by the VS Code debug session itself; adapter-backed
-     * resources use the adapter exit so the real process exit code can still arrive.
-     */
-    terminationSignal: 'adapterExit' | 'debugSessionEnd';
     getDisplayName: (launchConfig: ExecutableLaunchConfiguration) => string;
     getProjectFile: (launchConfig: ExecutableLaunchConfiguration) => string;
     getSupportedFileTypes: () => string[];
