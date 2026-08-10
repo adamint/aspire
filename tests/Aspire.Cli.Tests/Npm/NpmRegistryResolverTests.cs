@@ -673,6 +673,77 @@ public class NpmRegistryResolverTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_ReadsARegistryWrittenWithIniArraySyntax()
+    {
+        // ini strips the "[]" suffix and makes the entry an array, and every npm consumer of the
+        // registry turns that array back into a string, so a lone "registry[]" line really does
+        // select this mirror. Ignoring the key would check public npm instead and announce an
+        // update that the user's own npm cannot install.
+        WriteHomeNpmrc("registry[]=https://npm.contoso.example/feed/");
+
+        var resolution = CreateResolver().Resolve(PackageName);
+
+        Assert.Equal("https://npm.contoso.example/feed/", resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_JoinsRepeatedIniArrayRegistryEntriesTheWayNpmStringifiesThem()
+    {
+        // JS renders an array by joining with ",", so npm asks for a host whose name is the two
+        // addresses run together. That is unusable, but it is unusable in npm too - the point is
+        // that the key stays selected rather than falling through to the public registry.
+        WriteHomeNpmrc(
+            "registry[]=https://a.contoso.example/",
+            "registry[]=https://b.contoso.example/");
+
+        var resolution = CreateResolver().Resolve(PackageName);
+
+        Assert.Equal(
+            "https://a.contoso.example/,https://b.contoso.example/",
+            resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_AppendsAPlainRegistryLineOntoAnIniArrayItFollows()
+    {
+        // Once ini has made the key an array, a later plain assignment is pushed onto it rather
+        // than replacing it, so the usual last-wins rule for duplicate keys does not apply here.
+        WriteHomeNpmrc(
+            "registry[]=https://a.contoso.example/",
+            "registry=https://b.contoso.example/");
+
+        var resolution = CreateResolver().Resolve(PackageName);
+
+        Assert.Equal(
+            "https://a.contoso.example/,https://b.contoso.example/",
+            resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_ReadsAPrefixKeyAssembledByAnEnvironmentReference()
+    {
+        // prefix carries no free-form text, so substituting into its name cannot smuggle a secret
+        // into a retained key - the reason the substitution guard exists at all. npm expands keys
+        // after ini has parsed them, so this names the same prefix a literal spelling would.
+        var prefix = Directory.CreateDirectory(Path.Combine(_root.FullName, "corp"));
+        var globalNpmrcDirectory = Directory.CreateDirectory(Path.Combine(prefix.FullName, "etc"));
+        File.WriteAllText(
+            Path.Combine(globalNpmrcDirectory.FullName, "npmrc"),
+            "registry=https://npm.contoso.example/from-prefix/");
+
+        WriteHomeNpmrc($"pre${{NPM_KEY_TAIL}}={prefix.FullName}");
+
+        var resolver = CreateResolver(environment: new Dictionary<string, string>
+        {
+            ["NPM_KEY_TAIL"] = "fix"
+        });
+
+        var resolution = resolver.Resolve(PackageName);
+
+        Assert.Equal("https://npm.contoso.example/from-prefix/", resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
     public void Resolve_ReadsAQuotedNpmrcKey()
     {
         // ini decodes the key half with the same unsafe() pass it applies to values, so npm sees

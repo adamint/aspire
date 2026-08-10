@@ -23,7 +23,8 @@ namespace Aspire.Cli.Npm;
 // npm costs a process launch on the command startup path and would reintroduce a Node-on-PATH
 // requirement that the HTTP-based lookup deliberately removed.
 //
-// Nothing outside `registry`, `<scope>:registry`, `userconfig`, and `globalconfig` is ever retained.
+// Nothing outside `registry`, `<scope>:registry`, `userconfig`, `globalconfig`, and `prefix` is
+// ever retained.
 // Credential keys such as "//registry.example.com/:_authToken" are rejected by the allow list before
 // their value is parsed out of the line, and the environment layer keeps only the `npm_config_*`
 // variables that clear the same allow list, so no process environment value and no credential entry
@@ -340,6 +341,14 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
     {
         var fileConfiguration = new Dictionary<string, ConfigurationValue>(StringComparer.Ordinal);
 
+        // Values are collected raw and only turned into configuration once the file is read,
+        // because ini can still convert a key into an array after it has been assigned: once
+        // "registry[]" has appeared, a later plain "registry=" is pushed onto the array instead of
+        // replacing it. Joining normalized values would not reproduce what npm sees either, since
+        // npm reads the array through String(value).
+        var collectedValues = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var arrayKeys = new HashSet<string>(StringComparer.Ordinal);
+
         while (!contents.IsEmpty)
         {
             // Split exactly like File.ReadAllLines: "\r\n" is one terminator, and a lone "\r" or
@@ -381,11 +390,26 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
                 continue;
             }
 
-            var key = ExpandEnvironmentReferences(rawKey);
+            // ini strips a "[]" suffix from the decoded key and turns the entry into an array, so
+            // "registry[]=https://mirror.example/" names the plain `registry` key in npm. The
+            // suffix is removed before the allow list and before the substitution check, because
+            // it is ini syntax rather than anything the environment put there. ini requires more
+            // than the suffix itself, so a key that is exactly "[]" is not an array.
+            // See https://github.com/npm/ini/blob/main/lib/ini.js (isArray is computed from the
+            // unsafe()-decoded key, which is why the suffix is stripped after ParseNpmrcValue).
+            var isArrayEntry = rawKey.Length > 2 && rawKey.EndsWith("[]", StringComparison.Ordinal);
+            var scalarRawKey = isArrayEntry ? rawKey[..^2] : rawKey;
 
-            if (!IsInterestingKey(key) || !CanRetainExpandedKey(rawKey, key))
+            var key = ExpandEnvironmentReferences(scalarRawKey);
+
+            if (!IsInterestingKey(key) || !CanRetainExpandedKey(scalarRawKey, key))
             {
                 continue;
+            }
+
+            if (isArrayEntry)
+            {
+                arrayKeys.Add(key);
             }
 
             // ini yields the boolean true for a bare key line. npm rejects that as a url exactly
@@ -393,9 +417,28 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             // unusable marker rather than look like an absent key.
             var parsedValue = hasAssignment ? ParseNpmrcValue(rawValue) : IniBooleanTrue;
 
+            if (!collectedValues.TryGetValue(key, out var collected))
+            {
+                collected = [];
+                collectedValues[key] = collected;
+            }
+            else if (!arrayKeys.Contains(key))
+            {
+                // A duplicate scalar key inside one ini file is last-wins.
+                collected.Clear();
+            }
+
             // See the matching comment in MergeEnvironment: npm leaves an undefined "${VAR}"
             // literal rather than dropping the entry, so the layer stays selected and unusable.
-            SetIfPresent(fileConfiguration, key, ExpandEnvironmentReferences(parsedValue), path);
+            collected.Add(ExpandEnvironmentReferences(parsedValue));
+        }
+
+        foreach (var (key, collected) in collectedValues)
+        {
+            // npm never sees the array itself; every consumer of `registry` turns it into a string,
+            // and JS renders an array by joining its elements with ",". A single "registry[]" entry
+            // therefore resolves to exactly that address, which is why the key cannot be dropped.
+            SetIfPresent(fileConfiguration, key, string.Join(',', collected), path);
         }
 
         foreach (var (key, value) in fileConfiguration)
@@ -866,7 +909,7 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
     private static bool CanRetainExpandedKey(string rawKey, string expandedKey)
     {
         return string.Equals(rawKey, expandedKey, StringComparison.Ordinal) ||
-            expandedKey is RegistryKey or UserConfigKey or GlobalConfigKey;
+            expandedKey is RegistryKey or UserConfigKey or GlobalConfigKey or PrefixKey;
     }
 
     private static string NormalizeEnvironmentKey(string key)
