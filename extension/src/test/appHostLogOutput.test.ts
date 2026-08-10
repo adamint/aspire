@@ -263,6 +263,24 @@ suite('AppHost log output coordinator tests', () => {
             }]);
     });
 
+    test('keeps exception continuation state per stream when the streams interleave', () => {
+        // stdout, stderr and console interleave freely. The fallback filter tracks whether an
+        // exception block is still being extended, and that state belongs to one stream: a write
+        // on another stream used to reset it, after which the console stack frame was no longer
+        // recognized as a continuation and was dropped instead of routed to stderr.
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(coordinator, 'Unhandled exception. System.Exception: boom\n', 'console'),
+            [{ output: 'Unhandled exception. System.Exception: boom\n', category: 'stderr' }]);
+        assert.deepStrictEqual(
+            renderConsole(coordinator, 'listening on 5000\n', 'stdout'),
+            [{ output: 'listening on 5000\n', category: 'stdout' }]);
+        assert.deepStrictEqual(
+            renderConsole(coordinator, '   at Foo()\n', 'console'),
+            [{ output: '   at Foo()\n', category: 'stderr' }]);
+    });
+
     test('treats a chunk that is only a carriage return as an incomplete line', () => {
         // A CRLF split across two chunks arrives as "\r" on its own. Treating that CR as a
         // finished line would emit an empty record and leave the real line orphaned in the

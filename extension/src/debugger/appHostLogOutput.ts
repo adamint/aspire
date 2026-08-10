@@ -52,7 +52,12 @@ export class AppHostLogOutputCoordinator {
     private static readonly _allSources: readonly AppHostLogSource[] = ['backchannel', 'consoleLogger', 'debugLogger'];
     private static readonly _adapterOnlyIdleFlushDelayMs = 250;
     private readonly _correlatedRecords: CorrelatedRecord[] = [];
-    private readonly _fallbackFilter = new AppHostParentOutputFilter();
+    // One filter per normalized DAP category. The filter carries continuation state — whether an
+    // exception block or a dropped low-severity log is still being extended — and that state is
+    // only meaningful within a single stream. Sharing one instance made an interleaved write on
+    // another stream reset it, so a `console` stack frame arriving after an unrelated `stdout`
+    // line was no longer recognized as a continuation and was dropped instead of routed to stderr.
+    private readonly _fallbackFilters = new Map<string, AppHostParentOutputFilter>();
     private readonly _partialLines = new Map<string, string>();
     private readonly _idleFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
     private _highestBackchannelSequence = 0;
@@ -177,7 +182,20 @@ export class AppHostLogOutputCoordinator {
         this._pendingDebugRecords.clear();
         this._partialLines.clear();
         this.clearIdleFlushTimers();
-        this._fallbackFilter.reset();
+        this._fallbackFilters.clear();
+    }
+
+    private fallbackFilterFor(category: string | undefined): AppHostParentOutputFilter {
+        // Matches the filter's own normalization: the DAP category is optional and a missing one
+        // means `console`, so both spellings have to reach the same instance.
+        const normalizedCategory = category ?? 'console';
+        let filter = this._fallbackFilters.get(normalizedCategory);
+        if (filter === undefined) {
+            filter = new AppHostParentOutputFilter();
+            this._fallbackFilters.set(normalizedCategory, filter);
+        }
+
+        return filter;
     }
 
     /**
@@ -217,7 +235,7 @@ export class AppHostLogOutputCoordinator {
             const block = passthrough;
             passthrough = '';
 
-            const filtered = this._fallbackFilter.filter(block, category);
+            const filtered = this.fallbackFilterFor(category).filter(block, category);
             if (filtered) {
                 outputs.push(filtered);
             }
@@ -345,7 +363,7 @@ export class AppHostLogOutputCoordinator {
             return;
         }
 
-        const filtered = this._fallbackFilter.filter(pending.text, pending.category);
+        const filtered = this.fallbackFilterFor(pending.category).filter(pending.text, pending.category);
         if (filtered) {
             outputs.push(filtered);
         }
@@ -360,9 +378,10 @@ export class AppHostLogOutputCoordinator {
     private startsUnrelatedConsoleOutput(pending: PendingConsoleRecord, line: string): boolean {
         // Two kinds of line legitimately extend a record whose message already equals its twin's.
         // A blank one is the tail of a message that ended with a newline, which normalizeRecordText
-        // strips from both copies before they are compared. An exception block is the part of the
-        // record the AppHost could not send over the backchannel separately, so the twin carries
-        // the message alone. Neither can prove a different writer is now emitting.
+        // strips from both copies before they are compared. An exception block is ambiguous: the
+        // console formatter writes the separately captured exception and an exception-shaped
+        // continuation of a multi-line message identically, so a line that looks like one may
+        // still belong to this record. Neither can prove a different writer is now emitting.
         const content = normalizeLineEndings(line).split('\n', 1)[0];
         if (content.trim().length === 0 || startsExceptionBlock(content.slice(6))) {
             return false;
@@ -386,7 +405,7 @@ export class AppHostLogOutputCoordinator {
             return;
         }
 
-        const filtered = this._fallbackFilter.filter(text, pending.category);
+        const filtered = this.fallbackFilterFor(pending.category).filter(text, pending.category);
         if (filtered) {
             outputs.push(filtered);
         }
@@ -477,7 +496,7 @@ export class AppHostLogOutputCoordinator {
         // whether the previous line opened a suppressed trace/debug record or an error
         // block, so skipping consumed records leaves that state stale and the next
         // unstructured line is classified against the wrong record.
-        this._fallbackFilter.filter(rawText, category);
+        this.fallbackFilterFor(category).filter(rawText, category);
 
         const correlated = this.correlate(record, source);
         if (correlated) {
