@@ -79,7 +79,6 @@ suite('Aspire resource debugger E2E', function () {
 
         assert.strictEqual(resourceSession.type, 'pwa-node');
         assert.notStrictEqual(resourceSession.id, appHostSession.id);
-        assert.ok(isSamePath(String(appHostSession.configuration.program ?? ''), getPrimaryAppHostProjectPath()));
 
         // Which session owns a C# AppHost depends on the installed extensions, so assert both
         // shapes exactly instead of tolerating a missing AppHost session. The CLI hands the AppHost
@@ -90,13 +89,23 @@ suite('Aspire resource debugger E2E', function () {
         // CLI runs the AppHost itself with `dotnet run` and the synthetic `aspire` parent owns it;
         // a developer running this locally with the C# extension installed gets a real `coreclr`
         // AppHost child session instead.
+        //
+        // The two shapes carry the AppHost project differently, so `program` is only asserted on the
+        // synthetic session. The real `coreclr` session never keeps the `.csproj` in `program`:
+        // `createDebugSessionConfiguration` replaces it with the built output path, the `dotnet`
+        // muxer, or the launch profile's executable (`dotnet.ts` `program` assignments), so a shared
+        // assertion would fail locally before ever reaching the branch meant to validate that shape.
         if (proof.supportedLaunchConfigurations.includes('project')) {
             assert.strictEqual(appHostSession.type, 'coreclr');
             assert.strictEqual(appHostSession.configuration.isApphost, true);
+            assert.ok(
+                String(appHostSession.configuration.program ?? '').length > 0,
+                `Expected the coreclr AppHost session to launch a built program: ${JSON.stringify(appHostSession.configuration.program)}.`);
         }
         else {
             assert.strictEqual(appHostSession.type, 'aspire');
             assert.strictEqual(appHostSession.configuration.isApphost, undefined);
+            assert.ok(isSamePath(String(appHostSession.configuration.program ?? ''), getPrimaryAppHostProjectPath()));
         }
     });
 
