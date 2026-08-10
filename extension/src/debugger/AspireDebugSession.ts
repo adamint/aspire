@@ -6,7 +6,7 @@ import { AspireResourceExtendedDebugConfiguration, AspireResourceDebugSession, E
 import { extensionLogOutputChannel } from "../utils/logging";
 import AspireDcpServer, { generateDcpIdPrefix } from "../dcp/AspireDcpServer";
 import { spawnCliProcess } from "./languages/cli";
-import { disconnectingFromSession, launchingWithAppHost, launchingWithDirectory, processExceptionOccurred, processExitedWithCode, aspireDashboard, appHostSessionTerminated, debugSessionsFailedToStop } from "../loc/strings";
+import { disconnectingFromSession, launchingWithAppHost, launchingWithDirectory, processExceptionOccurred, processExitedWithCode, aspireDashboard, appHostSessionTerminated, debugSessionsFailedToStop, resourceStartsDidNotFinishBeforeStopDeadline } from "../loc/strings";
 import { projectDebuggerExtension } from "./languages/dotnet";
 import { AnsiColors } from "../utils/AspireTerminalProvider";
 import { applyTextStyle } from "../utils/strings";
@@ -53,6 +53,22 @@ export function getLoggableDebugConfiguration(debugConfig: AspireResourceExtende
 export class AspireDebugSession implements vscode.DebugAdapter {
   private static readonly _mauiDebugStartMaxAttempts = 3;
   private static readonly _mauiDebugStartRetryDelayMs = 5000;
+  /**
+   * How long the ordered shutdown waits for resource starts that were already in flight when Stop
+   * arrived.
+   *
+   * A bound is needed because there is nothing to cancel them with: prepareDebugSession() hands the
+   * launch to a resource-type extension that spawns its own host - Azure Functions builds the
+   * project and then waits for `func host start` to report readiness - and none of that takes a
+   * cancellation token, so one stalled preparation would hold Stop open forever.
+   *
+   * Giving up only stops the WAITING, not the stopping: a start that finishes afterwards still sees
+   * isShuttingDown and routes itself through stopLateResourceSession(), which issues the stop
+   * eagerly and logs its failure. What is lost is that failure reaching the caller, so abandoning a
+   * start is itself reported as a shutdown failure rather than passed off as success.
+   */
+  private static readonly _defaultLateStartDrainTimeoutMs = 30_000;
+  private readonly _lateStartDrainTimeoutMs: number;
   private readonly _onDidSendMessage = new EventEmitter<any>();
   private readonly _onDidSendDebugConsoleOutput = new EventEmitter<AspireDebugConsoleOutputEvent>();
   private _messageSeq = 1;
@@ -93,6 +109,9 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   // Resource starts that are in flight. A start only queues its stop once it finishes, so a start
   // that has not finished yet is represented nowhere else and the drain would not see it.
   private readonly _pendingResourceStarts = new Set<Promise<unknown>>();
+  // When the shutdown stops waiting for those starts. Set once, when the shutdown latches, so the
+  // two drain passes share one budget instead of each getting a fresh one.
+  private _lateStartDeadlineMs = Number.POSITIVE_INFINITY;
   // The in-flight (or completed) ordered shutdown, so overlapping stop requests share one.
   private _stopPromise: Promise<void> | undefined;
   private _parentStopPromise: Thenable<void> | undefined;
@@ -131,7 +150,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     return this._startupCompleted;
   }
 
-  constructor(session: vscode.DebugSession, rpcServer: AspireRpcServer, dcpServer: AspireDcpServer, terminalProvider: AspireTerminalProvider, removeAspireDebugSession: (session: AspireDebugSession) => void, debugSessionId: string = generateDcpIdPrefix()) {
+  constructor(session: vscode.DebugSession, rpcServer: AspireRpcServer, dcpServer: AspireDcpServer, terminalProvider: AspireTerminalProvider, removeAspireDebugSession: (session: AspireDebugSession) => void, debugSessionId: string = generateDcpIdPrefix(), lateStartDrainTimeoutMs: number = AspireDebugSession._defaultLateStartDrainTimeoutMs) {
     this._session = session;
     this._rpcServer = rpcServer;
     this._dcpServer = dcpServer;
@@ -139,6 +158,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     this.configuration = session.configuration as AspireExtendedDebugConfiguration;
 
     this.debugSessionId = debugSessionId;
+    this._lateStartDrainTimeoutMs = lateStartDrainTimeoutMs;
 
     this._disposables.push({
       dispose: () => removeAspireDebugSession(this)
@@ -182,6 +202,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // Latch before the first await so any resource that starts while the shutdown is in flight is
     // stopped immediately by the start paths instead of being registered behind the snapshot.
     this._stopping = true;
+    this._lateStartDeadlineMs = Date.now() + this._lateStartDrainTimeoutMs;
     const stopFailures = await this.stopAllSessions();
 
     // Dispose even when a stop failed, otherwise a failing adapter would leak the debug adapter
@@ -256,17 +277,33 @@ export class AspireDebugSession implements vscode.DebugAdapter {
    */
   private async drainLateResourceStops(): Promise<unknown[]> {
     const stopFailures: unknown[] = [];
+    let abandonedStarts = 0;
 
     while (this._pendingResourceStarts.size > 0 || this._lateResourceStops.length > 0) {
-      // Starts first. A start still in flight has not had the chance to queue its stop yet, so
-      // draining the stop list alone would observe an empty array, return, and let stopDebugging()
-      // resolve while that resource's debugger was still being launched and then stopped.
-      // A start FAILURE is reported to whoever requested the start, not here - this only needs the
-      // start to be finished so its stop, if any, is queued.
-      await Promise.allSettled([...this._pendingResourceStarts]);
+      if (this._pendingResourceStarts.size > 0) {
+        // Starts first. A start still in flight has not had the chance to queue its stop yet, so
+        // draining the stop list alone would observe an empty array, return, and let stopDebugging()
+        // resolve while that resource's debugger was still being launched and then stopped.
+        // A start FAILURE is reported to whoever requested the start, not here - this only needs the
+        // start to be finished so its stop, if any, is queued.
+        const pending = [...this._pendingResourceStarts];
+        const finished = await settlesBefore(Promise.allSettled(pending), this._lateStartDeadlineMs);
+
+        if (!finished) {
+          // Forget them rather than looping on them again. Each start deregisters itself through a
+          // finally() handler, and deleting from an emptied Set is a no-op, so the bookkeeping still
+          // holds once they do finish.
+          abandonedStarts += this._pendingResourceStarts.size;
+          this._pendingResourceStarts.clear();
+        }
+      }
 
       const draining = this._lateResourceStops.splice(0, this._lateResourceStops.length);
       stopFailures.push(...await this.settleResourceStops(draining));
+    }
+
+    if (abandonedStarts > 0) {
+      stopFailures.push(new Error(resourceStartsDidNotFinishBeforeStopDeadline(abandonedStarts)));
     }
 
     return stopFailures;
@@ -675,7 +712,27 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
   private _appHostRestartRequested = false;
 
+  /**
+   * Launches the AppHost under the same shutdown latch a resource launch runs under.
+   *
+   * Everything from the build through to the assignment of `_appHostDebugSession` is a window in
+   * which the AppHost exists as a process but not as anything `stopAllSessions()` can find: the
+   * session snapshot is empty and, without this registration, so is `_pendingResourceStarts`. A Stop
+   * arriving in that window would drain nothing, stop the synthetic parent, and report success while
+   * the AppHost was still starting behind it.
+   */
   async startAppHost(projectFile: string, args: string[], environment: EnvVar[], debug: boolean, options: StartAppHostOptions): Promise<void> {
+    const launch = this.startResourceIfNotShuttingDown(() => this.startAppHostCore(projectFile, args, environment, debug, options));
+
+    if (launch === undefined) {
+      extensionLogOutputChannel.info(`Not starting AppHost for project ${projectFile} because the Aspire session is already stopping.`);
+      return;
+    }
+
+    await launch;
+  }
+
+  private async startAppHostCore(projectFile: string, args: string[], environment: EnvVar[], debug: boolean, options: StartAppHostOptions): Promise<void> {
     try {
       const fileExtension = path.extname(projectFile).toLowerCase();
       const isNodeAppHost = AspireDebugSession._nodeAppHostExtensions.includes(fileExtension);
@@ -1237,6 +1294,38 @@ function delay(ms: number): Promise<void> {
  */
 function startStopSession(session: AspireResourceDebugSession): Promise<void> {
   return startStop(() => session.stopSession());
+}
+
+/**
+ * Resolves `true` when `operation` settles before `deadlineMs` (a `Date.now()` timestamp), `false`
+ * when the deadline passes first.
+ *
+ * The timer is always cleared. An outstanding `setTimeout` keeps the extension host's event loop
+ * alive, so leaving one behind on the fast path would delay the host's own shutdown by up to the
+ * full drain timeout.
+ */
+function settlesBefore(operation: Promise<unknown>, deadlineMs: number): Promise<boolean> {
+  const remainingMs = deadlineMs - Date.now();
+  if (remainingMs <= 0) {
+    return Promise.resolve(false);
+  }
+
+  if (!Number.isFinite(remainingMs)) {
+    return operation.then(() => true);
+  }
+
+  let timer: NodeJS.Timeout | undefined;
+
+  return Promise.race([
+    operation.then(() => true),
+    new Promise<boolean>(resolve => {
+      timer = setTimeout(() => resolve(false), remainingMs);
+    })
+  ]).finally(() => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  });
 }
 
 /**

@@ -853,6 +853,9 @@
     <trans-unit id="aspire-vscode.strings.aspireCliCommandFailed">
       <source xml:lang="en">{0} exited with code {1}{2}</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.resourceStartsDidNotFinishBeforeStopDeadline">
+      <source xml:lang="en">{0} resource(s) were still starting when the debug session was stopped. They are being stopped in the background; see the Aspire output channel for the result.</source>
+    </trans-unit>
     <trans-unit id="aspire-vscode.strings.appHostCandidateDescription">
       <source xml:lang="en">{0} · {1}</source>
     </trans-unit>

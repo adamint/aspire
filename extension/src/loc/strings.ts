@@ -60,6 +60,7 @@ export const failedToStartProject = (errorMessage: string) => vscode.l10n.t('Fai
 export const dcpServerNotInitialized = vscode.l10n.t('DCP server not initialized - cannot forward debug output.');
 export const appHostSessionTerminated = vscode.l10n.t('The AppHost process has terminated. To view console output, select the AppHost session from the debug console dropdown.');
 export const debugSessionsFailedToStop = (count: number) => vscode.l10n.t('{0} debug sessions failed to stop.', count);
+export const resourceStartsDidNotFinishBeforeStopDeadline = (count: number) => vscode.l10n.t('{0} resource(s) were still starting when the debug session was stopped. They are being stopped in the background; see the Aspire output channel for the result.', count);
 export const invalidTokenProvided = vscode.l10n.t('Invalid token provided.');
 export const noWorkspaceFolder = vscode.l10n.t('No workspace folder found.');
 export const aspireConfigExists = vscode.l10n.t('Aspire launch configuration already exists in launch.json.');

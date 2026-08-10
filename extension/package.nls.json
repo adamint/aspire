@@ -107,6 +107,7 @@
   "aspire-vscode.strings.dcpServerNotInitialized": "DCP server not initialized - cannot forward debug output.",
   "aspire-vscode.strings.appHostSessionTerminated": "The AppHost process has terminated. To view console output, select the AppHost session from the debug console dropdown.",
   "aspire-vscode.strings.debugSessionsFailedToStop": "{0} debug sessions failed to stop.",
+  "aspire-vscode.strings.resourceStartsDidNotFinishBeforeStopDeadline": "{0} resource(s) were still starting when the debug session was stopped. They are being stopped in the background; see the Aspire output channel for the result.",
   "aspire-vscode.strings.invalidTokenProvided": "Invalid token provided.",
   "aspire-vscode.strings.noWorkspaceFolder": "No workspace folder found.",
   "aspire-vscode.strings.aspireConfigExists": "Aspire launch configuration already exists in launch.json.",

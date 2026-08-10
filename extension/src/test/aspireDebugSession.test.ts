@@ -1300,6 +1300,103 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual((aspireDebugSession as any)._disposed, true, 'The session must still be disposed after a failed stop');
     });
 
+    // The AppHost launch is a resource start like any other as far as the shutdown is concerned:
+    // between the build and the assignment of _appHostDebugSession there is nothing for
+    // stopAllSessions() to find, so a Stop landing in that window must wait for the launch instead
+    // of draining an empty snapshot and reporting success while the AppHost was still starting.
+    test('a stop that lands while the AppHost is launching waits for the launch', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = { isCliDebugLoggingEnabled: () => false };
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(async () => { });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+
+        let releaseLaunch: (() => void) | undefined;
+        let launchFinished = false;
+        // Stands in for the real body: a build followed by startAndGetDebugSession(), neither of
+        // which has produced a session yet.
+        (aspireDebugSession as any).startAppHostCore = () => new Promise<void>(resolve => {
+            releaseLaunch = () => {
+                launchFinished = true;
+                resolve();
+            };
+        });
+
+        const launch = aspireDebugSession.startAppHost('/workspace/apphost.cs', [], [], false, { forceBuild: false });
+        await waitFor(() => releaseLaunch !== undefined);
+
+        let stopSettled = false;
+        const shutdown = aspireDebugSession.stopDebugging();
+        void shutdown.then(() => { stopSettled = true; }, () => { stopSettled = true; });
+
+        // Several turns, so anything that resolves the stop without waiting has had every chance to.
+        for (let turn = 0; turn < 20; turn++) {
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
+
+        assert.strictEqual(stopSettled, false, 'stopDebugging() must not settle while the AppHost launch is still in flight');
+
+        releaseLaunch!();
+        await launch;
+        await shutdown;
+
+        assert.strictEqual(launchFinished, true);
+    });
+
+    // Nothing can cancel a resource preparation, so the drain needs a deadline or one stalled
+    // launch holds Stop open forever. Giving up has to be reported: the resource is still stopped in
+    // the background, but the shutdown no longer knows whether that succeeded.
+    test('a resource start that never finishes does not hold the stop open forever', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = { isCliDebugLoggingEnabled: () => false };
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(async () => { });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { }, undefined, 50);
+
+        const stalledStart = aspireDebugSession.startResourceIfNotShuttingDown(() => new Promise<void>(() => { }));
+        assert.notStrictEqual(stalledStart, undefined);
+
+        let stopFailure: unknown;
+        try {
+            await aspireDebugSession.stopDebugging();
+        }
+        catch (err) {
+            stopFailure = err;
+        }
+
+        assert.ok(stopFailure instanceof Error, 'Abandoning an unfinished start must be reported as a shutdown failure');
+        assert.ok(
+            (stopFailure as Error).message.includes('still starting'),
+            `Unexpected shutdown failure: ${(stopFailure as Error).message}`);
+        assert.strictEqual((aspireDebugSession as any)._disposed, true, 'The session must still be disposed after abandoning a start');
+    });
+
     // VS Code disposes an inline debug adapter as soon as the disconnect response is sent, so the
     // ordered shutdown started by that disconnect is still in flight when dispose() runs. Disposal
     // must not fire the owned-session stop callbacks behind its back: doing so stops every resource
