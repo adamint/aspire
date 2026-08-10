@@ -10,7 +10,6 @@
 
 ### Fixes
 
-- Emit VS Code extension and dashboard telemetry with the `aspire/vscode/*` and `aspire/dashboard/*` wire names expected by downstream Aspire telemetry queries ([#18602](https://github.com/microsoft/aspire/pull/18602)).
 - Fix the Get Started walkthrough's Install Aspire CLI step to use a package-manager picker (WinGet, Homebrew, npm, .NET tool, mise) instead of shell-specific piped scripts, resolving failures on Windows when the default shell is `cmd.exe` ([#18459](https://github.com/microsoft/aspire/issues/18459), [#18522](https://github.com/microsoft/aspire/pull/18522)).
 - Fix stale global AppHosts appearing in the Aspire pane when switching back to a workspace view; global AppHosts are now cleared and re-filtered immediately on view switch ([#18506](https://github.com/microsoft/aspire/issues/18506), [#18516](https://github.com/microsoft/aspire/pull/18516)).
 

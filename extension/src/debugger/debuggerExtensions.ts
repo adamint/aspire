@@ -24,7 +24,7 @@ export interface DebuggableResourceSnapshot {
     properties: Record<string, unknown> | null;
 }
 
-export type AttachDebuggerConfigurationErrorKind = 'ResourceNotAttachable' | 'ProcessNameUnresolved';
+export type AttachDebuggerConfigurationErrorKind = 'ResourceNotAttachable';
 
 export class AttachDebuggerConfigurationError extends Error {
     constructor(public readonly errorKind: AttachDebuggerConfigurationErrorKind, message: string) {

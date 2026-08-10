@@ -64,7 +64,6 @@ import { executeResourceCommand as executeResourceCommandWithUi, type ResourceCo
 import { AppHostLaunchService } from '../services/AppHostLaunchService';
 import { isCommandCancellation } from '../utils/telemetry';
 import * as debuggerExtensions from '../debugger/debuggerExtensions';
-import { findAppHostForResource, findLatestResourceForElement, getAppHostPathForResource } from './resourceLookup';
 
 type TreeElement = AppHostItem | EndpointUrlItem | ResourcesGroupItem | ResourceItem | WorkspaceResourcesItem | WorkspaceAppHostItem | WorkspaceAppHostsGroupItem | RunningAppHostsGroupItem | WorkspaceAppHostActionItem | WorkspaceAppHostPathItem | HealthChecksGroupItem | HealthCheckItem | LogFileItem | CommandsGroupItem | ResourceCommandItem;
 
@@ -322,7 +321,7 @@ class LogFileItem extends vscode.TreeItem {
 }
 
 class ResourcesGroupItem extends vscode.TreeItem {
-    constructor(public readonly resources: ResourceJson[], public readonly appHostPid: number, public readonly appHostPath: string) {
+    constructor(public readonly resources: ResourceJson[], public readonly appHostPid: number) {
         super(resourcesGroupLabel, vscode.TreeItemCollapsibleState.Expanded);
         this.id = `resources:${appHostPid}`;
         this.iconPath = new vscode.ThemeIcon('layers', new vscode.ThemeColor('aspire.brandPurple'));
@@ -402,6 +401,11 @@ function getParentResourceName(resource: ResourceJson): string | null {
     return resource.properties?.['resource.parentName'] ?? null;
 }
 
+interface AttachDebuggerHandledFailure {
+    success: false;
+    errorKind: 'ResourceNotFound' | 'ResourceNotAttachable' | 'CSharpExtensionMissing';
+}
+
 class ResourceItem extends vscode.TreeItem {
     constructor(
         public readonly resource: ResourceJson,
@@ -430,7 +434,7 @@ class ResourceItem extends vscode.TreeItem {
     }
 }
 
-export function getResourceContextValue(resource: ResourceJson, canAttachDebugger: boolean): string {
+export function getResourceContextValue(resource: ResourceJson, canAttachDebugger: boolean = false): string {
     const commands = resource.commands;
     const parts = ['resource'];
     if (hasEnabledCommand(commands, 'start') || hasEnabledCommand(commands, 'resource-start')) {
@@ -465,11 +469,6 @@ function getTerminalReplicaIndex(resource: ResourceJson): string | undefined {
     const value = resource.properties?.[terminalReplicaIndexPropertyName];
     const trimmedValue = value?.trim();
     return trimmedValue && trimmedValue.length > 0 ? trimmedValue : undefined;
-}
-
-interface AttachDebuggerHandledFailure {
-    success: false;
-    errorKind: 'ResourceNotFound' | 'ResourceNotAttachable' | 'CSharpExtensionMissing' | 'ProcessNameUnresolved';
 }
 
 export function getResourceIcon(resource: ResourceJson): vscode.ThemeIcon {
@@ -1224,7 +1223,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
             }
 
             if (appHost.resources && appHost.resources.length > 0) {
-                items.push(new ResourcesGroupItem(appHost.resources, appHost.appHostPid, appHost.appHostPath));
+                items.push(new ResourcesGroupItem(appHost.resources, appHost.appHostPid));
             }
 
             return items;
@@ -1234,7 +1233,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
             const topLevel = element.resources.filter(r => !getParentResourceName(r));
             return sortResources(topLevel).map(r => {
                 const hasChildren = element.resources.some(c => getParentResourceName(c) === r.name);
-                return new ResourceItem(r, element.appHostPid, hasChildren, element.resources, element.appHostPath);
+                return new ResourceItem(r, element.appHostPid, hasChildren, element.resources);
             });
         }
 
@@ -1494,12 +1493,13 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
     }
 
     async attachDebuggerToResource(element: ResourceItem): Promise<AttachDebuggerHandledFailure | void> {
-        const resource = findLatestResourceForElement(this._repository, element);
-        if (!resource) {
+        const latestElement = this.findResourceElement(element.resource.name, element.appHostPath);
+        if (!(latestElement instanceof ResourceItem)) {
             vscode.window.showWarningMessage(attachDebuggerResourceNotFound);
             return { success: false, errorKind: 'ResourceNotFound' };
         }
 
+        const resource = latestElement.resource;
         const debuggerExtension = debuggerExtensions.getAttachDebuggerExtensionForResource(resource);
         if (!debuggerExtension) {
             const missingDebuggerExtension = debuggerExtensions.getMissingAttachDebuggerExtensionForResource(resource);
@@ -1535,20 +1535,16 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
 
     async viewResourceLogs(element: ResourceItem): Promise<void> {
         // aspire logs accepts the resource display name, not the internal name
-        const resource = findLatestResourceForElement(this._repository, element) ?? element.resource;
-        const resourceName = resource.displayName ?? resource.name;
+        const resourceName = element.resource.displayName ?? element.resource.name;
         if (this._repository.viewMode === 'workspace') {
-            const appHostPath = getAppHostPathForResource(this._repository, element);
-            if (element.appHostPath && appHostPath === undefined) {
-                return;
-            }
+            const appHostPath = this._getAppHostPathForResource(element);
             const command = appHostPath
                 ? ['logs', shellArg(resourceName), '--apphost', shellArg(appHostPath)]
                 : ['logs', shellArg(resourceName)];
             await this._terminalProvider.sendAspireCommandToAspireTerminal(command);
             return;
         }
-        const appHost = findAppHostForResource(this._repository, element);
+        const appHost = this._findAppHostForResource(element);
         if (!appHost) {
             return;
         }
@@ -1556,17 +1552,13 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
     }
 
     async openResourceTerminal(element: ResourceItem): Promise<void> {
-        const latestResource = findLatestResourceForElement(this._repository, element) ?? element.resource;
-        const command: Array<string | ShellArg> = ['terminal', 'attach', shellArg(latestResource.name)];
-        const appHostPath = getAppHostPathForResource(this._repository, element);
-        if (element.appHostPath && appHostPath === undefined) {
-            return;
-        }
+        const command: Array<string | ShellArg> = ['terminal', 'attach', shellArg(element.resource.name)];
+        const appHostPath = this._getAppHostPathForResource(element);
         if (appHostPath) {
             command.push('--apphost', shellArg(appHostPath));
         }
 
-        const replicaIndex = getTerminalReplicaIndex(latestResource);
+        const replicaIndex = getTerminalReplicaIndex(element.resource);
         if (replicaIndex) {
             command.push('--replica', shellArg(replicaIndex));
         }
@@ -1575,13 +1567,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
     }
 
     async executeResourceCommand(element: ResourceItem): Promise<ResourceCommandExecutionOutcome | void> {
-        const resource = findLatestResourceForElement(this._repository, element);
-        if (!resource) {
-            vscode.window.showInformationMessage(noCommandsAvailable);
-            return;
-        }
-
-        const commands = resource.commands;
+        const commands = element.resource.commands;
         if (!commands || Object.keys(commands).length === 0) {
             vscode.window.showInformationMessage(noCommandsAvailable);
             return;
@@ -1622,13 +1608,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
 
     async executeResourceCommandItem(element: ResourceCommandItem): Promise<ResourceCommandExecutionOutcome | void> {
         const commandName = element.commandName;
-        const latestResource = findLatestResourceForElement(this._repository, element.resourceItem);
-        if (!latestResource) {
-            vscode.window.showInformationMessage(noCommandsAvailable);
-            return;
-        }
-
-        const command = latestResource.commands?.[commandName];
+        const command = element.commandJson;
         const resourceItem = element.resourceItem;
 
         if (!isEnabledCommand(command)) {
@@ -1721,15 +1701,10 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         // values are not echoed to a terminal, and the spawn diagnostics log redacts tokens after
         // the `--` delimiter, so no separate redaction flag is needed here.
         const appHostPath = this._repository.viewMode === 'workspace'
-            ? getAppHostPathForResource(this._repository, element)
-            : findAppHostForResource(this._repository, element)?.appHostPath;
+            ? this._getAppHostPathForResource(element)
+            : this._findAppHostForResource(element)?.appHostPath;
 
         if (this._repository.viewMode !== 'workspace' && appHostPath === undefined) {
-            return;
-        }
-
-        const resource = findLatestResourceForElement(this._repository, element);
-        if (!resource) {
             return;
         }
 
@@ -1737,8 +1712,8 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
             this._repository,
             (resourceName, command, content, outputAppHostPath) => this.showResourceCommandOutput(resourceName, command, content, outputAppHostPath),
             {
-                resourceName: resource.name,
-                displayName: resource.displayName ?? resource.name,
+                resourceName: element.resource.name,
+                displayName: element.resource.displayName ?? element.resource.name,
                 commandName,
                 appHostPath: appHostPath ?? undefined,
                 additionalArgs,
@@ -1763,16 +1738,12 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
 
     private async _loadResourceCommandArguments(element: ResourceItem, commandName: string, values: readonly ResourceCommandArgumentValue[]): Promise<ResourceCommandArgumentInputJson[] | undefined> {
         const appHostPath = this._repository.viewMode === 'workspace'
-            ? getAppHostPathForResource(this._repository, element)
-            : findAppHostForResource(this._repository, element)?.appHostPath;
-        if (element.appHostPath && appHostPath === undefined) {
-            return undefined;
-        }
-        const resource = findLatestResourceForElement(this._repository, element) ?? element.resource;
+            ? this._getAppHostPathForResource(element)
+            : this._findAppHostForResource(element)?.appHostPath;
 
         const loader = createResourceCommandArgumentLoader({
             cliExecutionProvider: this._terminalProvider,
-            resourceName: resource.name,
+            resourceName: element.resource.name,
             commandName,
             appHostPath: appHostPath ?? undefined,
         });
@@ -1780,6 +1751,13 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         return await loader(values);
     }
 
+    private _findAppHostForResource(element: ResourceItem): AppHostDisplayInfo | undefined {
+        return this._repository.appHosts.find(a => a.appHostPid === element.appHostPid);
+    }
+
+    private _getAppHostPathForResource(element: ResourceItem): string | undefined {
+        return element.appHostPath ?? this._findAppHostForResource(element)?.appHostPath ?? this._repository.workspaceAppHostPath;
+    }
 }
 
 /**

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { extensionLogOutputChannel } from '../../utils/logging';
-import { noCsharpBuildTask, buildFailedWithExitCode, noOutputFromMsbuild, failedToGetTargetPath, invalidLaunchConfiguration, buildFailedForProjectWithError, processExitedWithCode, lookingForDevkitBuildTask, csharpDevKitNotInstalled, failedToInspectRuntimeConfig, dotNetRunFallbackDisablesDebugger, dotNetRunFileBasedExecutableProfileFallback, executableLaunchProfileMissingExecutablePath, attachDebuggerConfigurationName, attachDebuggerProcessNameUnresolved, attachDebuggerTargetNameProbeAssumesDefaultConfiguration, attachDebuggerExecutableLaunchProfile, attachDebuggerUnresolvedLaunchProfile } from '../../loc/strings';
+import { noCsharpBuildTask, buildFailedWithExitCode, noOutputFromMsbuild, failedToGetTargetPath, invalidLaunchConfiguration, buildFailedForProjectWithError, processExitedWithCode, lookingForDevkitBuildTask, csharpDevKitNotInstalled, failedToInspectRuntimeConfig, dotNetRunFallbackDisablesDebugger, dotNetRunFileBasedExecutableProfileFallback, executableLaunchProfileMissingExecutablePath, attachDebuggerConfigurationName } from '../../loc/strings';
 import { ChildProcessWithoutNullStreams, execFile, spawn } from 'child_process';
 import * as util from 'util';
 import * as path from 'path';
@@ -20,7 +20,6 @@ import {
     determineServerReadyAction,
     LaunchProfileCommandName,
     LaunchProfile,
-    LaunchProfileResult,
     expandEnvironmentVariables
 } from '../launchProfiles';
 import { AspireDebugSession } from '../AspireDebugSession';
@@ -34,32 +33,13 @@ interface IDotNetService {
 }
 
 interface DotNetAttachDebuggerResourceInfo {
-    projectPath: string;
+    processId: number;
     resourceLabel: string;
-    reportedTargetName: string | undefined;
-    selectedLaunchProfile: SelectedLaunchProfile;
 }
-
-// What the resource snapshot says about the launch profile the AppHost applied.
-// 'named'   - the AppHost reported the profile it selected, which is not necessarily the file's default.
-// 'none'    - the AppHost reported that no profile applies (ExcludeLaunchProfile, or no profile matched).
-// 'unknown' - the AppHost never reported the property, so the file's default has to be inferred instead.
-type SelectedLaunchProfile =
-    | { kind: 'named'; name: string }
-    | { kind: 'none' }
-    | { kind: 'unknown' };
 
 const executablePidPropertyName = 'executable.pid';
 const executablePathPropertyName = 'executable.path';
 const projectPathPropertyName = 'project.path';
-// Well-known snapshot property added by the AppHost SDK target-name contract.
-// It carries the MSBuild-evaluated `TargetName`, which is the process name the C# debugger attaches to.
-const projectTargetNamePropertyName = 'project.targetName';
-// Carries the name of the launch profile the AppHost actually applied to this resource, which the
-// AppHost resolves itself (ResourceSnapshotBuilder -> GetEffectiveLaunchProfile). It is published with a
-// null value when no profile applies, so key presence - not just the value - distinguishes "no profile"
-// from an AppHost too old to report the property at all.
-const projectLaunchProfilePropertyName = 'project.launchProfile';
 const resourceParentNamePropertyName = 'resource.parentName';
 const dotNetProjectFileExtensions = new Set(['.csproj', '.fsproj', '.vbproj']);
 
@@ -436,7 +416,8 @@ function getDotNetAttachDebuggerResourceInfo(resource: DebuggableResourceSnapsho
         return undefined;
     }
 
-    if (getAttachDebuggerProcessId(resource) === undefined) {
+    const processId = getAttachDebuggerProcessId(resource);
+    if (processId === undefined) {
         return undefined;
     }
 
@@ -454,71 +435,14 @@ function getDotNetAttachDebuggerResourceInfo(resource: DebuggableResourceSnapsho
     }
 
     return {
-        projectPath,
+        processId,
         resourceLabel: resource.displayName ?? resource.name,
-        reportedTargetName: getReportedTargetName(resource),
-        selectedLaunchProfile: getSelectedLaunchProfile(resource),
     };
-}
-
-function getSelectedLaunchProfile(resource: DebuggableResourceSnapshot): SelectedLaunchProfile {
-    const properties = resource.properties;
-    if (!properties || !(projectLaunchProfilePropertyName in properties)) {
-        return { kind: 'unknown' };
-    }
-
-    const value: unknown = properties[projectLaunchProfilePropertyName];
-    if (typeof value !== 'string' || value.trim().length === 0) {
-        return { kind: 'none' };
-    }
-
-    return { kind: 'named', name: value };
-}
-
-// Resolves the launch profile that governs how this resource was started. The AppHost-reported profile
-// wins because it is the one that was actually applied; only an AppHost that never reported it falls back
-// to inferring the file's default, which is what `dotnet run` would have picked.
-async function resolveEffectiveLaunchProfile(attachInfo: DotNetAttachDebuggerResourceInfo): Promise<LaunchProfileResult> {
-    if (attachInfo.selectedLaunchProfile.kind === 'none') {
-        return { profile: null, profileName: null };
-    }
-
-    const launchSettings = await readLaunchSettings(attachInfo.projectPath);
-    if (attachInfo.selectedLaunchProfile.kind === 'named') {
-        const profileName = attachInfo.selectedLaunchProfile.name;
-        // Match the SDK's ordinal, case-sensitive profile lookup so a profile that differs only in casing
-        // is treated as absent here exactly as it would be by `dotnet run`.
-        const profile = launchSettings?.profiles?.[profileName] ?? null;
-        if (!profile) {
-            // The AppHost only reports a profile name it resolved at startup, so failing to find it now
-            // means launchSettings.json changed or stopped parsing since then. Its commandName is what
-            // decides whether the project's own output is running, and that answer is now unavailable -
-            // so this fails closed rather than assuming a Project launch and offering an attach that may
-            // target a process the profile never started.
-            throw new AttachDebuggerConfigurationError(
-                'ResourceNotAttachable',
-                attachDebuggerUnresolvedLaunchProfile(attachInfo.resourceLabel, profileName));
-        }
-
-        return { profile, profileName };
-    }
-
-    return determineDefaultLaunchProfile(launchSettings);
 }
 
 function getResourceParentName(resource: DebuggableResourceSnapshot): string | null {
     const value: unknown = resource.properties?.[resourceParentNamePropertyName];
     return typeof value === 'string' ? value : null;
-}
-
-function getReportedTargetName(resource: DebuggableResourceSnapshot): string | undefined {
-    const value: unknown = resource.properties?.[projectTargetNamePropertyName];
-    if (typeof value !== 'string') {
-        return undefined;
-    }
-
-    const targetName = value.trim();
-    return targetName.length > 0 ? targetName : undefined;
 }
 
 function getAttachDebuggerProcessId(resource: DebuggableResourceSnapshot): number | undefined {
@@ -549,62 +473,18 @@ function isDotNetExecutable(resource: DebuggableResourceSnapshot): boolean {
     return executableName === 'dotnet' || executableName === 'dotnet.exe';
 }
 
-async function createDotNetAttachDebugSessionConfiguration(resource: DebuggableResourceSnapshot, dotNetService: IDotNetService): Promise<vscode.DebugConfiguration> {
+function createDotNetAttachDebugSessionConfiguration(resource: DebuggableResourceSnapshot): vscode.DebugConfiguration {
     const attachInfo = getDotNetAttachDebuggerResourceInfo(resource);
     if (!attachInfo) {
         throw new AttachDebuggerConfigurationError('ResourceNotAttachable', invalidLaunchConfiguration(JSON.stringify(resource)));
-    }
-
-    // An Executable profile does not run the project's own output: the extension launches the profile's
-    // executablePath with its commandLineArgs (see configureExecutableLaunchProfile), so a process named
-    // after the project's TargetName was never started and attaching by that name would find nothing.
-    const effectiveLaunchProfile = await resolveEffectiveLaunchProfile(attachInfo);
-    if (effectiveLaunchProfile.profile?.commandName === LaunchProfileCommandName.executable) {
-        throw new AttachDebuggerConfigurationError(
-            'ResourceNotAttachable',
-            attachDebuggerExecutableLaunchProfile(attachInfo.resourceLabel, effectiveLaunchProfile.profileName ?? ''));
-    }
-
-    let processName = attachInfo.reportedTargetName;
-    if (processName === undefined) {
-        processName = await getProcessNameFromTargetPath(attachInfo.projectPath, attachInfo.resourceLabel, dotNetService);
     }
 
     return {
         type: 'coreclr',
         request: 'attach',
         name: attachDebuggerConfigurationName(attachInfo.resourceLabel),
-        processName,
+        processId: String(attachInfo.processId),
     };
-}
-
-async function getProcessNameFromTargetPath(projectPath: string, resourceLabel: string, dotNetService: IDotNetService): Promise<string> {
-    // This probe evaluates the project with MSBuild's default global properties, so it answers for the
-    // project's default configuration rather than the one the AppHost is running. That is only wrong for
-    // a project whose assembly name is conditioned on Configuration, and it cannot be made right here:
-    // the resource contract of an AppHost old enough to omit project.targetName carries no configuration,
-    // and executable.args - the one property that would name the running assembly outright - is published
-    // as sensitive and redacted to null before the extension ever sees it (AuxiliaryBackchannelRpcTarget
-    // replaces every IsSensitive value with null). Failing closed instead would remove attach support from
-    // exactly the AppHosts this fallback exists to serve, so the probe stays best effort and says so.
-    extensionLogOutputChannel.warn(attachDebuggerTargetNameProbeAssumesDefaultConfiguration(resourceLabel, projectPath));
-
-    try {
-        const targetPath = await dotNetService.getDotNetTargetPath(projectPath);
-        const fileName = targetPath.trim().split(/[\\/]/).pop() ?? '';
-        const processName = fileName.replace(/\.(dll|exe)$/i, '');
-        if (processName.length === 0) {
-            throw new Error(noOutputFromMsbuild);
-        }
-
-        return processName;
-    } catch (error) {
-        throw new AttachDebuggerConfigurationError('ProcessNameUnresolved', attachDebuggerProcessNameUnresolved(resourceLabel, getErrorMessage(error)));
-    }
-}
-
-function getErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
 }
 
 export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSession: AspireDebugSession | undefined) => IDotNetService): ResourceDebuggerExtension {
@@ -622,9 +502,7 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
             throw new Error(invalidLaunchConfiguration(JSON.stringify(launchConfig)));
         },
         canAttachToResource: (resource) => getDotNetAttachDebuggerResourceInfo(resource) !== undefined,
-        createAttachDebugSessionConfigurationCallback: async (resource): Promise<vscode.DebugConfiguration> => {
-            return await createDotNetAttachDebugSessionConfiguration(resource, dotNetServiceProducer(undefined));
-        },
+        createAttachDebugSessionConfigurationCallback: async (resource): Promise<vscode.DebugConfiguration> => createDotNetAttachDebugSessionConfiguration(resource),
         createDebugSessionConfigurationCallback: async (launchConfig, args, env, launchOptions, debugConfiguration: AspireResourceExtendedDebugConfiguration): Promise<void> => {
             if (!isProjectLaunchConfiguration(launchConfig)) {
                 extensionLogOutputChannel.info(`The resource type was not project for ${JSON.stringify(launchConfig)}`);

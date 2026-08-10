@@ -9,8 +9,6 @@ import { AspireResourceExtendedDebugConfiguration, ExecutableLaunchConfiguration
 import * as io from '../utils/io';
 import { ResourceDebuggerExtension } from '../debugger/debuggerExtensions';
 import { AppHostParentOutputFilter, AspireDebugSession } from '../debugger/AspireDebugSession';
-import { extensionLogOutputChannel } from '../utils/logging';
-import { attachDebuggerTargetNameProbeAssumesDefaultConfiguration, attachDebuggerExecutableLaunchProfile, attachDebuggerUnresolvedLaunchProfile } from '../loc/strings';
 
 class TestDotNetService {
     private _hasDevKit: boolean;
@@ -63,7 +61,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         return { dotNetService: fakeDotNetService, extension: createProjectDebuggerExtension(() => fakeDotNetService), doesFileExistStub: sinon.stub(io, 'doesFileExist').resolves(doesOutputFileExist) };
     }
 
-    test('attach configuration uses reported target name without evaluating TargetPath', async () => {
+    test('attach configuration uses the selected resource process ID without evaluating TargetPath', async () => {
         const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/FromTargetPath.dll', null, true, true);
 
         const configuration = await extension.createAttachDebugSessionConfigurationCallback!({
@@ -75,83 +73,15 @@ suite('Dotnet Debugger Extension Tests', () => {
                 'executable.pid': '1234',
                 'executable.path': 'dotnet',
                 'project.path': '/repo/api/Api.csproj',
-                'project.targetName': 'FromReportedProperty',
             },
         });
 
         assert.strictEqual(configuration.type, 'coreclr');
         assert.strictEqual(configuration.request, 'attach');
         assert.strictEqual(configuration.name, 'Attach debugger: API');
-        assert.strictEqual(configuration.processName, 'FromReportedProperty');
+        assert.strictEqual(configuration.processId, '1234');
+        assert.strictEqual(configuration.processName, undefined);
         assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
-    });
-
-    test('attach configuration derives process name from evaluated TargetPath when target name is not reported', async () => {
-        const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/My Attach Service.dll', null, true, true);
-        const warn = sinon.stub(extensionLogOutputChannel, 'warn');
-
-        const configuration = await extension.createAttachDebugSessionConfigurationCallback!({
-            name: 'worker',
-            displayName: 'Worker',
-            resourceType: 'Project',
-            state: 'Running',
-            properties: {
-                'executable.pid': '1234',
-                'executable.path': 'dotnet',
-                'project.path': '/repo/worker/AttachDemo.Worker.csproj',
-            },
-        });
-
-        assert.strictEqual(configuration.processName, 'My Attach Service');
-        assert.ok(dotNetService.getDotNetTargetPathStub.calledOnceWith('/repo/worker/AttachDemo.Worker.csproj'));
-
-        // The probe answers for the project's default configuration, which is not necessarily the one the
-        // AppHost is running. Recording that is the only remedy available: the configuration is not in the
-        // resource contract of an AppHost old enough to need this fallback.
-        assert.deepStrictEqual(warn.getCalls().map(call => call.args[0]), [
-            attachDebuggerTargetNameProbeAssumesDefaultConfiguration('Worker', '/repo/worker/AttachDemo.Worker.csproj')
-        ]);
-    });
-
-    test('attach configuration treats blank reported target name as absent', async () => {
-        const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/FromTargetPath.dll', null, true, true);
-
-        const configuration = await extension.createAttachDebugSessionConfigurationCallback!({
-            name: 'api',
-            displayName: 'API',
-            resourceType: 'Project',
-            state: 'Running',
-            properties: {
-                'executable.pid': '1234',
-                'executable.path': 'dotnet',
-                'project.path': '/repo/api/Api.csproj',
-                'project.targetName': '   ',
-            },
-        });
-
-        assert.strictEqual(configuration.processName, 'FromTargetPath');
-        assert.ok(dotNetService.getDotNetTargetPathStub.calledOnceWith('/repo/api/Api.csproj'));
-    });
-
-    test('attach configuration reports process-name failure when TargetPath cannot be evaluated', async () => {
-        const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/unused.dll', null, true, true);
-        dotNetService.getDotNetTargetPathStub.rejects(new Error('MSBuild failed'));
-
-        await assert.rejects(
-            extension.createAttachDebugSessionConfigurationCallback!({
-                name: 'api',
-                displayName: 'API',
-                resourceType: 'Project',
-                state: 'Running',
-                properties: {
-                    'executable.pid': '1234',
-                    'executable.path': 'dotnet',
-                    'project.path': '/repo/api/Api.csproj',
-                },
-            }),
-            (error: unknown) => error instanceof Error
-                && error.name === 'AttachDebuggerConfigurationError'
-                && (error as Error & { errorKind?: string }).errorKind === 'ProcessNameUnresolved');
     });
 
     test('attach configuration rejects file-based project resources', async () => {
@@ -167,7 +97,6 @@ suite('Dotnet Debugger Extension Tests', () => {
                     'executable.pid': '1234',
                     'executable.path': 'dotnet',
                     'project.path': '/repo/api/Api.cs',
-                    'project.targetName': 'Api',
                 },
             }),
             (error: unknown) => error instanceof Error
@@ -175,197 +104,6 @@ suite('Dotnet Debugger Extension Tests', () => {
                 && (error as Error & { errorKind?: string }).errorKind === 'ResourceNotAttachable');
 
         assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
-    });
-
-    test('attach configuration refuses a project whose default launch profile runs an executable', async () => {
-        const fs = require('fs');
-        const path = require('path');
-
-        // A real launchSettings.json on disk, because the refusal is decided by reading the file the way
-        // `dotnet run` does rather than from anything the resource snapshot carries.
-        const fixtureRoot = path.join(__dirname, '..', '..', '.test-fixtures', 'attach-executable-profile');
-        const projectDirectory = path.join(fixtureRoot, 'MyClassLibFunction');
-        fs.mkdirSync(path.join(projectDirectory, 'Properties'), { recursive: true });
-        fs.writeFileSync(path.join(projectDirectory, 'Properties', 'launchSettings.json'), JSON.stringify({
-            profiles: {
-                'Aspire_my-function': {
-                    commandName: 'Executable',
-                    executablePath: 'dotnet',
-                    commandLineArgs: 'exec RuntimeSupport.dll MyClassLibFunction::MyClassLibFunction.Function::FunctionHandler',
-                },
-            },
-        }));
-
-        try {
-            const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/MyClassLibFunction.dll', null, true, true);
-
-            await assert.rejects(
-                extension.createAttachDebugSessionConfigurationCallback!({
-                    name: 'my-function',
-                    displayName: 'My Function',
-                    resourceType: 'Project',
-                    state: 'Running',
-                    properties: {
-                        'executable.pid': '1234',
-                        'executable.path': 'dotnet',
-                        'project.path': path.join(projectDirectory, 'MyClassLibFunction.csproj'),
-                        'project.targetName': 'MyClassLibFunction',
-                    },
-                }),
-                (error: unknown) => error instanceof Error
-                    && error.name === 'AttachDebuggerConfigurationError'
-                    && (error as Error & { errorKind?: string }).errorKind === 'ResourceNotAttachable'
-                    && error.message === attachDebuggerExecutableLaunchProfile('My Function', 'Aspire_my-function'));
-
-            assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
-        }
-        finally {
-            fs.rmSync(fixtureRoot, { recursive: true, force: true });
-        }
-    });
-
-    test('attach configuration refuses the launch profile the AppHost actually selected', async () => {
-        const fs = require('fs');
-        const path = require('path');
-
-        // The file's default profile is a Project profile, so inferring the default here would happily
-        // offer an attach. The AppHost reported that it applied the later Executable profile instead, and
-        // that is the one that decides what process is running.
-        const fixtureRoot = path.join(__dirname, '..', '..', '.test-fixtures', 'attach-selected-executable-profile');
-        const projectDirectory = path.join(fixtureRoot, 'MyClassLibFunction');
-        fs.mkdirSync(path.join(projectDirectory, 'Properties'), { recursive: true });
-        fs.writeFileSync(path.join(projectDirectory, 'Properties', 'launchSettings.json'), JSON.stringify({
-            profiles: {
-                'http': {
-                    commandName: 'Project',
-                },
-                'run-as-executable': {
-                    commandName: 'Executable',
-                    executablePath: 'dotnet',
-                    commandLineArgs: 'exec RuntimeSupport.dll MyClassLibFunction::MyClassLibFunction.Function::FunctionHandler',
-                },
-            },
-        }));
-
-        try {
-            const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/MyClassLibFunction.dll', null, true, true);
-
-            await assert.rejects(
-                extension.createAttachDebugSessionConfigurationCallback!({
-                    name: 'my-function',
-                    displayName: 'My Function',
-                    resourceType: 'Project',
-                    state: 'Running',
-                    properties: {
-                        'executable.pid': '1234',
-                        'executable.path': 'dotnet',
-                        'project.path': path.join(projectDirectory, 'MyClassLibFunction.csproj'),
-                        'project.targetName': 'MyClassLibFunction',
-                        'project.launchProfile': 'run-as-executable',
-                    },
-                }),
-                (error: unknown) => error instanceof Error
-                    && error.name === 'AttachDebuggerConfigurationError'
-                    && (error as Error & { errorKind?: string }).errorKind === 'ResourceNotAttachable'
-                    && error.message === attachDebuggerExecutableLaunchProfile('My Function', 'run-as-executable'));
-
-            assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
-        }
-        finally {
-            fs.rmSync(fixtureRoot, { recursive: true, force: true });
-        }
-    });
-
-    test('attach configuration refuses when the launch profile the AppHost reported can no longer be read', async () => {
-        const fs = require('fs');
-        const path = require('path');
-
-        // The AppHost resolved 'run-as-executable' when it started the resource, so the file has changed
-        // since. Its commandName is what decides whether the project's own output is running, and it is no
-        // longer knowable, so the guard must not quietly fall through to a Project-style attach.
-        const fixtureRoot = path.join(__dirname, '..', '..', '.test-fixtures', 'attach-unresolved-launch-profile');
-        const projectDirectory = path.join(fixtureRoot, 'MyClassLibFunction');
-        fs.mkdirSync(path.join(projectDirectory, 'Properties'), { recursive: true });
-        fs.writeFileSync(path.join(projectDirectory, 'Properties', 'launchSettings.json'), JSON.stringify({
-            profiles: {
-                'http': {
-                    commandName: 'Project',
-                },
-            },
-        }));
-
-        try {
-            const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/MyClassLibFunction.dll', null, true, true);
-
-            await assert.rejects(
-                extension.createAttachDebugSessionConfigurationCallback!({
-                    name: 'my-function',
-                    displayName: 'My Function',
-                    resourceType: 'Project',
-                    state: 'Running',
-                    properties: {
-                        'executable.pid': '1234',
-                        'executable.path': 'dotnet',
-                        'project.path': path.join(projectDirectory, 'MyClassLibFunction.csproj'),
-                        'project.targetName': 'MyClassLibFunction',
-                        'project.launchProfile': 'run-as-executable',
-                    },
-                }),
-                (error: unknown) => error instanceof Error
-                    && error.name === 'AttachDebuggerConfigurationError'
-                    && (error as Error & { errorKind?: string }).errorKind === 'ResourceNotAttachable'
-                    && error.message === attachDebuggerUnresolvedLaunchProfile('My Function', 'run-as-executable'));
-
-            assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
-        }
-        finally {
-            fs.rmSync(fixtureRoot, { recursive: true, force: true });
-        }
-    });
-
-    test('attach configuration is offered when the AppHost reports that no launch profile applies', async () => {
-        const fs = require('fs');
-        const path = require('path');
-
-        // WithExcludeLaunchProfile leaves the project running its own output no matter what the file says,
-        // so refusing here because the file's default happens to be an Executable profile would take attach
-        // away from a resource that is perfectly attachable.
-        const fixtureRoot = path.join(__dirname, '..', '..', '.test-fixtures', 'attach-excluded-launch-profile');
-        const projectDirectory = path.join(fixtureRoot, 'MyClassLibFunction');
-        fs.mkdirSync(path.join(projectDirectory, 'Properties'), { recursive: true });
-        fs.writeFileSync(path.join(projectDirectory, 'Properties', 'launchSettings.json'), JSON.stringify({
-            profiles: {
-                'run-as-executable': {
-                    commandName: 'Executable',
-                    executablePath: 'dotnet',
-                    commandLineArgs: 'exec RuntimeSupport.dll MyClassLibFunction::MyClassLibFunction.Function::FunctionHandler',
-                },
-            },
-        }));
-
-        try {
-            const { extension } = createDebuggerExtension('/repo/bin/Debug/net10.0/MyClassLibFunction.dll', null, true, true);
-
-            const debugConfiguration = await extension.createAttachDebugSessionConfigurationCallback!({
-                name: 'my-function',
-                displayName: 'My Function',
-                resourceType: 'Project',
-                state: 'Running',
-                properties: {
-                    'executable.pid': '1234',
-                    'executable.path': 'dotnet',
-                    'project.path': path.join(projectDirectory, 'MyClassLibFunction.csproj'),
-                    'project.targetName': 'MyClassLibFunction',
-                    'project.launchProfile': null,
-                },
-            });
-
-            assert.strictEqual(debugConfiguration.request, 'attach');
-            assert.strictEqual(debugConfiguration.processName, 'MyClassLibFunction');
-        }
-        finally {
-            fs.rmSync(fixtureRoot, { recursive: true, force: true });
-        }
     });
 
     test('failed AppHost start writes error to debug console', async () => {

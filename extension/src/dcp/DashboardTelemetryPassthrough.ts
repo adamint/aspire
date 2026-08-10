@@ -1028,16 +1028,9 @@ function sanitizeDashboardStringValue(value: string): string {
         /(key|token|sig|secret|signature|password|passwd|pwd|android:value)[^A-Za-z0-9]/i.test(boundedValue) ||
         /\b(?:login|psexec|certutil(?:\.exe)?|net(?:\.exe)?\s+(?:user|share)|user\s+-?\s*secrets\s+set)\b/i.test(boundedValue) ||
         /(?:^|[\s\r\n\\])net(?:\.exe)?.{1,5}(?:user|share)\b/i.test(boundedValue);
-    // Treat dashboard leaf values that start like private locations as unsafe, including
-    // UNC forms such as \\server\share, \\?\UNC\server\share, and //server/share.
-    // The share segment is optional on both spellings: \\server and //server name an internal
-    // host on their own, and the backslash alternative below already matched the host-only form,
-    // so requiring a share on the forward-slash form would redact one spelling of a private host
-    // name and pass the other through. A leading // followed by anything other than a separator or
-    // whitespace is redacted, which also covers //server/share because the host matches first.
     const containsPrivateLocation =
         /\b[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(boundedValue) ||
-        /(?:^|[\s"'(])(?:[A-Za-z]:[\\/]|\\\\|\/\/[^/\s]+|~[\\/]|\/(?:[^/\s]+[\\/])|\.\.?[\\/])/.test(boundedValue) ||
+        /(?:^|[\s"'(])(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|\/(?:[^/\s]+[\\/])|\.\.?[\\/])/.test(boundedValue) ||
         /(?:^|[\s"'(])(?:(?:[^\\/\s"'()]+[\\/]){2,}[^\\/\s"'()]+|(?:[^\\/\s"'()]+[\\/])+[^\\/\s"'()]+\.(?:cs|fs|vb|ts|js|json|xml|props|targets|sln|slnx))\b/i.test(boundedValue);
     const containsEmail = /@[A-Za-z0-9-]+\.[A-Za-z0-9-]+/.test(boundedValue);
 
