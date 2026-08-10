@@ -194,7 +194,8 @@ public class AppHostServerProjectTests(ITestOutputHelper outputHelper) : IDispos
             document.Descendants("PackageReference"),
             element => element.Attribute("Include")?.Value == "Aspire.Hosting.Redis");
 
-        Assert.Equal("[13.1.0]", packageReference.Attribute("Version")?.Value);
+        Assert.Equal("[13.1.0]", packageReference.Attribute("VersionOverride")?.Value);
+        Assert.Null(packageReference.Attribute("Version"));
         Assert.DoesNotContain(
             document.Descendants("PackageReference"),
             element => element.Attribute("Include")?.Value == "Aspire.Hosting.PostgreSQL");
