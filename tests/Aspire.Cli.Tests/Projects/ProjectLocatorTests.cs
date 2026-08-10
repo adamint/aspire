@@ -605,6 +605,66 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task WorkspaceConfigLockIsRetakenOnTheConfigRootResolutionActuallyLandsOn()
+    {
+        // Not CreateForCli: that plants .aspire/settings.json at the workspace root, and this is
+        // about a workspace that has no config yet, which is when the config root a launch will
+        // write to is still undecided.
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        var nestedDirectory = workspace.WorkspaceRoot.CreateSubdirectory("nested");
+        var appHostDirectory = nestedDirectory.CreateSubdirectory("AppHost");
+        var appHostProjectFile = new FileInfo(Path.Combine(appHostDirectory.FullName, "AppHost.csproj"));
+        await File.WriteAllTextAsync(appHostProjectFile.FullName, "Not a real apphost");
+
+        // The CLI runs from the nested folder, so with nothing on disk the only config root it can
+        // key its lock on is that folder.
+        var executionContext = CreateExecutionContext(nestedDirectory);
+        var projectLocator = CreateProjectLocator(executionContext);
+
+        var workspaceConfigFile = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName));
+        var acquiredLockPaths = new List<string>();
+
+        projectLocator.WorkspaceConfigLockAcquiredForTesting = lockPath =>
+        {
+            acquiredLockPaths.Add(lockPath);
+
+            // Stands in for the sibling launch of a compound configuration that ran from the
+            // workspace root and got there first. It establishes the workspace config after this
+            // process has already keyed its lock on the nested folder, so this process is now about
+            // to read and rewrite a file that a different lock protects.
+            return acquiredLockPaths.Count == 1
+                ? File.WriteAllTextAsync(workspaceConfigFile.FullName, "{}")
+                : Task.CompletedTask;
+        };
+
+        var result = await projectLocator.UseOrFindAppHostProjectFileAsync(
+            appHostProjectFile,
+            MultipleAppHostProjectsFoundBehavior.Prompt,
+            createSettingsFile: true,
+            CancellationToken.None).DefaultTimeout();
+
+        Assert.Equal(appHostProjectFile.FullName, result.SelectedProjectFile?.FullName);
+        Assert.Equal("nested/AppHost/AppHost.csproj", ReadConfiguredAppHostPath(workspaceConfigFile.FullName));
+
+        // The guess is allowed to be wrong; ending on it is not. The write landed in the workspace
+        // root config, so the lock held over it has to be the workspace root's, which means the
+        // nested guess had to be dropped and the right one taken.
+        Assert.Collection(
+            acquiredLockPaths,
+            lockPath => Assert.Equal(ExpectedWorkspaceConfigLockPath(executionContext, nestedDirectory), lockPath),
+            lockPath => Assert.Equal(ExpectedWorkspaceConfigLockPath(executionContext, workspace.WorkspaceRoot), lockPath));
+    }
+
+    private static string ExpectedWorkspaceConfigLockPath(Aspire.Cli.CliExecutionContext executionContext, DirectoryInfo configRoot)
+    {
+        return Path.Combine(
+            executionContext.CacheDirectory.FullName,
+            "workspace-config-locks",
+            ProjectLocator.GetWorkspaceConfigLockFileName(Aspire.Hosting.Utils.PathNormalizer.ResolveSymlinks(configRoot.FullName)));
+    }
+
+    [Fact]
     public async Task RecordedAppHostPathIsReplacedWhenOnlyItsCasingMatchesOnACaseSensitiveVolume()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);

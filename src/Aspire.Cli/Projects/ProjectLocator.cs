@@ -196,6 +196,31 @@ internal sealed class ProjectLocator(
     private static readonly TimeSpan s_workspaceConfigLockTimeout = TimeSpan.FromSeconds(30);
 
     /// <summary>
+    /// How many times <see cref="LockResolvedWorkspaceConfigTargetAsync"/> will re-lock when the
+    /// config root it resolved is not the one it locked on.
+    /// </summary>
+    /// <remarks>
+    /// Two passes are enough for the interleaving this defends against, because the config root only
+    /// ever descends. The third is slack for the pathological case of another process creating a
+    /// config file at every level while this one is running, and after it the write proceeds under
+    /// whichever lock is held rather than failing the user's command.
+    /// </remarks>
+    private const int MaxWorkspaceConfigLockAttempts = 3;
+
+    /// <summary>
+    /// Invoked immediately after the workspace config lock is acquired and before the config target
+    /// is resolved under it, with the lock file path that was taken. Set only by tests.
+    /// </summary>
+    /// <remarks>
+    /// The window this opens is the one <see cref="LockResolvedWorkspaceConfigTargetAsync"/> exists
+    /// to close: another CLI process creating the config file that decides the lock key after this
+    /// process has already locked. A test cannot produce that interleaving from the outside, because
+    /// there is no observable moment between the key being computed and the target being resolved --
+    /// it would have to guess, and guessing wrong makes the test pass for the wrong reason.
+    /// </remarks>
+    internal Func<string, Task>? WorkspaceConfigLockAcquiredForTesting { get; set; }
+
+    /// <summary>
     /// Finds all candidate AppHost projects in the specified search directory with language metadata.
     /// </summary>
     /// <param name="searchDirectory">The directory to search recursively.</param>
@@ -1125,9 +1150,10 @@ internal sealed class ProjectLocator(
         // moment (https://code.visualstudio.com/docs/debugtest/debugging#_compound-launch-configurations),
         // so without serialization both can observe "no default recorded" and both establish one,
         // and one whole-file write can land on top of the other's.
-        using var configLock = await TryAcquireWorkspaceConfigLockAsync(projectFile, cancellationToken);
+        var (acquiredLock, resolvedTarget) = await LockResolvedWorkspaceConfigTargetAsync(projectFile, cancellationToken);
+        using var configLock = acquiredLock;
 
-        if (ResolveWorkspaceConfigTarget(projectFile) is not { } configTarget)
+        if (resolvedTarget is not { } configTarget)
         {
             // The workspace already records this AppHost, so there is nothing to write.
             return;
@@ -1365,8 +1391,98 @@ internal sealed class ProjectLocator(
 
     /// <summary>
     /// Acquires the cross-process lock that serializes reading, deciding and rewriting the workspace
-    /// config for <paramref name="projectFile"/>, or returns <see langword="null"/> when the lock
-    /// could not be taken.
+    /// config for <paramref name="projectFile"/> and resolves the config file that will be written
+    /// under it, or returns a <see langword="null"/> lock when the lock could not be taken and a
+    /// <see langword="null"/> target when the config already records <paramref name="projectFile"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The lock key and the target are both answers to "which config file does this AppHost belong
+    /// to", and both are read off the filesystem, so a config file another CLI process creates
+    /// between the two moves the target without moving the key. That is not hypothetical on the very
+    /// path this lock exists for: with no config yet, a launch whose working directory is the
+    /// workspace root keys on the root while a launch whose working directory is a nested AppHost
+    /// folder keys on that folder, and once the first creates the root config the second resolves
+    /// that same newly created file while holding a different lock -- reading it mid-write and
+    /// racing the check-then-act the lock is supposed to serialize.
+    /// </para>
+    /// <para>
+    /// So the key is treated as a guess and verified: resolve under the lock, compare the lock the
+    /// resolved target needs against the one actually held, and when they differ drop the lock,
+    /// take the right one and resolve again. Creating a config file only ever moves the config root
+    /// closer to the AppHost -- nothing on this path deletes one -- so the root descends
+    /// monotonically and the loop settles, in practice on the second pass. The attempt cap and the
+    /// shared deadline are backstops for a workspace being churned underneath us, and both fail the
+    /// way the lock itself does: bookkeeping never fails the user's command.
+    /// </para>
+    /// <para>
+    /// Only one lock is ever held at a time, so there is no ordering between locks to get wrong and
+    /// nothing to deadlock against -- including against this process, since <see cref="FileLock"/>
+    /// excludes by share mode and would block on its own file.
+    /// </para>
+    /// </remarks>
+    private async Task<(FileLock? Lock, WorkspaceConfigTarget? Target)> LockResolvedWorkspaceConfigTargetAsync(FileInfo projectFile, CancellationToken cancellationToken)
+    {
+        // One budget for the whole loop rather than one per attempt: a second wait is still the same
+        // interactive command stalling, and s_workspaceConfigLockTimeout is already sized so that
+        // exceeding it means the holder is wedged rather than busy.
+        var deadline = DateTimeOffset.UtcNow + s_workspaceConfigLockTimeout;
+        var lockRoot = GetWorkspaceConfigLockRoot(projectFile);
+
+        FileLock? configLock = null;
+
+        try
+        {
+            for (var attempt = 1; ; attempt++)
+            {
+                var lockPath = GetWorkspaceConfigLockPath(lockRoot);
+                configLock = await TryAcquireWorkspaceConfigLockAsync(lockPath, deadline - DateTimeOffset.UtcNow, cancellationToken);
+
+                if (WorkspaceConfigLockAcquiredForTesting is { } workspaceConfigLockAcquired)
+                {
+                    await workspaceConfigLockAcquired(lockPath);
+                }
+
+                var target = ResolveWorkspaceConfigTarget(projectFile);
+
+                // A resolution that found nothing to write still decided that from a file this
+                // process may not have been protecting, so it is verified the same way. Falling back
+                // to the key derivation is the only root available in that case, and it follows the
+                // same search order the target does.
+                var resolvedLockRoot = target?.ConfigRootDirectory ?? GetWorkspaceConfigLockRoot(projectFile);
+                var resolvedLockPath = GetWorkspaceConfigLockPath(resolvedLockRoot);
+
+                // Comparing the derived lock paths rather than the directories compares exactly what
+                // decides mutual exclusion, so the casing, symlink and Unicode folding that
+                // GetWorkspaceConfigLockFileName applies is honored here for free.
+                if (configLock is null
+                    || string.Equals(resolvedLockPath, lockPath, StringComparison.Ordinal)
+                    || attempt >= MaxWorkspaceConfigLockAttempts)
+                {
+                    return (configLock, target);
+                }
+
+                logger.LogDebug(
+                    "Workspace config for {AppHost} resolved to {ConfigRoot}, which is not the config root the lock at {LockPath} was taken for. Re-acquiring.",
+                    projectFile.FullName,
+                    resolvedLockRoot.FullName,
+                    lockPath);
+
+                configLock.Dispose();
+                configLock = null;
+                lockRoot = resolvedLockRoot;
+            }
+        }
+        catch
+        {
+            configLock?.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Acquires the cross-process lock at <paramref name="lockPath"/>, or returns
+    /// <see langword="null"/> when it could not be taken within <paramref name="timeout"/>.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -1386,13 +1502,17 @@ internal sealed class ProjectLocator(
     /// unsynchronized behavior that shipped before this lock existed.
     /// </para>
     /// </remarks>
-    private async Task<FileLock?> TryAcquireWorkspaceConfigLockAsync(FileInfo projectFile, CancellationToken cancellationToken)
+    private async Task<FileLock?> TryAcquireWorkspaceConfigLockAsync(string lockPath, TimeSpan timeout, CancellationToken cancellationToken)
     {
-        var lockPath = GetWorkspaceConfigLockPath(projectFile);
+        if (timeout <= TimeSpan.Zero)
+        {
+            logger.LogDebug("Proceeding without the workspace config lock at {LockPath} because the time budget for it is spent.", lockPath);
+            return null;
+        }
 
         try
         {
-            return await FileLock.AcquireAsync(lockPath, cancellationToken, s_workspaceConfigLockTimeout);
+            return await FileLock.AcquireAsync(lockPath, cancellationToken, timeout);
         }
         catch (Exception ex) when (ex is TimeoutException or IOException or UnauthorizedAccessException)
         {
@@ -1402,22 +1522,33 @@ internal sealed class ProjectLocator(
     }
 
     /// <summary>
-    /// Returns the lock file path that identifies the workspace config
-    /// <paramref name="projectFile"/> would be recorded in.
+    /// Returns the config root that <paramref name="projectFile"/> is most likely to be recorded
+    /// in, which is the starting guess for the lock key.
     /// </summary>
-    private string GetWorkspaceConfigLockPath(FileInfo projectFile)
+    /// <remarks>
+    /// This mirrors the search order in <see cref="ResolveWorkspaceConfigTarget"/> -- the AppHost's
+    /// own tree wins, and the working directory is consulted only when that tree has no config --
+    /// rather than calling it, because resolution has to run inside the lock: it is what performs
+    /// the legacy migration write. The duplication is why the answer is only a guess and why
+    /// <see cref="LockResolvedWorkspaceConfigTargetAsync"/> re-checks it against the resolved target
+    /// instead of trusting it.
+    /// </remarks>
+    private DirectoryInfo GetWorkspaceConfigLockRoot(FileInfo projectFile)
     {
-        // Key the lock on the config root the write will land in, so two AppHosts that share a
-        // config file serialize while two that do not never block each other. This mirrors the
-        // search order in ResolveWorkspaceConfigTarget: the AppHost's own tree wins, and the working
-        // directory is consulted only when that tree has no config. It is deliberately duplicated
-        // rather than derived from the resolved target, because resolution has to run inside the
-        // lock -- it is what performs the legacy migration write. Both helpers used here only read,
-        // so computing the key cannot itself race.
-        var configRoot = projectFile.Directory is { } appHostDirectory && ConfigurationHelper.FindNearestConfigFilePath(appHostDirectory) is not null
+        return projectFile.Directory is { } appHostDirectory && ConfigurationHelper.FindNearestConfigFilePath(appHostDirectory) is not null
             ? ConfigurationHelper.GetConfigRootDirectory(appHostDirectory)
             : ConfigurationHelper.GetConfigRootDirectory(executionContext.WorkingDirectory);
+    }
 
+    /// <summary>
+    /// Returns the lock file path that identifies the workspace config rooted at
+    /// <paramref name="configRoot"/>.
+    /// </summary>
+    private string GetWorkspaceConfigLockPath(DirectoryInfo configRoot)
+    {
+        // Key the lock on the config root the write will land in, so two AppHosts that share a
+        // config file serialize while two that do not never block each other.
+        //
         // Two processes only exclude each other when they derive the same file name, so fold away
         // the spellings that name one directory. Symlinks first: macOS resolves /tmp to
         // /private/tmp, and checkouts are routinely reached through links.
