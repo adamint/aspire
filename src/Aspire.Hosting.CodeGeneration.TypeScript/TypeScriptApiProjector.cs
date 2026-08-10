@@ -1707,6 +1707,8 @@ internal sealed partial class TypeScriptApiProjector
         return $"{GetOptionsInterfaceQualifier(owningAssemblyName)}{OptionsInterfaceQualifierSeparator}{unqualifiedName}";
     }
 
+    private const string OptionsInterfaceQualifierSeparator = "$";
+
     /// <summary>
     /// Derives the name-space prefix an assembly's options interfaces carry when their unqualified
     /// names are in a known collision group.
@@ -1728,8 +1730,6 @@ internal sealed partial class TypeScriptApiProjector
     /// identifiers may not start with one.
     /// </para>
     /// </remarks>
-    private const string OptionsInterfaceQualifierSeparator = "$";
-
     private static string GetOptionsInterfaceQualifier(string owningAssemblyName)
     {
         if (string.IsNullOrEmpty(owningAssemblyName) ||

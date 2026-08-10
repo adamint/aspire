@@ -496,6 +496,65 @@ public sealed class TypeScriptApiCompatTests(ITestOutputHelper outputHelper)
         Assert.Contains("'Pkg.Two'", message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The shipped surface really does produce the two collisions that only became visible once the
+    /// guard started naming the interface after the projected method: Docker's
+    /// <c>addComposeFileSecret</c> projects as <c>addSecret</c> next to Key Vault's <c>addSecret</c>,
+    /// and eleven packages project <c>withHostPort</c>. Both unqualified names are in
+    /// <c>PackageQualifiedOptionsInterfaceNames</c>, so those packages emit package-qualified
+    /// interfaces and the guard has to stay quiet. Dropping either entry puts a conflicting
+    /// unqualified declaration back into the concatenated package exports, which is the exact
+    /// failure this repository shipped to CI before those entries were added.
+    /// </summary>
+    [Fact]
+    public void RunnerAllowsShippedAliasCollisionsThatPackageQualifiedNamesAlreadyResolve()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var baselineRoot = Path.Combine(workspace.Path, "baseline");
+        var currentRoot = Path.Combine(workspace.Path, "current");
+
+        // Trimmed from the surfaces `aspire sdk dump --format ci` actually emits for these packages.
+        foreach (var root in new[] { baselineRoot, currentRoot })
+        {
+            WriteSurface(root, "Aspire.Hosting.Azure.KeyVault", """
+                # Capabilities
+                Aspire.Hosting.Azure.KeyVault/addSecret(name: string, value?: string) -> void
+                """);
+            WriteSurface(root, "Aspire.Hosting.Docker", """
+                # Capabilities
+                Aspire.Hosting.Docker/addComposeFileSecret(name: string, value?: string) -> void [method=addSecret]
+                Aspire.Hosting.Docker/withHostPort(port?: number) -> void
+                """);
+            WriteSurface(root, "Aspire.Hosting.Redis", """
+                # Capabilities
+                Aspire.Hosting.Redis/withHostPort(port?: number) -> void
+                Aspire.Hosting.Redis/withRedisCommanderHostPort(port?: number) -> void [method=withHostPort]
+                """);
+            WriteSurface(root, "Aspire.Hosting.PostgreSQL", """
+                # Capabilities
+                Aspire.Hosting.PostgreSQL/withPgAdminHostPort(port?: number) -> void [method=withHostPort]
+                """);
+        }
+
+        using var error = new StringWriter();
+
+        var exitCode = TypeScriptApiCompatRunner.Run(
+            new CommandLineOptions(
+                baselineRoot,
+                currentRoot,
+                workspace.Path,
+                BaselineSuppressionsRoot: null,
+                ExcludedPackagesFile: null,
+                ReportPath: null,
+                GitHubAnnotations: false),
+            error);
+
+        // Assert the guard output before the exit code so a regression reports the collision text
+        // instead of just "expected 0, actual 2".
+        Assert.Equal(string.Empty, error.ToString());
+        Assert.Equal(0, exitCode);
+    }
+
     [Fact]
     public void RunnerAllowsSharedCapabilityIdsThatProjectToDifferentMethodNames()
     {
