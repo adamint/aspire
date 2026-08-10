@@ -21,6 +21,7 @@ public class NpmRegistryResolverTests : IDisposable
     // Credential-shaped and npm_config-prefixed, so it exercises the allow list rather than just
     // the prefix filter.
     private const string CredentialVariableName = "npm_config__authToken";
+    private const string PrefixVariableName = "npm_config_prefix";
 
     private readonly DirectoryInfo _root = Directory.CreateTempSubdirectory("aspire-npmrc-tests");
 
@@ -863,11 +864,15 @@ public class NpmRegistryResolverTests : IDisposable
     }
 
     [Fact]
-    public void ReadNpmConfigVariables_RetainsOnlyRegistryConfigurationFromTheProcessEnvironment()
+    public void ReadNpmConfigVariables_RetainsOnlyRegistryAndNpmrcLocationConfigurationFromTheProcessEnvironment()
     {
         // The resolver is a singleton for the whole command, so snapshotting the process
         // environment would keep unrelated credentials alive for that long.
+        var originalCredentialValue = Environment.GetEnvironmentVariable(CredentialVariableName);
+        var originalPrefixValue = Environment.GetEnvironmentVariable(PrefixVariableName);
+
         Environment.SetEnvironmentVariable(CredentialVariableName, "super-secret-token");
+        Environment.SetEnvironmentVariable(PrefixVariableName, _root.FullName);
 
         try
         {
@@ -880,15 +885,17 @@ public class NpmRegistryResolverTests : IDisposable
 
             // Without the credential variable actually present, the filter below would prove nothing.
             Assert.Contains(CredentialVariableName, processVariableNames);
-            Assert.Equal([], retained.Keys.Where(name => !IsRegistryConfigurationVariable(name)).Order().ToArray());
+            Assert.Contains(retained.Keys, name => string.Equals(name, PrefixVariableName, StringComparison.OrdinalIgnoreCase));
+            Assert.Equal([], retained.Keys.Where(name => !IsRetainedConfigurationVariable(name)).Order().ToArray());
         }
         finally
         {
-            Environment.SetEnvironmentVariable(CredentialVariableName, null);
+            Environment.SetEnvironmentVariable(CredentialVariableName, originalCredentialValue);
+            Environment.SetEnvironmentVariable(PrefixVariableName, originalPrefixValue);
         }
     }
 
-    private static bool IsRegistryConfigurationVariable(string name)
+    private static bool IsRetainedConfigurationVariable(string name)
     {
         if (!name.StartsWith(NpmRegistryResolver.EnvironmentVariablePrefix, StringComparison.OrdinalIgnoreCase))
         {
@@ -897,7 +904,7 @@ public class NpmRegistryResolverTests : IDisposable
 
         var key = name[NpmRegistryResolver.EnvironmentVariablePrefix.Length..].ToLowerInvariant();
 
-        return key is "registry" or "userconfig" or "globalconfig" || key.EndsWith(":registry", StringComparison.Ordinal);
+        return key is "registry" or "userconfig" or "globalconfig" or "prefix" || key.EndsWith(":registry", StringComparison.Ordinal);
     }
 
     [Fact]
