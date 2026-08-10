@@ -4779,7 +4779,9 @@ public static class ResourceBuilderExtensions
     /// <remarks>
     /// Registering debug support is synchronous. Aspire invokes <paramref name="launchConfigurationProducer"/>
     /// later only for executable creations where this debug-support annotation is active for the current debug
-    /// session, including restarts and replicas.
+    /// session, including restarts and replicas. This is not a general resource lifecycle callback: it does not
+    /// run for process launches, unsupported debug sessions, publish mode, or inactive annotations superseded by
+    /// a later <see cref="SupportsDebuggingAnnotation"/>.
     /// <para>
     /// A <see cref="ProjectLaunchArgsOverrideAnnotation"/> that already supplies a
     /// <see cref="KnownLaunchConfigurationTypes.Project"/> launch configuration skips the producer for that
@@ -4850,7 +4852,9 @@ public static class ResourceBuilderExtensions
     /// Registering debug support is synchronous. Aspire invokes <paramref name="launchConfigurationProducer"/>
     /// later only for executable creations where this debug-support annotation is active for the current debug
     /// session, including restarts and replicas. A producer that completes synchronously should return its result
-    /// with <see cref="Task.FromResult{TResult}(TResult)"/>.
+    /// with <see cref="Task.FromResult{TResult}(TResult)"/>. This is not a general resource lifecycle callback:
+    /// it does not run for process launches, unsupported debug sessions, publish mode, or inactive annotations
+    /// superseded by a later <see cref="SupportsDebuggingAnnotation"/>.
     /// <para>
     /// A <see cref="ProjectLaunchArgsOverrideAnnotation"/> that already supplies a
     /// <see cref="KnownLaunchConfigurationTypes.Project"/> launch configuration skips the producer for that
@@ -4889,7 +4893,7 @@ public static class ResourceBuilderExtensions
     ///            launchConfigurationType: "mytool",
     ///            argsCallback: argsContext =>
     ///            {
-    ///                // Applies only to the process command line, never to the configuration above.
+    ///                // Applies only to the executable arguments, never to the original configuration above.
     ///                argsContext.Args.Insert(0, "--wait-for-debugger");
     ///            });
     /// </code>

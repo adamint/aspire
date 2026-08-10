@@ -4322,7 +4322,7 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
         using var fileSystemService = new FileSystemService(new ConfigurationBuilder().Build());
         using var aspireStoreDirectory = fileSystemService.TempDirectory.CreateTempSubdirectory("aspire-store");
 
-        using var certificate = CreateTestCertificate();
+        using var certificate = CreateTestCertificateWithPrivateKey();
         var certificateAuthorities = builder.AddCertificateAuthorityCollection("certificates")
             .WithCertificate(certificate);
 
@@ -4374,7 +4374,7 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
             Assert.NotEmpty(expectedWellKnownCertificateDirectories);
 
             var builder = DistributedApplication.CreateBuilder();
-            using var certificate = CreateTestCertificate();
+            using var certificate = CreateTestCertificateWithPrivateKey();
             var certificateAuthorities = builder.AddCertificateAuthorityCollection("certificates")
                 .WithCertificate(certificate);
 
@@ -7024,6 +7024,394 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task PlainExecutable_ExtensionMode_ArgsRewritingDebugSupport_PreservesRegistrationOrderForLaterArgs()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var debugSessionInfoJson = JsonSerializer.Serialize(new RunSessionInfo { ProtocolsSupported = ["test"], SupportedLaunchConfigurations = ["test"] });
+        builder.Configuration[DcpExecutor.DebugSessionPortVar] = "12345";
+        builder.Configuration[KnownConfigNames.DebugSessionInfo] = debugSessionInfoJson;
+        builder.Configuration[KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234";
+        builder.Configuration[KnownConfigNames.DebugSessionRunMode] = "Debug";
+
+        IExecutionConfigurationResult? originalConfiguration = null;
+        IExecutionConfigurationResult? executableConfiguration = null;
+        var laterArgsCallbackCalls = 0;
+        var debuggableExecutable = new TestExecutableResource("test-working-directory");
+        builder.AddResource(debuggableExecutable)
+            .WithArgs("launcher")
+            .WithDebugSupport(
+                context =>
+                {
+                    originalConfiguration = context.OriginalExecutionConfiguration;
+                    executableConfiguration = context.ExecutableExecutionConfiguration;
+                    return Task.FromResult(new ExecutableLaunchConfiguration("test") { Mode = context.Mode });
+                },
+                "test",
+                argsCallback: static context => context.Args.Clear())
+            .WithArgs(context =>
+            {
+                laterArgsCallbackCalls++;
+                context.Args.Add("user");
+            });
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [DcpExecutor.DebugSessionPortVar] = "12345",
+                [KnownConfigNames.DebugSessionInfo] = debugSessionInfoJson,
+                [KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234",
+                [KnownConfigNames.DebugSessionRunMode] = "Debug"
+            })
+            .Build();
+
+        var kubernetesService = new TestKubernetesService();
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var appExecutor = CreateAppExecutor(distributedAppModel, kubernetesService: kubernetesService, configuration: configuration);
+
+        await appExecutor.RunApplicationAsync();
+
+        Assert.NotNull(originalConfiguration);
+        Assert.NotNull(executableConfiguration);
+        Assert.NotSame(originalConfiguration, executableConfiguration);
+        Assert.Equal(1, laterArgsCallbackCalls);
+        Assert.Equal(["launcher", "user"], originalConfiguration.Arguments.Select(argument => argument.Value));
+        Assert.Equal(["user"], executableConfiguration.Arguments.Select(argument => argument.Value));
+
+        var exe = GetCreatedExecutableForResource(kubernetesService, "TestExecutable");
+        Assert.Equal(["user"], exe.Spec.Args);
+    }
+
+    [Fact]
+    public async Task PlainExecutable_ExtensionMode_ArgsRewritingDebugSupport_AppliesLaterIndexedMutationsToExecutableBranch()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var debugSessionInfoJson = JsonSerializer.Serialize(new RunSessionInfo { ProtocolsSupported = ["test"], SupportedLaunchConfigurations = ["test"] });
+        builder.Configuration[DcpExecutor.DebugSessionPortVar] = "12345";
+        builder.Configuration[KnownConfigNames.DebugSessionInfo] = debugSessionInfoJson;
+        builder.Configuration[KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234";
+        builder.Configuration[KnownConfigNames.DebugSessionRunMode] = "Debug";
+
+        IExecutionConfigurationResult? originalConfiguration = null;
+        IExecutionConfigurationResult? executableConfiguration = null;
+        var debuggableExecutable = new TestExecutableResource("test-working-directory");
+        builder.AddResource(debuggableExecutable)
+            .WithArgs("launcher", "app")
+            .WithDebugSupport(
+                context =>
+                {
+                    originalConfiguration = context.OriginalExecutionConfiguration;
+                    executableConfiguration = context.ExecutableExecutionConfiguration;
+                    return Task.FromResult(new ExecutableLaunchConfiguration("test") { Mode = context.Mode });
+                },
+                "test",
+                argsCallback: static context => context.Args.RemoveAt(0))
+            .WithArgs(static context => context.Args.RemoveAt(0));
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [DcpExecutor.DebugSessionPortVar] = "12345",
+                [KnownConfigNames.DebugSessionInfo] = debugSessionInfoJson,
+                [KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234",
+                [KnownConfigNames.DebugSessionRunMode] = "Debug"
+            })
+            .Build();
+
+        var kubernetesService = new TestKubernetesService();
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var appExecutor = CreateAppExecutor(distributedAppModel, kubernetesService: kubernetesService, configuration: configuration);
+
+        await appExecutor.RunApplicationAsync();
+
+        Assert.NotNull(originalConfiguration);
+        Assert.NotNull(executableConfiguration);
+        Assert.Equal(["app"], originalConfiguration.Arguments.Select(argument => argument.Value));
+        Assert.Empty(executableConfiguration.Arguments);
+
+        var exe = GetCreatedExecutableForResource(kubernetesService, "TestExecutable");
+        Assert.Null(exe.Spec.Args);
+    }
+
+    [Fact]
+    public async Task PlainExecutable_ExtensionMode_ArgsRewritingDebugSupport_MapsLaterIndexedMutationToSurvivingArgument()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var debugSessionInfoJson = JsonSerializer.Serialize(new RunSessionInfo { ProtocolsSupported = ["test"], SupportedLaunchConfigurations = ["test"] });
+        builder.Configuration[DcpExecutor.DebugSessionPortVar] = "12345";
+        builder.Configuration[KnownConfigNames.DebugSessionInfo] = debugSessionInfoJson;
+        builder.Configuration[KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234";
+        builder.Configuration[KnownConfigNames.DebugSessionRunMode] = "Debug";
+
+        IExecutionConfigurationResult? originalConfiguration = null;
+        IExecutionConfigurationResult? executableConfiguration = null;
+        var debuggableExecutable = new TestExecutableResource("test-working-directory");
+        builder.AddResource(debuggableExecutable)
+            .WithArgs("launcher", "app")
+            .WithDebugSupport(
+                context =>
+                {
+                    originalConfiguration = context.OriginalExecutionConfiguration;
+                    executableConfiguration = context.ExecutableExecutionConfiguration;
+                    return Task.FromResult(new ExecutableLaunchConfiguration("test") { Mode = context.Mode });
+                },
+                "test",
+                argsCallback: static context => context.Args.Insert(0, "debug"))
+            .WithArgs(static context => context.Args[1] = "app2");
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [DcpExecutor.DebugSessionPortVar] = "12345",
+                [KnownConfigNames.DebugSessionInfo] = debugSessionInfoJson,
+                [KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234",
+                [KnownConfigNames.DebugSessionRunMode] = "Debug"
+            })
+            .Build();
+
+        var kubernetesService = new TestKubernetesService();
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var appExecutor = CreateAppExecutor(distributedAppModel, kubernetesService: kubernetesService, configuration: configuration);
+
+        await appExecutor.RunApplicationAsync();
+
+        Assert.NotNull(originalConfiguration);
+        Assert.NotNull(executableConfiguration);
+        Assert.Equal(["launcher", "app2"], originalConfiguration.Arguments.Select(argument => argument.Value));
+        Assert.Equal(["debug", "launcher", "app2"], executableConfiguration.Arguments.Select(argument => argument.Value));
+
+        var exe = GetCreatedExecutableForResource(kubernetesService, "TestExecutable");
+        Assert.Equal(["debug", "launcher", "app2"], exe.Spec.Args);
+    }
+
+    [Fact]
+    public async Task PlainExecutable_ExtensionMode_ArgsRewritingDebugSupport_AppendsLaterInsertAtCountAfterDebugPrefix()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var debugSessionInfoJson = JsonSerializer.Serialize(new RunSessionInfo { ProtocolsSupported = ["test"], SupportedLaunchConfigurations = ["test"] });
+        builder.Configuration[DcpExecutor.DebugSessionPortVar] = "12345";
+        builder.Configuration[KnownConfigNames.DebugSessionInfo] = debugSessionInfoJson;
+        builder.Configuration[KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234";
+        builder.Configuration[KnownConfigNames.DebugSessionRunMode] = "Debug";
+
+        IExecutionConfigurationResult? executableConfiguration = null;
+        var debuggableExecutable = new TestExecutableResource("test-working-directory");
+        builder.AddResource(debuggableExecutable)
+            .WithArgs("launcher", "app")
+            .WithDebugSupport(
+                context =>
+                {
+                    executableConfiguration = context.ExecutableExecutionConfiguration;
+                    return Task.FromResult(new ExecutableLaunchConfiguration("test") { Mode = context.Mode });
+                },
+                "test",
+                argsCallback: static context => context.Args.Insert(0, "debug"))
+            .WithArgs(static context => context.Args.Insert(context.Args.Count, "tail"));
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [DcpExecutor.DebugSessionPortVar] = "12345",
+                [KnownConfigNames.DebugSessionInfo] = debugSessionInfoJson,
+                [KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234",
+                [KnownConfigNames.DebugSessionRunMode] = "Debug"
+            })
+            .Build();
+
+        var kubernetesService = new TestKubernetesService();
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var appExecutor = CreateAppExecutor(distributedAppModel, kubernetesService: kubernetesService, configuration: configuration);
+
+        await appExecutor.RunApplicationAsync();
+
+        Assert.NotNull(executableConfiguration);
+        Assert.Equal(["debug", "launcher", "app", "tail"], executableConfiguration.Arguments.Select(argument => argument.Value));
+
+        var exe = GetCreatedExecutableForResource(kubernetesService, "TestExecutable");
+        Assert.Equal(["debug", "launcher", "app", "tail"], exe.Spec.Args);
+    }
+
+    [Fact]
+    public async Task PlainExecutable_ExtensionMode_ArgsRewritingDebugSupport_PreservesArgumentsAddedByLaterGatherers()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var debugSessionInfoJson = JsonSerializer.Serialize(new RunSessionInfo { ProtocolsSupported = ["test"], SupportedLaunchConfigurations = ["test"] });
+        builder.Configuration[DcpExecutor.DebugSessionPortVar] = "12345";
+        builder.Configuration[KnownConfigNames.DebugSessionInfo] = debugSessionInfoJson;
+        builder.Configuration[KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234";
+        builder.Configuration[KnownConfigNames.DebugSessionRunMode] = "Debug";
+
+        using var certificate = CreateTestCertificateWithPrivateKey();
+        IExecutionConfigurationResult? originalConfiguration = null;
+        IExecutionConfigurationResult? executableConfiguration = null;
+        var debuggableExecutable = new TestExecutableResource("test-working-directory");
+        builder.AddResource(debuggableExecutable)
+            .WithArgs("launcher")
+            .WithDebugSupport(
+                context =>
+                {
+                    originalConfiguration = context.OriginalExecutionConfiguration;
+                    executableConfiguration = context.ExecutableExecutionConfiguration;
+                    return Task.FromResult(new ExecutableLaunchConfiguration("test") { Mode = context.Mode });
+                },
+                "test",
+                argsCallback: static context => context.Args.Clear())
+            .WithAnnotation(new HttpsCertificateAnnotation { Certificate = certificate })
+            .WithAnnotation(new HttpsCertificateConfigurationCallbackAnnotation(static context =>
+            {
+                context.Arguments.Add("post-debug");
+                return Task.CompletedTask;
+            }));
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [DcpExecutor.DebugSessionPortVar] = "12345",
+                [KnownConfigNames.DebugSessionInfo] = debugSessionInfoJson,
+                [KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234",
+                [KnownConfigNames.DebugSessionRunMode] = "Debug"
+            })
+            .Build();
+
+        var kubernetesService = new TestKubernetesService();
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var appExecutor = CreateAppExecutor(distributedAppModel, kubernetesService: kubernetesService, configuration: configuration);
+
+        await appExecutor.RunApplicationAsync();
+
+        Assert.NotNull(originalConfiguration);
+        Assert.NotNull(executableConfiguration);
+        Assert.Equal(["launcher", "post-debug"], originalConfiguration.Arguments.Select(argument => argument.Value));
+        Assert.Equal(["post-debug"], executableConfiguration.Arguments.Select(argument => argument.Value));
+
+        var exe = GetCreatedExecutableForResource(kubernetesService, "TestExecutable");
+        Assert.Equal(["post-debug"], exe.Spec.Args);
+    }
+
+    [Fact]
+    public async Task ProjectReplicas_ExtensionMode_ArgsRewritingDebugSupport_PreservesLaterArgsWhenCallbackResultIsCached()
+    {
+        var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions
+        {
+            AssemblyName = typeof(DistributedApplicationTests).Assembly.FullName
+        });
+        var debugSessionInfoJson = JsonSerializer.Serialize(new RunSessionInfo { ProtocolsSupported = ["test"], SupportedLaunchConfigurations = ["test"] });
+        builder.Configuration[DcpExecutor.DebugSessionPortVar] = "12345";
+        builder.Configuration[KnownConfigNames.DebugSessionInfo] = debugSessionInfoJson;
+        builder.Configuration[KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234";
+        builder.Configuration[KnownConfigNames.DebugSessionRunMode] = "Debug";
+
+        var launchContexts = new ConcurrentQueue<LaunchConfigurationCallbackContext>();
+        var projectBuilder = builder.AddProject<Projects.ServiceA>("ServiceA")
+            .WithReplicas(2);
+        var defaultAnnotation = projectBuilder.Resource.Annotations.OfType<SupportsDebuggingAnnotation>().FirstOrDefault();
+        if (defaultAnnotation is not null)
+        {
+            projectBuilder.Resource.Annotations.Remove(defaultAnnotation);
+        }
+
+        projectBuilder
+            .WithArgs("launcher")
+            .WithDebugSupport(
+                context =>
+                {
+                    launchContexts.Enqueue(context);
+                    return Task.FromResult(new ExecutableLaunchConfiguration("test") { Mode = context.Mode });
+                },
+                "test",
+                argsCallback: static context => context.Args.Clear())
+            .WithArgs("user");
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [DcpExecutor.DebugSessionPortVar] = "12345",
+                [KnownConfigNames.DebugSessionInfo] = debugSessionInfoJson,
+                [KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234",
+                [KnownConfigNames.DebugSessionRunMode] = "Debug"
+            })
+            .Build();
+
+        var kubernetesService = new TestKubernetesService();
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var appExecutor = CreateAppExecutor(distributedAppModel, kubernetesService: kubernetesService, configuration: configuration);
+
+        await appExecutor.RunApplicationAsync();
+
+        var executables = GetCreatedExecutablesForResource(kubernetesService, projectBuilder.Resource.Name);
+        Assert.Equal(2, executables.Count);
+
+        var contexts = launchContexts.ToArray();
+        Assert.Equal(2, contexts.Length);
+        Assert.All(contexts, context => Assert.Equal(["user"], context.ExecutableExecutionConfiguration.Arguments.Select(argument => argument.Value)));
+    }
+
+    [Fact]
+    public async Task ProjectReplicas_ExtensionMode_ArgsRewritingDebugSupport_ReplaysCachedLaterArgsAgainstFreshDebugRewrite()
+    {
+        var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions
+        {
+            AssemblyName = typeof(DistributedApplicationTests).Assembly.FullName
+        });
+        var debugSessionInfoJson = JsonSerializer.Serialize(new RunSessionInfo { ProtocolsSupported = ["test"], SupportedLaunchConfigurations = ["test"] });
+        builder.Configuration[DcpExecutor.DebugSessionPortVar] = "12345";
+        builder.Configuration[KnownConfigNames.DebugSessionInfo] = debugSessionInfoJson;
+        builder.Configuration[KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234";
+        builder.Configuration[KnownConfigNames.DebugSessionRunMode] = "Debug";
+
+        var launchContexts = new ConcurrentQueue<LaunchConfigurationCallbackContext>();
+        var projectBuilder = builder.AddProject<Projects.ServiceA>("ServiceA")
+            .WithReplicas(2);
+        var defaultAnnotation = projectBuilder.Resource.Annotations.OfType<SupportsDebuggingAnnotation>().FirstOrDefault();
+        if (defaultAnnotation is not null)
+        {
+            projectBuilder.Resource.Annotations.Remove(defaultAnnotation);
+        }
+
+        var debugRewriteCallCount = 0;
+        projectBuilder
+            .WithArgs("launcher")
+            .WithDebugSupport(
+                context =>
+                {
+                    launchContexts.Enqueue(context);
+                    return Task.FromResult(new ExecutableLaunchConfiguration("test") { Mode = context.Mode });
+                },
+                "test",
+                argsCallback: context => context.Args.Add($"debug-{Interlocked.Increment(ref debugRewriteCallCount)}"))
+            .WithArgs("tail");
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [DcpExecutor.DebugSessionPortVar] = "12345",
+                [KnownConfigNames.DebugSessionInfo] = debugSessionInfoJson,
+                [KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234",
+                [KnownConfigNames.DebugSessionRunMode] = "Debug"
+            })
+            .Build();
+
+        var kubernetesService = new TestKubernetesService();
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var appExecutor = CreateAppExecutor(distributedAppModel, kubernetesService: kubernetesService, configuration: configuration);
+
+        await appExecutor.RunApplicationAsync();
+
+        var contexts = launchContexts.ToArray();
+        Assert.Equal(2, contexts.Length);
+        Assert.Collection(
+            contexts,
+            context => Assert.Equal(["launcher", "debug-1", "tail"], context.ExecutableExecutionConfiguration.Arguments.Select(argument => argument.Value)),
+            context => Assert.Equal(["launcher", "debug-2", "tail"], context.ExecutableExecutionConfiguration.Arguments.Select(argument => argument.Value)));
+    }
+
+    [Fact]
     public async Task PlainExecutable_ExtensionMode_ArgsRewritingDebugSupport_OrdinaryArgsCallbacksRunOnce()
     {
         var builder = DistributedApplication.CreateBuilder();
@@ -8724,6 +9112,18 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
             DateTimeOffset.Now,
             DateTimeOffset.Now.AddYears(1),
             serialNumber);
+    }
+
+    private static X509Certificate2 CreateTestCertificateWithPrivateKey()
+    {
+        using var rsa = RSA.Create(2048);
+        var request = new CertificateRequest(
+            new X500DistinguishedName("CN=test"),
+            rsa,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+
+        return request.CreateSelfSigned(DateTimeOffset.Now, DateTimeOffset.Now.AddYears(1));
     }
 
     private sealed class TestExecutableResource(string directory) : ExecutableResource("TestExecutable", "test", directory);

@@ -20,7 +20,7 @@ public static class LaunchConfigurationTestHelpers
     {
         ArgumentNullException.ThrowIfNull(resource);
 
-        executionConfiguration ??= CreateExecutionConfigurationResult();
+        executionConfiguration ??= CreateExecutionConfigurationResult(resource);
         return new LaunchConfigurationCallbackContext(
             mode,
             resource,
@@ -54,12 +54,16 @@ public static class LaunchConfigurationTestHelpers
     }
 
     public static IExecutionConfigurationResult CreateExecutionConfigurationResult(
+        IResource resource,
         IEnumerable<string>? arguments = null,
         IEnumerable<KeyValuePair<string, string>>? environmentVariables = null,
         Exception? exception = null)
     {
+        ArgumentNullException.ThrowIfNull(resource);
+
         return new ExecutionConfigurationResult
         {
+            Resource = resource,
             References = [],
             ArgumentsWithUnprocessed = (arguments ?? [])
                 .Select(value => ((object)value, value, false))

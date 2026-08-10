@@ -18,6 +18,11 @@ internal readonly record struct ArgumentResolution(object Unprocessed, string? P
 /// </summary>
 internal sealed class ExecutionConfigurationResult : IExecutionConfigurationResult
 {
+    /// <summary>
+    /// Gets the resource this configuration was resolved for.
+    /// </summary>
+    internal required IResource Resource { get; init; }
+
     /// <inheritdoc/>
     public required IEnumerable<object> References { get; init; }
 

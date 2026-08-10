@@ -115,11 +115,6 @@ public static class DebugSupportExtensions
                 nameof(context));
         }
 
-        if (context.OriginalExecutionConfiguration.Exception is { } configurationException)
-        {
-            ExceptionDispatchInfo.Throw(configurationException);
-        }
-
         if (context.ExecutableExecutionConfiguration.Exception is { } executableConfigurationException)
         {
             ExceptionDispatchInfo.Throw(executableConfigurationException);

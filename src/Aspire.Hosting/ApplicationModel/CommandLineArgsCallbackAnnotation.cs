@@ -15,6 +15,7 @@ using IArgCallbackAnnotation = ICallbackResourceAnnotation<CommandLineArgsCallba
 public class CommandLineArgsCallbackAnnotation : IResourceAnnotation, IArgCallbackAnnotation
 {
     private Task<IList<object>>? _callbackTask;
+    private IReadOnlyList<MirroredCommandLineArgsOperation>? _mirroredSecondaryOperations;
     private readonly object _lock = new();
 
     /// <summary>
@@ -52,12 +53,23 @@ public class CommandLineArgsCallbackAnnotation : IResourceAnnotation, IArgCallba
 
     Task<IList<object>> IArgCallbackAnnotation.EvaluateOnceAsync(CommandLineArgsCallbackContext context)
     {
+        return EvaluateOnceAsync(context, out _);
+    }
+
+    internal Task<IList<object>> EvaluateOnceAsync(CommandLineArgsCallbackContext context, out bool callbackStarted)
+    {
         lock(_lock)
         {
             if (_callbackTask is null)
             {
+                callbackStarted = true;
                 _callbackTask = ExecuteCallbackAsync(context);
             }
+            else
+            {
+                callbackStarted = false;
+            }
+
             return _callbackTask;
         }
     }
@@ -67,6 +79,30 @@ public class CommandLineArgsCallbackAnnotation : IResourceAnnotation, IArgCallba
         lock(_lock)
         {
             _callbackTask = null;
+            _mirroredSecondaryOperations = null;
+        }
+    }
+
+    internal void SetCachedMirroredSecondaryOperations(IReadOnlyList<MirroredCommandLineArgsOperation> operations)
+    {
+        lock (_lock)
+        {
+            _mirroredSecondaryOperations = operations.ToImmutableList();
+        }
+    }
+
+    internal bool TryGetCachedMirroredSecondaryOperations(out IReadOnlyList<MirroredCommandLineArgsOperation> operations)
+    {
+        lock (_lock)
+        {
+            if (_mirroredSecondaryOperations is { } mirroredSecondaryOperations)
+            {
+                operations = mirroredSecondaryOperations;
+                return true;
+            }
+
+            operations = [];
+            return false;
         }
     }
 

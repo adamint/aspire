@@ -237,6 +237,7 @@ public class DebugSupportExtensionsTests
             }, "go");
 
         var executionConfiguration = LaunchConfigurationTestHelpers.CreateExecutionConfigurationResult(
+            executable.Resource,
             environmentVariables: [new("EXPECTED", "./cmd/api")]);
         var callbackContext = LaunchConfigurationTestHelpers.CreateCallbackContext(
             executable.Resource,
@@ -273,6 +274,30 @@ public class DebugSupportExtensionsTests
     }
 
     [Fact]
+    public void LaunchConfigurationCallbackContextRejectsExecutionConfigurationForAnotherResource()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create();
+        var executable = builder.AddExecutable("app", "go", ".")
+            .WithDebugSupport(
+                static (LaunchConfigurationCallbackContext context) =>
+                    Task.FromResult(new TestGoLaunchConfiguration { Mode = context.Mode }),
+                "go");
+        var other = builder.AddExecutable("other", "go", ".");
+        var otherExecutionConfiguration = LaunchConfigurationTestHelpers.CreateExecutionConfigurationResult(
+            other.Resource,
+            arguments: ["secret-from-other"]);
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            LaunchConfigurationTestHelpers.CreateCallbackContext(
+                executable.Resource,
+                executionConfiguration: otherExecutionConfiguration));
+
+        Assert.Equal("originalExecutionConfiguration", exception.ParamName);
+        Assert.Contains("other", exception.Message);
+        Assert.Contains("app", exception.Message);
+    }
+
+    [Fact]
     public async Task CreateLaunchConfigurationRejectsAFailedExecutionConfiguration()
     {
         using var builder = TestDistributedApplicationBuilder.Create();
@@ -287,6 +312,7 @@ public class DebugSupportExtensionsTests
                 "go");
         var expectedException = new InvalidOperationException("configuration failed");
         var executionConfiguration = LaunchConfigurationTestHelpers.CreateExecutionConfigurationResult(
+            executable.Resource,
             exception: expectedException);
         var callbackContext = LaunchConfigurationTestHelpers.CreateCallbackContext(
             executable.Resource,

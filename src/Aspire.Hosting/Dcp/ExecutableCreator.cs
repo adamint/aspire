@@ -544,10 +544,16 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
 
         var activeDebugArgsAnnotation = supportsDebuggingAnnotation?.DebugCommandLineArgsCallbackAnnotation;
         var shouldBuildDebugArguments = activeDebugArgsAnnotation is not null && applyDebugArgumentRewrite;
+        DebugCommandLineArgsRewriteCapture? debugRewriteCapture = null;
         var configurationBuilder = ExecutionConfigurationBuilder.Create(er.ModelResource);
         if (activeDebugArgsAnnotation is null)
         {
             configurationBuilder.WithArgumentsConfig();
+        }
+        else if (shouldBuildDebugArguments)
+        {
+            debugRewriteCapture = new DebugCommandLineArgsRewriteCapture(activeDebugArgsAnnotation);
+            configurationBuilder.WithArgumentsConfig(debugRewriteCapture);
         }
         else
         {
@@ -596,7 +602,8 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         var executableConfiguration = shouldBuildDebugArguments
             ? await BuildExecutableConfigurationWithDebugArgumentsAsync(
                     originalConfiguration,
-                    activeDebugArgsAnnotation!,
+                    debugRewriteCapture!.OriginalArguments,
+                    debugRewriteCapture!.ExecutableArguments,
                     er.ModelResource,
                     resourceLogger,
                     cancellationToken)
@@ -679,31 +686,18 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
 
     private async Task<IExecutionConfigurationResult> BuildExecutableConfigurationWithDebugArgumentsAsync(
         IExecutionConfigurationResult originalConfiguration,
-        CommandLineArgsCallbackAnnotation activeDebugArgsAnnotation,
+        IReadOnlyList<object> originalArgsBeforePostArgumentGatherers,
+        IReadOnlyList<object> rewrittenArgs,
         IResource resource,
         ILogger resourceLogger,
         CancellationToken cancellationToken)
     {
-        // The executable snapshot is the original resolved argument list with only the active debug rewrite
-        // applied. Do not replay ordinary WithArgs annotations here: they may have side effects, and the
-        // original snapshot already evaluated them for this executable creation.
-        //
-        // The rewrite decides the executable's final command line, so it is handed every gathered argument,
-        // including any that resolved to null or threw. Those are absent from ArgumentsWithUnprocessed but
-        // still belong to the command line being rewritten: a callback that drops a failing argument (for
-        // example one that replaces the whole command line for the debugger) has to be able to see it, or
-        // that failure becomes unrecoverable even though nothing depends on it anymore.
+        // The executable snapshot is gathered in the same pass as the original configuration so the active
+        // debug rewrite keeps its registration-order position without replaying ordinary WithArgs callbacks.
+        // It still contains unprocessed arguments here; reusing the matching resolutions below avoids
+        // re-resolving value providers that already ran for this executable creation.
         var originalResolutions = ExecutionConfigurationResult.GetArgumentResolutions(originalConfiguration);
-        activeDebugArgsAnnotation.AsCallbackAnnotation().ForgetCachedResult();
-        var callbackContext = new CommandLineArgsCallbackContext(
-            [.. originalResolutions.Select(resolution => resolution.Unprocessed)],
-            resource,
-            cancellationToken)
-        {
-            Logger = resourceLogger,
-            ExecutionContext = _executionContext
-        };
-        var rewrittenArgs = await activeDebugArgsAnnotation.AsCallbackAnnotation().EvaluateOnceAsync(callbackContext).ConfigureAwait(false);
+        rewrittenArgs = AppendArgumentsAddedByLaterGatherers(originalArgsBeforePostArgumentGatherers, rewrittenArgs, originalResolutions);
 
         // Arguments the debug rewrite kept were already resolved into originalConfiguration for this same
         // executable creation. IValueProvider carries no idempotence guarantee, so resolving them a second
@@ -822,6 +816,7 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
 
         return new ExecutionConfigurationResult
         {
+            Resource = resource,
             References = environmentReferences.Concat(rewrittenArgsConfiguration.References).Concat(reusedReferences).ToHashSet(),
             ArgumentsWithUnprocessed = argumentsWithUnprocessed,
             ArgumentResolutions = retainedArgumentResolutions,
@@ -830,6 +825,37 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
             AdditionalConfigurationData = originalConfiguration.AdditionalConfigurationData,
             Exception = CombineExecutionConfigurationExceptions(retainedOriginalException, rewrittenArgsConfiguration.Exception)
         };
+    }
+
+    private static IReadOnlyList<object> AppendArgumentsAddedByLaterGatherers(
+        IReadOnlyList<object> originalArgsBeforePostArgumentGatherers,
+        IReadOnlyList<object> rewrittenArgs,
+        IReadOnlyList<ArgumentResolution> finalOriginalResolutions)
+    {
+        var finalOriginalArgs = finalOriginalResolutions.Select(static resolution => resolution.Unprocessed).ToArray();
+        if (finalOriginalArgs.Length < originalArgsBeforePostArgumentGatherers.Count)
+        {
+            return rewrittenArgs;
+        }
+
+        for (var i = 0; i < originalArgsBeforePostArgumentGatherers.Count; i++)
+        {
+            if (!ReferenceEquals(finalOriginalArgs[i], originalArgsBeforePostArgumentGatherers[i]))
+            {
+                // Later execution-configuration gatherers normally append arguments (for example TLS flags
+                // added by language integrations). If a custom gatherer reordered or removed the ordinary
+                // argument branch, we cannot safely infer how that mutation should apply to the debug branch
+                // without re-running callbacks, so keep the debug branch as captured.
+                return rewrittenArgs;
+            }
+        }
+
+        if (finalOriginalArgs.Length == originalArgsBeforePostArgumentGatherers.Count)
+        {
+            return rewrittenArgs;
+        }
+
+        return [.. rewrittenArgs, .. finalOriginalArgs.Skip(originalArgsBeforePostArgumentGatherers.Count)];
     }
 
     private static Exception? CombineExecutionConfigurationExceptions(Exception? originalException, Exception? rewrittenArgsException)

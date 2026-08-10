@@ -97,6 +97,7 @@ internal class ExecutionConfigurationGathererContext : IExecutionConfigurationGa
 
         return new ExecutionConfigurationResult
         {
+            Resource = resource,
             References = references,
             ArgumentsWithUnprocessed = resolvedArguments,
             ArgumentResolutions = argumentResolutions,
