@@ -8,7 +8,8 @@ import AspireDcpServer, { generateDcpIdPrefix } from "../dcp/AspireDcpServer";
 import { spawnCliProcess } from "./languages/cli";
 import { disconnectingFromSession, launchingWithAppHost, launchingWithDirectory, processExceptionOccurred, processExitedWithCode, aspireDashboard, appHostSessionTerminated } from "../loc/strings";
 import { projectDebuggerExtension } from "./languages/dotnet";
-import { AnsiColors, applyTextStyle } from "../utils/strings";
+import { AnsiColors } from "../utils/AspireTerminalProvider";
+import { applyTextStyle } from "../utils/strings";
 import { nodeDebuggerExtension } from "./languages/node";
 import { cleanupRun } from "./runCleanupRegistry";
 import { runWithRunStartWrappers } from "./runStartRegistry";
@@ -480,8 +481,8 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       // The output filter is intentionally a positive opt-in for C# AppHosts only.
       // The .NET debugger (`coreclr`) emits a lot of `console`-category chatter
       // (module loads, exception-thrown notifications, the debugger banner, etc.)
-      // into the parent debug console, and structured `Microsoft.Extensions.Logging`
-      // lines need trce/dbug-level filtering. Other languages (Node, and future
+      // into the parent debug console, and `Microsoft.Extensions.Logging` lines need
+      // correlation and severity styling. Other languages (Node, and future
       // additions like Python/Go) use different debug adapters that don't produce
       // that noise, so we pass their output through unmodified until/unless they
       // explicitly opt in to filtering.

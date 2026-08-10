@@ -67,16 +67,6 @@ export function isBunInstalled() {
 export function getSupportedCapabilities(): Capabilities {
     const capabilities: Capabilities = ['prompting', 'baseline.v1', 'secret-prompts.v1', 'file-pickers.v1', 'build-dotnet-using-cli'];
 
-    // 'apphost-log-output.v1' must stay character-identical to KnownCapabilities.AppHostLogOutput
-    // on the CLI side: nothing compiles the two together, and a mismatch silently disables
-    // structured AppHost log correlation instead of erroring.
-    // test/appHostLogOutputCapability.test.ts enforces the exact token. Note that only the
-    // extension side is negotiated - the CLI decides whether the AppHost can produce structured
-    // entries from the sequence number on each entry, not from an AppHost capability.
-    //
-    // The token is versioned because an unversioned one cannot be retired once shipped: an older
-    // extension advertising it would keep claiming a contract it no longer implements, which is
-    // https://github.com/microsoft/aspire/issues/15850.
     capabilities.push('apphost-log-output.v1');
 
     if (isCsDevKitInstalled()) {

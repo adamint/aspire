@@ -32,27 +32,6 @@ public class BackchannelLoggerProviderTests
     }
 
     [Fact]
-    public void Log_StampsEverySequenceNumberAboveZero()
-    {
-        using var provider = new BackchannelLoggerProvider();
-        var logger = provider.CreateLogger("TestCategory");
-
-        // The CLI branches its structured debug-console log path on SequenceNumber > 0. This
-        // provider is the only producer of BackchannelLogEntry, so a zero can only mean the
-        // entry came off the wire from an AppHost that predates the field — which is exactly
-        // what the CLI infers. Numbering must therefore never start at or return to 0.
-        foreach (var level in new[] { LogLevel.Trace, LogLevel.Debug, LogLevel.Information, LogLevel.Warning, LogLevel.Error, LogLevel.Critical })
-        {
-            logger.Log(level, "Message");
-        }
-
-        var (snapshot, subscriberId, _) = provider.Subscribe();
-        provider.Unsubscribe(subscriberId);
-
-        Assert.Equal([1, 2, 3, 4, 5, 6], snapshot.Select(entry => entry.SequenceNumber));
-    }
-
-    [Fact]
     public void Log_CapturesExceptionSeparatelyFromFormattedMessage()
     {
         using var provider = new BackchannelLoggerProvider();

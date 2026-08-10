@@ -22,6 +22,8 @@ internal sealed class TestExtensionInteractionService(IServiceProvider servicePr
     public Action? NotifyAppHostStartupCompletedCallback { get; set; }
     public Action<DashboardUrlsState>? DisplayDashboardUrlsCallback { get; set; }
     public Action<string, string?, bool, DebugSessionOptions?>? StartDebugSessionCallback { get; set; }
+    public Action<string, bool, string?>? WriteDebugSessionMessageCallback { get; set; }
+    public Action<ExtensionAppHostLogEntry>? WriteAppHostLogEntryCallback { get; set; }
     public Action<string, bool>? ConsoleDisplaySubtleMessageCallback { get; set; }
     public Func<string, bool, bool>? ConfirmCallback { get; set; }
     public Func<string, IReadOnlyList<string>, string>? SelectionCallback { get; set; }
@@ -139,10 +141,12 @@ internal sealed class TestExtensionInteractionService(IServiceProvider servicePr
 
     public void WriteDebugSessionMessage(string message, bool stdout, string? textStyle)
     {
+        WriteDebugSessionMessageCallback?.Invoke(message, stdout, textStyle);
     }
 
     public void WriteAppHostLogEntry(ExtensionAppHostLogEntry entry)
     {
+        WriteAppHostLogEntryCallback?.Invoke(entry);
     }
 
     public void DisplayLines(IEnumerable<(OutputLineStream Stream, string Line)> lines)

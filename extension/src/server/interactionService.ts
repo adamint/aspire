@@ -5,7 +5,7 @@ import { getRelativePathToWorkspace, isFolderOpenInWorkspace } from '../utils/wo
 import { yesLabel, noLabel, directLink, codespacesLink, openAspireDashboard, settingsLabel, failedToShowPromptEmpty, incompatibleAppHostError, aspireHostingSdkVersion, aspireCliVersion, requiredCapability, fieldRequired, aspireDebugSessionNotInitialized, errorMessage, failedToStartDebugSession, dashboard, codespaces, selectDirectoryTitle, selectFileTitle, unableToAddFolderToWorkspace, dashboardLaunchBehaviorChanged, changelogLabel } from '../loc/strings';
 import { ICliRpcClient } from './rpcClient';
 import { ProgressNotifier } from './progressNotifier';
-import { AnsiColors, applyTextStyle, formatText } from '../utils/strings';
+import { applyTextStyle, formatText } from '../utils/strings';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { AspireExtendedDebugConfiguration, EnvVar } from '../dcp/types';
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
@@ -14,6 +14,7 @@ import { isDirectory } from '../utils/io';
 import { sendTelemetryEvent } from '../utils/telemetry';
 import { dashboardDefaultChangedNotificationKey } from '../utils/dashboardNotificationState';
 import { AppHostLogEntry } from '../debugger/appHostLogOutput';
+import { AnsiColors } from '../utils/AspireTerminalProvider';
 
 export interface IInteractionService {
     showStatus: (statusText: string | null) => void;

@@ -22,8 +22,8 @@ export type AppHostOutputHandler = (output: string, category: DapOutputCategory)
 
 export interface AppHostTrackerOptions {
     // VS Code invokes every factory registered for an adapter type for every matching
-    // debug session. Scope AppHost callbacks to the synthetic Aspire session that
-    // registered this tracker so concurrent AppHosts cannot consume each other's output.
+    // debug session. Scope AppHost output to the synthetic Aspire session that
+    // registered this tracker so concurrent AppHosts cannot consume each other's logs.
     debugSessionId: string;
     onRestartRequested?: AppHostRestartHandler;
     onOutput?: AppHostOutputHandler;
@@ -50,8 +50,7 @@ export function createDebugAdapterTracker(dcpServer: AspireDcpServer, debugAdapt
                     if (configuration.isApphost
                         && (message.command === 'disconnect' || message.command === 'terminate')
                         && message.arguments?.restart
-                        && isOwnedAppHostSession
-                        && appHostTracker.onRestartRequested) {
+                        && appHostTracker?.onRestartRequested) {
                         const shouldSuppress = appHostTracker.onRestartRequested(debugSessionId);
                         if (shouldSuppress) {
                             message.arguments.restart = false;

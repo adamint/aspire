@@ -89,9 +89,6 @@ internal sealed class ExtensionAppHostLogEntry
     [JsonPropertyName("sequenceNumber")]
     public required long SequenceNumber { get; set; }
 
-    [JsonPropertyName("timestamp")]
-    public required DateTimeOffset Timestamp { get; set; }
-
     [JsonPropertyName("logLevel")]
     public required string LogLevel { get; set; }
 
@@ -103,9 +100,6 @@ internal sealed class ExtensionAppHostLogEntry
 
     [JsonPropertyName("eventId")]
     public required int EventId { get; set; }
-
-    [JsonPropertyName("eventName")]
-    public string? EventName { get; set; }
 
     [JsonPropertyName("exception")]
     public string? Exception { get; set; }

@@ -557,17 +557,6 @@ internal class ExtensionInteractionService : IExtensionInteractionService, IDisp
         Debug.Assert(result);
     }
 
-    /// <summary>
-    /// Queues an AppHost log entry for asynchronous delivery to the extension.
-    /// </summary>
-    /// <remarks>
-    /// Queued like every other extension operation. This is deliberately not gated: the entries
-    /// that reach here are Information and above, matching what the CLI has always forwarded, so
-    /// the queue sees no more pressure than it did before structured entries existed. A gate here
-    /// would not bound total memory anyway -- <c>BackchannelLoggerProvider</c> hands each
-    /// subscriber an unbounded channel, so refusing to drain simply moves the backlog into the
-    /// user's AppHost process.
-    /// </remarks>
     public void WriteAppHostLogEntry(ExtensionAppHostLogEntry entry)
     {
         var result = _extensionTaskChannel.Writer.TryWrite(async () => await Backchannel.WriteAppHostLogEntryAsync(entry, _cancellationToken).ConfigureAwait(false));

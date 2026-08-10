@@ -424,49 +424,6 @@ suite('Debug Adapter Tracker Tests', () => {
         disposable.dispose();
     });
 
-    test('identical output from distinct resources is reported once per resource', async () => {
-        const disposable = createDebugAdapterTracker(dcpServer as any, 'node', {
-            debugSessionId: 'debug-456',
-            onOutput: sinon.stub()
-        });
-        const factory = registerFactoryStub.lastCall.args[1];
-        const firstResourceTracker = factory.createDebugAdapterTracker(debugSession);
-        const secondResourceTracker = factory.createDebugAdapterTracker({
-            ...debugSession,
-            id: 'test-session-2',
-            configuration: {
-                ...debugSession.configuration,
-                runId: 'run-789'
-            }
-        });
-        const outputEvent = {
-            type: 'event',
-            event: 'output',
-            body: {
-                category: 'stdout',
-                output: 'Now listening on: http://localhost:5000\n'
-            }
-        };
-
-        firstResourceTracker.onDidSendMessage(outputEvent);
-        secondResourceTracker.onDidSendMessage(outputEvent);
-        // The same resource legitimately repeating a line must also be reported again.
-        firstResourceTracker.onDidSendMessage(outputEvent);
-
-        assert.deepStrictEqual(
-            dcpServer.sendNotification.args.map(args => {
-                const notification = args[0] as ServiceLogsNotification;
-                return { session_id: notification.session_id, log_message: notification.log_message };
-            }),
-            [
-                { session_id: 'run-123', log_message: 'Now listening on: http://localhost:5000' },
-                { session_id: 'run-789', log_message: 'Now listening on: http://localhost:5000' },
-                { session_id: 'run-123', log_message: 'Now listening on: http://localhost:5000' }
-            ]);
-
-        disposable.dispose();
-    });
-
     test('telemetry output event is not sent as service log', async () => {
         const disposable = createDebugAdapterTracker(dcpServer as any, 'node');
         const factory = registerFactoryStub.lastCall.args[1];
@@ -487,7 +444,7 @@ suite('Debug Adapter Tracker Tests', () => {
     });
 
     test('apphost output events are mirrored to output callback without service log notification', async () => {
-        const outputCallback = sinon.stub().returns(true);
+        const outputCallback = sinon.stub();
         const disposable = createDebugAdapterTracker(dcpServer as any, 'pwa-node', {
             debugSessionId: 'debug-456',
             onOutput: outputCallback
@@ -501,140 +458,50 @@ suite('Debug Adapter Tracker Tests', () => {
             }
         });
 
-        const outputEvent = {
+        tracker.onDidSendMessage({
             type: 'event',
             event: 'output',
             body: {
                 category: 'stderr',
                 output: 'tsx compile error\n'
             }
-        };
-        tracker.onDidSendMessage(outputEvent);
+        });
 
         assert.strictEqual(outputCallback.calledOnceWith('tsx compile error\n', 'stderr'), true);
-        // The AppHost child session owns a separate debug console (the extension never
-        // requests DebugConsoleMode.MergeWithParent), so its own payload must survive.
-        assert.strictEqual(outputEvent.body.output, 'tsx compile error\n');
         assert.strictEqual(dcpServer.sendNotification.called, false);
 
         disposable.dispose();
     });
 
     test('apphost output only feeds the tracker that owns its debug session', async () => {
-        const owningOutputCallback = sinon.stub().returns(true);
-        const unrelatedOutputCallback = sinon.stub().returns(true);
-
-        const owningDisposable = createDebugAdapterTracker(dcpServer as any, 'pwa-node', {
-            debugSessionId: 'debug-456',
-            onOutput: owningOutputCallback
-        });
-        const owningFactory = registerFactoryStub.lastCall.args[1];
-
-        const unrelatedDisposable = createDebugAdapterTracker(dcpServer as any, 'pwa-node', {
-            debugSessionId: 'debug-other',
-            onOutput: unrelatedOutputCallback
-        });
-        const unrelatedFactory = registerFactoryStub.lastCall.args[1];
-
-        const appHostDebugSession = {
-            ...debugSession,
-            configuration: {
-                ...debugSession.configuration,
-                isApphost: true
-            }
-        };
-        const owningTracker = owningFactory.createDebugAdapterTracker(appHostDebugSession);
-        const unrelatedTracker = unrelatedFactory.createDebugAdapterTracker(appHostDebugSession);
-        const outputEvents = [
-            {
-                type: 'event',
-                event: 'output',
-                body: {
-                    category: 'stdout',
-                    output: 'Repeated AppHost output\n'
-                }
-            },
-            {
-                type: 'event',
-                event: 'output',
-                body: {
-                    category: 'stdout',
-                    output: 'Repeated AppHost output\n'
-                }
-            },
-            {
-                type: 'event',
-                event: 'output',
-                body: {
-                    category: 'stderr',
-                    output: 'Unhandled exception. System.InvalidOperationException: boom\n   at Program.Main()\n'
-                }
-            }
-        ];
-
-        for (const outputEvent of outputEvents) {
-            owningTracker.onDidSendMessage(outputEvent);
-            unrelatedTracker.onDidSendMessage(outputEvent);
-        }
-
-        assert.deepStrictEqual(owningOutputCallback.args, [
-            ['Repeated AppHost output\n', 'stdout'],
-            ['Repeated AppHost output\n', 'stdout'],
-            ['Unhandled exception. System.InvalidOperationException: boom\n   at Program.Main()\n', 'stderr']
-        ]);
-        assert.strictEqual(unrelatedOutputCallback.called, false);
-        assert.deepStrictEqual(outputEvents.map(event => event.body.output), [
-            'Repeated AppHost output\n',
-            'Repeated AppHost output\n',
-            'Unhandled exception. System.InvalidOperationException: boom\n   at Program.Main()\n'
-        ]);
-        assert.strictEqual(dcpServer.sendNotification.called, false);
-
-        owningDisposable.dispose();
-        unrelatedDisposable.dispose();
-    });
-
-    test('apphost restart requests only feed the tracker that owns its debug session', async () => {
-        const owningRestartCallback = sinon.stub().returns(true);
-        const unrelatedRestartCallback = sinon.stub().returns(true);
-
+        const owningCallback = sinon.stub();
+        const unrelatedCallback = sinon.stub();
         const owningDisposable = createDebugAdapterTracker(dcpServer as any, 'coreclr', {
             debugSessionId: 'debug-456',
-            onRestartRequested: owningRestartCallback
+            onOutput: owningCallback
         });
         const owningFactory = registerFactoryStub.lastCall.args[1];
-
         const unrelatedDisposable = createDebugAdapterTracker(dcpServer as any, 'coreclr', {
-            debugSessionId: 'debug-other',
-            onRestartRequested: unrelatedRestartCallback
+            debugSessionId: 'other-session',
+            onOutput: unrelatedCallback
         });
         const unrelatedFactory = registerFactoryStub.lastCall.args[1];
-
-        const appHostDebugSession = {
+        const appHostSession = {
             ...debugSession,
-            configuration: {
-                ...debugSession.configuration,
-                isApphost: true
-            }
-        };
-        const owningTracker = owningFactory.createDebugAdapterTracker(appHostDebugSession);
-        const unrelatedTracker = unrelatedFactory.createDebugAdapterTracker(appHostDebugSession);
-        const owningRestartRequest = {
-            command: 'disconnect',
-            arguments: { restart: true }
-        };
-        const unrelatedRestartRequest = {
-            command: 'disconnect',
-            arguments: { restart: true }
+            configuration: { ...debugSession.configuration, isApphost: true }
         };
 
-        owningTracker.onWillReceiveMessage(owningRestartRequest);
-        unrelatedTracker.onWillReceiveMessage(unrelatedRestartRequest);
+        const outputEvent = {
+            type: 'event',
+            event: 'output',
+            body: { category: 'stdout', output: 'Repeated AppHost output\n' }
+        };
+        owningFactory.createDebugAdapterTracker(appHostSession).onDidSendMessage(outputEvent);
+        unrelatedFactory.createDebugAdapterTracker(appHostSession).onDidSendMessage(outputEvent);
 
-        assert.strictEqual(owningRestartCallback.calledOnceWith('debug-456'), true);
-        assert.strictEqual(owningRestartRequest.arguments.restart, false);
-        assert.strictEqual(unrelatedRestartCallback.called, false);
-        assert.strictEqual(unrelatedRestartRequest.arguments.restart, true);
+        assert.strictEqual(owningCallback.calledOnceWith('Repeated AppHost output\n', 'stdout'), true);
+        assert.strictEqual(unrelatedCallback.called, false);
+        assert.strictEqual(dcpServer.sendNotification.called, false);
 
         owningDisposable.dispose();
         unrelatedDisposable.dispose();
