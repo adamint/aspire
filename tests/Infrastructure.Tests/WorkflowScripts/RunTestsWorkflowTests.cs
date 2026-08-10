@@ -292,6 +292,59 @@ public sealed class RunTestsWorkflowTests
         }
     }
 
+    [Theory]
+    [InlineData(3)]
+    [InlineData(7)]
+    public async Task TestResultValidationAllowsIncompleteTrxWhenIgnoredRunHasToleratedExitCode(int exitCode)
+    {
+        string scratchDirectory = CreateScratchDirectory();
+        try
+        {
+            string testResultsDirectory = Path.Combine(scratchDirectory, "testresults");
+            Directory.CreateDirectory(testResultsDirectory);
+            File.WriteAllText(Path.Combine(scratchDirectory, "test-exit-code.txt"), exitCode.ToString());
+            WriteTrxFileWithoutCounters(Path.Combine(testResultsDirectory, "truncated.trx"));
+
+            using var command = new PowerShellCommand(CreateTestResultValidationScript(scratchDirectory, allowZeroTests: true, ignoreTestFailures: true), _output).WithTimeout(TimeSpan.FromMinutes(1));
+
+            CommandResult result = await command.ExecuteAsync(scratchDirectory);
+
+            result.EnsureSuccessful();
+            Assert.Contains("has no parseable ResultSummary/Counters/@total", result.Output);
+            Assert.Contains("ignored because ignoreTestFailures is true and the test runner exit code was tolerated", result.Output);
+        }
+        finally
+        {
+            DeleteScratchDirectory(scratchDirectory);
+        }
+    }
+
+    [Theory]
+    [InlineData(3)]
+    [InlineData(7)]
+    public async Task TestResultValidationFailsIncompleteTrxInNormalCiEvenWhenExitCodeWouldBeTolerated(int exitCode)
+    {
+        string scratchDirectory = CreateScratchDirectory();
+        try
+        {
+            string testResultsDirectory = Path.Combine(scratchDirectory, "testresults");
+            Directory.CreateDirectory(testResultsDirectory);
+            File.WriteAllText(Path.Combine(scratchDirectory, "test-exit-code.txt"), exitCode.ToString());
+            WriteTrxFileWithoutCounters(Path.Combine(testResultsDirectory, "truncated.trx"));
+
+            using var command = new PowerShellCommand(CreateTestResultValidationScript(scratchDirectory, allowZeroTests: true, ignoreTestFailures: false), _output).WithTimeout(TimeSpan.FromMinutes(1));
+
+            CommandResult result = await command.ExecuteAsync(scratchDirectory);
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("has no parseable ResultSummary/Counters/@total", result.Output);
+        }
+        finally
+        {
+            DeleteScratchDirectory(scratchDirectory);
+        }
+    }
+
     [Fact]
     [RequiresTools(["pwsh"])]
     public async Task TestResultValidationFailsWhenTrxFileHasUnparseableCountersEvenWhenZeroTestsAreAllowed()
@@ -426,12 +479,12 @@ public sealed class RunTestsWorkflowTests
         return scriptPath;
     }
 
-    private static string CreateTestResultValidationScript(string scratchDirectory, bool allowZeroTests = false)
+    private static string CreateTestResultValidationScript(string scratchDirectory, bool allowZeroTests = false, bool ignoreTestFailures = true)
     {
         string scriptPath = Path.Combine(scratchDirectory, "validate-test-results.ps1");
         string script = ExtractPowerShellStep("Verify test results exist")
             .Replace("${{ github.workspace }}", "$Workspace", StringComparison.Ordinal)
-            .Replace("'${{ inputs.ignoreTestFailures }}'", "'true'", StringComparison.Ordinal)
+            .Replace("'${{ inputs.ignoreTestFailures }}'", $"'{ignoreTestFailures.ToString().ToLowerInvariant()}'", StringComparison.Ordinal)
             .Replace("'${{ inputs.allowZeroTests }}'", $"'{allowZeroTests.ToString().ToLowerInvariant()}'", StringComparison.Ordinal);
 
         File.WriteAllText(

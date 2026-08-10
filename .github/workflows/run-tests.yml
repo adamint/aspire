@@ -653,6 +653,9 @@ jobs:
           #   12 = no supported protocol version
           # (Exit code 8 "zero tests ran" is already mapped to 0 by --ignore-exit-code 8 in MtpBaseArgs, so a
           # genuinely empty run is caught below by the .trx/artifact checks rather than by the exit code.)
+          $ignoreTestFailures = '${{ inputs.ignoreTestFailures }}' -eq 'true'
+          $toleratedTestOutcomeExitCodes = @(2, 3, 7, 13)
+          $hasToleratedTestOutcomeExitCode = $false
           $exitCodeFile = "${{ github.workspace }}/test-exit-code.txt"
           if (Test-Path $exitCodeFile) {
             $mtpExitCode = [int]((Get-Content -Path $exitCodeFile -Raw).Trim())
@@ -660,6 +663,9 @@ jobs:
             if ($fatalInfraCodes -contains $mtpExitCode) {
               Write-Host "::error::Test runner exited with code $mtpExitCode, which indicates a test infrastructure/configuration failure rather than a test failure. Failing the job even though ignoreTestFailures is true."
               exit 1
+            }
+            if ($ignoreTestFailures -and ($toleratedTestOutcomeExitCodes -contains $mtpExitCode)) {
+              $hasToleratedTestOutcomeExitCode = $true
             }
             Write-Host "Test runner exit code: $mtpExitCode (treated as a test outcome, not an infrastructure failure)"
           } else {
@@ -685,6 +691,16 @@ jobs:
 
           Write-Host "Found $($trxFiles.Count) .trx file(s)"
 
+          function Test-ShouldIgnoreIncompleteTrx([string]$message) {
+            if ($hasToleratedTestOutcomeExitCode) {
+              Write-Warning "$message (ignored because ignoreTestFailures is true and the test runner exit code was tolerated)."
+              return $true
+            }
+
+            Write-Error $message
+            exit 1
+          }
+
           $validFileCount = 0
           $totalTestCount = 0
           foreach ($trxFile in $trxFiles) {
@@ -698,8 +714,9 @@ jobs:
                 $countersNode = $trxContent.TestRun.ResultSummary.Counters
 
                 if (-not $countersNode -or -not $countersNode.total) {
-                  Write-Error "  $($trxFile.Name) has no parseable ResultSummary/Counters/@total value. This can indicate a truncated .trx file from a crashed or timed-out test host."
-                  exit 1
+                  if (Test-ShouldIgnoreIncompleteTrx "  $($trxFile.Name) has no parseable ResultSummary/Counters/@total value. This can indicate a truncated .trx file from a crashed or timed-out test host.") {
+                    continue
+                  }
                 }
 
                 $testCount = 0
@@ -717,17 +734,23 @@ jobs:
                 $totalTestCount += $testCount
                 Write-Host "  Total tests in file: $testCount"
               } else {
-                Write-Error "  $($trxFile.Name) appears to be empty or invalid. This can indicate a truncated .trx file from a crashed or timed-out test host."
-                exit 1
+                if (Test-ShouldIgnoreIncompleteTrx "  $($trxFile.Name) appears to be empty or invalid. This can indicate a truncated .trx file from a crashed or timed-out test host.") {
+                  continue
+                }
               }
             }
             catch {
-              Write-Error "Failed to parse $($trxFile.Name): $_"
-              exit 1
+              if (Test-ShouldIgnoreIncompleteTrx "Failed to parse $($trxFile.Name): $_") {
+                continue
+              }
             }
           }
 
           if ($validFileCount -eq 0) {
+            if ($hasToleratedTestOutcomeExitCode) {
+              Write-Warning "No valid .trx files found, but incomplete .trx output is ignored because ignoreTestFailures is true and the test runner exit code was tolerated."
+              exit 0
+            }
             Write-Error "No valid .trx files found. All .trx files are empty or invalid XML."
             exit 1
           }
