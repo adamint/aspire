@@ -4,7 +4,6 @@ import { extensionLogOutputChannel } from "../utils/logging";
 import AspireDcpServer from '../dcp/AspireDcpServer';
 import { removeTrailingNewline } from '../utils/strings';
 import { dcpServerNotInitialized } from '../loc/strings';
-import { getResourceTerminationSignal } from './resourceSessionTermination';
 
 /**
  * Callback invoked when a restart is requested on an app host debug session.
@@ -101,10 +100,10 @@ export function createDebugAdapterTracker(dcpServer: AspireDcpServer, debugAdapt
                     }
                 },
                 onExit(code: number | undefined) {
-                    // Runs whose termination is owned by the debug-session-end handler in
-                    // AspireDebugSession (browser/js-debug) must not also report an adapter exit,
-                    // or DCP would observe the run terminate twice.
-                    if (getResourceTerminationSignal(configuration) !== 'adapterExit') {
+                    // Browser adapters are server-hosted or can disconnect without exiting the
+                    // launched browser. The root VS Code debug session owns their terminal
+                    // notification, so an adapter exit must not report the run a second time.
+                    if (configuration.resourceType === 'browser') {
                         return;
                     }
 

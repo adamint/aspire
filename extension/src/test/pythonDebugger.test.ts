@@ -8,7 +8,6 @@ function createDebugConfig(overrides: Partial<AspireResourceExtendedDebugConfigu
     return {
         runId: '1',
         debugSessionId: '1',
-        terminationSignal: 'adapterExit',
         type: 'debugpy',
         name: 'Test Debug Config',
         request: 'launch',

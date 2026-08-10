@@ -1,1068 +1,237 @@
 import * as assert from 'assert';
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
+import { BrowserDebugSessionTermination } from '../debugger/browserDebugSessionTermination';
 import { browserDebuggerExtension } from '../debugger/languages/browser';
-import { nodeDebuggerExtension } from '../debugger/languages/node';
 import { prepareDebugSession } from '../debugger/debuggerExtensions';
-import { cleanupRun } from '../debugger/runCleanupRegistry';
-import { BrowserLaunchConfiguration, ExecutableLaunchConfiguration } from '../dcp/types';
-import { extensionLogOutputChannel } from '../utils/logging';
-import {
-    stubBrowserProfileFs,
-    stubbedMkdtempSuffix,
-    configureBrowserDebugSession,
-    createDebugSession,
-    createResourceDebugConfig,
-    DebugSessionHarness
-} from './helpers/debugSessionHarness';
-
-const browserProfileRootName = 'aspire-vscode-browser-debug';
-const expectedRmOptions = { recursive: true, force: true, maxRetries: 3, retryDelay: 100 };
-
-function browserProfileTempRootDir(): string {
-    return os.tmpdir();
-}
-
-/**
- * The profile directory `stubBrowserProfileFs` produces for a run id. The leaf carries a generated
- * suffix because the real code creates it with `mkdtemp` rather than deriving a guessable name.
- */
-function profileDirFor(runId: string): string {
-    return path.join(browserProfileTempRootDir(), `${browserProfileRootName}-${runId}-${stubbedMkdtempSuffix}`);
-}
-
-function assertProperDescendantOfTempRoot(candidate: string): void {
-    const relative = path.relative(browserProfileTempRootDir(), candidate);
-    assert.ok(relative.length > 0, `Expected '${candidate}' to be below '${browserProfileTempRootDir()}', not equal to it`);
-    assert.notStrictEqual(relative, '..', `Expected '${candidate}' to stay below '${browserProfileTempRootDir()}'`);
-    assert.strictEqual(relative.startsWith(`..${path.sep}`), false, `Expected '${candidate}' to stay below '${browserProfileTempRootDir()}'`);
-    assert.strictEqual(path.isAbsolute(relative), false, `Expected '${candidate}' to stay below '${browserProfileTempRootDir()}'`);
-}
+import { cleanupRun, registerRunCleanup } from '../debugger/runCleanupRegistry';
+import { AspireResourceExtendedDebugConfiguration, BrowserLaunchConfiguration, SessionTerminatedNotification } from '../dcp/types';
 
 suite('Browser Debugger Tests', () => {
-    setup(() => {
-        // Installed for every test so none of them can create real directories under the shared OS
-        // temp directory. Tests that assert on the calls request the same stubs back.
-        stubBrowserProfileFs();
-    });
-
     teardown(() => {
         cleanupRun('run-1');
         sinon.restore();
     });
 
-    test('configures js-debug browser launch with isolated profile and clean-exit flags', async () => {
-        const rmStub = sinon.stub(fs.promises, 'rm').resolves();
-        stubBrowserProfileFs();
-        const launchConfig: BrowserLaunchConfiguration = {
-            type: 'browser',
-            mode: 'Debug',
-            url: 'https://localhost:5001',
-            web_root: '/workspace/app',
-            browser: 'chrome'
-        };
-        const debugConfig = createResourceDebugConfig();
-
-        await configureBrowserDebugSession(launchConfig, debugConfig);
-
-        assert.strictEqual(debugConfig.type, 'pwa-chrome');
-        assert.strictEqual(debugConfig.request, 'launch');
-        assert.strictEqual(debugConfig.url, 'https://localhost:5001');
-        assert.strictEqual(debugConfig.webRoot, '/workspace/app');
-        assert.strictEqual(debugConfig.sourceMaps, true);
-        assert.deepStrictEqual(debugConfig.resolveSourceMapLocations, ['**', '!**/node_modules/**']);
-        assert.deepStrictEqual(debugConfig.runtimeArgs, [
-            '--no-first-run',
-            '--no-default-browser-check',
-            '--disable-background-mode'
-        ]);
-        assert.strictEqual(debugConfig.userDataDir, profileDirFor('run-1'));
-        assert.strictEqual(debugConfig.debugSessionId, 'dcp-1');
-        // The signal is declared by the integration, not written by the callback, so assert it at
-        // its source. js-debug is server-hosted and tears down child target sessions on its own, so
-        // the root debug session ending is the only reliable run lifetime signal for browsers.
-        assert.strictEqual(browserDebuggerExtension.terminationSignal, 'debugSessionEnd');
-        assert.strictEqual(debugConfig.program, undefined);
-        assert.strictEqual(debugConfig.args, undefined);
-        assert.strictEqual(debugConfig.cwd, undefined);
-
-        cleanupRun('run-1');
-        assert.strictEqual(rmStub.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
-    });
-
-    test('defaults to Edge and preserves user runtime args', async () => {
-        const launchConfig: BrowserLaunchConfiguration = {
-            type: 'browser',
-            url: 'https://localhost:5001'
-        };
-        const debugConfig = createResourceDebugConfig();
-        debugConfig.runtimeArgs = ['--custom-flag', '--no-first-run'];
-
-        await configureBrowserDebugSession(launchConfig, debugConfig);
-
-        assert.strictEqual(debugConfig.type, 'pwa-msedge');
-        assert.deepStrictEqual(debugConfig.runtimeArgs, [
-            '--custom-flag',
-            '--no-first-run',
-            '--no-default-browser-check',
-            '--disable-background-mode'
-        ]);
-    });
-
-    test('uses the registered cleanup run id for the browser profile directory', async () => {
-        const rmStub = sinon.stub(fs.promises, 'rm').resolves();
-        const debugConfig = createResourceDebugConfig({ runId: 'custom-run-id' });
-
-        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
-
-        assert.strictEqual(debugConfig.userDataDir, profileDirFor('custom-run-id'));
-
-        cleanupRun('run-1');
-        assert.strictEqual(rmStub.called, false);
-
-        cleanupRun('custom-run-id');
-        assert.strictEqual(rmStub.calledOnceWithExactly(profileDirFor('custom-run-id'), expectedRmOptions), true);
-    });
-
-    // Path containment. The profile directory is deleted recursively when the run ends, so a run id
-    // must never be able to move that delete outside the OS temp directory. `..` is the
-    // dangerous case: `.` and `-` are legal in a run id and survive character sanitizing untouched,
-    // so the post-creation realpath containment check is the final guard before cleanup is
-    // registered.
-    const escapingRunIds: { runId: string; description: string }[] = [
-        { runId: '..', description: 'parent directory traversal' },
-        { runId: '.', description: 'the temp directory itself' },
-        { runId: '', description: 'an empty run id' },
-        { runId: '../..', description: 'repeated parent traversal' },
-        { runId: '.././..', description: 'mixed traversal and current-directory segments' },
-        { runId: path.join(os.tmpdir(), 'elsewhere'), description: 'an absolute path inside the temp directory' },
-        { runId: '/etc/passwd', description: 'an absolute POSIX path' },
-        { runId: 'C:\\Windows\\System32', description: 'an absolute Windows path' },
-        { runId: '..\\..\\elsewhere', description: 'Windows separator traversal' },
-        { runId: 'a/../../../b', description: 'embedded separator traversal' }
-    ];
-
-    for (const { runId, description } of escapingRunIds) {
-        test(`keeps the browser profile directory under the temp root for ${description}`, async () => {
-            const rmStub = sinon.stub(fs.promises, 'rm').resolves();
-            stubBrowserProfileFs();
-            const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
-            const debugConfig = createResourceDebugConfig({ runId });
-
-            await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
-
-            const userDataDir = debugConfig.userDataDir as string | undefined;
-            if (userDataDir === undefined) {
-                assert.ok(
-                    warnStub.getCalls().some(call => /without an Aspire-owned profile/.test(call.args[0])),
-                    'Expected the rejected profile directory to be logged');
-            }
-            else {
-                assertProperDescendantOfTempRoot(userDataDir);
-            }
-
-            cleanupRun(runId);
-
-            for (const call of rmStub.getCalls()) {
-                const deleted = call.args[0] as string;
-                assertProperDescendantOfTempRoot(deleted);
-            }
-        });
-    }
-
-    test('creates the browser profile directory directly under the OS temp directory', async () => {
-        // There must not be a fixed shared parent such as
-        // `${os.tmpdir()}/aspire-vscode-browser-debug`: another local user can pre-create it and
-        // make every launch fall back to the browser's default profile. `mkdtemp` creates the
-        // per-run directory itself, so the path Aspire later deletes is always an Aspire-created
-        // leaf.
-        const profileFs = stubBrowserProfileFs();
-        profileFs.lstat.resolves({
-            isDirectory: () => true,
-            isSymbolicLink: () => true,
-            mode: 0o777,
-            uid: typeof process.getuid === 'function' ? process.getuid() + 1 : 0,
-        } as fs.Stats);
-        const debugConfig = createResourceDebugConfig({ runId: 'run-1' });
-
-        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
-
-        assert.strictEqual(profileFs.mkdir.called, false);
-        assert.strictEqual(profileFs.lstat.called, false);
-        assert.strictEqual(profileFs.mkdtemp.calledOnce, true);
-        assert.strictEqual(profileFs.mkdtemp.firstCall.args[0], path.join(browserProfileTempRootDir(), `${browserProfileRootName}-run-1-`));
-        assert.deepStrictEqual(profileFs.realpath.getCalls().map(call => call.args[0]), [
-            browserProfileTempRootDir(),
-            profileDirFor('run-1')
-        ]);
-        // The directory handed to the browser is the one mkdtemp actually created, not the prefix.
-        assert.strictEqual(debugConfig.userDataDir, profileDirFor('run-1'));
-    });
-
-    test('refuses a created profile directory whose real path escapes the temp root', async () => {
-        // Defense in depth behind mkdtemp: whatever produced the final path, a recursive delete
-        // must never be aimed outside the intended parent.
-        const rmStub = sinon.stub(fs.promises, 'rm').resolves();
-        const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
-        const profileFs = stubBrowserProfileFs();
-        const createdPath = profileDirFor('run-1');
-        profileFs.mkdtemp.resolves(createdPath);
-        profileFs.realpath.callsFake(async (candidate: fs.PathLike) =>
-            String(candidate) === createdPath ? path.join(browserProfileTempRootDir(), '..', 'escaped-profile') : String(candidate));
-        const debugConfig = createResourceDebugConfig();
-
-        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
-
-        assert.strictEqual(debugConfig.userDataDir, undefined);
-        assert.ok(warnStub.getCalls().some(call => /outside/.test(call.args[0])));
-
-        cleanupRun('run-1');
-        assert.strictEqual(rmStub.called, false);
-    });
-
-    test('ignores workspace debugger settings that try to take over Aspire-owned configuration fields', async () => {
-        // `prepareDebugSession` merges the workspace `debuggers.<type>` block into the generated
-        // configuration. Every field on the configuration is therefore workspace-writable unless it
-        // is re-applied afterwards, and several of them are not user knobs:
-        //   - `runId` derives a directory that is later deleted recursively, so `'..'` would aim
-        //     that delete at the OS temp directory.
-        //   - `debugSessionId` becomes `dcp_id` on DCP wire notifications.
-        //   - `terminationSignal` decides who reports the run terminating.
-        const rmStub = sinon.stub(fs.promises, 'rm').resolves();
-        stubBrowserProfileFs();
-        const prepared = await prepareDebugSession(
+    test('configures Chromium for an isolated browser that exits with the debug session', async () => {
+        const configuration = await createBrowserConfiguration(
+            { type: 'browser', url: 'https://localhost:5001', browser: 'chrome' },
             {
-                type: 'aspire',
-                request: 'launch',
-                name: 'Aspire',
-                program: '/workspace/apphost.cs',
-                debuggers: {
-                    browser: {
-                        runId: '..',
-                        debugSessionId: 'workspace-supplied-dcp-id',
-                        terminationSignal: 'adapterExit',
-                        isApphost: true,
-                        args: ['--user-supplied']
-                    } as never
-                }
-            },
-            { type: 'browser', url: 'https://localhost:5001' } as BrowserLaunchConfiguration,
-            [],
-            [],
-            { debug: true, runId: 'run-1', debugSessionId: 'dcp-1', isApphost: false, debugSession: {} as AspireDebugSession },
-            browserDebuggerExtension);
+                runtimeArgs: ['--start-maximized', '--user-data-dir', '/workspace/profile'],
+                runId: 'workspace-run',
+                debugSessionId: 'workspace-dcp',
+                resourceType: 'node'
+            });
 
-        const configuration = prepared.debugConfiguration;
+        assert.strictEqual(configuration.type, 'pwa-chrome');
+        assert.strictEqual(configuration.request, 'launch');
+        assert.strictEqual(configuration.url, 'https://localhost:5001');
+        assert.strictEqual(configuration.userDataDir, true);
+        assert.deepStrictEqual(configuration.runtimeArgs, [
+            '--start-maximized',
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-background-mode'
+        ]);
         assert.strictEqual(configuration.runId, 'run-1');
         assert.strictEqual(configuration.debugSessionId, 'dcp-1');
-        assert.strictEqual(configuration.isApphost, false);
-        assert.strictEqual(configuration.terminationSignal, 'debugSessionEnd');
-        assert.strictEqual(configuration.userDataDir, profileDirFor('run-1'));
-
-        cleanupRun('run-1');
-        assert.strictEqual(rmStub.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
+        assert.strictEqual(configuration.resourceType, 'browser');
     });
 
-    test('ignores a workspace attempt to rewire the termination signal of a non-browser resource', async () => {
-        // The browser extension overwrites several fields itself, which can mask an override. Node
-        // touches none of them, so this is the case that proves the guarantee comes from
-        // prepareDebugSession rather than from a language callback happening to win the race.
-        // A workspace that could set `terminationSignal: 'debugSessionEnd'` here would silence
-        // adapterTracker's onExit notification and leave every node run alive forever in DCP.
-        const prepared = await prepareDebugSession(
+    test('forces Firefox to terminate instead of reattaching to the launched browser', async () => {
+        const configuration = await createBrowserConfiguration(
+            { type: 'browser', url: 'https://localhost:5001', browser: 'firefox' },
             {
-                type: 'aspire',
-                request: 'launch',
-                name: 'Aspire',
-                program: '/workspace/apphost.cs',
-                debuggers: {
-                    node: {
-                        terminationSignal: 'debugSessionEnd',
-                        runId: '../../etc',
-                        debugSessionId: 'workspace-supplied-dcp-id'
-                    } as never
-                }
-            },
-            { type: 'node', program: '/workspace/app/index.js' } as unknown as ExecutableLaunchConfiguration,
-            [],
-            [],
-            { debug: true, runId: 'node-run', debugSessionId: 'node-dcp', isApphost: false, debugSession: {} as AspireDebugSession },
-            nodeDebuggerExtension);
+                reAttach: true,
+                runtimeArgs: ['--headless'],
+                userDataDir: '/workspace/chrome-profile'
+            });
 
-        assert.strictEqual(prepared.debugConfiguration.terminationSignal, 'adapterExit');
-        assert.strictEqual(prepared.debugConfiguration.runId, 'node-run');
-        assert.strictEqual(prepared.debugConfiguration.debugSessionId, 'node-dcp');
-    });
-
-    test('maps Firefox to the VS Code Firefox debug adapter', async () => {
-        // The `firefox` adapter is only available when the firefox-devtools.vscode-firefox-debug
-        // extension is installed, so stub it as present for this happy-path assertion.
-        sinon.stub(vscode.extensions, 'getExtension').callsFake((id: string) =>
-            id === 'firefox-devtools.vscode-firefox-debug' ? ({ id } as vscode.Extension<unknown>) : undefined);
-        const rmStub = sinon.stub(fs.promises, 'rm').resolves();
-        const profileFs = stubBrowserProfileFs();
-        const debugConfig = createResourceDebugConfig();
-
-        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001', browser: 'firefox' }, debugConfig);
-
-        const firefoxConfig = debugConfig as typeof debugConfig & { firefoxArgs?: unknown; profile?: unknown; profileDir?: unknown };
-        assert.strictEqual(debugConfig.type, 'firefox');
-        assert.strictEqual(debugConfig.runtimeArgs, undefined);
-        assert.strictEqual(debugConfig.userDataDir, undefined);
-        assert.strictEqual(firefoxConfig.firefoxArgs, undefined);
-        assert.strictEqual(firefoxConfig.profile, undefined);
-        assert.strictEqual(firefoxConfig.profileDir, undefined);
-        assert.strictEqual(profileFs.mkdtemp.called, false);
-
-        cleanupRun('run-1');
-        assert.strictEqual(rmStub.called, false);
-    });
-
-    test('drops a workspace userDataDir when no Aspire-owned profile could be created', async () => {
-        // `prepareDebugSession` merges the workspace `debuggers.browser` block before this
-        // callback runs. When the contained profile cannot be created, leaving that value in place
-        // would send js-debug at the user's own profile directory - js-debug treats a string as
-        // the exact profile path - instead of falling back to an isolated one.
-        const rmStub = sinon.stub(fs.promises, 'rm').resolves();
-        const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
-        const profileFs = stubBrowserProfileFs();
-        profileFs.mkdtemp.rejects(new Error('no space left on device'));
-        const prepared = await prepareDebugSession(
-            {
-                type: 'aspire',
-                request: 'launch',
-                name: 'Aspire',
-                program: '/workspace/apphost.cs',
-                debuggers: {
-                    browser: {
-                        userDataDir: '/home/user/.config/google-chrome'
-                    } as never
-                }
-            },
-            { type: 'browser', url: 'https://localhost:5001' } as BrowserLaunchConfiguration,
-            [],
-            [],
-            { debug: true, runId: 'run-1', debugSessionId: 'dcp-1', isApphost: false, debugSession: {} as AspireDebugSession },
-            browserDebuggerExtension);
-
-        const configuration = prepared.debugConfiguration;
-        assert.strictEqual(configuration.userDataDir, undefined, 'Expected the workspace userDataDir to be dropped when Aspire could not create its own profile');
-        assert.ok(warnStub.getCalls().some(call => /without an Aspire-owned profile/.test(call.args[0])));
-
-        cleanupRun('run-1');
-        assert.strictEqual(rmStub.called, false);
-    });
-
-    test('strips a workspace --user-data-dir from browser runtimeArgs', async () => {
-        // js-debug seeds its argument map with `--user-data-dir=<userDataDir>` and then merges
-        // `runtimeArgs` over it keyed on the switch name, so a workspace-supplied duplicate wins
-        // and the browser would launch into that profile while Aspire believes the isolated
-        // profile it created (and later deletes) is in use.
-        const rmStub = sinon.stub(fs.promises, 'rm').resolves();
-        const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
-        stubBrowserProfileFs();
-        const prepared = await prepareDebugSession(
-            {
-                type: 'aspire',
-                request: 'launch',
-                name: 'Aspire',
-                program: '/workspace/apphost.cs',
-                debuggers: {
-                    browser: {
-                        runtimeArgs: ['--start-maximized', '--user-data-dir=/home/user/.config/google-chrome']
-                    } as never
-                }
-            },
-            { type: 'browser', url: 'https://localhost:5001' } as BrowserLaunchConfiguration,
-            [],
-            [],
-            { debug: true, runId: 'run-1', debugSessionId: 'dcp-1', isApphost: false, debugSession: {} as AspireDebugSession },
-            browserDebuggerExtension);
-
-        const configuration = prepared.debugConfiguration;
-        assert.deepStrictEqual(
-            configuration.runtimeArgs,
-            ['--start-maximized', '--no-first-run', '--no-default-browser-check', '--disable-background-mode'],
-            'Expected the workspace --user-data-dir switch to be dropped while its other runtimeArgs survive');
-        assert.strictEqual(configuration.userDataDir, profileDirFor('run-1'));
-        assert.ok(warnStub.getCalls().some(call => /redirect the debug profile directory/.test(call.args[0])));
-
-        cleanupRun('run-1');
-        assert.strictEqual(rmStub.called, true);
-    });
-
-    test('drops a workspace userDataDir when the created profile directory fails containment', async () => {
-        // The other half of the same failure mode: `createBrowserUserDataDir` also returns
-        // `undefined` when the directory it created resolves outside the temp root, and that path
-        // never reaches the `catch`. A workspace `userDataDir` has to be dropped there too, or the
-        // containment refusal would hand js-debug the workspace's own profile path instead.
-        const rmStub = sinon.stub(fs.promises, 'rm').resolves();
-        const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
-        const profileFs = stubBrowserProfileFs();
-        const createdPath = profileDirFor('run-1');
-        profileFs.mkdtemp.resolves(createdPath);
-        profileFs.realpath.callsFake(async (candidate: fs.PathLike) =>
-            String(candidate) === createdPath ? path.join(browserProfileTempRootDir(), '..', 'escaped-profile') : String(candidate));
-        const prepared = await prepareDebugSession(
-            {
-                type: 'aspire',
-                request: 'launch',
-                name: 'Aspire',
-                program: '/workspace/apphost.cs',
-                debuggers: {
-                    browser: {
-                        userDataDir: '/home/user/.config/google-chrome'
-                    } as never
-                }
-            },
-            { type: 'browser', url: 'https://localhost:5001' } as BrowserLaunchConfiguration,
-            [],
-            [],
-            { debug: true, runId: 'run-1', debugSessionId: 'dcp-1', isApphost: false, debugSession: {} as AspireDebugSession },
-            browserDebuggerExtension);
-
-        const configuration = prepared.debugConfiguration;
-        assert.strictEqual(configuration.userDataDir, undefined, 'Expected the workspace userDataDir to be dropped when the created profile directory failed containment');
-        assert.ok(warnStub.getCalls().some(call => /outside/.test(call.args[0])));
-        assert.ok(warnStub.getCalls().some(call => /without an Aspire-owned profile/.test(call.args[0])));
-
-        cleanupRun('run-1');
-        assert.strictEqual(rmStub.called, false);
-    });
-
-    test('strips js-debug-only workspace settings from a Firefox launch', async () => {
-        // `prepareDebugSession` merges the workspace `debuggers.browser` block before the browser
-        // callback runs, and unknown adapter keys are forwarded on purpose. A workspace that
-        // configures Chromium options would otherwise hand `runtimeArgs` and a `userDataDir` that
-        // Aspire neither created nor cleans up to the Firefox adapter, which is a different
-        // extension with its own profile handling.
-        sinon.stub(vscode.extensions, 'getExtension').callsFake((id: string) =>
-            id === 'firefox-devtools.vscode-firefox-debug' ? ({ id } as vscode.Extension<unknown>) : undefined);
-        const rmStub = sinon.stub(fs.promises, 'rm').resolves();
-        const profileFs = stubBrowserProfileFs();
-        const prepared = await prepareDebugSession(
-            {
-                type: 'aspire',
-                request: 'launch',
-                name: 'Aspire',
-                program: '/workspace/apphost.cs',
-                debuggers: {
-                    browser: {
-                        runtimeArgs: ['--headless'],
-                        userDataDir: '/workspace/chrome-profile'
-                    } as never
-                }
-            },
-            { type: 'browser', url: 'https://localhost:5001', browser: 'firefox' } as BrowserLaunchConfiguration,
-            [],
-            [],
-            { debug: true, runId: 'run-1', debugSessionId: 'dcp-1', isApphost: false, debugSession: {} as AspireDebugSession },
-            browserDebuggerExtension);
-
-        const configuration = prepared.debugConfiguration;
         assert.strictEqual(configuration.type, 'firefox');
-        assert.strictEqual(configuration.runtimeArgs, undefined, 'Expected the js-debug runtimeArgs to be dropped for the Firefox adapter');
-        assert.strictEqual(configuration.userDataDir, undefined, 'Expected the js-debug userDataDir to be dropped for the Firefox adapter');
-        assert.strictEqual(profileFs.mkdtemp.called, false);
-
-        cleanupRun('run-1');
-        assert.strictEqual(rmStub.called, false);
+        assert.strictEqual(configuration.reAttach, false);
+        assert.strictEqual(configuration.runtimeArgs, undefined);
+        assert.strictEqual(configuration.userDataDir, undefined);
+        assert.deepStrictEqual(configuration.pathMappings, []);
     });
 
-    test('gives the Firefox adapter an empty pathMappings list when the resource has no web root', async () => {
-        // firefox-devtools.vscode-firefox-debug rejects a launch configuration that has a `url` but
-        // neither `webRoot` nor `pathMappings`, and `web_root` is optional in the launch
-        // configuration Aspire receives. Without the fallback the session never starts.
-        sinon.stub(vscode.extensions, 'getExtension').callsFake((id: string) =>
-            id === 'firefox-devtools.vscode-firefox-debug' ? ({ id } as vscode.Extension<unknown>) : undefined);
-        const debugConfig = createResourceDebugConfig();
+    test('reports a natural root browser termination exactly once', () => {
+        let terminateListener: ((session: vscode.DebugSession) => void) | undefined;
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(listener => {
+            terminateListener = listener;
+            return { dispose: () => { terminateListener = undefined; } };
+        });
+        const send = sinon.stub();
+        const cleanup = sinon.stub();
+        registerRunCleanup('run-1', cleanup);
+        const session = createDebugSession('browser-root');
+        new BrowserDebugSessionTermination(session, 'run-1', 'dcp-1', send);
 
-        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001', browser: 'firefox' }, debugConfig);
+        terminateListener!(createDebugSession('browser-child', session));
+        assert.strictEqual(send.called, false);
 
-        assert.strictEqual(debugConfig.type, 'firefox');
-        assert.strictEqual(debugConfig.webRoot, undefined);
-        assert.deepStrictEqual(debugConfig.pathMappings, [], 'Expected an empty pathMappings list so the Firefox adapter accepts the url-only configuration');
+        terminateListener!(session);
+
+        assert.deepStrictEqual(send.firstCall.args, ['run-1', 'dcp-1']);
+        assert.strictEqual(send.calledOnce, true);
+        assert.strictEqual(cleanup.calledOnce, true);
+        assert.strictEqual(terminateListener, undefined);
     });
 
-    test('leaves pathMappings alone when the Firefox resource supplies a web root', async () => {
-        // `webRoot` already satisfies the adapter's requirement, so Aspire must not add a mapping
-        // list that would compete with the source root the resource declared.
-        sinon.stub(vscode.extensions, 'getExtension').callsFake((id: string) =>
-            id === 'firefox-devtools.vscode-firefox-debug' ? ({ id } as vscode.Extension<unknown>) : undefined);
-        const debugConfig = createResourceDebugConfig();
-
-        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001', browser: 'firefox', web_root: '/workspace/app/wwwroot' }, debugConfig);
-
-        assert.strictEqual(debugConfig.webRoot, '/workspace/app/wwwroot');
-        assert.strictEqual(debugConfig.pathMappings, undefined);
-    });
-
-    test('prompts to install the Firefox debugger and fails when the adapter is missing', async () => {
-        const getExtensionStub = sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
-        const showErrorStub = sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined as any);
-        const debugConfig = createResourceDebugConfig();
-
-        await assert.rejects(
-            configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001', browser: 'firefox' }, debugConfig),
-            /Firefox Debugger extension/);
-
-        assert.ok(getExtensionStub.calledWith('firefox-devtools.vscode-firefox-debug'));
-        assert.strictEqual(showErrorStub.calledOnce, true);
-        assert.match(showErrorStub.firstCall.args[0], /Firefox Debugger extension/);
-    });
-
-    test('installs the Firefox debugger when the user accepts the install prompt', async () => {
-        sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
-        sinon.stub(vscode.window, 'showErrorMessage').resolves('Install' as any);
-        const executeCommandStub = sinon.stub(vscode.commands, 'executeCommand').resolves();
-        const debugConfig = createResourceDebugConfig();
-
-        await assert.rejects(
-            configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001', browser: 'firefox' }, debugConfig),
-            /Firefox Debugger extension/);
-
-        // The prompt is fire-and-forget, so let the resolved showErrorMessage promise settle.
-        await Promise.resolve();
-        await Promise.resolve();
-
-        assert.ok(executeCommandStub.calledOnceWithExactly('workbench.extensions.installExtension', 'firefox-devtools.vscode-firefox-debug'));
-    });
-
-    test('logs when the Firefox debugger install command fails', async () => {
-        sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
-        sinon.stub(vscode.window, 'showErrorMessage').resolves('Install' as any);
-        const executeCommandStub = sinon.stub(vscode.commands, 'executeCommand').rejects(new Error('install failed'));
-        const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
-        const debugConfig = createResourceDebugConfig();
-
-        await assert.rejects(
-            configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001', browser: 'firefox' }, debugConfig),
-            /Firefox Debugger extension/);
-
-        // The prompt is fire-and-forget, so let the resolved showErrorMessage promise and its
-        // command handler settle before asserting the logged rejection.
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-
-        assert.ok(executeCommandStub.calledOnceWithExactly('workbench.extensions.installExtension', 'firefox-devtools.vscode-firefox-debug'));
-        assert.ok(warnStub.getCalls().some(call => /Failed to install Firefox Debugger extension/.test(call.args[0]) && /install failed/.test(call.args[0])));
-    });
-
-    test('logs the missing URL reason when browser launch configuration is incomplete', async () => {
-        const infoStub = sinon.stub(extensionLogOutputChannel, 'info');
-        const launchConfig: BrowserLaunchConfiguration = {
-            type: 'browser'
+    test('wires the started browser root session to DCP termination', async () => {
+        let startListener: ((session: vscode.DebugSession) => void) | undefined;
+        let terminateListener: ((session: vscode.DebugSession) => void) | undefined;
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(listener => {
+            startListener = listener;
+            return { dispose: () => { startListener = undefined; } };
+        });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(listener => {
+            terminateListener = listener;
+            return { dispose: () => { terminateListener = undefined; } };
+        });
+        sinon.stub(vscode.debug, 'startDebugging').callsFake(async (_folder, configuration) => {
+            startListener!(createDebugSession('browser-root', undefined, configuration as vscode.DebugConfiguration));
+            return true;
+        });
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        sinon.stub(vscode.workspace, 'getWorkspaceFolder').returns(undefined);
+        const sendNotification = sinon.stub();
+        const dcpServer = {
+            sendNotification,
+            takeDebugSessionAggregateStats: sinon.stub().returns(undefined)
         };
-
-        await assert.rejects(configureBrowserDebugSession(launchConfig, createResourceDebugConfig()));
-
-        assert.strictEqual(infoStub.calledOnce, true);
-        assert.match(infoStub.firstCall.args[0], /Browser launch configuration did not include a URL/);
-    });
-
-    test('sends sessionTerminated and cleans up when the root browser debug session terminates', async () => {
-        const harness = new DebugSessionHarness();
-        const debugConfig = createResourceDebugConfig();
-        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
-
-        const resourceDebugSession = await harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
-
-        assert.ok(resourceDebugSession);
-        harness.terminateSession(resourceDebugSession.session);
-
-        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), [{
-            notification_type: 'sessionTerminated',
-            session_id: 'run-1',
-            dcp_id: 'dcp-1'
-        }]);
-        assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
-
-        harness.dispose();
-    });
-
-    test('stopping an already-ended browser session succeeds without asking VS Code to stop it', async () => {
-        // A browser run ends on its own as often as it is stopped by DCP, and VS Code drops the
-        // ended session from its model. A later `DELETE /run_session` must not reach stopDebugging
-        // for a session VS Code no longer knows about: that rejects, which fails the delete and
-        // leaves the run entry behind in the DCP server's map.
-        const harness = new DebugSessionHarness();
-        const debugConfig = createResourceDebugConfig();
-        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
-
-        const resourceDebugSession = await harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
-
-        assert.ok(resourceDebugSession);
-        harness.terminateSession(resourceDebugSession.session);
-        harness.stopDebugging.rejects(new Error('debug session not found'));
-
-        await resourceDebugSession.stopSession();
-
-        assert.strictEqual(harness.stopDebugging.called, false, 'Expected no stop request for a session that already ended');
-        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), [{
-            notification_type: 'sessionTerminated',
-            session_id: 'run-1',
-            dcp_id: 'dcp-1'
-        }]);
-
-        harness.dispose();
-    });
-
-    test('a stop that loses the race with the browser session ending still resolves', async () => {
-        // The same DCP-requested stop, but the session ends after the stop was issued. VS Code
-        // rejects a stop for a session it has already dropped, and the run is over either way, so
-        // the requested stop has to report success rather than failing `DELETE /run_session`.
-        const harness = new DebugSessionHarness({ stopDebugging: 'deferred' });
-        const debugConfig = createResourceDebugConfig();
-        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
-
-        const resourceDebugSession = await harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
-
-        assert.ok(resourceDebugSession);
-        const stop = Promise.resolve(resourceDebugSession.stopSession());
-        await Promise.resolve();
-
-        assert.strictEqual(harness.stopDebugging.callCount, 1);
-        harness.terminateSession(resourceDebugSession.session);
-        harness.failStopDebugging(new Error('debug session not found'));
-
-        await stop;
-
-        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), [{
-            notification_type: 'sessionTerminated',
-            session_id: 'run-1',
-            dcp_id: 'dcp-1'
-        }]);
-        assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
-
-        harness.dispose();
-    });
-
-    test('waits for stopped browser debug session before cleaning profile directory', async () => {
-        const harness = new DebugSessionHarness({ stopDebugging: 'deferred' });
-        const debugConfig = createResourceDebugConfig();
-        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
-
-        const resourceDebugSession = await harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
-
-        assert.ok(resourceDebugSession);
-        const stop = Promise.resolve(resourceDebugSession.stopSession());
-        await Promise.resolve();
-
-        assert.strictEqual(harness.rm.called, false);
-
-        harness.finishStopDebugging();
-        await stop;
-
-        assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
-
-        harness.dispose();
-    });
-
-    test('stopSession is awaitable and single-shot for a DCP-requested browser stop', async () => {
-        // This is the shape a DCP `DELETE /run_session` drives: the handler waits for the debugger
-        // teardown before it acknowledges the delete. Three things must hold together:
-        //   1. stopSession() resolves only after VS Code finished stopping the browser session, so the
-        //      caller can sequence teardown rather than fire-and-forget.
-        //   2. exactly one `sessionTerminated` reaches DCP, with no `exit_code` (a requested stop is
-        //      not a program exit).
-        //   3. repeated stops are memoized, so DCP-requested stop plus extension disposal cannot
-        //      terminate the run twice.
-        const harness = new DebugSessionHarness({ stopDebugging: 'deferred' });
-        const debugConfig = createResourceDebugConfig();
-        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
-
-        const resourceDebugSession = await harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
-
-        assert.ok(resourceDebugSession);
-        let stopResolved = false;
-        const firstStop = Promise.resolve(resourceDebugSession.stopSession()).then(() => { stopResolved = true; });
-        const secondStop = resourceDebugSession.stopSession();
-        await Promise.resolve();
-
-        assert.strictEqual(harness.stopDebugging.callCount, 1, 'Expected the browser session to be stopped once');
-        assert.strictEqual(stopResolved, false, 'Expected stopSession to stay pending until VS Code finished stopping');
-        assert.strictEqual(harness.sendNotification.called, false, 'Expected no termination before the stop completed');
-
-        harness.finishStopDebugging();
-        await firstStop;
-        await secondStop;
-
-        assert.strictEqual(stopResolved, true);
-        assert.strictEqual(harness.stopDebugging.callCount, 1, 'Expected the second stop to reuse the in-flight stop');
-        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), [{
-            notification_type: 'sessionTerminated',
-            session_id: 'run-1',
-            dcp_id: 'dcp-1'
-        }]);
-        assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
-
-        harness.dispose();
-        assert.strictEqual(harness.sessionTerminatedNotifications().length, 1, 'Expected disposal after a requested stop to stay single-shot');
-    });
-
-    test('stopSession is awaitable and single-shot for a non-browser resource session', async () => {
-        // Only browser runs use the `debugSessionEnd` signal; the AppHost and every normal resource
-        // session go through this same stop path with `adapterExit`. It has to make the same
-        // ordering promise, because AspireDebugSession.stopDebugging() stops the AppHost first and only
-        // then the Aspire parent — a stop that resolved early would let VS Code's parent session
-        // cascade race the AppHost registry refresh.
-        const harness = new DebugSessionHarness({ stopDebugging: 'deferred', startedSessionId: 'resource-session-id' });
-        const debugConfig = createResourceDebugConfig({ type: 'coreclr', name: 'apiservice' });
-
-        const resourceDebugSession = await harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
-
-        assert.ok(resourceDebugSession);
-        let stopResolved = false;
-        const firstStop = Promise.resolve(resourceDebugSession.stopSession()).then(() => { stopResolved = true; });
-        const secondStop = resourceDebugSession.stopSession();
-        await Promise.resolve();
-
-        assert.strictEqual(harness.stopDebugging.callCount, 1, 'Expected the resource session to be stopped once');
-        assert.strictEqual(stopResolved, false, 'Expected stopSession to stay pending until VS Code finished stopping');
-
-        harness.finishStopDebugging();
-        await firstStop;
-        await secondStop;
-
-        assert.strictEqual(stopResolved, true);
-        assert.strictEqual(harness.stopDebugging.callCount, 1, 'Expected the second stop to reuse the in-flight stop');
-        // `adapterExit` runs report termination from the debug adapter's onExit, not from here.
-        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), []);
-
-        harness.dispose();
-    });
-
-    test('stopSession rejects when VS Code fails to stop a non-browser resource session', async () => {
-        // The failure has to reach the caller instead of being logged and dropped. stopDebugging()
-        // reports AppHost stop failures to its caller, and a swallowed rejection there would let
-        // teardown proceed as though the session had stopped.
-        const harness = new DebugSessionHarness({ stopDebugging: 'deferred', startedSessionId: 'resource-session-id' });
-        const debugConfig = createResourceDebugConfig({ type: 'coreclr', name: 'apiservice' });
-
-        const resourceDebugSession = await harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
-
-        assert.ok(resourceDebugSession);
-        const stop = Promise.resolve(resourceDebugSession.stopSession());
-        await Promise.resolve();
-
-        harness.failStopDebugging(new Error('VS Code failed to stop the session'));
-
-        await assert.rejects(() => stop, /VS Code failed to stop the session/);
-        assert.strictEqual(harness.stopDebugging.callCount, 1);
-        // A rejected stop means VS Code never confirmed the session ended, so the run must not be
-        // reported as terminated. Claiming termination here would mark the resource stopped in the
-        // dashboard while its process is still running.
-        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), []);
-
-        harness.dispose();
-    });
-
-    test('does not delete the browser profile or report termination when the stop fails', async () => {
-        // The browser is potentially still running after a failed stop, and its profile directory is
-        // its live working state. Deleting it would corrupt a running browser, so cleanup has to wait
-        // for a stop that actually succeeded (or for the session to end on its own).
-        const harness = new DebugSessionHarness({ stopDebugging: 'deferred' });
-        const debugConfig = createResourceDebugConfig();
-        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
-
-        const resourceDebugSession = await harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
-
-        assert.ok(resourceDebugSession);
-        const stop = Promise.resolve(resourceDebugSession.stopSession());
-        await Promise.resolve();
-        harness.failStopDebugging(new Error('VS Code failed to stop the session'));
-
-        await assert.rejects(() => stop, /VS Code failed to stop the session/);
-        assert.strictEqual(harness.rm.called, false, 'Expected the profile directory to survive a failed stop');
-        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), []);
-
-        // The termination listener has to survive the failure, otherwise a session that later ends
-        // for real would never terminate the run in DCP.
-        harness.terminateSession(resourceDebugSession.session);
-
-        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), [{
-            notification_type: 'sessionTerminated',
-            session_id: 'run-1',
-            dcp_id: 'dcp-1'
-        }]);
-        assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
-
-        harness.dispose();
-    });
-
-    test('sends sessionTerminated when browser debug session starts after Aspire session disposal', async () => {
-        const harness = new DebugSessionHarness({ autoStartSession: false });
-        const debugConfig = createResourceDebugConfig();
-        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
-
-        const resourceDebugSessionPromise = harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
-        await Promise.resolve();
-        harness.aspireDebugSession.dispose();
-
-        harness.startSession(createDebugSession('browser-session-id', debugConfig));
-
-        const resourceDebugSession = await resourceDebugSessionPromise;
-
-        assert.strictEqual(resourceDebugSession, undefined);
-        assert.strictEqual(harness.stopDebugging.calledWith(sinon.match.has('id', 'browser-session-id')), true);
-        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), [{
-            notification_type: 'sessionTerminated',
-            session_id: 'run-1',
-            dcp_id: 'dcp-1'
-        }]);
-        assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
-    });
-
-    test('does not send sessionTerminated for a browser child session from another parent', async () => {
-        const harness = new DebugSessionHarness();
-        const otherParentDebugSession = createDebugSession('other-browser-session-id', {
-            type: 'pwa-msedge',
+        const parent = createDebugSession('aspire-parent', undefined, {
+            type: 'aspire',
+            name: 'Aspire',
             request: 'launch',
-            name: 'Browser: https://localhost:5001',
+            program: '/workspace/apphost.cs'
         });
-        const debugConfig = createResourceDebugConfig({
-            terminationSignal: 'debugSessionEnd'
-        });
+        const aspireSession = new AspireDebugSession(
+            parent,
+            {} as never,
+            dcpServer as never,
+            { isDebugConfigEnvironmentLoggingEnabled: () => false } as never,
+            () => { });
+        const configuration = await createBrowserConfiguration(
+            { type: 'browser', url: 'https://localhost:5001' },
+            {});
 
-        const resourceDebugSession = await harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
+        const resourceSession = await aspireSession.startAndGetDebugSession(configuration);
+        assert.ok(resourceSession);
 
-        assert.ok(resourceDebugSession);
-        harness.terminateSession(createDebugSession('same-name-different-parent-session-id', {
-            type: 'pwa-msedge',
-            request: 'launch',
-            name: 'Browser: https://localhost:5001',
-        }, otherParentDebugSession));
+        terminateListener!(resourceSession.session);
+        terminateListener?.(resourceSession.session);
 
-        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), []);
-
-        harness.dispose();
-    });
-
-    test('does not send sessionTerminated for a transient browser child target', async () => {
-        const harness = new DebugSessionHarness();
-        const debugConfig = createResourceDebugConfig({
-            terminationSignal: 'debugSessionEnd'
-        });
-
-        const resourceDebugSession = await harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
-
-        assert.ok(resourceDebugSession);
-        harness.terminateSession(createDebugSession('js-debug-child-session-id', {
-            type: 'pwa-msedge',
-            request: 'launch',
-            name: 'Page title from browser target',
-        }, resourceDebugSession.session));
-
-        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), []);
-
-        harness.terminateSession(resourceDebugSession.session);
-
-        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), [{
+        const terminations = sendNotification.getCalls()
+            .map(call => call.args[0])
+            .filter((notification): notification is SessionTerminatedNotification => notification.notification_type === 'sessionTerminated');
+        assert.deepStrictEqual(terminations, [{
             notification_type: 'sessionTerminated',
             session_id: 'run-1',
             dcp_id: 'dcp-1'
         }]);
 
-        harness.dispose();
+        aspireSession.dispose();
     });
 
-    test('skips the termination notification when the run has no DCP session id', async () => {
-        // `debugSessionId` is typed nullable and every other DCP notification path in
-        // AspireDebugSession skips with a warning when it is missing rather than inventing an id
-        // (see trackAlreadyStartedResourceSession). Termination has to agree: a notification
-        // addressed to no run is not deliverable, and guessing an id would target another run.
-        const harness = new DebugSessionHarness();
-        const debugConfig = createResourceDebugConfig({ debugSessionId: null });
-        // Configure through the real browser path so the profile-directory cleanup is registered
-        // and the assertion below proves cleanup is independent of the notification.
-        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
-
-        const resourceDebugSession = await harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
-
-        assert.ok(resourceDebugSession);
-        harness.terminateSession(resourceDebugSession.session);
-
-        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), []);
-        // Cleanup still has to run, otherwise the browser profile directory leaks.
-        assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
-
-        harness.dispose();
-    });
-
-    test('waits for browser debug shutdown before cleaning up a session that starts after disposal', async () => {
-        const harness = new DebugSessionHarness({ stopDebugging: 'deferred' });
-        harness.onBeforeSessionStarted = () => harness.aspireDebugSession.dispose();
-        const debugConfig = createResourceDebugConfig();
-        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
+    test('awaits one browser stop before reporting termination', async () => {
+        const stop = deferred<void>();
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').returns({ dispose: () => { } });
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').returns(stop.promise);
+        const send = sinon.stub();
+        const termination = new BrowserDebugSessionTermination(createDebugSession('browser-root'), 'run-1', 'dcp-1', send);
 
         let resolved = false;
-        const resourceDebugSessionPromise = harness.aspireDebugSession.startAndGetDebugSession(debugConfig).then(result => {
-            resolved = true;
-            return result;
-        });
-        await Promise.resolve();
+        const first = termination.stop().then(() => { resolved = true; });
+        const second = termination.stop();
         await Promise.resolve();
 
+        assert.strictEqual(stopDebugging.calledOnce, true);
         assert.strictEqual(resolved, false);
-        assert.strictEqual(harness.sendNotification.called, false);
-        assert.strictEqual(harness.rm.called, false);
+        assert.strictEqual(send.called, false);
 
-        harness.finishStopDebugging();
-        const resourceDebugSession = await resourceDebugSessionPromise;
+        stop.resolve();
+        await first;
+        await second;
 
-        assert.strictEqual(resourceDebugSession, undefined);
-        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), [{
-            notification_type: 'sessionTerminated',
-            session_id: 'run-1',
-            dcp_id: 'dcp-1'
-        }]);
-        assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
+        assert.strictEqual(send.calledOnce, true);
     });
 
-    // A failed stop deliberately keeps waiting for a real termination, so something has to bound
-    // that wait or a browser that never closes would hold the listener for the life of the
-    // extension host. Disposing the owning Aspire session is that bound.
-    test('releases the termination listener when the owning session is disposed after a failed stop', async () => {
-        const harness = new DebugSessionHarness({ stopDebugging: 'deferred' });
-        const debugConfig = createResourceDebugConfig();
-        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
-        const resourceDebugSession = await harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
-        assert.ok(resourceDebugSession);
+    test('keeps a failed browser stop retryable and does not report termination', async () => {
+        let terminateListener: ((session: vscode.DebugSession) => void) | undefined;
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(listener => {
+            terminateListener = listener;
+            return { dispose: () => { terminateListener = undefined; } };
+        });
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging');
+        stopDebugging.onFirstCall().rejects(new Error('stop failed'));
+        stopDebugging.onSecondCall().resolves();
+        const send = sinon.stub();
+        const session = createDebugSession('browser-root');
+        const termination = new BrowserDebugSessionTermination(session, 'run-1', 'dcp-1', send);
 
-        const stop = Promise.resolve(resourceDebugSession.stopSession());
-        harness.failStopDebugging(new Error('VS Code failed to stop the session'));
-        await assert.rejects(stop);
+        await assert.rejects(termination.stop(), /stop failed/);
+        assert.strictEqual(send.called, false);
+        assert.ok(terminateListener);
 
-        // Still armed: a termination arriving before disposal must still finish the run.
-        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), []);
-        assert.strictEqual(harness.rm.called, false);
+        await termination.stop();
 
-        harness.aspireDebugSession.dispose();
-
-        // Disposal retries the stop, and the listener has to stay armed while that retry is in
-        // flight: VS Code stops the Aspire parent during disposal and cascades that to this
-        // session, so an end can arrive before the retry settles.
-        assert.strictEqual(harness.terminateListenerRegistered, true, 'Expected the termination listener to survive an in-flight disposal stop');
-
-        harness.failStopDebuggingFor(resourceDebugSession.session, new Error('VS Code failed to stop the session again'));
-        await new Promise<void>(resolve => setTimeout(resolve, 0));
-
-        const hadListener = harness.terminateSession(resourceDebugSession.session);
-
-        assert.strictEqual(hadListener, false, 'Expected the termination listener to have been released once the disposal stop genuinely failed');
-        // Nothing observed the debuggee ending before the session went away, so the run is not
-        // reported as terminated and the profile is left for the OS rather than deleted blindly.
-        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), []);
-        assert.strictEqual(harness.rm.called, false);
-    });
-
-    // The DCP /run_session handler reads `undefined` from startAndGetDebugSession as "the debugger
-    // never started" and responds by calling cleanupRun(runId), which recursively deletes the
-    // browser profile. A session that started and then failed to stop is still running, so it must
-    // not be reported that way or the cleanup would delete a live browser's profile.
-    test('returns the session when a start after disposal cannot be stopped', async () => {
-        const harness = new DebugSessionHarness({ stopDebugging: 'deferred' });
-        harness.onBeforeSessionStarted = () => harness.aspireDebugSession.dispose();
-        const debugConfig = createResourceDebugConfig();
-        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
-
-        const resourceDebugSessionPromise = harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
-        await Promise.resolve();
-        await Promise.resolve();
-
-        harness.failStopDebugging(new Error('VS Code failed to stop the session'));
-        const resourceDebugSession = await resourceDebugSessionPromise;
-
-        // Handed back rather than undefined, so the caller does not treat this as a failed start.
-        assert.ok(resourceDebugSession, 'Expected the started session to be returned after a failed stop');
-        assert.strictEqual(resourceDebugSession.session.configuration.runId, 'run-1');
-        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), []);
-        assert.strictEqual(harness.rm.called, false);
-
-        // The returned handle supports a real retry, and the profile is only cleaned up once the
-        // stop actually succeeds.
-        const retry = resourceDebugSession.stopSession();
-        harness.finishStopDebugging();
-        await retry;
-
-        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), [{
-            notification_type: 'sessionTerminated',
-            session_id: 'run-1',
-            dcp_id: 'dcp-1'
-        }]);
-        assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
-    });
-
-    // Even when nothing retries the stop, the run must still be able to complete: a session that
-    // ends on its own later is the only remaining path to reporting termination and cleaning up.
-    test('finishes a start after disposal when a failed stop is followed by a real termination', async () => {
-        const harness = new DebugSessionHarness({ stopDebugging: 'deferred' });
-        harness.onBeforeSessionStarted = () => harness.aspireDebugSession.dispose();
-        const debugConfig = createResourceDebugConfig();
-        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
-
-        const resourceDebugSessionPromise = harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
-        await Promise.resolve();
-        await Promise.resolve();
-
-        harness.failStopDebugging(new Error('VS Code failed to stop the session'));
-        const resourceDebugSession = await resourceDebugSessionPromise;
-        assert.ok(resourceDebugSession);
-        assert.strictEqual(harness.rm.called, false);
-
-        harness.terminateSession(resourceDebugSession.session);
-
-        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), [{
-            notification_type: 'sessionTerminated',
-            session_id: 'run-1',
-            dcp_id: 'dcp-1'
-        }]);
-        assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
-    });
-
-    test('openDashboard debugFirefox launches the Firefox debug configuration', async () => {
-        // The dashboard Firefox launch path is distinct from resource-based browser debugging:
-        // it builds its own debug configuration in AspireDebugSession.launchDebugBrowser rather
-        // than going through browserDebuggerExtension. Stub the Firefox extension as installed so
-        // we exercise the happy path instead of the install prompt/fallback.
-        sinon.stub(vscode.extensions, 'getExtension').callsFake((id: string) =>
-            id === 'firefox-devtools.vscode-firefox-debug' ? ({ id } as vscode.Extension<unknown>) : undefined);
-        const harness = new DebugSessionHarness({ autoStartSession: false });
-        const openExternalStub = sinon.stub(vscode.env, 'openExternal').resolves(true);
-
-        await harness.aspireDebugSession.openDashboard('https://localhost:5001', 'debugFirefox');
-
-        assert.strictEqual(harness.startDebugging.calledOnce, true);
-        assert.strictEqual(openExternalStub.called, false);
-        const launchedConfig = harness.startDebugging.firstCall.args[1] as vscode.DebugConfiguration;
-        assert.strictEqual(launchedConfig.type, 'firefox');
-        assert.strictEqual(launchedConfig.request, 'launch');
-        assert.strictEqual(launchedConfig.url, 'https://localhost:5001');
-        assert.deepStrictEqual(launchedConfig.pathMappings, []);
-        assert.strictEqual(typeof launchedConfig.webRoot, 'string');
-        assert.ok((launchedConfig.webRoot as string).length > 0);
-
-        harness.dispose();
-    });
-
-    test('openDashboard debugFirefox prompts to install and falls back to the external browser when the adapter is missing', async () => {
-        sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
-        const showErrorStub = sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined as any);
-        const harness = new DebugSessionHarness({ autoStartSession: false });
-        const openExternalStub = sinon.stub(vscode.env, 'openExternal').resolves(true);
-
-        await harness.aspireDebugSession.openDashboard('https://localhost:5001', 'debugFirefox');
-
-        assert.strictEqual(harness.startDebugging.called, false);
-        assert.strictEqual(showErrorStub.calledOnce, true);
-        assert.match(showErrorStub.firstCall.args[0], /Firefox Debugger extension/);
-        assert.strictEqual(openExternalStub.calledOnce, true);
-
-        harness.dispose();
+        assert.strictEqual(stopDebugging.callCount, 2);
+        assert.strictEqual(send.calledOnce, true);
     });
 });
+
+async function createBrowserConfiguration(
+    launchConfiguration: BrowserLaunchConfiguration,
+    workspaceSettings: Record<string, unknown>): Promise<AspireResourceExtendedDebugConfiguration> {
+    const configuration = await prepareDebugSession(
+        {
+            type: 'aspire',
+            request: 'launch',
+            name: 'Aspire',
+            program: '/workspace/apphost.cs',
+            debuggers: { browser: workspaceSettings as never }
+        },
+        launchConfiguration,
+        [],
+        [],
+        {
+            debug: true,
+            runId: 'run-1',
+            debugSessionId: 'dcp-1',
+            isApphost: false,
+            debugSession: {} as AspireDebugSession
+        },
+        browserDebuggerExtension);
+
+    return configuration.debugConfiguration;
+}
+
+function createDebugSession(id: string, parentSession?: vscode.DebugSession, configuration?: vscode.DebugConfiguration): vscode.DebugSession {
+    return {
+        id,
+        type: configuration?.type ?? 'pwa-msedge',
+        name: configuration?.name ?? 'Browser',
+        parentSession,
+        workspaceFolder: undefined,
+        configuration: configuration ?? {
+            type: 'pwa-msedge',
+            name: 'Browser',
+            request: 'launch',
+            runId: 'run-1',
+            debugSessionId: 'dcp-1',
+            resourceType: 'browser'
+        },
+        customRequest: sinon.stub(),
+        getDebugProtocolBreakpoint: sinon.stub()
+    };
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>(promiseResolve => {
+        resolve = promiseResolve;
+    });
+
+    return { promise, resolve };
+}

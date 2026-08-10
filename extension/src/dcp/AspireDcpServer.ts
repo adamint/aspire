@@ -29,80 +29,22 @@ export interface DcpTelemetryHooks {
     onRunSessionAccepted?: (info: { resourceType: string; mode: string }) => void;
 }
 
-/**
- * Per-run telemetry state captured when `PUT /run_session` is accepted and consumed
- * when the matching `sessionTerminated` notification arrives.
- */
-export interface RunSessionTelemetryEntry {
-    startTimeMs: number;
-    resourceType: string;
-    mode: string;
-    debugSessionId: string;
-}
-
-export type RunSessionExitBucket = 'unknown' | 'success' | 'canceled' | 'nonzero';
-
-/**
- * Emits the `debug/runsession/end` event for a terminated resource run session and returns the
- * bucket that was reported.
- *
- * Exported (rather than inlined into `sendNotification`) so the exit-code shaping can be tested
- * without standing up a DCP server, whose startup generates a 4096-bit RSA certificate.
- */
-export function sendRunSessionEndTelemetry(entry: RunSessionTelemetryEntry, exitCode: number | undefined, durationMs: number): RunSessionExitBucket {
-    // `exit_code` is optional on the wire: DCP allows it to be omitted when a debug session
-    // ended for a reason other than program exit (a stopped browser/WASM session, for
-    // example). Bucket that as `unknown` rather than folding it into `success`, and leave
-    // the measurement off entirely so no fabricated exit code reaches telemetry.
-    const exitBucket: RunSessionExitBucket = exitCode === undefined
-        ? 'unknown'
-        : exitCode === 0
-            ? 'success'
-            : exitCode === -1
-                ? 'canceled'
-                : 'nonzero';
-    // Route non-zero exits through the error-event channel so they are surfaced
-    // as errors in the telemetry pipeline, consistent with the synchronous
-    // launch-failure path in PUT /run_session and the dashboard fault path.
-    const emitEnd = exitBucket === 'nonzero' ? sendTelemetryErrorEvent : sendTelemetryEvent;
-    emitEnd('aspire/vscode/debug/runsession/end', {
-        resource_type: entry.resourceType,
-        mode: entry.mode,
-        exit_code_bucket: exitBucket,
-    }, {
-        duration_ms: durationMs,
-        ...(exitCode === undefined ? {} : { exit_code: exitCode }),
-    });
-
-    return exitBucket;
-}
-
 type DebugSessionAggregateStats = {
     totalChildSessions: number;
     distinctResourceTypes: Set<string>;
     anyNonZeroExit: boolean;
 };
 
-export type StopRunSessionResult =
-    | { status: 'notFound' }
-    | { status: 'stopped' }
-    | { status: 'failed'; error: unknown };
-
-export async function stopRunSession(runId: string, runsBySession: Map<string, AspireResourceDebugSession[]>): Promise<StopRunSessionResult> {
+export async function stopRunSession(runId: string, runsBySession: Map<string, AspireResourceDebugSession[]>): Promise<boolean> {
     const debugSessions = runsBySession.get(runId);
     if (!debugSessions) {
-        return { status: 'notFound' };
+        return false;
     }
 
-    const results = await Promise.allSettled(debugSessions.map(async debugSession => await debugSession.stopSession()));
-    const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
-    if (failure) {
-        return { status: 'failed', error: failure.reason };
-    }
-
+    await Promise.all(debugSessions.map(debugSession => Promise.resolve(debugSession.stopSession())));
     runsBySession.delete(runId);
 
-    return { status: 'stopped' };
+    return true;
 }
 
 export default class AspireDcpServer {
@@ -116,7 +58,7 @@ export default class AspireDcpServer {
     // the subsequent sessionTerminated WebSocket notification. We need to look
     // up the original event timing/labels when the session terminates, since
     // the WebSocket notification arrives without that context.
-    private readonly _runTelemetryById: Map<string, RunSessionTelemetryEntry>;
+    private readonly _runTelemetryById: Map<string, { startTimeMs: number; resourceType: string; mode: string; debugSessionId: string }>;
     // Per AppHost debug-session aggregate stats accumulated across the lifetime of the
     // session. Used to emit the `debug/apphost/end` summary when an AppHost debug session
     // terminates. Entries are added on first run_session for a debugSessionId and removed
@@ -133,7 +75,7 @@ export default class AspireDcpServer {
         wsBySession: Map<string, WebSocket>,
         pendingNotificationQueueByDcpId: Map<string, RunSessionNotification[]>,
         dashboardTelemetry: DashboardTelemetryPassthrough,
-        runTelemetryById: Map<string, RunSessionTelemetryEntry>,
+        runTelemetryById: Map<string, { startTimeMs: number; resourceType: string; mode: string; debugSessionId: string }>,
         debugSessionStats: Map<string, DebugSessionAggregateStats>) {
         this.connectionInfo = info;
         this.app = app;
@@ -186,7 +128,7 @@ export default class AspireDcpServer {
 
     static async create(getDebugSession: (debugSessionId: string) => AspireDebugSession | null, hooks: DcpTelemetryHooks = {}): Promise<AspireDcpServer> {
         const runsBySession = new Map<string, AspireResourceDebugSession[]>();
-        const runTelemetryById = new Map<string, RunSessionTelemetryEntry>();
+        const runTelemetryById = new Map<string, { startTimeMs: number; resourceType: string; mode: string; debugSessionId: string }>();
         const debugSessionStats = new Map<string, DebugSessionAggregateStats>();
         const getOrCreateDebugSessionStats = (debugSessionId: string): DebugSessionAggregateStats => {
             let aggregate = debugSessionStats.get(debugSessionId);
@@ -530,26 +472,20 @@ export default class AspireDcpServer {
 
             app.delete('/run_session/:id', requireHeaders, async (req: Request, res: Response) => {
                 const runId = req.params.id as string;
-                const stopResult = await stopRunSession(runId, runsBySession);
-                switch (stopResult.status) {
-                    case 'stopped':
-                        res.status(200).end();
-                        return;
-                    case 'notFound':
-                        res.status(204).end();
-                        return;
-                    case 'failed': {
-                        const message = `Failed to stop debug session for run ${runId}: ${stopResult.error instanceof Error ? stopResult.error.message : String(stopResult.error)}`;
-                        extensionLogOutputChannel.warn(message);
-                        const error: ErrorDetails = {
+                try {
+                    const stopped = await stopRunSession(runId, runsBySession);
+                    res.status(stopped ? 200 : 204).end();
+                }
+                catch (error) {
+                    const message = `Failed to stop debug session for run ${runId}: ${error instanceof Error ? error.message : String(error)}`;
+                    extensionLogOutputChannel.warn(message);
+                    res.status(500).json({
+                        error: {
                             code: 'DebugSessionStopFailed',
                             message,
                             details: []
-                        };
-
-                        res.status(500).json({ error }).end();
-                        return;
-                    }
+                        }
+                    }).end();
                 }
             });
 
@@ -651,8 +587,21 @@ export default class AspireDcpServer {
             const entry = this._runTelemetryById.get(notification.session_id);
             if (entry) {
                 this._runTelemetryById.delete(notification.session_id);
+                const durationMs = Date.now() - entry.startTimeMs;
                 const exitCode = sessionTerminated.exit_code;
-                const exitBucket = sendRunSessionEndTelemetry(entry, exitCode, Date.now() - entry.startTimeMs);
+                const exitBucket = exitCode === undefined ? 'unknown' : exitCode === 0 ? 'success' : exitCode === -1 ? 'canceled' : 'nonzero';
+                // Route non-zero exits through the error-event channel so they are surfaced
+                // as errors in the telemetry pipeline, consistent with the synchronous
+                // launch-failure path above and the dashboard fault path.
+                const emitEnd = exitBucket === 'nonzero' ? sendTelemetryErrorEvent : sendTelemetryEvent;
+                emitEnd('aspire/vscode/debug/runsession/end', {
+                    resource_type: entry.resourceType,
+                    mode: entry.mode,
+                    exit_code_bucket: exitBucket,
+                }, {
+                    duration_ms: durationMs,
+                    ...(exitCode === undefined ? {} : { exit_code: exitCode }),
+                });
 
                 // Surface a non-zero exit on the parent AppHost debug-session aggregate so
                 // the eventual `debug/apphost/end` summary reflects whether any child
@@ -691,7 +640,7 @@ export default class AspireDcpServer {
             const message = JSON.stringify({
                 notification_type: 'sessionTerminated',
                 session_id: notification.session_id,
-                exit_code: sessionTerminated.exit_code
+                ...(sessionTerminated.exit_code === undefined ? {} : { exit_code: sessionTerminated.exit_code })
             });
 
             ws.send(message + '\n');

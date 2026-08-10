@@ -851,7 +851,6 @@ suite('MAUI Debugger Extension Tests', () => {
                     resourceType: 'project',
                     debugAdapter: 'coreclr',
                     extensionId: null,
-                    terminationSignal: 'adapterExit',
                     getDisplayName: () => 'Api',
                     getProjectFile: () => '/workspace/Api/Api.csproj',
                     getSupportedFileTypes: () => ['.csproj'],
@@ -1659,7 +1658,6 @@ function createDebugConfig(runId = '1'): AspireResourceExtendedDebugConfiguratio
     return {
         runId,
         debugSessionId: '1',
-        terminationSignal: 'adapterExit',
         type: 'maui',
         name: 'MAUI',
         request: 'launch',

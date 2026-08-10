@@ -155,10 +155,7 @@ export interface ProcessRestartedNotification extends RunSessionNotification {
 
 export interface SessionTerminatedNotification extends RunSessionNotification {
     notification_type: 'sessionTerminated';
-    // The DCP IDE execution contract permits omission when an exit code is
-    // unavailable or inapplicable. Requested stops therefore omit this wire
-    // field even though canceled telemetry uses -1 internally.
-    // See docs/specs/IDE-execution.md#session-change-notifications.
+    // Browser sessions end without observing a process exit code.
     exit_code?: number;
 }
 
@@ -195,43 +192,10 @@ export interface AspireResourceDebugSession {
     stopSession(): Thenable<void>;
 }
 
-/**
- * Which observable event marks the end of a resource run, and therefore which component emits
- * the terminal `sessionTerminated` notification to DCP.
- *
- * - `adapterExit` — the debug adapter exiting is the lifetime signal. `adapterTracker` emits
- *   `sessionTerminated` from `onExit`, carrying the observed debuggee exit code. This is correct
- *   for every resource type whose debuggee is a process the adapter owns.
- * - `debugSessionEnd` — the VS Code debug session ending is the lifetime signal, and
- *   `AspireDebugSession` emits `sessionTerminated`. Used by browser (js-debug) runs: js-debug is
- *   a server-hosted adapter shared across sessions, so its `onExit` is not a per-run signal, and
- *   it tears down child target sessions independently of the root session.
- *
- * This is a property of the *debugger integration*, not of an individual run, so it is declared
- * once per {@link ResourceDebuggerExtension} rather than assigned per session. That placement is
- * deliberate and load-bearing for safety: the resource debug configuration is merged with the
- * workspace `debuggers` setting, so anything stored there is workspace-writable. A workspace that
- * could set this field would be choosing who reports run termination — for example silently
- * rewiring the DCP lifecycle of `node`/`dotnet` resources, whose callbacks never overwrite it.
- * Deciding it at authoring time keeps it out of reach of settings entirely.
- *
- * The member names deliberately match the run-scoped trigger kind names so the two models join
- * without a translation table.
- */
-export type ResourceTerminationSignal = 'adapterExit' | 'debugSessionEnd';
-
 export interface AspireResourceExtendedDebugConfiguration extends vscode.DebugConfiguration {
     runId: string;
     debugSessionId: string | null;
-    /**
-     * Which event ends this run. Stamped from the resource's {@link ResourceDebuggerExtension}
-     * after workspace settings are merged, so it always reflects the integration's declaration.
-     *
-     * Read it through `getResourceTerminationSignal` in `debugger/resourceSessionTermination.ts`
-     * rather than directly: `vscode.DebugSession.configuration` is untyped JSON rebuilt by
-     * VS Code, so validation and the default belong in one place.
-     */
-    terminationSignal: ResourceTerminationSignal;
+    resourceType?: string;
     projectFile?: string;
     isApphost?: boolean;
 }

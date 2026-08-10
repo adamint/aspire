@@ -447,7 +447,6 @@ function createDebugConfiguration(projectPath: string, args: string[] = []): Asp
         noDebug: true,
         runId: 'azure-functions-test-run',
         debugSessionId: 'azure-functions-test-debug-session',
-        terminationSignal: 'adapterExit',
         console: 'internalConsole',
         isApphost: false
     };

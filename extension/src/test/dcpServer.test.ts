@@ -1,8 +1,8 @@
 import * as assert from 'assert';
 import * as sinon from 'sinon';
+import * as vscode from 'vscode';
 import { stopRunSession } from '../dcp/AspireDcpServer';
 import { AspireResourceDebugSession } from '../dcp/types';
-import { createDebugSession } from './helpers/debugSessionHarness';
 
 suite('Aspire DCP Server Tests', () => {
     teardown(() => {
@@ -17,9 +17,8 @@ suite('Aspire DCP Server Tests', () => {
             [runId, runSessions]
         ]);
 
-        const result = await stopRunSession(runId, runsBySession);
+        await assert.rejects(stopRunSession(runId, runsBySession), /VS Code failed to stop/);
 
-        assert.strictEqual(result.status, 'failed');
         assert.strictEqual(runsBySession.get(runId), runSessions, 'Expected the failed run entry to stay retryable');
         assert.strictEqual(runsBySession.get(runId)?.[0], failingDebugSession);
         assert.strictEqual(failingDebugSession.stopSession.calledOnce, true);
@@ -35,7 +34,7 @@ suite('Aspire DCP Server Tests', () => {
 
         const result = await stopRunSession(runId, runsBySession);
 
-        assert.strictEqual(result.status, 'stopped');
+        assert.strictEqual(result, true);
         assert.strictEqual(runsBySession.has(runId), false);
         assert.strictEqual(firstDebugSession.stopSession.calledOnce, true);
         assert.strictEqual(secondDebugSession.stopSession.calledOnce, true);
@@ -47,11 +46,15 @@ type StopSessionStub = sinon.SinonStub;
 function createResourceDebugSession(id: string, stopSession: StopSessionStub): AspireResourceDebugSession & { stopSession: StopSessionStub } {
     return {
         id,
-        session: createDebugSession(id, {
+        session: {
+            id,
             type: 'coreclr',
             name: id,
-            request: 'launch',
-        }),
+            workspaceFolder: undefined,
+            configuration: { type: 'coreclr', name: id, request: 'launch' },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub()
+        } as vscode.DebugSession,
         stopSession,
     };
 }

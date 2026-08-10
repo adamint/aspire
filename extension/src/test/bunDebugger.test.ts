@@ -119,7 +119,6 @@ function createDebugConfig(program: string = '/workspace/app/index.ts'): AspireR
     return {
         runId: '1',
         debugSessionId: '1',
-        terminationSignal: 'adapterExit',
         type: 'bun',
         name: 'Bun',
         request: 'launch',
