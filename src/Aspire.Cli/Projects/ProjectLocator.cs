@@ -1169,13 +1169,13 @@ internal sealed class ProjectLocator(
         // the config lock taken above, so a launch that starts alongside the one establishing the
         // default observes that write rather than racing it.
         //
-        // The recorded default comes from a local-only directory-scoped reader, which covers both
-        // key spellings and both workspace file layouts (aspire.config.json and the legacy
-        // .aspire/settings.json). Global AppHost paths are intentionally ignored here: they are a
-        // stale compatibility hazard, not a workspace default, and must not block establishing the
-        // local default. Only presence matters locally: resolving the path would mean calling
-        // Path.GetFullPath without the IsValidConfiguredAppHostPath guard the canonical readers
-        // apply, which throws on NUL bytes that survive JSON parsing
+        // The recorded default comes from the same target resolution that decided which file will
+        // be written, so a legacy migration or nested config discovery cannot split "the config we
+        // preserved" from "the config we update". Global AppHost paths are intentionally ignored
+        // here: they are a stale compatibility hazard, not a workspace default, and must not block
+        // establishing the local default. Only presence matters locally: resolving the path would
+        // mean calling Path.GetFullPath without the IsValidConfiguredAppHostPath guard the
+        // canonical readers apply, which throws on NUL bytes that survive JSON parsing
         // (https://github.com/microsoft/aspire/issues/17624), and a recorded path has to count even
         // when the file it names is missing, because a branch switch or a sparse checkout is
         // indistinguishable from a deletion and would otherwise let the next launch permanently
@@ -1183,10 +1183,7 @@ internal sealed class ProjectLocator(
         // the user actually made, from any other origin or `aspire config set`.
         if (isSessionScopedSelection)
         {
-            var configRootDirectory = configTarget.ConfigRootDirectory;
-            var recordedDefault = await configurationService.GetConfigurationFromDirectoryAsync(AspireConfigAppHostPathKey, configRootDirectory, cancellationToken: cancellationToken, includeGlobalSettings: false)
-                ?? await configurationService.GetConfigurationFromDirectoryAsync(LegacySettingsAppHostPathKey, configRootDirectory, cancellationToken: cancellationToken, includeGlobalSettings: false);
-
+            var recordedDefault = configTarget.RecordedAppHostPath;
             if (!string.IsNullOrEmpty(recordedDefault))
             {
                 logger.LogDebug(
@@ -1293,13 +1290,13 @@ internal sealed class ProjectLocator(
                 }
             }
 
-            return new WorkspaceConfigTarget(new FileInfo(targetSettingsFilePath), appHostDir);
+            return new WorkspaceConfigTarget(new FileInfo(targetSettingsFilePath), appHostDir, existingConfig);
         }
 
         // Only use the working-directory config after checking the selected AppHost's tree.
-        // GetOrCreateLocalAspireConfigFile can migrate legacy .aspire/settings.json into
+        // GetOrCreateLocalWorkspaceConfigTarget can migrate legacy .aspire/settings.json into
         // aspire.config.json, so calling it earlier would recreate the split-config bug.
-        return new WorkspaceConfigTarget(GetOrCreateLocalAspireConfigFile(), AppHostDirectoryForScopedConfig: null);
+        return GetOrCreateLocalWorkspaceConfigTarget();
     }
 
     /// <summary>
@@ -1622,14 +1619,15 @@ internal sealed class ProjectLocator(
         return $"{Convert.ToHexString(XxHash3.Hash(Encoding.UTF8.GetBytes(foldedConfigRootPath.ToLowerInvariant()))).ToLowerInvariant()}.lock";
     }
 
-    private FileInfo GetOrCreateLocalAspireConfigFile()
+    private WorkspaceConfigTarget GetOrCreateLocalWorkspaceConfigTarget()
     {
         var settingsFile = new FileInfo(configurationService.GetSettingsFilePath(isGlobal: false));
 
         if (string.Equals(settingsFile.Name, AspireConfigFile.FileName, StringComparison.OrdinalIgnoreCase))
         {
             logger.LogDebug("Using existing config file at {Path}", settingsFile.FullName);
-            return settingsFile;
+            var loadedConfig = AspireConfigFile.Load(settingsFile.Directory!.FullName);
+            return new WorkspaceConfigTarget(settingsFile, AppHostDirectoryForScopedConfig: null, loadedConfig);
         }
 
         var legacySettingsRootDirectory = ConfigurationHelper.GetLegacySettingsRootDirectory(settingsFile);
@@ -1637,27 +1635,32 @@ internal sealed class ProjectLocator(
         {
             var newConfigPath = Path.Combine(executionContext.WorkingDirectory.FullName, AspireConfigFile.FileName);
             logger.LogDebug("No existing config found, will create new config at {Path}", newConfigPath);
-            return new FileInfo(newConfigPath);
+            return new WorkspaceConfigTarget(new FileInfo(newConfigPath), AppHostDirectoryForScopedConfig: null, RecordedConfig: null);
         }
 
         var aspireConfigFile = new FileInfo(Path.Combine(legacySettingsRootDirectory.FullName, AspireConfigFile.FileName));
+        AspireConfigFile? recordedConfig;
         if (!aspireConfigFile.Exists)
         {
             logger.LogInformation("Migrating legacy settings from {LegacyDir} to {ConfigFile}", legacySettingsRootDirectory.FullName, aspireConfigFile.FullName);
-            MigrateLegacySettings(legacySettingsRootDirectory);
+            recordedConfig = MigrateLegacySettings(legacySettingsRootDirectory);
+        }
+        else
+        {
+            recordedConfig = AspireConfigFile.Load(legacySettingsRootDirectory.FullName);
         }
 
-        return aspireConfigFile;
+        return new WorkspaceConfigTarget(aspireConfigFile, AppHostDirectoryForScopedConfig: null, recordedConfig);
     }
 
-    private void MigrateLegacySettings(DirectoryInfo settingsRootDirectory)
+    private AspireConfigFile MigrateLegacySettings(DirectoryInfo settingsRootDirectory)
     {
         var configFilePath = Path.Combine(settingsRootDirectory.FullName, AspireConfigFile.FileName);
         logger.LogInformation("Migrating legacy settings to {SettingsFilePath}", configFilePath);
 
         // LoadOrCreate handles the legacy fallback and migration internally,
         // including saving the migrated config to disk.
-        _ = AspireConfigFile.LoadOrCreate(settingsRootDirectory.FullName);
+        return AspireConfigFile.LoadOrCreate(settingsRootDirectory.FullName);
     }
 
     private string? GetNuGetPackagesCachePath()
@@ -1686,6 +1689,10 @@ internal sealed class ProjectLocator(
     /// <see langword="null"/> when the target came from the working directory instead of the
     /// AppHost's own tree, in which case the ambient config search applies.
     /// </param>
+    /// <param name="RecordedConfig">
+    /// The config loaded while resolving <paramref name="SettingsFile"/>, or <see langword="null"/>
+    /// when the file does not exist yet.
+    /// </param>
     /// <remarks>
     /// These travel together because every correctness question in this area is about whether they
     /// still agree: whether the config that decided "the workspace already has a default" is the one
@@ -1695,7 +1702,7 @@ internal sealed class ProjectLocator(
     /// unrepresentable, including across the legacy migration that rebases the config root onto the
     /// parent of <c>.aspire/</c>.
     /// </remarks>
-    private sealed record WorkspaceConfigTarget(FileInfo SettingsFile, DirectoryInfo? AppHostDirectoryForScopedConfig)
+    private sealed record WorkspaceConfigTarget(FileInfo SettingsFile, DirectoryInfo? AppHostDirectoryForScopedConfig, AspireConfigFile? RecordedConfig)
     {
         /// <summary>
         /// The directory <see cref="SettingsFile"/> lives in, which is also the directory the
@@ -1705,6 +1712,11 @@ internal sealed class ProjectLocator(
 
         /// <inheritdoc cref="ConfigRootDirectory"/>
         public string ConfigRootPath => ConfigRootDirectory.FullName;
+
+        /// <summary>
+        /// The AppHost path already recorded in <see cref="SettingsFile"/>, if any.
+        /// </summary>
+        public string? RecordedAppHostPath => RecordedConfig?.AppHost?.Path;
     }
 }
 
