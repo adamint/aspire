@@ -188,6 +188,70 @@ suite('telemetry utilities', () => {
         assert.strictEqual(fake.events[0].measurements?.duration_ms, 12);
     });
 
+    // Extension-authored telemetry is cleaned by VS Code's TelemetryLogger rather than by anything
+    // in this file. That is a deliberate choice - a hand-written replacement has to re-derive the
+    // platform's whole secret vocabulary and silently loses a category whenever it misses one - so
+    // this pins the categories the delegation is relied on for, standalone credential formats
+    // included: those carry no assignment and no `Bearer` prefix, so an assignment-shaped detector
+    // would pass them straight to the wire.
+    test('extension-authored property values are cleaned before reaching the transport', () => {
+        const githubPat = `github_pat_11ABCDEFG0abcdefghijkl_${'abcdefghijklmnopqrstuvwxyz'}${'ABCDEFGHIJKLMNOPQRSTUVWXYZ'}0123456`;
+        const cleanedInputs = [
+            'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIn0.abcdEFGH',
+            githubPat,
+            'ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+            'xoxb-123456789012-abcdefghijkl',
+            'AIzaSyA0123456789abcdefghijklmnopqrstuvw',
+            String.raw`C:\Users\customer\workspace\apphost.csproj`,
+            String.raw`D:\Work\customer\apphost.csproj`,
+            '/mnt/customer/project/apphost.csproj',
+            String.raw`\\private-server\customer-share\workspace`,
+            '//private-server/customer-share/workspace',
+            String.raw`\\?\UNC\private-server\customer-share`,
+            String.raw`\\?\C:\customer\workspace`,
+            String.raw`\\\\private-server\\customer-share`,
+        ];
+
+        for (const input of cleanedInputs) {
+            sendTelemetryEvent('aspire/vscode/command/invoked', { command: input });
+        }
+
+        assert.deepStrictEqual(
+            fake.events.map(event => event.properties?.command),
+            [
+                '<REDACTED: Microsoft Entra ID>',
+                '<REDACTED: GitHub Token>',
+                '<REDACTED: GitHub Token>',
+                '<REDACTED: Slack Token>',
+                '<REDACTED: Google API Key>',
+                '<REDACTED: user-file-path>',
+                '<REDACTED: user-file-path>',
+                '<REDACTED: user-file-path>',
+                '<REDACTED: user-file-path>',
+                '/<REDACTED: user-file-path>',
+                String.raw`\\?<REDACTED: user-file-path>`,
+                String.raw`\\?\<REDACTED: user-file-path>`,
+                String.raw`\\<REDACTED: user-file-path>`,
+            ]
+        );
+    });
+
+    // The boundary of the delegation above. VS Code's path detector needs at least one
+    // separated segment after the leading slashes, so a bare host name survives it in either
+    // spelling. Extension-authored properties are registry-constrained buckets that cannot carry
+    // one; the dashboard passthrough, which does carry free-form strings, cleans each leaf itself
+    // rather than relying on this stage - see the private-location spelling coverage in
+    // dashboardTelemetryRoutes.test.ts. Pinned so the split stays visible if either side moves.
+    test('host-only UNC values survive the platform cleaning stage', () => {
+        sendTelemetryEvent('aspire/vscode/command/invoked', { command: String.raw`\\private-server` });
+        sendTelemetryEvent('aspire/vscode/command/invoked', { command: '//private-server' });
+
+        assert.deepStrictEqual(
+            fake.events.map(event => event.properties?.command),
+            [String.raw`\\private-server`, '//private-server']
+        );
+    });
+
     test('telemetry levels are consulted on every emit', () => {
         fake.telemetryLevel = 'off';
         sendTelemetryEvent('aspire/vscode/command/invoked', { command: 'cmd.off' });

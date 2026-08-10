@@ -210,7 +210,13 @@ suite('DashboardTelemetryPassthrough route-level normalization', () => {
         assert.strictEqual(parsed.v['Aspire.Dashboard.UserAgent'], '<redacted>');
     });
 
-    test('POST /telemetry/operation sanitizes UNC paths before bundling', async () => {
+    // Every spelling a private location can arrive in from the dashboard. This is one test rather
+    // than several because the failure mode being pinned is a gap between spellings: the detector
+    // is a set of alternatives, and a change that tightens one of them leaves the same host name
+    // redacted under one spelling and transmitted under another. VS Code's own cleaner does not
+    // backstop this - the bundle reaches it as a single JSON string, which is why each leaf is
+    // cleaned before it is bundled - and it does not redact host-only UNC values at all.
+    test('POST /telemetry/operation sanitizes every private-location spelling before bundling', async () => {
         const { status } = await postJson(h.baseUrl, '/telemetry/operation', {
             eventName: 'aspire/dashboard/component/open',
             properties: {
@@ -221,6 +227,14 @@ suite('DashboardTelemetryPassthrough route-level normalization', () => {
                         String.raw`\\private-server`,
                         '//private-server/customer-share/workspace/apphost.csproj',
                         '//private-server',
+                        // JSON-escaped spellings, which is how a UNC path looks once a dashboard
+                        // client has already serialized it into a string it then sends as a value.
+                        String.raw`\\\\private-server\\customer-share`,
+                        String.raw`\\?\C:\customer\workspace`,
+                        String.raw`C:\Users\customer\workspace\apphost.csproj`,
+                        String.raw`D:\Work\customer\apphost.csproj`,
+                        String.raw`D:\\Work\\customer`,
+                        '/mnt/customer/project/apphost.csproj',
                         'UNC-looking label private-server customer-share without leading slashes',
                     ],
                     propertyType: 1,
@@ -239,7 +253,51 @@ suite('DashboardTelemetryPassthrough route-level normalization', () => {
                 '<redacted>',
                 '<redacted>',
                 '<redacted>',
+                '<redacted>',
+                '<redacted>',
+                '<redacted>',
+                '<redacted>',
+                '<redacted>',
+                '<redacted>',
                 'UNC-looking label private-server customer-share without leading slashes',
+            ]
+        );
+    });
+
+    // Standalone credential formats carry no assignment and no `Bearer` prefix, so an
+    // assignment-shaped detector alone misses them. They are cleaned here rather than left to
+    // VS Code for the same reason the paths above are: the bundle is one opaque string by the
+    // time VS Code sees it, and a single match would replace the whole bundle rather than the leaf.
+    test('POST /telemetry/operation redacts standalone credential formats before bundling', async () => {
+        const { status } = await postJson(h.baseUrl, '/telemetry/operation', {
+            eventName: 'aspire/dashboard/component/open',
+            properties: {
+                'Aspire.Dashboard.Resource.Types': {
+                    value: [
+                        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIn0.abcdEFGH',
+                        `github_pat_11ABCDEFG0abcdefghijkl_${'abcdefghijklmnopqrstuvwxyz'}${'ABCDEFGHIJKLMNOPQRSTUVWXYZ'}0123456`,
+                        'ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+                        'xoxb-123456789012-abcdefghijkl',
+                        'AIzaSyA0123456789abcdefghijklmnopqrstuvw',
+                        'project',
+                    ],
+                    propertyType: 1,
+                },
+            },
+            result: 1,
+        });
+
+        assert.strictEqual(status, 200);
+        const parsed = JSON.parse(h.fake.events[0].properties?.dashboard_properties ?? '');
+        assert.deepStrictEqual(
+            parsed.v['Aspire.Dashboard.Resource.Types'],
+            [
+                '<redacted>',
+                '<redacted>',
+                '<redacted>',
+                '<redacted>',
+                '<redacted>',
+                'project',
             ]
         );
     });
