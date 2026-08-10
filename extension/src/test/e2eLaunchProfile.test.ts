@@ -19,6 +19,20 @@ function stripComments(source: string): string {
     return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 }
 
+function compareVersionStrings(left: string, right: string): number {
+    const leftParts = left.split('.').map(Number);
+    const rightParts = right.split('.').map(Number);
+
+    for (let i = 0; i < Math.max(leftParts.length, rightParts.length); i++) {
+        const difference = (leftParts[i] ?? 0) - (rightParts[i] ?? 0);
+        if (difference !== 0) {
+            return difference;
+        }
+    }
+
+    return 0;
+}
+
 suite('E2E launch profile', () => {
     test('creates nothing in the per-run root that a later module-scope throw could strand', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
@@ -194,7 +208,7 @@ suite('E2E launch profile', () => {
         assert.ok(!workflow.includes('registry=https://'));
     });
 
-    test('defaults to the current VS Code version while the internal feed lacks newer ExTester', () => {
+    test('defaults to the newest VS Code before the macOS executable rename while the internal feed lacks newer ExTester', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
         const installedPackageJson = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'node_modules', 'vscode-extension-tester', 'package.json'), 'utf8'));
@@ -202,15 +216,18 @@ suite('E2E launch profile', () => {
             loadCodeVersion(version: string): string;
         };
         const previousCodeVersion = process.env.CODE_VERSION;
-        const currentVsCodeVersion = '1.131.0';
+        const defaultVsCodeVersion = '1.130.0';
+        const macOsExecutableRenameVersion = '1.131.0';
+        const extesterMacOsExecutableFallbackVersion = '8.24.0';
 
-        assert.ok(runner.includes(`process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '${currentVsCodeVersion}'`));
+        assert.ok(runner.includes(`process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '${defaultVsCodeVersion}'`));
         assert.strictEqual(installedPackageJson.version, '8.23.0');
-        assert.notStrictEqual(installedPackageJson.supportedVersions['vscode-max'], currentVsCodeVersion);
+        assert.ok(compareVersionStrings(defaultVsCodeVersion, macOsExecutableRenameVersion) < 0);
+        assert.ok(compareVersionStrings(installedPackageJson.version, extesterMacOsExecutableFallbackVersion) < 0);
 
         try {
             delete process.env.CODE_VERSION;
-            assert.strictEqual(extester.loadCodeVersion(currentVsCodeVersion), currentVsCodeVersion);
+            assert.strictEqual(extester.loadCodeVersion(defaultVsCodeVersion), defaultVsCodeVersion);
         }
         finally {
             if (previousCodeVersion === undefined) {
@@ -807,7 +824,7 @@ suite('E2E launch profile', () => {
         assert.ok(resolverStart >= 0);
         assert.ok(resolverBody.includes("normalizedVersion === 'min' || normalizedVersion === 'max'"));
         assert.ok(resolverBody.includes('/^\\d+\\.\\d+(\\.\\d+)?$/.test(normalizedVersion)'));
-        assert.ok(resolverBody.includes("a concrete version such as '1.131.0'"));
+        assert.ok(resolverBody.includes("a concrete version such as '1.130.0'"));
         assert.ok(resolverBody.includes('throw new Error('));
     });
 

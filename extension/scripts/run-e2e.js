@@ -41,7 +41,11 @@ if (!extesterVersion) {
 // The feed preflight must not touch the shared cache: it runs before any download and only
 // verifies package availability, so resolving the cache root there would be wasted Git discovery.
 const downloadCacheRoot = verifyExtesterFeedOnly ? '' : resolveDownloadCacheRoot(repoRoot);
-const vscodeVersion = resolveCachedVsCodeVersion(process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '1.131.0');
+// Keep this below VS Code 1.131.0 while ExTester is pinned to 8.23.0. VS Code 1.131.0 renamed the
+// macOS app executable from Contents/MacOS/Electron to Contents/MacOS/Code, and ExTester 8.23.0
+// only launches the old path. ExTester 8.24.0 adds the fallback, but it is not mirrored in
+// dotnet-public-npm yet.
+const vscodeVersion = resolveCachedVsCodeVersion(process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '1.130.0');
 if (!verifyExtesterFeedOnly) {
   fs.mkdirSync(requestedTempRoot, { recursive: true });
 }
@@ -1115,7 +1119,7 @@ function resolveCachedVsCodeVersion(requestedVersion) {
     return normalizedVersion;
   }
 
-  throw new Error(`ASPIRE_EXTENSION_E2E_VSCODE_VERSION must be a concrete version such as '1.131.0', or 'min'/'max', but was '${requestedVersion}'. Moving aliases cannot be cached because the cache key would never change when the alias does.`);
+  throw new Error(`ASPIRE_EXTENSION_E2E_VSCODE_VERSION must be a concrete version such as '1.130.0', or 'min'/'max', but was '${requestedVersion}'. Moving aliases cannot be cached because the cache key would never change when the alias does.`);
 }
 
 function getAspireCliEnvironment(extraEnv = {}) {
