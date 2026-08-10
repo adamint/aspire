@@ -952,9 +952,9 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     const debugSessionId = this.debugSessionId;
     const dcpServer = this._dcpServer;
 
-    const finishDispose = () => {
+    const finishDispose = async () => {
       try {
-        this.finishDisposeAfterResourceStops(
+        await this.finishDisposeAfterResourceStops(
           startMs,
           mode,
           language,
@@ -980,7 +980,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       void this.waitForResourceDebugSessionStops(resourceStops).then(finishDispose);
     }
     else {
-      finishDispose();
+      void finishDispose();
     }
 
     return this._disposeCompletion;
@@ -990,7 +990,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     return this.dispose();
   }
 
-  private finishDisposeAfterResourceStops(
+  private async finishDisposeAfterResourceStops(
     startMs: number | undefined,
     mode: 'run' | 'debug',
     language: 'csharp' | 'typescript' | 'unknown',
@@ -999,7 +999,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     targetVersionPromise: Promise<string> | undefined,
     appHostIsDirectory: 'true' | 'false' | 'unknown',
     debugSessionId: string,
-    dcpServer: AspireDcpServer): void {
+    dcpServer: AspireDcpServer): Promise<void> {
 
     // Stop child debug sessions first so their `sessionTerminated`
     // notifications can flow back through `AspireDcpServer.sendNotification`
@@ -1009,7 +1009,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // be missed and the summary would under-report failures.
     this._disposables.forEach(disposable => disposable.dispose());
     this._trackedDebugAdapters = [];
-    void this.stopParentDebugSessionOnce();
+    await this.stopParentDebugSessionOnce();
     this._onDidSendDebugConsoleOutput.dispose();
 
     // Telemetry: emit `debug/apphost/end` after a short grace window so any

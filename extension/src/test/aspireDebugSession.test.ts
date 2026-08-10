@@ -644,7 +644,15 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             return { dispose: sinon.stub() };
         });
         const restartStub = sinon.stub(vscode.debug, 'startDebugging').resolves(true);
-        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        let releaseParentStop!: () => void;
+        const parentStopGate = new Promise<void>(resolve => { releaseParentStop = resolve; });
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(session => {
+            if (session === (parentDebugSession as unknown as vscode.DebugSession)) {
+                return parentStopGate;
+            }
+
+            return Promise.resolve();
+        });
         const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
         let releaseResourceStop!: () => void;
         const resourceStopGate = new Promise<void>(resolve => { releaseResourceStop = resolve; });
@@ -670,10 +678,15 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         // The AppHost termination callback used to call dispose() and immediately restart. That
         // lets the replacement Aspire session launch while the old one still owns resource debug
-        // sessions and has not run its CLI/AppHost shutdown disposables yet.
+        // sessions or while its parent Aspire session is still stopping.
         sinon.assert.notCalled(restartStub);
 
         releaseResourceStop();
+        await new Promise(resolve => setTimeout(resolve, 0));
+
+        sinon.assert.notCalled(restartStub);
+
+        releaseParentStop();
         await restart;
 
         sinon.assert.calledOnceWithExactly(restartStub, undefined, parentDebugSession.configuration);
