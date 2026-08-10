@@ -1851,7 +1851,7 @@ extends:
 
                 - ${{ if or(eq(parameters.SkipNpmPointerPublish, true), eq(parameters.NpmInternalMirrorAction, 'only')) }}:
                   - powershell: |
-                      Write-Host "Skipping npm pointer package publish because SkipNpmPointerPublish=true. Registry validation still runs unless this run neither publishes npm packages nor sets NpmInternalMirrorAction=only."
+                      Write-Host "Skipping npm pointer package publish (SkipNpmPointerPublish=${{ parameters.SkipNpmPointerPublish }}, NpmInternalMirrorAction=${{ parameters.NpmInternalMirrorAction }}). Either of those alone suppresses this step, so both are reported to keep mirror-only recovery runs from looking like the operator set the skip flag. Registry validation still runs unless this run neither publishes npm packages nor sets NpmInternalMirrorAction=only."
                     displayName: 'Skip npm Pointer Publish (flagged)'
 
                 - pwsh: |
@@ -2458,6 +2458,11 @@ extends:
                     Write-Host " (DRY RUN)"
                   } elseif ("${{ parameters.IsPrerelease }}" -eq "true") {
                     Write-Host " (BLOCKED - prerelease requires non-latest npm dist-tag support)"
+                  } elseif ("${{ parameters.NpmInternalMirrorAction }}" -eq "only") {
+                    # Mirror-only gates both publish steps regardless of the skip flags, so this
+                    # has to be read before them or a run with both flags false reports
+                    # "(EXECUTED)" while nothing was submitted to the public registry.
+                    Write-Host " (SKIPPED - mirror-only run; nothing published to the public registry)"
                   } elseif ("${{ parameters.SkipNpmPointerPublish }}" -eq "true") {
                     # The public registry smoke test is skipped only when this run neither
                     # publishes npm nor seeds the mirror, and that case is already reported by

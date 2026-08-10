@@ -250,6 +250,85 @@ public class NpmRegistryResolverTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_DecodesEscapesInADoubleQuotedNpmrcValue()
+    {
+        // ini hands a value that starts and ends with a quote to JSON.parse, so escape sequences in
+        // a double-quoted value are live rather than literal.
+        WriteHomeNpmrc("registry=\"https://npm.contoso.example/\\u0066eed/\"");
+
+        Assert.Equal(
+            "https://npm.contoso.example/feed/",
+            CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_KeepsADoubleQuotedNpmrcValueThatIsNotValidJson()
+    {
+        // JSON.parse rejects "\z", and ini swallows the error while still holding the quoted text,
+        // so the quotes survive and the value never names a usable registry.
+        WriteHomeNpmrc("registry=\"https://npm.contoso.example/a\\zb/\"");
+
+        Assert.Equal(PublicRegistry, CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_DoesNotDecodeEscapesInASingleQuotedNpmrcValue()
+    {
+        // ini strips single quotes before calling JSON.parse, and bare text is not valid JSON, so
+        // the escape survives as the six literal characters "\u0066". Uri then rewrites the
+        // backslash to a forward slash, which is why the segment reads "/u0066eed" rather than the
+        // "/feed/" a decoded value would produce.
+        WriteHomeNpmrc("registry='https://npm.contoso.example/\\u0066eed/'");
+
+        Assert.Equal(
+            "https://npm.contoso.example//u0066eed/",
+            CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_ReadsAGlobalNpmrcNamedByTheUserNpmrc()
+    {
+        // npm loads the global npmrc after the user one, and an explicitly configured globalconfig
+        // needs no install prefix to locate, so a registry pinned there is the one the recommended
+        // global install would use.
+        var globalConfigPath = Path.Combine(CreateWorkingDirectory("global").FullName, "npmrc");
+        File.WriteAllLines(globalConfigPath, ["registry=https://npm.contoso.example/global/"]);
+        WriteHomeNpmrc($"globalconfig={globalConfigPath}");
+
+        Assert.Equal(
+            "https://npm.contoso.example/global/",
+            CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_PrefersTheUserNpmrcRegistryOverTheGlobalOne()
+    {
+        // The global layer sits below the user layer, so it only supplies keys nothing above set.
+        var globalConfigPath = Path.Combine(CreateWorkingDirectory("global").FullName, "npmrc");
+        File.WriteAllLines(globalConfigPath, ["registry=https://npm.contoso.example/global/"]);
+        WriteHomeNpmrc($"globalconfig={globalConfigPath}", "registry=https://npm.contoso.example/user/");
+
+        Assert.Equal(
+            "https://npm.contoso.example/user/",
+            CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_ReadsAGlobalNpmrcNamedByTheEnvironment()
+    {
+        var globalConfigPath = Path.Combine(CreateWorkingDirectory("global").FullName, "npmrc");
+        File.WriteAllLines(globalConfigPath, ["registry=https://npm.contoso.example/envglobal/"]);
+
+        var resolution = CreateResolver(
+            environment: new Dictionary<string, string>
+            {
+                ["npm_config_globalconfig"] = globalConfigPath
+            }).Resolve(PackageName);
+
+        Assert.Equal("https://npm.contoso.example/envglobal/", resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
     public void Resolve_IgnoresARegistryNestedUnderAnIniSection()
     {
         // npm parses .npmrc with ini, which nests every later assignment under the section, so

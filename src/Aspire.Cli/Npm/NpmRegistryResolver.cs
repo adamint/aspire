@@ -5,6 +5,7 @@ using System.Buffers;
 using System.Collections;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Cli.Npm;
@@ -49,6 +50,7 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
 
     private const string ScopedRegistryKeySuffix = ":registry";
     private const string UserConfigKey = "userconfig";
+    private const string GlobalConfigKey = "globalconfig";
     private const string NpmrcFileName = ".npmrc";
 
     // npm expands ${VAR} by indexing Node's process.env, which is case-insensitive only on Windows.
@@ -192,14 +194,20 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
         // "npm install -g @microsoft/aspire-cli@latest".
         // See https://docs.npmjs.com/cli/v10/configuring-npm/npmrc#per-project-config-file.
         //
-        // The npm CLI's own global and builtin npmrc layers are not read because locating them requires npm's install prefix,
-        // which is only discoverable by running npm - the process launch this lookup exists to
-        // avoid. Registry pinning lives in the env or user layer in practice.
+        // npm's builtin npmrc (the one beside its own installation) is not read because locating it
+        // requires npm's install prefix, which is only discoverable by running npm - the process
+        // launch this lookup exists to avoid. The global layer is read only when something
+        // explicitly points at it, because npm's default for it is also prefix-derived.
         var configuration = new Dictionary<string, ConfigurationValue>(StringComparer.Ordinal);
 
         MergeEnvironment(configuration);
 
         MergeNpmrcFile(configuration, GetUserConfigPath(configuration));
+
+        // npm loads the global npmrc after the user one, so it only supplies keys nothing above it
+        // set. It is resolved after the user file is merged because the user file is allowed to
+        // declare globalconfig, exactly as npm's load order allows.
+        MergeNpmrcFile(configuration, GetGlobalConfigPath(configuration));
 
         return configuration;
     }
@@ -433,16 +441,32 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
     /// Parses the value half of a <c>.npmrc</c> line.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Unquoted values follow npm/ini comment rules: the first unescaped <c>;</c> or <c>#</c>
     /// starts an inline comment, while <c>\;</c>, <c>\#</c>, and <c>\\</c> unescape to literal
-    /// characters. Quoted values are taken verbatim.
+    /// characters.
+    /// </para>
+    /// <para>
+    /// A value that both starts and ends with a quote is handed to <c>JSON.parse</c> by ini, after
+    /// stripping the quotes first when they are single ones. That makes escape sequences in a
+    /// double-quoted value live, so <c>registry="https://npm.example/\u0066eed/"</c> names
+    /// <c>/feed/</c>. Anything <c>JSON.parse</c> rejects keeps whatever ini was holding at that
+    /// point, which still carries the double quotes but not the single ones. A quote followed by an
+    /// inline comment is not "quoted" at all under that rule, because ini tests the last character
+    /// of the untrimmed value, so it takes the unquoted path and keeps its quotes.
+    /// See https://github.com/npm/ini/blob/main/lib/ini.js.
+    /// </para>
     /// </remarks>
     private static string ParseNpmrcValue(ReadOnlySpan<char> value)
     {
         if (value.Length >= 2 &&
             (value[0] is '"' && value[^1] is '"' || value[0] is '\'' && value[^1] is '\''))
         {
-            return value[1..^1].ToString();
+            // ini drops single quotes before parsing, so an unparseable single-quoted value keeps
+            // the stripped text while an unparseable double-quoted one keeps its quotes.
+            var candidate = value[0] is '\'' ? value[1..^1].ToString() : value.ToString();
+
+            return TryParseJsonString(candidate, out var decoded) ? decoded : candidate;
         }
 
         var builder = new System.Text.StringBuilder(value.Length);
@@ -602,6 +626,55 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
     }
 
     /// <summary>
+    /// Decodes <paramref name="candidate"/> the way ini's <c>JSON.parse</c> call does, reporting
+    /// failure for anything that is not a JSON string so the caller can keep the raw text.
+    /// </summary>
+    private static bool TryParseJsonString(string candidate, [NotNullWhen(true)] out string? value)
+    {
+        value = null;
+
+        // JSON.parse accepts any JSON value, but only a string can name a registry. A number or a
+        // literal reaches npm as a non-string that its own URL handling would reject anyway, so
+        // treating those as undecodable keeps the raw text and lets the URL check reject it.
+        if (candidate.Length < 2 || candidate[0] is not '"')
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(candidate);
+
+            if (document.RootElement.ValueKind is not JsonValueKind.String)
+            {
+                return false;
+            }
+
+            value = document.RootElement.GetString();
+            return value is not null;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private string? GetGlobalConfigPath(IReadOnlyDictionary<string, ConfigurationValue> configuration)
+    {
+        // npm computes globalconfig as "<prefix>/etc/npmrc" by default, and the prefix is only
+        // knowable by launching npm. An explicitly configured globalconfig needs no prefix, so an
+        // npmrc that pins the registry there is honored rather than silently skipped, which would
+        // otherwise advertise an update the recommended global install cannot resolve.
+        if (configuration.TryGetValue(GlobalConfigKey, out var globalConfig) &&
+            !string.IsNullOrWhiteSpace(globalConfig.Value))
+        {
+            return ResolveConfiguredPath(globalConfig.Value);
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Applies the normalization npm's <c>parseField</c> gives a path-typed option such as
     /// <c>userconfig</c>.
     /// </summary>
@@ -672,12 +745,12 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
     }
 
     /// <summary>
-    /// Limits what is retained to the registry keys and the user-config redirect, so credential
+    /// Limits what is retained to the registry keys and the two npmrc redirects, so credential
     /// entries in a <c>.npmrc</c> or in the process environment are never retained.
     /// </summary>
     private static bool IsInterestingKey(string key)
     {
-        return key is RegistryKey or UserConfigKey || key.EndsWith(ScopedRegistryKeySuffix, StringComparison.Ordinal);
+        return key is RegistryKey or UserConfigKey or GlobalConfigKey || key.EndsWith(ScopedRegistryKeySuffix, StringComparison.Ordinal);
     }
 
     private static string NormalizeEnvironmentKey(string key)
