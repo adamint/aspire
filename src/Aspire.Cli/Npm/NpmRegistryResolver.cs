@@ -739,7 +739,24 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             return ResolveConfiguredPath(userConfig.Value);
         }
 
-        return Path.Combine(_homeDirectory.FullName, NpmrcFileName);
+        return Path.Combine(GetHomeDirectory(), NpmrcFileName);
+    }
+
+    /// <summary>
+    /// Resolves the directory npm treats as the home directory.
+    /// </summary>
+    private string GetHomeDirectory()
+    {
+        // npm takes `this.home = this.env.HOME || homedir()` with no platform guard, and both the
+        // default userconfig path and "~" expansion hang off it. On Windows the two disagree
+        // whenever a Git Bash or MSYS shell exports HOME, and npm then reads a .npmrc the profile
+        // directory does not hold - so `npm install -g` would use a registry this lookup never saw.
+        // The JS `||` falls back on the empty string too, which is why this does not use
+        // IsNullOrWhiteSpace: an all-whitespace HOME is a real directory name to npm.
+        // See https://github.com/npm/cli/blob/latest/workspaces/config/lib/index.js
+        var home = _lookupEnvironmentVariable("HOME");
+
+        return string.IsNullOrEmpty(home) ? _homeDirectory.FullName : home;
     }
 
     /// <summary>
@@ -798,6 +815,19 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             return Path.Combine(ResolveConfiguredPath(prefix.Value), "etc", GlobalNpmrcFileName);
         }
 
+        // npm's loadGlobalPrefix consults the plain PREFIX variable before deriving a prefix from
+        // its own executable path, and globalconfig then defaults to "$PREFIX/etc/npmrc". It ranks
+        // below the configured `prefix` because that one is the config value, while PREFIX only
+        // supplies its default - confirmed against @npmcli/config 11.0.1, where PREFIX=/corp alone
+        // yields globalconfig /corp/etc/npmrc. Only the executable-derived prefix stays out of
+        // reach, because finding it means launching npm.
+        var prefixVariable = _lookupEnvironmentVariable("PREFIX");
+
+        if (!string.IsNullOrEmpty(prefixVariable))
+        {
+            return Path.Combine(ResolveConfiguredPath(prefixVariable), "etc", GlobalNpmrcFileName);
+        }
+
         return null;
     }
 
@@ -819,7 +849,7 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
         try
         {
             return isHomeReference
-                ? Path.GetFullPath(Path.Combine(_homeDirectory.FullName, value[2..]))
+                ? Path.GetFullPath(Path.Combine(GetHomeDirectory(), value[2..]))
                 : Path.GetFullPath(value);
         }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)

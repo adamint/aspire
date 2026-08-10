@@ -2333,7 +2333,12 @@ extends:
                             throw "Internal npm mirror did not anonymously expose and pack $packageName@latest at or above $packageVersion with every RID dependency after $maxAttempts attempts."
                           }
 
+                          # The cache is a sibling of the attempt directory rather than a child, so
+                          # it has to be removed explicitly. Each attempt packs the pointer plus one
+                          # tarball per RID, and with up to 10 attempts the abandoned caches would
+                          # otherwise hold ten copies of every binary until the job ends.
                           Remove-Item -LiteralPath $attemptRoot -Recurse -Force
+                          Remove-Item -LiteralPath $attemptCache -Recurse -Force
                           Start-Sleep -Seconds 30
                         }
                       }

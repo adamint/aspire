@@ -744,6 +744,115 @@ public class NpmRegistryResolverTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_PrefersTheHomeVariableOverTheProfileDirectory()
+    {
+        // npm resolves its home as `env.HOME || homedir()` on every platform. On Windows those are
+        // different directories whenever a Git Bash or MSYS shell exports HOME, and it is npm's
+        // answer that decides which .npmrc the recommended global install obeys.
+        WriteHomeNpmrc("registry=https://npm.contoso.example/from-profile/");
+
+        var shellHome = Directory.CreateDirectory(Path.Combine(_root.FullName, "msys-home"));
+        File.WriteAllText(
+            Path.Combine(shellHome.FullName, ".npmrc"),
+            "registry=https://npm.contoso.example/from-home/");
+
+        var resolver = CreateResolver(environment: new Dictionary<string, string>
+        {
+            ["HOME"] = shellHome.FullName
+        });
+
+        var resolution = resolver.Resolve(PackageName);
+
+        Assert.Equal("https://npm.contoso.example/from-home/", resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_FallsBackToTheProfileDirectoryWhenHomeIsEmpty()
+    {
+        // JS falls through "||" on the empty string, so an empty HOME leaves npm on os.homedir().
+        WriteHomeNpmrc("registry=https://npm.contoso.example/from-profile/");
+
+        var resolver = CreateResolver(environment: new Dictionary<string, string>
+        {
+            ["HOME"] = string.Empty
+        });
+
+        var resolution = resolver.Resolve(PackageName);
+
+        Assert.Equal("https://npm.contoso.example/from-profile/", resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_ExpandsATildeUserConfigPathAgainstTheHomeVariable()
+    {
+        // "~" hangs off the same home npm computed, so the two cannot disagree.
+        var shellHome = Directory.CreateDirectory(Path.Combine(_root.FullName, "msys-home"));
+        File.WriteAllText(
+            Path.Combine(shellHome.FullName, "custom.npmrc"),
+            "registry=https://npm.contoso.example/from-tilde/");
+
+        var resolver = CreateResolver(environment: new Dictionary<string, string>
+        {
+            ["HOME"] = shellHome.FullName,
+            ["npm_config_userconfig"] = "~/custom.npmrc"
+        });
+
+        var resolution = resolver.Resolve(PackageName);
+
+        Assert.Equal("https://npm.contoso.example/from-tilde/", resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_ReadsTheGlobalNpmrcUnderneathThePrefixVariable()
+    {
+        // npm's loadGlobalPrefix takes the plain PREFIX variable before deriving a prefix from its
+        // own executable, so this npmrc is the one a global install would obey.
+        var prefix = Directory.CreateDirectory(Path.Combine(_root.FullName, "corp-env"));
+        var globalNpmrcDirectory = Directory.CreateDirectory(Path.Combine(prefix.FullName, "etc"));
+        File.WriteAllText(
+            Path.Combine(globalNpmrcDirectory.FullName, "npmrc"),
+            "registry=https://npm.contoso.example/from-prefix-variable/");
+
+        var resolver = CreateResolver(environment: new Dictionary<string, string>
+        {
+            ["PREFIX"] = prefix.FullName
+        });
+
+        var resolution = resolver.Resolve(PackageName);
+
+        Assert.Equal(
+            "https://npm.contoso.example/from-prefix-variable/",
+            resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_PrefersTheConfiguredPrefixOverThePrefixVariable()
+    {
+        // PREFIX only supplies the default for the `prefix` config, so the config outranks it.
+        var configuredPrefix = Directory.CreateDirectory(Path.Combine(_root.FullName, "corp-config"));
+        File.WriteAllText(
+            Path.Combine(Directory.CreateDirectory(Path.Combine(configuredPrefix.FullName, "etc")).FullName, "npmrc"),
+            "registry=https://npm.contoso.example/from-configured-prefix/");
+
+        var variablePrefix = Directory.CreateDirectory(Path.Combine(_root.FullName, "corp-env"));
+        File.WriteAllText(
+            Path.Combine(Directory.CreateDirectory(Path.Combine(variablePrefix.FullName, "etc")).FullName, "npmrc"),
+            "registry=https://npm.contoso.example/from-prefix-variable/");
+
+        var resolver = CreateResolver(environment: new Dictionary<string, string>
+        {
+            ["PREFIX"] = variablePrefix.FullName,
+            ["npm_config_prefix"] = configuredPrefix.FullName
+        });
+
+        var resolution = resolver.Resolve(PackageName);
+
+        Assert.Equal(
+            "https://npm.contoso.example/from-configured-prefix/",
+            resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
     public void Resolve_ReadsAQuotedNpmrcKey()
     {
         // ini decodes the key half with the same unsafe() pass it applies to values, so npm sees

@@ -733,6 +733,37 @@ public sealed class ReleasePublishNugetPipelineTests
     }
 
     [Fact]
+    public async Task EachFailedAnonymousMirrorAttemptDiscardsItsOwnCache()
+    {
+        // The npm cache is a sibling of the attempt directory, not a child, so removing the attempt
+        // directory alone leaves it behind. Every attempt packs the pointer plus one tarball per
+        // RID, and with 10 attempts the abandoned caches would hold ten copies of every binary on
+        // the agent until the job ends.
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+        var seedScript = ExtractSection(
+            pipeline,
+            "function Invoke-NpmPack",
+            "displayName: 'Seed and Validate npm Internal Mirror'");
+
+        Assert.Contains(
+            "$attemptCache = Join-Path $anonymousCache \"attempt-$attempt\"",
+            seedScript,
+            StringComparison.Ordinal);
+
+        var attemptRootRemovalIndex = FindRequiredText(
+            seedScript,
+            "Remove-Item -LiteralPath $attemptRoot -Recurse -Force");
+        var attemptCacheRemovalIndex = FindRequiredText(
+            seedScript,
+            "Remove-Item -LiteralPath $attemptCache -Recurse -Force");
+        var retryDelayIndex = FindRequiredText(seedScript, "Start-Sleep -Seconds 30");
+
+        Assert.True(
+            attemptRootRemovalIndex < attemptCacheRemovalIndex && attemptCacheRemovalIndex < retryDelayIndex,
+            "Both the attempt directory and its cache have to be discarded before the retry sleeps.");
+    }
+
+    [Fact]
     public async Task NpmMirrorValidationIsExplicitlyGatedWhenBothPublishFlagsAreSkipped()
     {
         var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
