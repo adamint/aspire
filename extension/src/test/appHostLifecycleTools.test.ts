@@ -1036,6 +1036,23 @@ suite('AppHost lifecycle language model tools', () => {
             assert.strictEqual(JSON.stringify(result).includes('/Users/private'), false);
         });
 
+        test('does not start an AppHost when the service is disposed during the authoritative probe', async () => {
+            // `preflight` rejects a disposed service, but the in-lock preflight is separated
+            // from the claim by the target resolution and the `aspire ps` probe. Deactivation
+            // landing in that window would otherwise start a process that outlives the host.
+            launchService.onRunningAppHostsRequested = () => {
+                if (launchService.runningAppHostRequests === 2) {
+                    service.dispose();
+                }
+            };
+
+            const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(launchService.launchCalls.length, 0, 'Expected no AppHost to be launched after the service was disposed');
+            assert.strictEqual(launchService.reserveLaunchAttempts, 0, 'Expected no launching claim to be taken after the service was disposed');
+            assert.strictEqual(result.outcome, 'cancelled');
+        });
+
         test('reports a bounded busy outcome when the shared lifecycle lock cannot be acquired', async () => {
             launchService.lifecycleLockError = new AppHostLifecycleLockTimeoutError();
 

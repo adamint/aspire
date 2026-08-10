@@ -391,6 +391,17 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                     return createResult(aspireAppHostStartToolName, 'alreadyRunning', current.displayPath, 'external', requestedMode, undefined);
                 }
 
+                // Disposal means the extension is deactivating. The check in `preflight` is
+                // separated from this point by the target resolution and the `aspire ps` probe,
+                // and neither is bound to this service's lifetime, so re-read the flag before
+                // taking the claim: an AppHost started here would outlive the host tearing down.
+                // Trust deliberately is not re-read - the API exposes only
+                // `onDidGrantWorkspaceTrust`, because removing trust reloads the window and
+                // restarts the extension host, so `isTrusted` can only go false to true here.
+                if (this._disposed) {
+                    return createResult(aspireAppHostStartToolName, 'cancelled', current.displayPath, 'none', requestedMode, undefined);
+                }
+
                 // Claim the launching slot in one synchronous step. The lifecycle lock only
                 // serializes callers that take it, and `launch.json`/F5 reaches
                 // `startDebugging` without it, so this claim - not the checks above - is
