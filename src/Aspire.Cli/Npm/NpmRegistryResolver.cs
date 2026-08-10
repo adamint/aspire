@@ -61,7 +61,11 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
     private const string ScopedRegistryKeySuffix = ":registry";
     private const string UserConfigKey = "userconfig";
     private const string GlobalConfigKey = "globalconfig";
+    private const string PrefixKey = "prefix";
     private const string NpmrcFileName = ".npmrc";
+
+    // npm's global npmrc has no leading dot: resolve(prefix, 'etc/npmrc').
+    private const string GlobalNpmrcFileName = "npmrc";
 
     // npm expands ${VAR} by indexing Node's process.env, which is case-insensitive only on Windows.
     // Matching that means ${npm_host} must not pick up NPM_HOST on Linux or macOS, where npm would
@@ -260,12 +264,9 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             // npm's envReplace leaves each undefined "${VAR}" in place instead of dropping the
             // entry, so the value stays selected at this precedence and npm's own request fails.
             // Keeping the literal reproduces that rather than silently consulting a
-            // lower-precedence layer, and it keeps a defined ${NPM_TOKEN} that sits beside an
-            // undefined reference out of the retained string.
+            // lower-precedence layer.
             // See https://github.com/npm/config/blob/main/lib/env-replace.js.
-            var configuredValue = TryExpandEnvironmentReferences(rawValue, out var expandedValue)
-                ? expandedValue
-                : rawValue;
+            var configuredValue = ExpandEnvironmentReferences(rawValue);
 
             if (TryCreateConfigurationValue(key, configuredValue, $"the {name} environment variable", out var configurationValue))
             {
@@ -375,10 +376,14 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             // "//registry.example.com/:_authToken=..." entry never becomes a token-bearing string.
             // npm substitutes ${VAR} in keys as well as values, so "@${NPM_SCOPE}:registry" has to
             // be expanded before the allow-list decides whether the entry is interesting at all.
-            if (!TryParseNpmrcKey(line, out var rawKey, out var rawValue, out var hasAssignment) ||
-                !TryExpandEnvironmentReferences(rawKey, out var key) ||
-                !IsInterestingKey(key) ||
-                !CanRetainExpandedKey(rawKey, key))
+            if (!TryParseNpmrcKey(line, out var rawKey, out var rawValue, out var hasAssignment))
+            {
+                continue;
+            }
+
+            var key = ExpandEnvironmentReferences(rawKey);
+
+            if (!IsInterestingKey(key) || !CanRetainExpandedKey(rawKey, key))
             {
                 continue;
             }
@@ -390,12 +395,7 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
 
             // See the matching comment in MergeEnvironment: npm leaves an undefined "${VAR}"
             // literal rather than dropping the entry, so the layer stays selected and unusable.
-            if (!TryExpandEnvironmentReferences(parsedValue, out var value))
-            {
-                value = parsedValue;
-            }
-
-            SetIfPresent(fileConfiguration, key, value, path);
+            SetIfPresent(fileConfiguration, key, ExpandEnvironmentReferences(parsedValue), path);
         }
 
         foreach (var (key, value) in fileConfiguration)
@@ -596,14 +596,11 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
     /// untouched, matching npm's behavior of leaving a non-reference literal.
     /// See https://github.com/npm/cli/blob/latest/workspaces/config/lib/env-replace.js.
     /// </remarks>
-    private bool TryExpandEnvironmentReferences(string value, [NotNullWhen(true)] out string? expanded)
+    private string ExpandEnvironmentReferences(string value)
     {
-        expanded = null;
-
         if (!value.Contains("${", StringComparison.Ordinal))
         {
-            expanded = value;
-            return true;
+            return value;
         }
 
         var builder = new System.Text.StringBuilder(value.Length);
@@ -669,7 +666,14 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             {
                 if (!isOptional)
                 {
-                    return false;
+                    // npm's fallback for a missing mandatory reference is the literal "${NAME}",
+                    // applied per reference by String.replace. Substitutions already made for other
+                    // variables in the same value survive, so "https://host/${SEGMENT}/${MISSING}/"
+                    // with SEGMENT=feed becomes "https://host/feed/${MISSING}/" rather than
+                    // reverting to the raw text.
+                    builder.Append(value, start, end + 1 - start);
+                    index = end + 1;
+                    continue;
                 }
 
                 variableValue = string.Empty;
@@ -679,8 +683,7 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             index = end + 1;
         }
 
-        expanded = builder.ToString();
-        return true;
+        return builder.ToString();
     }
 
     private string? GetUserConfigPath(IReadOnlyDictionary<string, ConfigurationValue> configuration)
@@ -732,14 +735,24 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
 
     private string? GetGlobalConfigPath(IReadOnlyDictionary<string, ConfigurationValue> configuration)
     {
-        // npm computes globalconfig as "<prefix>/etc/npmrc" by default, and the prefix is only
-        // knowable by launching npm. An explicitly configured globalconfig needs no prefix, so an
-        // npmrc that pins the registry there is honored rather than silently skipped, which would
-        // otherwise advertise an update the recommended global install cannot resolve.
+        // An explicitly configured globalconfig wins, exactly as it does for npm.
         if (configuration.TryGetValue(GlobalConfigKey, out var globalConfig) &&
             !string.IsNullOrWhiteSpace(globalConfig.Value))
         {
             return ResolveConfiguredPath(globalConfig.Value);
+        }
+
+        // Otherwise npm derives it: `resolve(prefix, 'etc/npmrc')`. The default prefix is npm's own
+        // install location and is only knowable by launching npm, but a configured prefix needs no
+        // such probe - verified against @npmcli/config 11.0.1, where npm_config_prefix=/corp yields
+        // globalconfig /corp/etc/npmrc. An enterprise that sets prefix and pins the registry in the
+        // npmrc underneath it would otherwise be resolved against public npm, advertising an update
+        // the recommended global install cannot fetch.
+        // See https://github.com/npm/cli/blob/latest/workspaces/config/lib/index.js (globalPrefix).
+        if (configuration.TryGetValue(PrefixKey, out var prefix) &&
+            !string.IsNullOrWhiteSpace(prefix.Value))
+        {
+            return Path.Combine(ResolveConfiguredPath(prefix.Value), "etc", GlobalNpmrcFileName);
         }
 
         return null;
@@ -827,12 +840,12 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
     }
 
     /// <summary>
-    /// Limits what is retained to the registry keys and the two npmrc redirects, so credential
+    /// Limits what is retained to the registry keys and the keys that locate an npmrc, so credential
     /// entries in a <c>.npmrc</c> or in the process environment are never retained.
     /// </summary>
     private static bool IsInterestingKey(string key)
     {
-        return IsRegistryKey(key) || key is UserConfigKey or GlobalConfigKey;
+        return IsRegistryKey(key) || key is UserConfigKey or GlobalConfigKey or PrefixKey;
     }
 
     private static bool IsRegistryKey(string key)

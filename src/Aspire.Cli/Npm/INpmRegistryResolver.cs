@@ -10,7 +10,9 @@ namespace Aspire.Cli.Npm;
 internal interface INpmRegistryResolver
 {
     /// <summary>
-    /// Gets the registry base address <c>npm install &lt;packageName&gt;</c> would resolve against.
+    /// Gets the registry base address <c>npm install -g &lt;packageName&gt;</c> would resolve
+    /// against. The global command is the one the update notice prints, and it is what makes the
+    /// project <c>.npmrc</c> irrelevant here: a global install does not consult one.
     /// </summary>
     /// <param name="packageName">The npm package name (e.g., "@microsoft/aspire-cli").</param>
     NpmRegistryResolution Resolve(string packageName);

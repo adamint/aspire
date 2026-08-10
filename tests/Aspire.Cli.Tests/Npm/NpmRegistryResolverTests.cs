@@ -589,6 +589,90 @@ public class NpmRegistryResolverTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_ExpandsTheDefinedReferencesBesideAnUndefinedOne()
+    {
+        // npm's env-replace runs String.replace per reference, so a missing mandatory variable
+        // leaves only its own "${NAME}" behind while every other substitution survives. Discarding
+        // the whole expansion would resolve a different address than npm does - here it would drop
+        // the "feed" path segment - and the partially expanded value is still a legal URL, so npm
+        // really does request it rather than erroring out.
+        var resolver = CreateResolver(environment: new Dictionary<string, string>
+        {
+            ["NPM_SEGMENT"] = "feed",
+            ["npm_config_registry"] = "https://npm.contoso.example/${NPM_SEGMENT}/${NPM_HOST_NOT_SET}/"
+        });
+
+        var resolution = resolver.Resolve(PackageName);
+
+        Assert.Equal(
+            "https://npm.contoso.example/feed/$%7BNPM_HOST_NOT_SET%7D/",
+            resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_ExpandsTheDefinedReferencesBesideAnUndefinedOneInAnNpmrcValue()
+    {
+        WriteHomeNpmrc("registry=https://npm.contoso.example/${NPM_SEGMENT}/${NPM_HOST_NOT_SET}/");
+
+        var resolver = CreateResolver(environment: new Dictionary<string, string>
+        {
+            ["NPM_SEGMENT"] = "feed"
+        });
+
+        var resolution = resolver.Resolve(PackageName);
+
+        Assert.Equal(
+            "https://npm.contoso.example/feed/$%7BNPM_HOST_NOT_SET%7D/",
+            resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_ReadsTheGlobalNpmrcUnderneathAConfiguredPrefix()
+    {
+        // npm derives globalconfig as resolve(prefix, "etc/npmrc") when nothing sets it explicitly,
+        // so an enterprise that sets prefix and pins the registry there would otherwise be resolved
+        // against public npm - an update the recommended global install cannot fetch.
+        var prefix = Directory.CreateDirectory(Path.Combine(_root.FullName, "corp"));
+        var globalNpmrcDirectory = Directory.CreateDirectory(Path.Combine(prefix.FullName, "etc"));
+        File.WriteAllText(
+            Path.Combine(globalNpmrcDirectory.FullName, "npmrc"),
+            "registry=https://npm.contoso.example/from-prefix/");
+
+        var resolver = CreateResolver(environment: new Dictionary<string, string>
+        {
+            ["npm_config_prefix"] = prefix.FullName
+        });
+
+        var resolution = resolver.Resolve(PackageName);
+
+        Assert.Equal("https://npm.contoso.example/from-prefix/", resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_PrefersAnExplicitGlobalConfigOverThePrefixDerivedOne()
+    {
+        // globalconfig is an explicit npm setting; the prefix only supplies the default.
+        var prefix = Directory.CreateDirectory(Path.Combine(_root.FullName, "corp"));
+        var globalNpmrcDirectory = Directory.CreateDirectory(Path.Combine(prefix.FullName, "etc"));
+        File.WriteAllText(
+            Path.Combine(globalNpmrcDirectory.FullName, "npmrc"),
+            "registry=https://npm.contoso.example/from-prefix/");
+
+        var explicitGlobalNpmrc = Path.Combine(_root.FullName, "explicit-npmrc");
+        File.WriteAllText(explicitGlobalNpmrc, "registry=https://npm.contoso.example/from-globalconfig/");
+
+        var resolver = CreateResolver(environment: new Dictionary<string, string>
+        {
+            ["npm_config_prefix"] = prefix.FullName,
+            ["npm_config_globalconfig"] = explicitGlobalNpmrc
+        });
+
+        var resolution = resolver.Resolve(PackageName);
+
+        Assert.Equal("https://npm.contoso.example/from-globalconfig/", resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
     public void Resolve_ReadsAQuotedNpmrcKey()
     {
         // ini decodes the key half with the same unsafe() pass it applies to values, so npm sees
