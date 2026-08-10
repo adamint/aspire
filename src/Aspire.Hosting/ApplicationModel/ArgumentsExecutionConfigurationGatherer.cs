@@ -175,16 +175,23 @@ internal sealed class MirroredCommandLineArgs : IList<object>
             var primaryArgument = _primaryArguments[index];
             primaryArgument.Value = value;
 
+            // Prefer the identity mapping built in the constructor. When the debug rewrite replaced or
+            // dropped this argument there is no counterpart, so fall back to the positional slot to keep
+            // ordinary registration-order semantics. That fallback must never address an entry the debug
+            // rewrite introduced (PrimaryId is null), because the two branches are offset by exactly those
+            // entries and writing through would silently strip a debugger token.
             var secondaryIndex = _secondaryArguments.FindIndex(argument => argument.PrimaryId == primaryArgument.Id);
             if (secondaryIndex < 0)
             {
+                if (index >= _secondaryArguments.Count || _secondaryArguments[index].PrimaryId is null)
+                {
+                    return;
+                }
+
                 secondaryIndex = index;
             }
 
-            if (secondaryIndex < _secondaryArguments.Count)
-            {
-                _secondaryArguments[secondaryIndex].Value = value;
-            }
+            _secondaryArguments[secondaryIndex].Value = value;
 
             SecondaryOperations.Add(new SetMirroredCommandLineArgsOperation(secondaryIndex, value));
         }
@@ -265,16 +272,20 @@ internal sealed class MirroredCommandLineArgs : IList<object>
         var primaryId = _primaryArguments[index].Id;
         _primaryArguments.RemoveAt(index);
 
+        // Same identity-then-position rule as the indexer: the positional fallback must not delete an
+        // argument the debug rewrite introduced.
         var secondaryIndex = _secondaryArguments.FindIndex(argument => argument.PrimaryId == primaryId);
         if (secondaryIndex < 0)
         {
+            if (index >= _secondaryArguments.Count || _secondaryArguments[index].PrimaryId is null)
+            {
+                return;
+            }
+
             secondaryIndex = index;
         }
 
-        if (secondaryIndex < _secondaryArguments.Count)
-        {
-            _secondaryArguments.RemoveAt(secondaryIndex);
-        }
+        _secondaryArguments.RemoveAt(secondaryIndex);
 
         SecondaryOperations.Add(new RemoveAtMirroredCommandLineArgsOperation(secondaryIndex));
     }
