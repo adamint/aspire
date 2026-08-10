@@ -96,8 +96,10 @@ suite('E2E shard matrix', () => {
      */
     function matrixSpecPaths(workflow: string): string[] {
         return [...new Set(matrixRows(workflow)
-            .map(row => row.spec)
-            .filter((spec): spec is string => spec !== undefined))]
+            .map(row => {
+                assert.ok(row.spec, 'E2E matrix rows must include spec.');
+                return row.spec;
+            }))]
             .sort();
     }
 
@@ -151,7 +153,7 @@ suite('E2E shard matrix', () => {
         return rows;
 
         function appendCurrentRow(): void {
-            if (currentRow?.spec !== undefined || currentRow?.disabledIssue !== undefined) {
+            if (currentRow !== undefined) {
                 rows.push(currentRow);
             }
         }
@@ -371,6 +373,25 @@ suite('E2E shard matrix', () => {
             () => assertMatrixMatchesSpecs(workflow, ['edgeCases.e2e.test.ts']),
             assert.AssertionError,
             'A nested spec property is not matrix.spec and must not count as a covered E2E shard.');
+    });
+
+    test('rejects a matrix row without a spec', () => {
+        const workflow = [
+            'jobs:',
+            '  extension_e2e:',
+            '    strategy:',
+            '      matrix:',
+            '        include:',
+            '          - name: Linux',
+            '            shardName: edge-cases',
+            '            runner: ubuntu-latest',
+            '',
+        ].join('\n');
+
+        assert.throws(
+            () => assertMatrixMatchesSpecs(workflow, ['edgeCases.e2e.test.ts']),
+            /E2E matrix rows must include spec/,
+            'A row without matrix.spec would run the default all-spec glob and must fail the guard.');
     });
 
     test('rejects a disabled matrix row that is not explicitly tracked', () => {
