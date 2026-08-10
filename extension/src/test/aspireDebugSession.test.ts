@@ -199,6 +199,36 @@ suite('AspireDebugSession tests', () => {
         }
     });
 
+    test('a Windows CLI process that exits on its own is not swept after the cooperative grace period', async () => {
+        // The exit callback runs `dispose()`, which re-runs the CLI disposable and schedules the
+        // forced escalation. Asserting only at exit time therefore proves nothing about the sweep
+        // that actually reaches taskkill, so this test has to advance past the grace period.
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const platformStub = sinon.stub(process, 'platform').value('win32');
+        const cliProcess = createFakeCliProcess(4328, 0);
+        const spawnStub = sinon.stub(cliModule, 'spawnCliProcess').returns(cliProcess);
+        const terminateStub = sinon.stub(cliModule, 'terminateCliProcess');
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = createSessionForSpawn();
+
+        try {
+            await aspireDebugSession.spawnAspireCommand(['run'], '/workspace', false, 'aspire run');
+
+            spawnStub.firstCall.args[3]?.exitCallback?.(0);
+
+            // Well past the 10s cooperative grace period, so any scheduled escalation has fired.
+            await clock.tickAsync(30_000);
+
+            // The recorded PID named a process that has already exited, so Windows may have handed
+            // it to something unrelated by now. Nothing may aim taskkill at it.
+            sinon.assert.notCalled(terminateStub);
+        }
+        finally {
+            platformStub.restore();
+            clock.restore();
+        }
+    });
+
     test('a forced CLI process tree termination is not repeated by the exit callback', async () => {
         const cliProcess = createFakeCliProcess(4326, 0);
         const spawnStub = sinon.stub(cliModule, 'spawnCliProcess').returns(cliProcess);

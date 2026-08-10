@@ -220,6 +220,24 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     }
   }
 
+  /**
+   * Permanently gives up signalling the recorded CLI process tree, without signalling it.
+   *
+   * Windows has no equivalent of the POSIX process group: `taskkill /pid <pid> /t` walks the live
+   * process table to find children, so it can only reach descendants while the recorded PID still
+   * names the running leader. Once that PID is released the same number can be assigned to an
+   * unrelated process, and the sweep would then terminate that process and its children instead.
+   *
+   * Cancelling the pending timer is not enough on its own, because the disposable installed for the
+   * CLI schedules a new one every time it runs. Marking the PID as spent is what makes every later
+   * path — the scheduled escalation and any direct `terminateCliProcessTree` call — decline to aim
+   * at it.
+   */
+  private abandonCliProcessTree(): void {
+    this.cancelScheduledCliProcessTermination();
+    this._cliProcessTreeTerminationAttempted = true;
+  }
+
   private releaseExtensionContextOwnership(): void {
     if (this._removedFromExtensionContext) {
       return;
@@ -521,8 +539,14 @@ export class AspireDebugSession implements vscode.DebugAdapter {
           // leader exits, and the group id can be reused later, so collect that group immediately.
           // Windows taskkill needs the target PID to still identify a live process tree; after the
           // close event the CLI PID may already be reusable, so do not taskkill from this path.
+          // `dispose()` below re-runs the CLI disposable, which would otherwise schedule a forced
+          // sweep of that same spent PID once the grace period elapses, so retire it here instead
+          // of only skipping the immediate call.
           if (process.platform !== 'win32') {
             this.terminateCliProcessTree({ force: true });
+          }
+          else {
+            this.abandonCliProcessTree();
           }
           this._dcpServer.recordAppHostProcessExit(this.debugSessionId, code);
           // Flush any partial line left in either buffer so trailing output isn't lost.
