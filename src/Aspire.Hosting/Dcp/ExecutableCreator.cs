@@ -16,7 +16,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting.Dcp;
 
-using ExecutableConfiguration = (IExecutionConfigurationResult OriginalConfiguration, IExecutionConfigurationResult ExecutableConfiguration, ExecutablePemCertificates? PemCertificates);
+using ExecutableConfiguration = (IExecutionConfigurationResult Configuration, ExecutablePemCertificates? PemCertificates);
 
 /// <summary>
 /// Handles preparation and creation of Executable DCP resources (project executables and plain executables).
@@ -59,6 +59,7 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
     {
         PrepareProjectExecutables(cancellationToken);
         PreparePlainExecutables();
+
         return _appResources.Get().OfType<RenderedModelResource<Executable>>();
     }
 
@@ -90,42 +91,7 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
             spec.Args.AddRange(projectArgs);
         }
 
-        // PrepareProjectExecutables() takes a dedicated branch for project resources that carry a launch
-        // args override: it pins the executable to Process execution and writes the static "project"
-        // launch configuration itself. Both of those decisions have to be preserved here.
-        //
-        // This is NOT the same as "the resource has no launch configuration". MAUI platform resources are
-        // ProjectResources that carry both a ProjectLaunchArgsOverrideAnnotation and a "maui"
-        // SupportsDebuggingAnnotation, and their producer must still run below so the IDE receives the MAUI
-        // launch configuration rather than the generic "project" one.
-        var preparedFromLaunchArgsOverride = er.ModelResource is ProjectResource && HasProjectLaunchArgsOverride(er.ModelResource);
-
-        SupportsDebuggingAnnotation? supportsDebuggingAnnotation = null;
-        if (!er.ModelResource.HasAnnotationOfType<ForceProcessExecutionAnnotation>()
-            && er.ModelResource.SupportsDebugging(_configuration, out var activeDebuggingAnnotation))
-        {
-            supportsDebuggingAnnotation = activeDebuggingAnnotation;
-
-            if (!preparedFromLaunchArgsOverride)
-            {
-                // Executable objects are reused for restarts, and a prior producer failure may have changed
-                // the execution type to Process. Reset it before building arguments because launch-profile
-                // arguments are executable in Process mode but display-only in IDE mode.
-                spec.ExecutionType = ExecutionType.IDE;
-            }
-        }
-
-        // A launch-args override pins the executable to Process mode, so the process command line must stay
-        // runnable even when a custom launch configuration producer also has an IDE-only args callback.
-        // The producer still runs below for non-"project" launch types, but its debug argument rewrite is
-        // suppressed for the executable snapshot.
-        var (originalConfiguration, configuration, pemCertificates) = await BuildExecutableConfiguration(
-                er,
-                resourceLogger,
-                supportsDebuggingAnnotation,
-                applyDebugArgumentRewrite: !preparedFromLaunchArgsOverride,
-                cancellationToken)
-            .ConfigureAwait(false);
+        var (configuration, pemCertificates) = await BuildExecutableConfiguration(er, resourceLogger, cancellationToken).ConfigureAwait(false);
 
         spec.PemCertificates = pemCertificates;
 
@@ -194,15 +160,13 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         }
 
         // Invoke the active launch configuration producer only after the resource execution configuration
-        // has been resolved. This gives every launch type, including "project", the exact arguments and
-        // environment used for this executable creation.
-        //
-        // The single exception is the "project" type on a launch-args-override project resource:
-        // PrepareProjectExecutables() already wrote the launch configuration matching the overridden command
-        // line, so re-running that producer would describe a launch that never happens. Producers for every
-        // other launch type still run here, because nothing else supplies their configuration.
-        if (supportsDebuggingAnnotation is not null
-            && !(preparedFromLaunchArgsOverride && supportsDebuggingAnnotation.LaunchConfigurationType is KnownLaunchConfigurationTypes.Project))
+        // has been resolved. This lets the producer reuse the exact arguments and environment values applied
+        // to this executable creation without evaluating resource callbacks a second time.
+        if (!er.ModelResource.HasAnnotationOfType<ForceProcessExecutionAnnotation>()
+            && er.ModelResource.SupportsDebugging(_configuration, out var supportsDebuggingAnnotation)
+            && !(er.ModelResource is ProjectResource
+                && HasProjectLaunchArgsOverride(er.ModelResource)
+                && supportsDebuggingAnnotation.LaunchConfigurationType is KnownLaunchConfigurationTypes.Project))
         {
             var isProjectLaunchConfiguration =
                 supportsDebuggingAnnotation.LaunchConfigurationType is KnownLaunchConfigurationTypes.Project;
@@ -217,27 +181,18 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
             var mode = isProjectLaunchConfiguration
                 ? GetProjectLaunchConfigurationMode()
                 : _configuration[KnownConfigNames.DebugSessionRunMode] ?? ExecutableLaunchMode.NoDebug;
-
-            // The fallback below runs the executable spec's command and args "as is", so it is only unsafe
-            // when the debug rewrite actually replaced them. A launch-args override suppresses that rewrite
-            // (applyDebugArgumentRewrite above), which leaves the spec holding the user's real command line
-            // -- so keying the guard on the annotation alone denied the fallback to exactly the resources
-            // that could still use it, and a MAUI or custom project resource whose producer threw failed
-            // outright instead of running.
-            var rewroteArgumentsForDebugging = supportsDebuggingAnnotation.RewritesArgumentsForDebugging
-                && !preparedFromLaunchArgsOverride;
             var callbackContext = new LaunchConfigurationCallbackContext(
                 mode,
                 er.ModelResource,
-                originalConfiguration,
-                configuration,
-                _executionContext,
-                resourceLogger,
+                configuration.EnvironmentVariables.ToDictionary(
+                    static variable => variable.Key,
+                    static variable => variable.Value,
+                    StringComparer.Ordinal),
                 cancellationToken);
 
             try
             {
-                // Executable objects are reused for restarts. Clear the prior launch configuration before
+                // Executable objects are reused for restarts, so clear the prior launch configuration before
                 // applying the freshly resolved producer result.
                 exe.Annotate(Executable.LaunchConfigurationsAnnotation, string.Empty);
                 await supportsDebuggingAnnotation
@@ -245,9 +200,8 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
                     .ConfigureAwait(false);
             }
             catch (Exception exception) when (
-                (exception is not OperationCanceledException || !callbackContext.CancellationToken.IsCancellationRequested)
-                && !isProjectLaunchConfiguration
-                && !rewroteArgumentsForDebugging)
+                !isProjectLaunchConfiguration
+                && !supportsDebuggingAnnotation.RewritesArgumentsForDebugging)
             {
                 _logger.LogWarning(
                     exception,
@@ -267,7 +221,6 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
 
         foreach (var project in modelProjectResources)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             if (!project.TryGetProjectMetadata(out var projectMetadata))
             {
                 throw new InvalidOperationException($"Project resource '{project.Name}' is missing required metadata."); // Should never happen.
@@ -342,6 +295,9 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
                         exe.Spec.FallbackExecutionTypes = [ExecutionType.Process];
                     }
 
+                    // The active launch configuration producer runs later in CreateObjectAsync, after the
+                    // resource's arguments and environment variables have been resolved.
+
                     // File-based apps (.cs files) are not supported by all IDEs (e.g. Visual Studio
                     // returns 500 for them). Populate fallback process args so that when the IDE
                     // rejects the launch request and DCP falls back to ExecutionType.Process, the
@@ -379,7 +335,7 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
                     exe.Spec.ExecutionType = ExecutionType.IDE;
                     exe.Spec.FallbackExecutionTypes = [ExecutionType.Process];
 
-                    ApplyProjectLaunchConfiguration(exe, project, projectMetadata);
+                    exe.SetProjectLaunchConfiguration(CreateProjectLaunchConfiguration(project, projectMetadata));
                 }
                 else
                 {
@@ -527,12 +483,7 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         }
     }
 
-    private async Task<ExecutableConfiguration> BuildExecutableConfiguration(
-        RenderedModelResource<Executable> er,
-        ILogger resourceLogger,
-        SupportsDebuggingAnnotation? supportsDebuggingAnnotation,
-        bool applyDebugArgumentRewrite,
-        CancellationToken cancellationToken)
+    private async Task<ExecutableConfiguration> BuildExecutableConfiguration(RenderedModelResource<Executable> er, ILogger resourceLogger, CancellationToken cancellationToken)
     {
         var exe = (Executable)er.DcpResource;
 
@@ -542,25 +493,8 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         var certificatesOutputPath = Path.Join(certificatesRootDir, "certs");
         var baseServerAuthOutputPath = Path.Join(certificatesRootDir, "private");
 
-        var activeDebugArgsAnnotation = supportsDebuggingAnnotation?.DebugCommandLineArgsCallbackAnnotation;
-        var shouldBuildDebugArguments = activeDebugArgsAnnotation is not null && applyDebugArgumentRewrite;
-        DebugCommandLineArgsRewriteCapture? debugRewriteCapture = null;
-        var configurationBuilder = ExecutionConfigurationBuilder.Create(er.ModelResource);
-        if (activeDebugArgsAnnotation is null)
-        {
-            configurationBuilder.WithArgumentsConfig();
-        }
-        else if (shouldBuildDebugArguments)
-        {
-            debugRewriteCapture = new DebugCommandLineArgsRewriteCapture(activeDebugArgsAnnotation);
-            configurationBuilder.WithArgumentsConfig(debugRewriteCapture);
-        }
-        else
-        {
-            configurationBuilder.WithArgumentsConfig(annotation => !ReferenceEquals(annotation, activeDebugArgsAnnotation));
-        }
-
-        var originalConfiguration = await configurationBuilder
+        var configuration = await ExecutionConfigurationBuilder.Create(er.ModelResource)
+            .WithArgumentsConfig()
             .WithEnvironmentVariablesConfig()
             .WithCertificateTrustConfig(scope =>
             {
@@ -599,20 +533,9 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
             .BuildAsync(_executionContext, resourceLogger, cancellationToken)
             .ConfigureAwait(false);
 
-        var executableConfiguration = shouldBuildDebugArguments
-            ? await BuildExecutableConfigurationWithDebugArgumentsAsync(
-                    originalConfiguration,
-                    debugRewriteCapture!.OriginalArguments,
-                    debugRewriteCapture!.ExecutableArguments,
-                    er.ModelResource,
-                    resourceLogger,
-                    cancellationToken)
-                .ConfigureAwait(false)
-            : originalConfiguration;
-
         // Add the certificates to the executable spec so they'll be placed in the DCP config
         ExecutablePemCertificates? pemCertificates = null;
-        if (originalConfiguration.TryGetAdditionalData<CertificateTrustExecutionConfigurationData>(out var certificateTrustConfiguration)
+        if (configuration.TryGetAdditionalData<CertificateTrustExecutionConfigurationData>(out var certificateTrustConfiguration)
             && certificateTrustConfiguration.Scope != CertificateTrustScope.None
             && certificateTrustConfiguration.Certificates.Count > 0)
         {
@@ -636,7 +559,7 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
             }
         }
 
-        if (originalConfiguration.TryGetAdditionalData<HttpsCertificateExecutionConfigurationData>(out var tlsCertificateConfiguration))
+        if (configuration.TryGetAdditionalData<HttpsCertificateExecutionConfigurationData>(out var tlsCertificateConfiguration))
         {
             var thumbprint = tlsCertificateConfiguration.Certificate.Thumbprint;
             var publicCertificatePem = tlsCertificateConfiguration.Certificate.ExportCertificatePem();
@@ -681,195 +604,7 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
             }
         }
 
-        return (originalConfiguration, executableConfiguration, pemCertificates);
-    }
-
-    private async Task<IExecutionConfigurationResult> BuildExecutableConfigurationWithDebugArgumentsAsync(
-        IExecutionConfigurationResult originalConfiguration,
-        IReadOnlyList<object> originalArgsBeforePostArgumentGatherers,
-        IReadOnlyList<object> rewrittenArgs,
-        IResource resource,
-        ILogger resourceLogger,
-        CancellationToken cancellationToken)
-    {
-        // The executable snapshot is gathered in the same pass as the original configuration so the active
-        // debug rewrite keeps its registration-order position without replaying ordinary WithArgs callbacks.
-        // It still contains unprocessed arguments here; reusing the matching resolutions below avoids
-        // re-resolving value providers that already ran for this executable creation.
-        var originalResolutions = ExecutionConfigurationResult.GetArgumentResolutions(originalConfiguration);
-        rewrittenArgs = AppendArgumentsAddedByLaterGatherers(originalArgsBeforePostArgumentGatherers, rewrittenArgs, originalResolutions);
-
-        // Arguments the debug rewrite kept were already resolved into originalConfiguration for this same
-        // executable creation. IValueProvider carries no idempotence guarantee, so resolving them a second
-        // time can produce a different value or repeat a side effect - the same hazard that stopped ordinary
-        // WithArgs callbacks from being replayed above. Reuse those resolutions and send only what the
-        // callback introduced through the gatherer.
-        //
-        // The lookup is keyed by reference identity but tracked per occurrence: one provider instance can sit
-        // at several positions on the command line, and because it is resolved once per position those
-        // positions can hold different values. Collapsing them to a single entry would replay the first
-        // position's value everywhere the instance appears.
-        var previousResolutions = new Dictionary<object, List<ArgumentResolution>>(ReferenceEqualityComparer.Instance);
-        foreach (var resolution in originalResolutions)
-        {
-            if (!previousResolutions.TryGetValue(resolution.Unprocessed, out var resolutions))
-            {
-                resolutions = [];
-                previousResolutions[resolution.Unprocessed] = resolutions;
-            }
-
-            resolutions.Add(resolution);
-        }
-
-        var reuseCounts = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
-        var plannedArguments = new List<(object Argument, ArgumentResolution? Reused)>(rewrittenArgs.Count);
-        var rewrittenArgsGathererContext = new ExecutionConfigurationGathererContext();
-        foreach (var argument in rewrittenArgs)
-        {
-            if (previousResolutions.TryGetValue(argument, out var resolutions))
-            {
-                var occurrence = reuseCounts.TryGetValue(argument, out var count) ? count : 0;
-                reuseCounts[argument] = occurrence + 1;
-
-                // A callback that duplicates an argument produces more occurrences than were resolved, and the
-                // extra ones repeat the last recorded resolution rather than being resolved again. Resolving
-                // again is what this whole path exists to avoid.
-                plannedArguments.Add((argument, resolutions[Math.Min(occurrence, resolutions.Count - 1)]));
-            }
-            else
-            {
-                plannedArguments.Add((argument, null));
-                rewrittenArgsGathererContext.Arguments.Add(argument);
-            }
-        }
-
-        var rewrittenArgsConfiguration = await rewrittenArgsGathererContext
-            .ResolveAsync(resource, resourceLogger, _executionContext, cancellationToken)
-            .ConfigureAwait(false);
-
-        // Newly resolved values are matched back by reference identity and occurrence order rather than by
-        // position, because the gatherer only received the arguments that had no prior resolution.
-        var newResolutions = new Dictionary<object, Queue<ArgumentResolution>>(ReferenceEqualityComparer.Instance);
-        foreach (var resolution in ExecutionConfigurationResult.GetArgumentResolutions(rewrittenArgsConfiguration))
-        {
-            if (!newResolutions.TryGetValue(resolution.Unprocessed, out var queue))
-            {
-                queue = new Queue<ArgumentResolution>();
-                newResolutions[resolution.Unprocessed] = queue;
-            }
-
-            queue.Enqueue(resolution);
-        }
-
-        var reusedReferences = new List<object>();
-        var reusedResolutions = new List<ArgumentResolution>();
-        var retainedArgumentResolutions = new List<ArgumentResolution>(rewrittenArgs.Count);
-        var argumentsWithUnprocessed = new List<(object Unprocessed, string Processed, bool IsSensitive)>(rewrittenArgs.Count);
-        foreach (var (argument, reused) in plannedArguments)
-        {
-            var resolution = reused;
-            if (resolution is null && newResolutions.TryGetValue(argument, out var queue) && queue.Count > 0)
-            {
-                resolution = queue.Dequeue();
-            }
-
-            if (resolution is not { } argumentResolution)
-            {
-                continue;
-            }
-
-            retainedArgumentResolutions.Add(argumentResolution);
-            if (reused is not null)
-            {
-                reusedResolutions.Add(argumentResolution);
-            }
-
-            // An argument that resolved to null, or whose resolution threw, contributes nothing to the command
-            // line - exactly as it would have if the gatherer had resolved it here.
-            if (argumentResolution.Processed is not { } processed)
-            {
-                continue;
-            }
-
-            argumentsWithUnprocessed.Add((argument, processed, argumentResolution.IsSensitive));
-
-            if (reused is not null && argument is IValueProvider or IManifestExpressionProvider)
-            {
-                // ResolveAsync never saw this argument, so its reference has to be contributed here or the
-                // executable would lose the dependency edge that the original resolution recorded.
-                reusedReferences.Add(argument);
-            }
-        }
-
-        // Only failures that still apply to this executable are retained. A reused argument that failed to
-        // resolve and that the rewrite dropped is no longer part of the command line, so keeping its failure
-        // would fail an executable that has nothing left to fail on. Only reused resolutions are considered
-        // here because failures from the gatherer above are already carried by its own result, and they always
-        // apply: it only ever saw arguments that survived the rewrite. Environment variables are copied from
-        // the original configuration untouched, so their failures always apply too.
-        var environmentVariableExceptions = ExecutionConfigurationResult.GetEnvironmentVariableExceptions(originalConfiguration);
-        var retainedOriginalException = ExecutionConfigurationResult.CombineResolutionExceptions(reusedResolutions, environmentVariableExceptions);
-
-        var environmentReferences = originalConfiguration.EnvironmentVariablesWithUnprocessed
-            .Select(static kvp => kvp.Value.Unprocessed)
-            .Where(static value => value is IValueProvider or IManifestExpressionProvider);
-
-        return new ExecutionConfigurationResult
-        {
-            Resource = resource,
-            References = environmentReferences.Concat(rewrittenArgsConfiguration.References).Concat(reusedReferences).ToHashSet(),
-            ArgumentsWithUnprocessed = argumentsWithUnprocessed,
-            ArgumentResolutions = retainedArgumentResolutions,
-            EnvironmentVariablesWithUnprocessed = originalConfiguration.EnvironmentVariablesWithUnprocessed,
-            EnvironmentVariableExceptions = environmentVariableExceptions,
-            AdditionalConfigurationData = originalConfiguration.AdditionalConfigurationData,
-            Exception = CombineExecutionConfigurationExceptions(retainedOriginalException, rewrittenArgsConfiguration.Exception)
-        };
-    }
-
-    private static IReadOnlyList<object> AppendArgumentsAddedByLaterGatherers(
-        IReadOnlyList<object> originalArgsBeforePostArgumentGatherers,
-        IReadOnlyList<object> rewrittenArgs,
-        IReadOnlyList<ArgumentResolution> finalOriginalResolutions)
-    {
-        var finalOriginalArgs = finalOriginalResolutions.Select(static resolution => resolution.Unprocessed).ToArray();
-        if (finalOriginalArgs.Length < originalArgsBeforePostArgumentGatherers.Count)
-        {
-            return rewrittenArgs;
-        }
-
-        for (var i = 0; i < originalArgsBeforePostArgumentGatherers.Count; i++)
-        {
-            if (!ReferenceEquals(finalOriginalArgs[i], originalArgsBeforePostArgumentGatherers[i]))
-            {
-                // Later execution-configuration gatherers normally append arguments (for example TLS flags
-                // added by language integrations). If a custom gatherer reordered or removed the ordinary
-                // argument branch, we cannot safely infer how that mutation should apply to the debug branch
-                // without re-running callbacks, so keep the debug branch as captured.
-                return rewrittenArgs;
-            }
-        }
-
-        if (finalOriginalArgs.Length == originalArgsBeforePostArgumentGatherers.Count)
-        {
-            return rewrittenArgs;
-        }
-
-        return [.. rewrittenArgs, .. finalOriginalArgs.Skip(originalArgsBeforePostArgumentGatherers.Count)];
-    }
-
-    private static Exception? CombineExecutionConfigurationExceptions(Exception? originalException, Exception? rewrittenArgsException)
-    {
-        return (originalException, rewrittenArgsException) switch
-        {
-            (null, null) => null,
-            ({ } exception, null) => exception,
-            (null, { } exception) => exception,
-            ({ } original, { } rewritten) => new AggregateException(
-                "One or more errors occurred while resolving resource configuration.",
-                original,
-                rewritten)
-        };
+        return (configuration, pemCertificates);
     }
 
     private string GetCertificatesRootDirectory(RenderedModelResource<Executable> er, Executable exe)
@@ -1074,11 +809,6 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         }
 
         return true;
-    }
-
-    private void ApplyProjectLaunchConfiguration(Executable exe, IResource project, IProjectMetadata projectMetadata)
-    {
-        exe.SetProjectLaunchConfiguration(CreateProjectLaunchConfiguration(project, projectMetadata));
     }
 
     private ProjectLaunchConfiguration CreateProjectLaunchConfiguration(IResource project, IProjectMetadata projectMetadata)

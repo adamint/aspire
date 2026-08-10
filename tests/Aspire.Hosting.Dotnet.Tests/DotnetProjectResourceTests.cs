@@ -331,9 +331,7 @@ public class DotnetProjectResourceTests(ITestOutputHelper outputHelper)
         var projectPath = Path.Combine(builder.AppHostDirectory, "MyService", "MyService.csproj");
         var app = builder.AddDotnetProject("svc", projectPath, o => o.ExcludeLaunchProfile = true)
                          .WithArgs("--config", "prod.yaml")
-                         .WithDebugSupport(
-                             static _ => Task.FromResult(new ExecutableLaunchConfiguration("custom")),
-                             "custom");
+                         .WithDebugSupport(_ => new ExecutableLaunchConfiguration("custom"), "custom");
 
         using var application = builder.Build();
         var args = await ArgumentEvaluator.GetArgumentListAsync(app.Resource, application.Services);
@@ -366,10 +364,7 @@ public class DotnetProjectResourceTests(ITestOutputHelper outputHelper)
         var projectPath = Path.Combine(builder.AppHostDirectory, "MyService", "MyService.csproj");
         var app = builder.AddDotnetProject("svc", projectPath, o => o.ExcludeLaunchProfile = true)
                          .WithArgs("--config", "prod.yaml")
-                         .WithDebugSupport(
-                             static _ => Task.FromResult(new ExecutableLaunchConfiguration("custom")),
-                             "custom",
-                             ctx => ctx.Args.Add("rewritten-arg"));
+                         .WithDebugSupport(_ => new ExecutableLaunchConfiguration("custom"), "custom", ctx => ctx.Args.Add("rewritten-arg"));
 
         using var application = builder.Build();
         var args = await ArgumentEvaluator.GetArgumentListAsync(app.Resource, application.Services);

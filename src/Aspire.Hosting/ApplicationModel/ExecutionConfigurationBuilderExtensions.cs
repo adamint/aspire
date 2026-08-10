@@ -22,24 +22,6 @@ public static class ExecutionConfigurationBuilderExtensions
         return builder.AddExecutionConfigurationGatherer(new ArgumentsExecutionConfigurationGatherer());
     }
 
-    internal static IExecutionConfigurationBuilder WithArgumentsConfig(this IExecutionConfigurationBuilder builder, Func<CommandLineArgsCallbackAnnotation, bool> shouldIncludeAnnotation)
-    {
-        ArgumentNullException.ThrowIfNull(builder);
-        ArgumentNullException.ThrowIfNull(shouldIncludeAnnotation);
-
-        return builder.AddExecutionConfigurationGatherer(new ArgumentsExecutionConfigurationGatherer(shouldIncludeAnnotation));
-    }
-
-    internal static IExecutionConfigurationBuilder WithArgumentsConfig(this IExecutionConfigurationBuilder builder, DebugCommandLineArgsRewriteCapture debugRewriteCapture)
-    {
-        ArgumentNullException.ThrowIfNull(builder);
-        ArgumentNullException.ThrowIfNull(debugRewriteCapture);
-
-        return builder.AddExecutionConfigurationGatherer(new ArgumentsExecutionConfigurationGatherer(
-            annotation => !ReferenceEquals(annotation, debugRewriteCapture.ActiveDebugArgsAnnotation),
-            debugRewriteCapture));
-    }
-
     /// <summary>
     /// Adds an environment variables configuration gatherer to the builder.
     /// </summary>

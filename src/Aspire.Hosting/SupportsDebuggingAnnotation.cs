@@ -12,11 +12,9 @@ namespace Aspire.Hosting.ApplicationModel;
 /// instead of being started as a plain process by Aspire.
 /// </summary>
 /// <remarks>
-/// Added by <see cref="ResourceBuilderExtensions.WithDebugSupport{T, TLaunchConfiguration}(IResourceBuilder{T}, Func{LaunchConfigurationCallbackContext, Task{TLaunchConfiguration}}, string, Action{CommandLineArgsCallbackContext})"/>.
+/// Added by a <c>WithDebugSupport</c> overload on <see cref="ResourceBuilderExtensions"/>.
 /// The annotation is only honored while a debug session is active; use
-/// <see cref="DebugSupportExtensions.SupportsDebugging"/> to test for that, and
-/// <see cref="DebugSupportExtensions.CreateLaunchConfigurationAsync"/> to inspect the launch configuration
-/// the resource will send.
+/// <see cref="DebugSupportExtensions.SupportsDebugging"/> to test for that.
 /// </remarks>
 [DebuggerDisplay("Type = {GetType().Name,nq}, RequiredExtensionId = {LaunchConfigurationType,nq}")]
 [Experimental("ASPIREEXTENSION001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
@@ -26,13 +24,11 @@ public sealed class SupportsDebuggingAnnotation : IResourceAnnotation
         string launchConfigurationType,
         Func<Executable, LaunchConfigurationCallbackContext, Task> launchConfigurationAnnotator,
         Func<LaunchConfigurationCallbackContext, Task<object>> launchConfigurationProducer,
-        CommandLineArgsCallbackAnnotation? debugCommandLineArgsCallbackAnnotation,
         bool rewritesArgumentsForDebugging)
     {
         LaunchConfigurationType = launchConfigurationType;
         LaunchConfigurationAnnotator = launchConfigurationAnnotator;
         LaunchConfigurationProducer = launchConfigurationProducer;
-        DebugCommandLineArgsCallbackAnnotation = debugCommandLineArgsCallbackAnnotation;
         RewritesArgumentsForDebugging = rewritesArgumentsForDebugging;
     }
 
@@ -58,8 +54,6 @@ public sealed class SupportsDebuggingAnnotation : IResourceAnnotation
     // Internal because it hands out an untyped object; DebugSupportExtensions.CreateLaunchConfigurationAsync is
     // the supported way to reach it.
     internal Func<LaunchConfigurationCallbackContext, Task<object>> LaunchConfigurationProducer { get; }
-
-    internal CommandLineArgsCallbackAnnotation? DebugCommandLineArgsCallbackAnnotation { get; }
 
     /// <summary>
     /// Indicates that the debug support rewrites the resource's command-line arguments while a debug
@@ -87,52 +81,23 @@ public sealed class SupportsDebuggingAnnotation : IResourceAnnotation
         string resourceName,
         string launchConfigurationType,
         Func<LaunchConfigurationCallbackContext, Task<T>> launchConfigurationProducer,
-        CommandLineArgsCallbackAnnotation? debugCommandLineArgsCallbackAnnotation = null,
         bool rewritesArgumentsForDebugging = false)
     {
         // The annotator stays generic over T so the DCP annotation is serialized against the concrete
         // launch configuration type rather than a boxed object, which would change the emitted JSON.
         return new SupportsDebuggingAnnotation(
             launchConfigurationType,
-            async (exe, context) =>
-                exe.AnnotateAsObjectList(
-                    Executable.LaunchConfigurationsAnnotation,
-                    await ProduceAsync(context).ConfigureAwait(false)),
+            async (exe, context) => exe.AnnotateAsObjectList(
+                Executable.LaunchConfigurationsAnnotation,
+                await ProduceAsync(context).ConfigureAwait(false)),
             // The suppression is safe because ProduceAsync throws rather than returning null; the
             // compiler cannot see that because T is unconstrained and so may be a nullable type.
             async context => (await ProduceAsync(context).ConfigureAwait(false))!,
-            debugCommandLineArgsCallbackAnnotation,
             rewritesArgumentsForDebugging);
 
         async Task<T> ProduceAsync(LaunchConfigurationCallbackContext context)
         {
-            Task<T>? producerTask;
-            try
-            {
-                producerTask = launchConfigurationProducer(context);
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException || !context.CancellationToken.IsCancellationRequested)
-            {
-                throw CreateProducerException(exception);
-            }
-
-            if (producerTask is null)
-            {
-                throw new InvalidOperationException(
-                    $"The \"{launchConfigurationType}\" launch configuration producer for resource '{resourceName}' returned a null task. " +
-                    "The producer must return a task that produces the complete launch configuration.");
-            }
-
-            T launchConfiguration;
-            try
-            {
-                launchConfiguration = await producerTask.ConfigureAwait(false);
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException || !context.CancellationToken.IsCancellationRequested)
-            {
-                throw CreateProducerException(exception);
-            }
-
+            var launchConfiguration = await launchConfigurationProducer(context).ConfigureAwait(false);
             if (launchConfiguration is null)
             {
                 throw new InvalidOperationException(
@@ -141,13 +106,6 @@ public sealed class SupportsDebuggingAnnotation : IResourceAnnotation
             }
 
             return launchConfiguration;
-        }
-
-        InvalidOperationException CreateProducerException(Exception innerException)
-        {
-            return new InvalidOperationException(
-                $"The \"{launchConfigurationType}\" launch configuration producer for resource '{resourceName}' failed.",
-                innerException);
         }
     }
 }

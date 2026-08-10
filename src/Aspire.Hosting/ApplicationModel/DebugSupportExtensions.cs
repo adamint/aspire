@@ -2,7 +2,6 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Diagnostics.CodeAnalysis;
-using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using Aspire.Hosting.Dcp;
 using Aspire.Hosting.Dcp.Model;
@@ -75,10 +74,10 @@ public static class DebugSupportExtensions
     }
 
     /// <summary>
-    /// Creates the launch configuration that this resource sends to the IDE using an explicitly resolved callback context.
+    /// Creates the launch configuration that this resource sends to the IDE using a callback context.
     /// </summary>
     /// <param name="resource">The resource to inspect. It must carry a <see cref="SupportsDebuggingAnnotation"/>.</param>
-    /// <param name="context">The callback context containing the resolved execution configuration and launch data.</param>
+    /// <param name="context">The callback context containing the resolved environment and launch data.</param>
     /// <returns>The launch configuration, typically an <see cref="ExecutableLaunchConfiguration"/>.</returns>
     /// <exception cref="ArgumentException"><paramref name="context"/> belongs to a different resource.</exception>
     /// <exception cref="InvalidOperationException">The resource does not declare debug launch support.</exception>
@@ -88,7 +87,7 @@ public static class DebugSupportExtensions
     /// which owns the complete configuration; Aspire serializes the result as-is.
     /// </para>
     /// <para>
-    /// This method never resolves arguments or environment variables. Aspire creates <paramref name="context"/>
+    /// This method never resolves environment variables. Aspire creates <paramref name="context"/>
     /// when the active debug-support annotation is producing a launch configuration for an executable creation.
     /// </para>
     /// <para>
@@ -113,11 +112,6 @@ public static class DebugSupportExtensions
                 $"The launch configuration callback context belongs to resource '{context.Resource.Name}', " +
                 $"but launch configuration was requested for resource '{resource.Name}'.",
                 nameof(context));
-        }
-
-        if (context.ExecutableExecutionConfiguration.Exception is { } executableConfigurationException)
-        {
-            ExceptionDispatchInfo.Throw(executableConfigurationException);
         }
 
         if (!resource.TryGetLastAnnotation<SupportsDebuggingAnnotation>(out var supportsDebuggingAnnotation))
