@@ -565,6 +565,43 @@ public sealed class TypeScriptApiCompatTests(ITestOutputHelper outputHelper)
         Assert.Equal(0, exitCode);
     }
 
+    [Fact]
+    public void ComparerReportsARenamedProjectedMethodOnceTheBaselineRecordsIt()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var baselineRoot = Path.Combine(workspace.Path, "baseline");
+        var currentRoot = Path.Combine(workspace.Path, "current");
+
+        // The capability id is unchanged, so nothing else in the comparison notices -- but the
+        // generated TypeScript method is renamed, which breaks callers exactly like a removal.
+        WriteSurface(baselineRoot, "Pkg", """
+            # Capabilities
+            Pkg/withCommanderHostPort(port?: number) -> void [method=withHostPort]
+            """);
+        WriteSurface(currentRoot, "Pkg", """
+            # Capabilities
+            Pkg/withCommanderHostPort(port?: number) -> void [method=withOtherPort]
+            """);
+
+        var reportPath = Path.Combine(workspace.Path, "report.md");
+
+        var exitCode = TypeScriptApiCompatRunner.Run(new CommandLineOptions(
+            baselineRoot,
+            currentRoot,
+            workspace.Path,
+            BaselineSuppressionsRoot: null,
+            ExcludedPackagesFile: null,
+            ReportPath: reportPath,
+            GitHubAnnotations: false));
+
+        Assert.Equal(1, exitCode);
+
+        var report = File.ReadAllText(reportPath);
+        Assert.Contains("capability-method-renamed", report, StringComparison.Ordinal);
+        Assert.Contains("withHostPort", report, StringComparison.Ordinal);
+        Assert.Contains("withOtherPort", report, StringComparison.Ordinal);
+    }
+
     private static void WriteSurface(string rootPath, string packageName, string content)
     {
         var apiDirectory = Path.Combine(rootPath, "src", packageName, "api");

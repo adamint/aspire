@@ -430,8 +430,12 @@ internal sealed class SdkExportCommand : BaseCommand
         FileInfo? outputFile,
         CancellationToken cancellationToken)
     {
-        // The AppHost is restored at the version being documented so the export describes that exact
-        // SDK, not the CLI's bundled one.
+        // Both scanner projects ignore this value -- DotNetBasedAppHostServerProject.PrepareAsync
+        // never reads it, and PrebuiltAppHostServer restores from the integration references alone --
+        // so it is a label, not a pin. What actually makes the export describe the requested SDK is
+        // the exact IntegrationReference above plus ValidateRequestedPackageIsRestorable below. It is
+        // still derived from the documented version so any consumer that starts honoring it agrees
+        // with what was exported rather than with the CLI's bundled SDK.
         var sdkVersion = string.Equals(packageName, CorePackageName, StringComparison.OrdinalIgnoreCase)
             ? packageVersion
             : ExecutionContext.IdentityVersion;

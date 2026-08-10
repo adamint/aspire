@@ -230,6 +230,21 @@ internal static class AtsCompatibilityComparer
                     $"Capability '{capabilityId}' return type changed from '{baselineCapability.ReturnTypeId}' to '{currentCapability.ReturnTypeId}'."));
             }
 
+            // Renaming the projected method renames the generated TypeScript method even though the
+            // capability id is unchanged, so it breaks callers exactly like a removal would. Only an
+            // annotated baseline can be compared: an unannotated one has the name inferred from the
+            // id, so comparing it would report every aliased export as renamed on the single
+            // regeneration that first writes the annotations.
+            if (baselineCapability.ProjectedMethodNameWasRecorded &&
+                !string.Equals(baselineCapability.ProjectedMethodName, currentCapability.ProjectedMethodName, StringComparison.Ordinal))
+            {
+                diagnostics.Add(new ApiCompatDiagnostic(
+                    "capability-method-renamed",
+                    baseline.PackageName,
+                    capabilityId,
+                    $"Capability '{capabilityId}' projected method name changed from '{baselineCapability.ProjectedMethodName}' to '{currentCapability.ProjectedMethodName}'."));
+            }
+
             CompareCapabilityParameters(baseline.PackageName, baselineCapability, currentCapability, diagnostics);
         }
     }

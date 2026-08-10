@@ -213,15 +213,17 @@ internal static class AtsSurfaceParser
         // The annotation is emitted only for the aliased minority, so an unannotated line -- every
         // line in a surface written before this existed -- projects under its own id.
         var projectedMethodName = GetMethodNameSegment(capabilityId);
+        var projectedMethodNameWasRecorded = false;
         var annotationIndex = returnTypeId.IndexOf(MethodAnnotationPrefix, StringComparison.Ordinal);
         if (annotationIndex >= 0 && returnTypeId.EndsWith(']'))
         {
             var start = annotationIndex + MethodAnnotationPrefix.Length;
             projectedMethodName = returnTypeId[start..^1];
             returnTypeId = returnTypeId[..annotationIndex];
+            projectedMethodNameWasRecorded = true;
         }
 
-        return new AtsCapability(capabilityId, parameters, returnTypeId, projectedMethodName);
+        return new AtsCapability(capabilityId, parameters, returnTypeId, projectedMethodName, projectedMethodNameWasRecorded);
     }
 
     private const string MethodAnnotationPrefix = " [method=";
