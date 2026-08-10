@@ -82,7 +82,7 @@ export class AppHostLogOutputCoordinator {
         }
 
         return this.correlate({
-            categoryName: entry.categoryName,
+            categoryName: normalizeCategoryName(entry.categoryName),
             logLevel: entry.logLevel,
             message: normalizeRecordText(entry.message),
             eventId: entry.eventId,
@@ -635,7 +635,7 @@ function parseConsoleLoggerRecord(output: string): AppHostLoggerRecord | undefin
     const { message, exception } = splitMessageAndException(body);
 
     return {
-        categoryName: match[2],
+        categoryName: normalizeCategoryName(match[2]),
         logLevel: getFullLoggerLevel(match[1]),
         message: normalizeRecordText(message),
         eventId: Number(match[3]),
@@ -694,7 +694,7 @@ function parseDebugLoggerRecord(output: string): AppHostLoggerRecord | undefined
 
     const { message, exception } = splitMessageAndException(match[3]);
     return {
-        categoryName: match[1],
+        categoryName: normalizeCategoryName(match[1]),
         logLevel: match[2] as AppHostLogLevel,
         message: normalizeRecordText(message),
         exception: normalizeOptionalRecordText(exception)
@@ -830,6 +830,20 @@ function formatLoggerRecord(record: AppHostLoggerRecord): AppHostParentOutput {
 
 function normalizeOptionalRecordText(value: string | null | undefined): string | undefined {
     return value ? normalizeRecordText(value) : undefined;
+}
+
+function normalizeCategoryName(value: string): string {
+    // The category is rendered verbatim into an ANSI-capable debug console as the leading
+    // `${category}: ${level}: ` token, so an application that calls
+    // `CreateLogger("\u001b[31mInjected")` would otherwise restyle the console, and a category
+    // carrying \r or \n would forge additional output lines that look like separate records.
+    //
+    // Unlike `normalizeRecordText` this also escapes \t, \n and \r: those are legitimate inside
+    // a multi-line message body but can never appear in a single-line category token. The console
+    // parser's own category capture is `[^\n]+`, so escaping here keeps the two sources spelled
+    // the same way for correlation instead of pushing them apart.
+    return escapeConsoleControlCharacters(value).replace(/[\t\n\r]/g, character =>
+        `\\u${character.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`);
 }
 
 function normalizeRecordText(value: string): string {

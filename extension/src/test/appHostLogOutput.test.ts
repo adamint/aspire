@@ -332,6 +332,23 @@ suite('AppHost log output coordinator tests', () => {
             undefined);
     });
 
+    test('escapes control characters in a logger category so it cannot restyle or forge console lines', () => {
+        // The category is rendered verbatim ahead of the level and message, so an application
+        // that names its logger with an ESC sequence would otherwise recolor the debug console,
+        // and one carrying a newline would emit what reads as an extra record.
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({
+                categoryName: '\x1b[31mInjected\nForged.Category',
+                message: 'Real message.'
+            })),
+            {
+                output: '\\u001B[31mInjected\\u000AForged.Category: Information: Real message.\n',
+                category: 'stdout'
+            });
+    });
+
     test('keeps suppressing trace body lines after a record is consumed as a record', () => {
         // The fallback filter decides whether an indented line continues a suppressed
         // trace/debug record. Records handled by the correlation path never reach it, so
