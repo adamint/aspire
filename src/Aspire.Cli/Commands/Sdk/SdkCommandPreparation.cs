@@ -150,8 +150,19 @@ internal static class SdkCommandPreparation
             }
         }
 
+        // Only the numeric prefix has been checked so far, so "1.2.3.4-" and "1.2.3.4+sha space"
+        // would still get through. Handing the semver-shaped equivalent back to the parser validates
+        // the pre-release and build-metadata grammar without reimplementing it. SemVersionStyles.Any
+        // is deliberate: it allows the leading zeros in labels that NuGet accepts and semver does not
+        // ("1.2.3-beta.01"), while still rejecting an empty or malformed label.
+        var semanticEquivalent = $"{parsedSegments[0]}.{parsedSegments[1]}.{parsedSegments[2]}{suffix}";
+        if (!SemVersion.TryParse(semanticEquivalent, SemVersionStyles.Any, out _))
+        {
+            return false;
+        }
+
         normalized = parsedSegments[3] == 0
-            ? $"{parsedSegments[0]}.{parsedSegments[1]}.{parsedSegments[2]}{suffix}"
+            ? semanticEquivalent
             : $"{parsedSegments[0]}.{parsedSegments[1]}.{parsedSegments[2]}.{parsedSegments[3]}{suffix}";
 
         return true;

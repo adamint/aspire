@@ -453,6 +453,8 @@ public class SdkDumpCommandTests(ITestOutputHelper outputHelper)
     [InlineData("1.2.3.4", "1.2.3.4")]
     [InlineData("1.2.3.4-beta.1", "1.2.3.4-beta.1")]
     [InlineData("01.02.03.00", "1.2.3")]
+    [InlineData("1.2.3.4-beta.01", "1.2.3.4-beta.01")]
+    [InlineData("1.2.3.0+sha.abc", "1.2.3+sha.abc")]
     public void FourSegmentPackageVersionsAreAcceptedAndNormalizedLikeNuGet(string requested, string expected)
     {
         Assert.True(SdkCommandPreparation.TryParseIntegrationArgument(
@@ -474,6 +476,10 @@ public class SdkDumpCommandTests(ITestOutputHelper outputHelper)
     [InlineData("[1.0.0.0,2.0.0.0)")]
     [InlineData("1.2.3.4.5")]
     [InlineData("1.2.3.-1")]
+    [InlineData("1.2.3.4-")]
+    [InlineData("1.2.3.4+")]
+    [InlineData("1.2.3.4-.")]
+    [InlineData("1.2.3.4-beta_1")]
     public void FloatingAndRangeVersionsAreStillRejected(string requested)
     {
         Assert.False(SdkCommandPreparation.TryParseIntegrationArgument(
