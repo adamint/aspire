@@ -325,7 +325,7 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         // a child process, and portable mode relocates the whole root.
         //
         // The value is only trusted when it parses, so a truncated or corrupted variable falls through
-        // to the disk scan instead of being reported as an unknown version.
+        // to the disk scan for the roots it searched -- but not for a version.
         var reportedVersion = environment.GetEnvironmentVariable(ExtensionVersionEnvironmentVariable)?.Trim();
         if (!string.IsNullOrEmpty(reportedVersion) &&
             SemVersion.TryParse(reportedVersion, SemVersionStyles.Strict, out var reportedSemVersion))
@@ -390,9 +390,25 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         // lands on the "installed, version unknown" warning instead.
         var extensionReportedItself = !string.IsNullOrEmpty(reportedVersion);
 
+        // Nothing on disk may be adopted in that case. A variable that is present at all means a
+        // specific instance is loaded right now, and one that does not parse means the CLI cannot say
+        // which -- exactly the situation the parseable path refuses to guess in, where the disk record
+        // is only adopted after diskVersion.Equals(reportedSemVersion). No such check is possible
+        // here, so a stale copy under a default root would donate its version, channel, and origin to
+        // a portable or --extensions-dir instance and produce a confident update verdict about an
+        // installation the user is not running. The searched roots are still carried through: they
+        // name where the CLI looked, not what it found.
+        if (extensionReportedItself)
+        {
+            return new VsCodeExtensionDetection(
+                VsCodeInstalled: true,
+                ExtensionInstalled: true,
+                SearchedRoots: diskDetection.SearchedRoots);
+        }
+
         return new VsCodeExtensionDetection(
             VsCodeInstalled: true,
-            ExtensionInstalled: diskDetection.Installed || extensionReportedItself,
+            ExtensionInstalled: diskDetection.Installed,
             ExtensionVersion: diskDetection.Version,
             VersionSource: diskDetection.Version is null ? VsCodeExtensionVersionSource.None : VsCodeExtensionVersionSource.Manifest,
             ReleaseChannel: diskDetection.ReleaseChannel,

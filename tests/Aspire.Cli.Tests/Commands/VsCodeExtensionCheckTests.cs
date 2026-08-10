@@ -325,29 +325,35 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task CheckAsync_FallsBackToDisk_WhenReportedVersionCannotBeParsed()
+    public async Task CheckAsync_StillNamesTheSearchedRoots_WhenReportedVersionCannotBeParsed()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
         var extensions = CreateDefaultExtensionsRoot(home);
-        // A corrupted variable must not be trusted, and must not short-circuit the disk scan either.
+        // A corrupted variable must not be trusted, and must not short-circuit the disk scan either:
+        // nothing it found may be adopted, but where it looked is still what the warning has to name
+        // so the user can check those roots themselves.
         CreateInstalledExtension(extensions, "1.2.3");
         var environment = new TestEnvironment(new Dictionary<string, string?>
         {
             ["TERM_PROGRAM"] = "vscode",
+            // Overridden so the searched-roots detail names exactly one directory.
+            ["VSCODE_EXTENSIONS"] = extensions.FullName,
             [ReportedVersionVariable] = "not-a-version"
         });
-        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
-        {
-            StableVersionCallback = _ => Task.FromResult(SemVersion.Parse("1.2.3", SemVersionStyles.Strict))
-        };
+        var marketplaceClient = CreateUnusedMarketplaceClient();
         var check = CreateCheck(environment, home, marketplaceClient);
 
         var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
 
-        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
-        Assert.Equal("1.2.3", result.Metadata!["extensionVersion"]!.GetValue<string>());
-        Assert.Equal("manifest", result.Metadata["extensionVersionSource"]!.GetValue<string>());
+        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
+        Assert.Equal(
+            string.Format(
+                CultureInfo.CurrentCulture,
+                DoctorCommandStrings.VsCodeExtensionVersionUnknownSearchedDetailsFormat,
+                extensions.FullName),
+            result.Details);
+        Assert.Equal(0, marketplaceClient.CallCount);
     }
 
     [Fact]
@@ -1066,6 +1072,36 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         Assert.Equal(DoctorCommandStrings.VsCodeExtensionVersionUnknownFix, result.Fix);
         Assert.True(result.Metadata!["extensionInstalled"]!.GetValue<bool>());
         Assert.False(result.Metadata["extensionVersionKnown"]!.GetValue<bool>());
+        Assert.Equal(0, marketplaceClient.CallCount);
+    }
+
+    [Fact]
+    public async Task CheckAsync_DoesNotAdoptADiskInstall_WhenTheReportedVersionIsUnparseable()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = CreateDefaultExtensionsRoot(home);
+        // A stale Marketplace copy under a default root, and a running instance the scan cannot see
+        // (portable mode or --extensions-dir) whose reported version does not parse. The disk record
+        // describes a different installation, so adopting its version would produce a confident
+        // update verdict about something the user is not running.
+        CreateInstalledExtension(extensions, "1.0.0", marketplace: true);
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            [ReportedVersionVariable] = "not-a-version"
+        });
+        var marketplaceClient = CreateUnusedMarketplaceClient();
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
+        Assert.Equal(DoctorCommandStrings.VsCodeExtensionVersionUnknownMessage, result.Message);
+        Assert.True(result.Metadata!["extensionInstalled"]!.GetValue<bool>());
+        Assert.False(result.Metadata["extensionVersionKnown"]!.GetValue<bool>());
+        Assert.Equal("unknown", result.Metadata["extensionVersionSource"]!.GetValue<string>());
+        Assert.Equal("unknown", result.Metadata["extensionInstallSource"]!.GetValue<string>());
         Assert.Equal(0, marketplaceClient.CallCount);
     }
 
