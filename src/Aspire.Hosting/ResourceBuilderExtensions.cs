@@ -4799,16 +4799,16 @@ public static class ResourceBuilderExtensions
         Action<CommandLineArgsCallbackContext>? argsCallback = null)
         where T : IResource
     {
+        ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(launchConfigurationProducer);
         var producerReturnType = typeof(TLaunchConfiguration);
         if (typeof(Task).IsAssignableFrom(producerReturnType)
             || producerReturnType == typeof(ValueTask)
             || producerReturnType.IsGenericType && producerReturnType.GetGenericTypeDefinition() == typeof(ValueTask<>))
         {
-            // Keep this an ArgumentException naming the parameter: main already threw that for this exact
-            // input, and it is the right shape for a validation failure about an argument. Only the message
-            // changes, because the replacement overload now takes a context and returns Task<T>, so adding a
-            // CancellationToken parameter is no longer what makes an async producer bind.
+            // This overload binds an asynchronous producer as if its task were the launch configuration, so it
+            // rejects one instead. ArgumentException naming the parameter is the compatible shape: the invalid
+            // input is the producer's return type, and callers that already handle this rejection keep working.
             throw new ArgumentException(
                 $"The launch configuration producer returns '{typeof(TLaunchConfiguration)}'. The legacy {nameof(WithDebugSupport)} overload requires a synchronous producer. " +
                 "Use the overload that accepts LaunchConfigurationCallbackContext and returns Task<TLaunchConfiguration>. " +
@@ -4861,17 +4861,30 @@ public static class ResourceBuilderExtensions
     /// </remarks>
     /// <example>
     /// Produce a launch configuration for a resource, reading the arguments and environment Aspire resolved for
-    /// this launch. A synchronous producer returns through <see cref="Task.FromResult{TResult}(TResult)"/>:
+    /// this launch. The launch configuration type declares whatever the IDE launcher expects, because
+    /// <see cref="ExecutableLaunchConfiguration"/> itself carries only <c>type</c> and <c>mode</c>:
+    /// <code language="csharp">
+    /// internal sealed class MyToolLaunchConfiguration() : ExecutableLaunchConfiguration("mytool")
+    /// {
+    ///     [JsonPropertyName("args")]
+    ///     public List&lt;string&gt; Args { get; set; } = [];
+    ///
+    ///     [JsonPropertyName("env")]
+    ///     public Dictionary&lt;string, string&gt; Env { get; set; } = [];
+    /// }
+    /// </code>
+    /// A synchronous producer returns through <see cref="Task.FromResult{TResult}(TResult)"/>:
     /// <code language="csharp">
     /// builder.AddExecutable("tool", "mytool", ".")
     ///        .WithDebugSupport(
-    ///            context => Task.FromResult(new ExecutableLaunchConfiguration("mytool")
+    ///            context => Task.FromResult(new MyToolLaunchConfiguration
     ///            {
+    ///                Mode = context.Mode,
     ///                // OriginalExecutionConfiguration is the resolution before the argsCallback below runs,
     ///                // so the IDE launches the arguments the user asked for rather than the debug rewrite.
-    ///                Args = [.. context.OriginalExecutionConfiguration.Arguments.Select(argument => argument.Processed)],
+    ///                Args = [.. context.OriginalExecutionConfiguration.Arguments.Select(argument => argument.Value)],
     ///                Env = context.OriginalExecutionConfiguration.EnvironmentVariables
-    ///                             .ToDictionary(variable => variable.Key, variable => variable.Value.Processed)
+    ///                             .ToDictionary(variable => variable.Key, variable => variable.Value)
     ///            }),
     ///            launchConfigurationType: "mytool",
     ///            argsCallback: argsContext =>

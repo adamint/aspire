@@ -173,8 +173,8 @@ public class ExecutableResourceBuilderExtensionTests
     {
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
 
-        // ArgumentException, not InvalidOperationException: the producer's return type is what is wrong, so the
-        // exception carries the parameter name and matches the shipped behaviour on the base branch.
+        // ArgumentException, not InvalidOperationException: the producer's return type is the invalid input, so
+        // the exception carries the offending parameter's name.
         var taskException = Assert.Throws<ArgumentException>(() =>
             builder.AddExecutable("task", "command", "workingdirectory")
                 .WithDebugSupport(
@@ -190,6 +190,29 @@ public class ExecutableResourceBuilderExtensionTests
                     "go"));
         Assert.Contains("ValueTask", valueTaskException.Message);
         Assert.Equal("launchConfigurationProducer", valueTaskException.ParamName);
+    }
+#pragma warning restore CS0618
+
+    [Fact]
+#pragma warning disable CS0618 // Verify the shipped overload preserves its argument validation order.
+    public void WithDebugSupportLegacyModeProducerOverloadValidatesBuilderFirst()
+    {
+        // The null-builder check is the entry point contract for every extension method, so it has to run
+        // before the producer's return type is examined. Otherwise a null builder passed with a task-returning
+        // producer reports the producer instead of the builder.
+        IResourceBuilder<ExecutableResource> nullBuilder = null!;
+
+        var taskProducerException = Assert.Throws<ArgumentNullException>(() =>
+            nullBuilder.WithDebugSupport(
+                (string mode) => Task.FromResult(new ExecutableLaunchConfiguration("go") { Mode = mode }),
+                "go"));
+        Assert.Equal("builder", taskProducerException.ParamName);
+
+        var nullProducerException = Assert.Throws<ArgumentNullException>(() =>
+            nullBuilder.WithDebugSupport(
+                (Func<string, ExecutableLaunchConfiguration>)null!,
+                "go"));
+        Assert.Equal("builder", nullProducerException.ParamName);
     }
 #pragma warning restore CS0618
 

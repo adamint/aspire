@@ -4789,6 +4789,227 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task DebugArgumentRewriting_KeepsPerOccurrenceResolutionsWhenOneProviderInstanceIsRepeated()
+    {
+        // The same IValueProvider instance can legitimately appear more than once in a command line, and
+        // IValueProvider carries no idempotence guarantee, so each occurrence has its own resolved value.
+        // Carrying the original resolutions forward has to be per occurrence: collapsing them by reference
+        // would replay the first occurrence's value at every position.
+        var builder = DistributedApplication.CreateBuilder();
+
+        var configDict = new Dictionary<string, string?>
+        {
+            [DcpExecutor.DebugSessionPortVar] = "12345",
+            [KnownConfigNames.DebugSessionInfo] = JsonSerializer.Serialize(new RunSessionInfo
+            {
+                ProtocolsSupported = ["test"],
+                SupportedLaunchConfigurations = ["test"]
+            }),
+            [KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234"
+        };
+
+        builder.Configuration.AddInMemoryCollection(configDict);
+
+        var repeatedArgument = new SequentialValueProvider("resolved");
+
+        IExecutionConfigurationResult? originalConfiguration = null;
+        var debuggableExecutable = new TestExecutableResource("test-working-directory");
+        builder.AddResource(debuggableExecutable)
+            .WithArgs(context =>
+            {
+                context.Args.Add(repeatedArgument);
+                context.Args.Add(repeatedArgument);
+            })
+            .WithDebugSupport(
+                context =>
+                {
+                    originalConfiguration = context.OriginalExecutionConfiguration;
+                    return Task.FromResult(new ExecutableLaunchConfiguration("test") { Mode = context.Mode });
+                },
+                "test",
+                argsCallback: static context => context.Args.Insert(0, "--debug"));
+
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
+
+        var kubernetesService = new TestKubernetesService();
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var appExecutor = CreateAppExecutor(distributedAppModel, kubernetesService: kubernetesService, configuration: configuration);
+
+        await appExecutor.RunApplicationAsync();
+
+        var exe = Assert.Single(kubernetesService.CreatedResources.OfType<Executable>(), e => e.AppModelResourceName == "TestExecutable");
+
+        Assert.Equal(2, repeatedArgument.ResolutionCount);
+        Assert.NotNull(originalConfiguration);
+        Assert.Equal(["resolved-1", "resolved-2"], originalConfiguration.Arguments.Select(argument => argument.Value));
+        Assert.Equal(["--debug", "resolved-1", "resolved-2"], exe.Spec.Args);
+    }
+
+    [Fact]
+    public async Task DebugArgumentRewriting_CallbackSeesArgumentsThatFailedToResolve()
+    {
+        // The rewrite decides which arguments reach the executable, so it has to see every gathered argument -
+        // including one whose resolution failed. Removing that argument is what lets the executable start, so
+        // hiding it from the callback would make the failure unrecoverable.
+        var builder = DistributedApplication.CreateBuilder();
+
+        var configDict = new Dictionary<string, string?>
+        {
+            [DcpExecutor.DebugSessionPortVar] = "12345",
+            [KnownConfigNames.DebugSessionInfo] = JsonSerializer.Serialize(new RunSessionInfo
+            {
+                ProtocolsSupported = ["test"],
+                SupportedLaunchConfigurations = ["test"]
+            }),
+            [KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234"
+        };
+
+        builder.Configuration.AddInMemoryCollection(configDict);
+
+        var failingArgument = new ThrowingValueProvider("Argument resolution failed.");
+        List<object>? observedCallbackArgs = null;
+
+        var debuggableExecutable = new TestExecutableResource("test-working-directory");
+        builder.AddResource(debuggableExecutable)
+            .WithArgs(context =>
+            {
+                context.Args.Add("keep");
+                context.Args.Add(failingArgument);
+            })
+            .WithDebugSupport(
+                static context => Task.FromResult(new ExecutableLaunchConfiguration("test") { Mode = context.Mode }),
+                "test",
+                argsCallback: context =>
+                {
+                    observedCallbackArgs = [.. context.Args];
+                    context.Args.Remove(failingArgument);
+                });
+
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
+
+        var kubernetesService = new TestKubernetesService();
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var appExecutor = CreateAppExecutor(distributedAppModel, kubernetesService: kubernetesService, configuration: configuration);
+
+        await appExecutor.RunApplicationAsync();
+
+        Assert.NotNull(observedCallbackArgs);
+        Assert.Equal(["keep", failingArgument], observedCallbackArgs);
+
+        var exe = Assert.Single(kubernetesService.CreatedResources.OfType<Executable>(), e => e.AppModelResourceName == "TestExecutable");
+        Assert.Equal(["keep"], exe.Spec.Args);
+    }
+
+    [Fact]
+    public async Task DebugArgumentRewriting_RetainsResolutionFailuresForArgumentsTheCallbackKept()
+    {
+        // The mirror of the test above: an argument whose resolution failed and that the rewrite kept still
+        // belongs to the executable, so its failure must still stop the executable from being created.
+        var builder = DistributedApplication.CreateBuilder();
+
+        var configDict = new Dictionary<string, string?>
+        {
+            [DcpExecutor.DebugSessionPortVar] = "12345",
+            [KnownConfigNames.DebugSessionInfo] = JsonSerializer.Serialize(new RunSessionInfo
+            {
+                ProtocolsSupported = ["test"],
+                SupportedLaunchConfigurations = ["test"]
+            }),
+            [KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234"
+        };
+
+        builder.Configuration.AddInMemoryCollection(configDict);
+
+        var failingArgument = new ThrowingValueProvider("Argument resolution failed.");
+
+        var debuggableExecutable = new TestExecutableResource("test-working-directory");
+        builder.AddResource(debuggableExecutable)
+            .WithArgs(context =>
+            {
+                context.Args.Add("keep");
+                context.Args.Add(failingArgument);
+            })
+            .WithDebugSupport(
+                static context => Task.FromResult(new ExecutableLaunchConfiguration("test") { Mode = context.Mode }),
+                "test",
+                argsCallback: static context => context.Args.Insert(0, "--debug"));
+
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
+
+        var kubernetesService = new TestKubernetesService();
+        var failedResources = new List<IResource>();
+        var events = new DcpExecutorEvents();
+        events.Subscribe<OnResourceFailedToStartContext>(context =>
+        {
+            failedResources.Add(context.Resource);
+            return Task.CompletedTask;
+        });
+
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var appExecutor = CreateAppExecutor(distributedAppModel, kubernetesService: kubernetesService, configuration: configuration, events: events);
+
+        await appExecutor.RunApplicationAsync();
+
+        Assert.Empty(kubernetesService.CreatedResources.OfType<Executable>());
+        Assert.Same(debuggableExecutable, Assert.Single(failedResources));
+    }
+
+    [Fact]
+    public async Task DebugArgumentRewriting_RetainsResolutionFailuresForArgumentsTheCallbackIntroduced()
+    {
+        // An argument the rewrite adds has no earlier resolution, so it is resolved here for the first time.
+        // A failure at that point belongs to the executable just as much as one carried over from the original
+        // resolution does.
+        var builder = DistributedApplication.CreateBuilder();
+
+        var configDict = new Dictionary<string, string?>
+        {
+            [DcpExecutor.DebugSessionPortVar] = "12345",
+            [KnownConfigNames.DebugSessionInfo] = JsonSerializer.Serialize(new RunSessionInfo
+            {
+                ProtocolsSupported = ["test"],
+                SupportedLaunchConfigurations = ["test"]
+            }),
+            [KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234"
+        };
+
+        builder.Configuration.AddInMemoryCollection(configDict);
+
+        var failingArgument = new ThrowingValueProvider("Argument resolution failed.");
+
+        var debuggableExecutable = new TestExecutableResource("test-working-directory");
+        builder.AddResource(debuggableExecutable)
+            .WithArgs("keep")
+            .WithDebugSupport(
+                static context => Task.FromResult(new ExecutableLaunchConfiguration("test") { Mode = context.Mode }),
+                "test",
+                argsCallback: context => context.Args.Add(failingArgument));
+
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
+
+        var kubernetesService = new TestKubernetesService();
+        var failedResources = new List<IResource>();
+        var events = new DcpExecutorEvents();
+        events.Subscribe<OnResourceFailedToStartContext>(context =>
+        {
+            failedResources.Add(context.Resource);
+            return Task.CompletedTask;
+        });
+
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var appExecutor = CreateAppExecutor(distributedAppModel, kubernetesService: kubernetesService, configuration: configuration, events: events);
+
+        await appExecutor.RunApplicationAsync();
+
+        Assert.Empty(kubernetesService.CreatedResources.OfType<Executable>());
+        Assert.Same(debuggableExecutable, Assert.Single(failedResources));
+    }
+
+    [Fact]
     public async Task CustomExecutable_DebugSessionInfoContainsType_RunInIde()
     {
         // Arrange
@@ -8522,6 +8743,28 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
         }
     }
     private sealed class TestOtherExecutableResource(string directory) : ExecutableResource("TestOtherExecutable", "test-other", directory);
+
+    // Resolves to a different value on every call so a test can tell which occurrence of a repeated
+    // argument each entry in the final command line came from.
+    private sealed class SequentialValueProvider(string prefix) : IValueProvider
+    {
+        private int _resolutionCount;
+
+        public int ResolutionCount => Volatile.Read(ref _resolutionCount);
+
+        public ValueTask<string?> GetValueAsync(CancellationToken cancellationToken = default)
+        {
+            var resolution = Interlocked.Increment(ref _resolutionCount);
+            return new ValueTask<string?>($"{prefix}-{resolution.ToString(CultureInfo.InvariantCulture)}");
+        }
+    }
+
+    // Models an argument whose dependency failed to start, which surfaces as a throwing resolution.
+    private sealed class ThrowingValueProvider(string message) : IValueProvider
+    {
+        public ValueTask<string?> GetValueAsync(CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException(message);
+    }
 
     // Models a DotnetProjectResource: a plain ExecutableResource (launches `dotnet`) that carries
     // IProjectMetadata and a "project" SupportsDebuggingAnnotation. Used to verify the DCP project-launch

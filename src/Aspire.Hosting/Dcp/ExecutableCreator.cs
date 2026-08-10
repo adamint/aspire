@@ -687,9 +687,16 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         // The executable snapshot is the original resolved argument list with only the active debug rewrite
         // applied. Do not replay ordinary WithArgs annotations here: they may have side effects, and the
         // original snapshot already evaluated them for this executable creation.
+        //
+        // The rewrite decides the executable's final command line, so it is handed every gathered argument,
+        // including any that resolved to null or threw. Those are absent from ArgumentsWithUnprocessed but
+        // still belong to the command line being rewritten: a callback that drops a failing argument (for
+        // example one that replaces the whole command line for the debugger) has to be able to see it, or
+        // that failure becomes unrecoverable even though nothing depends on it anymore.
+        var originalResolutions = ExecutionConfigurationResult.GetArgumentResolutions(originalConfiguration);
         activeDebugArgsAnnotation.AsCallbackAnnotation().ForgetCachedResult();
         var callbackContext = new CommandLineArgsCallbackContext(
-            [.. originalConfiguration.ArgumentsWithUnprocessed.Select(argument => argument.Unprocessed)],
+            [.. originalResolutions.Select(resolution => resolution.Unprocessed)],
             resource,
             cancellationToken)
         {
@@ -701,49 +708,113 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         // Arguments the debug rewrite kept were already resolved into originalConfiguration for this same
         // executable creation. IValueProvider carries no idempotence guarantee, so resolving them a second
         // time can produce a different value or repeat a side effect - the same hazard that stopped ordinary
-        // WithArgs callbacks from being replayed above. Reuse those resolutions by reference identity and
-        // send only what the callback introduced or replaced through the gatherer.
-        var previouslyResolved = new Dictionary<object, (string Value, bool IsSensitive)>(ReferenceEqualityComparer.Instance);
-        foreach (var argument in originalConfiguration.ArgumentsWithUnprocessed)
+        // WithArgs callbacks from being replayed above. Reuse those resolutions and send only what the
+        // callback introduced through the gatherer.
+        //
+        // The lookup is keyed by reference identity but tracked per occurrence: one provider instance can sit
+        // at several positions on the command line, and because it is resolved once per position those
+        // positions can hold different values. Collapsing them to a single entry would replay the first
+        // position's value everywhere the instance appears.
+        var previousResolutions = new Dictionary<object, List<ArgumentResolution>>(ReferenceEqualityComparer.Instance);
+        foreach (var resolution in originalResolutions)
         {
-            previouslyResolved.TryAdd(argument.Unprocessed, (argument.Processed, argument.IsSensitive));
+            if (!previousResolutions.TryGetValue(resolution.Unprocessed, out var resolutions))
+            {
+                resolutions = [];
+                previousResolutions[resolution.Unprocessed] = resolutions;
+            }
+
+            resolutions.Add(resolution);
         }
 
+        var reuseCounts = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
+        var plannedArguments = new List<(object Argument, ArgumentResolution? Reused)>(rewrittenArgs.Count);
         var rewrittenArgsGathererContext = new ExecutionConfigurationGathererContext();
-        rewrittenArgsGathererContext.Arguments.AddRange(rewrittenArgs.Where(argument => !previouslyResolved.ContainsKey(argument)));
+        foreach (var argument in rewrittenArgs)
+        {
+            if (previousResolutions.TryGetValue(argument, out var resolutions))
+            {
+                var occurrence = reuseCounts.TryGetValue(argument, out var count) ? count : 0;
+                reuseCounts[argument] = occurrence + 1;
+
+                // A callback that duplicates an argument produces more occurrences than were resolved, and the
+                // extra ones repeat the last recorded resolution rather than being resolved again. Resolving
+                // again is what this whole path exists to avoid.
+                plannedArguments.Add((argument, resolutions[Math.Min(occurrence, resolutions.Count - 1)]));
+            }
+            else
+            {
+                plannedArguments.Add((argument, null));
+                rewrittenArgsGathererContext.Arguments.Add(argument);
+            }
+        }
+
         var rewrittenArgsConfiguration = await rewrittenArgsGathererContext
             .ResolveAsync(resource, resourceLogger, _executionContext, cancellationToken)
             .ConfigureAwait(false);
 
-        // ResolveAsync drops arguments that resolve to null, so the newly resolved values are matched back by
-        // reference identity rather than by position, and an argument missing from both maps is dropped here
-        // for the same reason it would have been dropped there.
-        var newlyResolved = new Dictionary<object, (string Value, bool IsSensitive)>(ReferenceEqualityComparer.Instance);
-        foreach (var argument in rewrittenArgsConfiguration.ArgumentsWithUnprocessed)
+        // Newly resolved values are matched back by reference identity and occurrence order rather than by
+        // position, because the gatherer only received the arguments that had no prior resolution.
+        var newResolutions = new Dictionary<object, Queue<ArgumentResolution>>(ReferenceEqualityComparer.Instance);
+        foreach (var resolution in ExecutionConfigurationResult.GetArgumentResolutions(rewrittenArgsConfiguration))
         {
-            newlyResolved.TryAdd(argument.Unprocessed, (argument.Processed, argument.IsSensitive));
+            if (!newResolutions.TryGetValue(resolution.Unprocessed, out var queue))
+            {
+                queue = new Queue<ArgumentResolution>();
+                newResolutions[resolution.Unprocessed] = queue;
+            }
+
+            queue.Enqueue(resolution);
         }
 
         var reusedReferences = new List<object>();
+        var reusedResolutions = new List<ArgumentResolution>();
+        var retainedArgumentResolutions = new List<ArgumentResolution>(rewrittenArgs.Count);
         var argumentsWithUnprocessed = new List<(object Unprocessed, string Processed, bool IsSensitive)>(rewrittenArgs.Count);
-        foreach (var argument in rewrittenArgs)
+        foreach (var (argument, reused) in plannedArguments)
         {
-            if (newlyResolved.TryGetValue(argument, out var resolved))
+            var resolution = reused;
+            if (resolution is null && newResolutions.TryGetValue(argument, out var queue) && queue.Count > 0)
             {
-                argumentsWithUnprocessed.Add((argument, resolved.Value, resolved.IsSensitive));
+                resolution = queue.Dequeue();
             }
-            else if (previouslyResolved.TryGetValue(argument, out var reused))
-            {
-                argumentsWithUnprocessed.Add((argument, reused.Value, reused.IsSensitive));
 
+            if (resolution is not { } argumentResolution)
+            {
+                continue;
+            }
+
+            retainedArgumentResolutions.Add(argumentResolution);
+            if (reused is not null)
+            {
+                reusedResolutions.Add(argumentResolution);
+            }
+
+            // An argument that resolved to null, or whose resolution threw, contributes nothing to the command
+            // line - exactly as it would have if the gatherer had resolved it here.
+            if (argumentResolution.Processed is not { } processed)
+            {
+                continue;
+            }
+
+            argumentsWithUnprocessed.Add((argument, processed, argumentResolution.IsSensitive));
+
+            if (reused is not null && argument is IValueProvider or IManifestExpressionProvider)
+            {
                 // ResolveAsync never saw this argument, so its reference has to be contributed here or the
                 // executable would lose the dependency edge that the original resolution recorded.
-                if (argument is IValueProvider or IManifestExpressionProvider)
-                {
-                    reusedReferences.Add(argument);
-                }
+                reusedReferences.Add(argument);
             }
         }
+
+        // Only failures that still apply to this executable are retained. A reused argument that failed to
+        // resolve and that the rewrite dropped is no longer part of the command line, so keeping its failure
+        // would fail an executable that has nothing left to fail on. Only reused resolutions are considered
+        // here because failures from the gatherer above are already carried by its own result, and they always
+        // apply: it only ever saw arguments that survived the rewrite. Environment variables are copied from
+        // the original configuration untouched, so their failures always apply too.
+        var environmentVariableExceptions = ExecutionConfigurationResult.GetEnvironmentVariableExceptions(originalConfiguration);
+        var retainedOriginalException = ExecutionConfigurationResult.CombineResolutionExceptions(reusedResolutions, environmentVariableExceptions);
 
         var environmentReferences = originalConfiguration.EnvironmentVariablesWithUnprocessed
             .Select(static kvp => kvp.Value.Unprocessed)
@@ -753,9 +824,11 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         {
             References = environmentReferences.Concat(rewrittenArgsConfiguration.References).Concat(reusedReferences).ToHashSet(),
             ArgumentsWithUnprocessed = argumentsWithUnprocessed,
+            ArgumentResolutions = retainedArgumentResolutions,
             EnvironmentVariablesWithUnprocessed = originalConfiguration.EnvironmentVariablesWithUnprocessed,
+            EnvironmentVariableExceptions = environmentVariableExceptions,
             AdditionalConfigurationData = originalConfiguration.AdditionalConfigurationData,
-            Exception = CombineExecutionConfigurationExceptions(originalConfiguration.Exception, rewrittenArgsConfiguration.Exception)
+            Exception = CombineExecutionConfigurationExceptions(retainedOriginalException, rewrittenArgsConfiguration.Exception)
         };
     }
 

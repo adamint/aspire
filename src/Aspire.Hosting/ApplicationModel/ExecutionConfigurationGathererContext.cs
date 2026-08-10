@@ -41,9 +41,10 @@ internal class ExecutionConfigurationGathererContext : IExecutionConfigurationGa
         CancellationToken cancellationToken = default)
     {
         HashSet<object> references = new();
+        List<ArgumentResolution> argumentResolutions = new(Arguments.Count);
         List<(object Unprocessed, string Value, bool IsSensitive)> resolvedArguments = new(Arguments.Count);
         Dictionary<string, (object Unprocessed, string Value)> resolvedEnvironmentVariables = new(EnvironmentVariables.Count);
-        List<Exception> exceptions = new();
+        List<Exception> environmentVariableExceptions = new();
 
         foreach (var argument in Arguments)
         {
@@ -52,17 +53,24 @@ internal class ExecutionConfigurationGathererContext : IExecutionConfigurationGa
                 var resolvedValue = await resource.ResolveValueAsync(executionContext, resourceLogger, argument, null, cancellationToken).ConfigureAwait(false);
                 if (resolvedValue?.Value != null)
                 {
+                    argumentResolutions.Add(new ArgumentResolution(argument, resolvedValue.Value, resolvedValue.IsSensitive, Exception: null));
                     resolvedArguments.Add((argument, resolvedValue.Value, resolvedValue.IsSensitive));
                     if (argument is IValueProvider or IManifestExpressionProvider)
                     {
                         references.Add(argument);
                     }
                 }
+                else
+                {
+                    // Recorded even though it contributes nothing to the command line: consumers that replay
+                    // this resolution need one entry per gathered argument to stay aligned by occurrence.
+                    argumentResolutions.Add(new ArgumentResolution(argument, Processed: null, IsSensitive: false, Exception: null));
+                }
             }
             catch (Exception ex)
             {
                 resourceLogger.LogError(ex, "Failed to resolve argument for resource '{ResourceName}'. A dependency may have failed to start.", resource.Name);
-                exceptions.Add(ex);
+                argumentResolutions.Add(new ArgumentResolution(argument, Processed: null, IsSensitive: false, ex));
             }
         }
 
@@ -83,7 +91,7 @@ internal class ExecutionConfigurationGathererContext : IExecutionConfigurationGa
             catch (Exception ex)
             {
                 resourceLogger.LogError(ex, "Failed to resolve environment variable '{EnvironmentVariable}' for resource '{ResourceName}'. A dependency may have failed to start.", kvp.Key, resource.Name);
-                exceptions.Add(ex);
+                environmentVariableExceptions.Add(ex);
             }
         }
 
@@ -91,9 +99,11 @@ internal class ExecutionConfigurationGathererContext : IExecutionConfigurationGa
         {
             References = references,
             ArgumentsWithUnprocessed = resolvedArguments,
+            ArgumentResolutions = argumentResolutions,
             EnvironmentVariablesWithUnprocessed = resolvedEnvironmentVariables,
+            EnvironmentVariableExceptions = environmentVariableExceptions,
             AdditionalConfigurationData = AdditionalConfigurationData,
-            Exception = exceptions.Count == 0 ? null : new AggregateException("One or more errors occurred while resolving resource configuration.", exceptions)
+            Exception = ExecutionConfigurationResult.CombineResolutionExceptions(argumentResolutions, environmentVariableExceptions)
         };
     }
 }
