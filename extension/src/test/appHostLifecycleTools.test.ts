@@ -614,11 +614,86 @@ suite('AppHost lifecycle language model tools', () => {
                 const result = await service.start({ appHostPath: 'second/AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
 
                 assert.strictEqual(result.outcome, 'started');
-                assert.strictEqual(result.appHostPath, 'AppHost/AppHost.csproj');
+                assert.strictEqual(result.appHostPath, 'second/AppHost/AppHost.csproj');
                 assert.deepStrictEqual(launchService.launchCalls, [{ appHostPath: secondAppHost, command: 'run', noDebug: true }]);
             }
             finally {
                 fs.rmSync(secondRoot, { recursive: true, force: true });
+            }
+        });
+
+        test('returns a selector the next tool call can reuse in a multi-root workspace', async () => {
+            // The model's only handle on an AppHost is the `appHostPath` the previous call
+            // returned. A bare workspace-relative path is not a usable one here: resolution
+            // refuses it as ambiguous even when a single root matches, so a start followed by a
+            // stop of the same AppHost would be impossible without the agent guessing the prefix.
+            const secondRoot = createFixtureDirectory('second-workspace');
+            try {
+                const secondAppHost = path.join(secondRoot, 'AppHost', 'AppHost.csproj');
+                fs.mkdirSync(path.dirname(secondAppHost), { recursive: true });
+                fs.writeFileSync(secondAppHost, appHostProjectContents);
+                discoveryService.registeredPaths.push(secondAppHost);
+                workspaceFoldersStub.value([
+                    { uri: vscode.Uri.file(workspaceRoot), name: 'workspace', index: 0 },
+                    { uri: vscode.Uri.file(secondRoot), name: 'second', index: 1 },
+                ]);
+
+                const started = await service.start({ appHostPath: 'second/AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+                assert.strictEqual(started.outcome, 'started');
+
+                const session = new FakeEditorSession(secondAppHost, { noDebug: true });
+                editorSessions.push(session);
+                const stopped = await service.stop({ appHostPath: started.appHostPath }, new vscode.CancellationTokenSource().token);
+
+                assert.strictEqual(stopped.outcome, 'stopped');
+                assert.strictEqual(stopped.appHostPath, 'second/AppHost/AppHost.csproj');
+                assert.strictEqual(session.stopCount, 1);
+            }
+            finally {
+                fs.rmSync(secondRoot, { recursive: true, force: true });
+            }
+        });
+
+        test('keeps both AppHosts addressable when two workspace folders share a name', async () => {
+            // `WorkspaceFolder.name` is a display label, not an identity. Two roots named `app`
+            // that each contain `AppHost/AppHost.csproj` would otherwise produce one selector for
+            // two AppHosts, and resolution would then reject that selector as ambiguous — leaving
+            // neither AppHost reachable through the tools at all.
+            const firstNamesake = createFixtureDirectory('namesake-a');
+            const secondNamesake = createFixtureDirectory('namesake-b');
+            try {
+                const firstAppHost = path.join(firstNamesake, 'AppHost', 'AppHost.csproj');
+                const secondAppHost = path.join(secondNamesake, 'AppHost', 'AppHost.csproj');
+                for (const appHost of [firstAppHost, secondAppHost]) {
+                    fs.mkdirSync(path.dirname(appHost), { recursive: true });
+                    fs.writeFileSync(appHost, appHostProjectContents);
+                    discoveryService.registeredPaths.push(appHost);
+                }
+
+                workspaceFoldersStub.value([
+                    { uri: vscode.Uri.file(firstNamesake), name: 'app', index: 0 },
+                    { uri: vscode.Uri.file(secondNamesake), name: 'app', index: 1 },
+                ]);
+
+                const firstSelector = `${path.basename(firstNamesake)}/AppHost/AppHost.csproj`;
+                const secondSelector = `${path.basename(secondNamesake)}/AppHost/AppHost.csproj`;
+
+                const first = await service.start({ appHostPath: firstSelector, mode: 'run' }, new vscode.CancellationTokenSource().token);
+                assert.strictEqual(first.outcome, 'started');
+                assert.strictEqual(first.appHostPath, firstSelector);
+
+                const second = await service.start({ appHostPath: secondSelector, mode: 'run' }, new vscode.CancellationTokenSource().token);
+                assert.strictEqual(second.outcome, 'started');
+                assert.strictEqual(second.appHostPath, secondSelector);
+
+                assert.deepStrictEqual(launchService.launchCalls, [
+                    { appHostPath: firstAppHost, command: 'run', noDebug: true },
+                    { appHostPath: secondAppHost, command: 'run', noDebug: true },
+                ]);
+            }
+            finally {
+                fs.rmSync(firstNamesake, { recursive: true, force: true });
+                fs.rmSync(secondNamesake, { recursive: true, force: true });
             }
         });
 

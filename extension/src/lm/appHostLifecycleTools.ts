@@ -108,7 +108,13 @@ export interface AppHostStopToolInput {
 export interface AppHostLifecycleToolResult {
     tool: string;
     outcome: AppHostLifecycleOutcome;
-    /** Path relative to the containing workspace folder, or empty when the input could not be resolved. */
+    /**
+     * The selector that names the AppHost this result is about, or empty when the input could
+     * not be resolved. This is the same folder-qualified form the confirmation displays and the
+     * tools accept, so a model can feed the value of one call straight into the next. A bare
+     * workspace-relative path would not round-trip: in a multi-root workspace `resolveTarget`
+     * refuses it as ambiguous even when only one root currently matches.
+     */
     appHostPath: string;
     requestedMode?: AppHostLifecycleMode;
     effectiveMode?: AppHostLifecycleMode;
@@ -211,9 +217,11 @@ interface ResolvedAppHostTarget {
     /** Path relative to the containing workspace folder, always with `/` separators. */
     relativePath: string;
     /**
-     * The identity shown in the confirmation dialog. Identical to `relativePath` in a
-     * single-root workspace, and prefixed with the workspace folder name otherwise, so a
-     * selector that resolves under one root still names that root in the prompt.
+     * The identity shown in the confirmation dialog and returned to the model. Identical to
+     * `relativePath` in a single-root workspace, and prefixed with a workspace folder qualifier
+     * otherwise, so a selector that resolves under one root still names that root in the prompt.
+     * See {@link computeWorkspaceFolderQualifiers} for why the qualifier is not always the
+     * folder's display name.
      */
     displayPath: string;
 }
@@ -313,14 +321,14 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                         throw error;
                     }
 
-                    return this.createErrorResult(aspireAppHostStartToolName, error, preflight.target.relativePath, 'unknown', requestedMode, undefined);
+                    return this.createErrorResult(aspireAppHostStartToolName, error, preflight.target.displayPath, 'unknown', requestedMode, undefined);
                 }
 
                 if (runningOutsideEditor) {
                     // Launching again would start a second AppHost against the same project.
                     // Report it instead so the agent can decide, and never adopt or kill a
                     // process this extension does not own.
-                    return createResult(aspireAppHostStartToolName, 'alreadyRunning', preflight.target.relativePath, 'external', requestedMode, undefined);
+                    return createResult(aspireAppHostStartToolName, 'alreadyRunning', preflight.target.displayPath, 'external', requestedMode, undefined);
                 }
             }
 
@@ -343,14 +351,14 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                     return createResult(
                         aspireAppHostStartToolName,
                         'alreadyRunning',
-                        current.relativePath,
+                        current.displayPath,
                         'editor',
                         requestedMode,
                         getSessionMode(runningSession));
                 }
 
                 if (this._dependencies.launchService.isLaunching(current.absolutePath) || owned.sessions.length > 0) {
-                    return createResult(aspireAppHostStartToolName, 'alreadyStarting', current.relativePath, 'editor', requestedMode, undefined);
+                    return createResult(aspireAppHostStartToolName, 'alreadyStarting', current.displayPath, 'editor', requestedMode, undefined);
                 }
 
                 if (owned.ambiguous) {
@@ -358,7 +366,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                     // for example a sibling project file and a `Program.cs` in a directory
                     // holding several projects. Launching would risk a second process for
                     // an AppHost that is already running, so refuse instead of guessing.
-                    return createResult(aspireAppHostStartToolName, 'ambiguousSession', current.relativePath, 'editor', requestedMode, undefined);
+                    return createResult(aspireAppHostStartToolName, 'ambiguousSession', current.displayPath, 'editor', requestedMode, undefined);
                 }
 
                 // Authoritative ownership check immediately before launching. This is the
@@ -376,11 +384,11 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                     // outer catch - which reports `editor` - would claim the editor controls an
                     // AppHost it has no session for. The probe failing means the controller is
                     // genuinely unknown, exactly as the pre-lock probe reports it.
-                    return this.createErrorResult(aspireAppHostStartToolName, error, current.relativePath, 'unknown', requestedMode, undefined);
+                    return this.createErrorResult(aspireAppHostStartToolName, error, current.displayPath, 'unknown', requestedMode, undefined);
                 }
 
                 if (runningOutsideEditorNow) {
-                    return createResult(aspireAppHostStartToolName, 'alreadyRunning', current.relativePath, 'external', requestedMode, undefined);
+                    return createResult(aspireAppHostStartToolName, 'alreadyRunning', current.displayPath, 'external', requestedMode, undefined);
                 }
 
                 // Claim the launching slot in one synchronous step. The lifecycle lock only
@@ -388,7 +396,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 // `startDebugging` without it, so this claim - not the checks above - is
                 // what makes "no second AppHost" hold against a concurrent editor launch.
                 if (!this._dependencies.launchService.tryReserveLaunch(current.absolutePath)) {
-                    return createResult(aspireAppHostStartToolName, 'alreadyStarting', current.relativePath, 'editor', requestedMode, undefined);
+                    return createResult(aspireAppHostStartToolName, 'alreadyStarting', current.displayPath, 'editor', requestedMode, undefined);
                 }
 
                 try {
@@ -405,14 +413,14 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                     // failure before that point (a disposed service, for example) would
                     // otherwise leave this AppHost reported as launching forever.
                     this._dependencies.launchService.clearLaunching(current.absolutePath);
-                    return this.createErrorResult(aspireAppHostStartToolName, error, current.relativePath, 'editor', requestedMode, undefined);
+                    return this.createErrorResult(aspireAppHostStartToolName, error, current.displayPath, 'editor', requestedMode, undefined);
                 }
 
-                return createResult(aspireAppHostStartToolName, 'started', current.relativePath, 'editor', requestedMode, requestedMode);
+                return createResult(aspireAppHostStartToolName, 'started', current.displayPath, 'editor', requestedMode, requestedMode);
             });
         }
         catch (error) {
-            return this.createErrorResult(aspireAppHostStartToolName, error, preflight.target.relativePath, 'editor', requestedMode, undefined);
+            return this.createErrorResult(aspireAppHostStartToolName, error, preflight.target.displayPath, 'editor', requestedMode, undefined);
         }
     }
 
@@ -442,7 +450,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 if (owned.sessions.length > 1) {
                     // Two sessions claim the same AppHost. Stopping "one of them" would be an
                     // arbitrary choice, so refuse and let the user disambiguate in the UI.
-                    return createResult(aspireAppHostStopToolName, 'ambiguousSession', current.relativePath, 'editor', undefined, undefined);
+                    return createResult(aspireAppHostStopToolName, 'ambiguousSession', current.displayPath, 'editor', undefined, undefined);
                 }
 
                 if (owned.sessions.length === 0 && owned.ambiguous) {
@@ -450,7 +458,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                     // sibling project file and a `Program.cs` in a directory holding several
                     // projects, for instance. Stopping it would terminate an AppHost the
                     // caller never named, so refuse.
-                    return createResult(aspireAppHostStopToolName, 'ambiguousSession', current.relativePath, 'editor', undefined, undefined);
+                    return createResult(aspireAppHostStopToolName, 'ambiguousSession', current.displayPath, 'editor', undefined, undefined);
                 }
 
                 if (owned.sessions.length === 0) {
@@ -458,7 +466,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                         // A launch can be reserved before its debug session is observable.
                         // Report that in-flight state instead of claiming there is nothing
                         // to stop, so an agent retry can wait for the session to materialize.
-                        return createResult(aspireAppHostStopToolName, 'alreadyStarting', current.relativePath, 'editor', undefined, undefined);
+                        return createResult(aspireAppHostStopToolName, 'alreadyStarting', current.displayPath, 'editor', undefined, undefined);
                     }
 
                     const externalController = await this.probeExternalControllerForStop(current.absolutePath, lockToken);
@@ -466,13 +474,13 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                         // The probe failed, so "nothing is running" would be an assertion the
                         // extension cannot make. Report the failure and let the agent retry
                         // or fall back rather than telling it the AppHost is not running.
-                        return createResult(aspireAppHostStopToolName, 'failed', current.relativePath, 'unknown', undefined, undefined);
+                        return createResult(aspireAppHostStopToolName, 'failed', current.displayPath, 'unknown', undefined, undefined);
                     }
 
                     return createResult(
                         aspireAppHostStopToolName,
                         externalController === 'external' ? 'notEditorOwned' : 'notRunning',
-                        current.relativePath,
+                        current.displayPath,
                         externalController,
                         undefined,
                         undefined);
@@ -481,20 +489,20 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 const session = owned.sessions[0];
                 const effectiveMode = getSessionMode(session);
                 if (lockToken.isCancellationRequested) {
-                    return createResult(aspireAppHostStopToolName, 'cancelled', current.relativePath, 'editor', undefined, effectiveMode);
+                    return createResult(aspireAppHostStopToolName, 'cancelled', current.displayPath, 'editor', undefined, effectiveMode);
                 }
                 try {
                     await session.stopDebugging();
                 }
                 catch (error) {
-                    return this.createErrorResult(aspireAppHostStopToolName, error, current.relativePath, 'editor', undefined, effectiveMode);
+                    return this.createErrorResult(aspireAppHostStopToolName, error, current.displayPath, 'editor', undefined, effectiveMode);
                 }
 
-                return createResult(aspireAppHostStopToolName, 'stopped', current.relativePath, 'editor', undefined, effectiveMode);
+                return createResult(aspireAppHostStopToolName, 'stopped', current.displayPath, 'editor', undefined, effectiveMode);
             });
         }
         catch (error) {
-            return this.createErrorResult(aspireAppHostStopToolName, error, preflight.target.relativePath, 'editor', undefined, undefined);
+            return this.createErrorResult(aspireAppHostStopToolName, error, preflight.target.displayPath, 'editor', undefined, undefined);
         }
     }
 
@@ -595,13 +603,15 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
      */
     private async enumerateKnownAppHosts(token: vscode.CancellationToken): Promise<readonly ResolvedAppHostTarget[]> {
         const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
-        const candidatesByFolder = await Promise.all(workspaceFolders.map(async folder => ({
+        const folderQualifiers = computeWorkspaceFolderQualifiers(workspaceFolders);
+        const candidatesByFolder = await Promise.all(workspaceFolders.map(async (folder, index) => ({
             folder,
+            qualifier: folderQualifiers[index],
             candidates: await this._dependencies.discoveryService.discover(folder, false, token),
         })));
 
         const targets = new Map<string, ResolvedAppHostTarget>();
-        for (const { folder, candidates } of candidatesByFolder) {
+        for (const { folder, qualifier, candidates } of candidatesByFolder) {
             // Containment is decided on the real paths, because a link inside the workspace
             // can point at a file outside it. The confirmation would show the in-workspace
             // link while `startDebugging` executed the external target, so a lexical check
@@ -628,7 +638,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 }
 
                 const displayPath = workspaceFolders.length > 1
-                    ? `${folder.name}/${relativePath}`
+                    ? `${qualifier}/${relativePath}`
                     : relativePath;
                 // Nested workspace folders enumerate the same file twice. Keying by the
                 // absolute path collapses those into one target so a selector matching both
@@ -729,24 +739,24 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
     private createErrorResult(
         tool: string,
         error: unknown,
-        relativePath: string,
+        displayPath: string,
         controller: AppHostLifecycleController,
         requestedMode: AppHostLifecycleMode | undefined,
         effectiveMode: AppHostLifecycleMode | undefined,
     ): AppHostLifecycleToolResult {
         if (isCommandCancellation(error)) {
-            return createResult(tool, 'cancelled', relativePath, controller, requestedMode, effectiveMode);
+            return createResult(tool, 'cancelled', displayPath, controller, requestedMode, effectiveMode);
         }
 
         if (error instanceof AppHostLifecycleLockTimeoutError) {
-            return createResult(tool, 'busy', relativePath, controller, requestedMode, effectiveMode);
+            return createResult(tool, 'busy', displayPath, controller, requestedMode, effectiveMode);
         }
 
         // Failure details stay in the extension log. They routinely contain absolute
         // paths, CLI stderr, and DCP/RPC connection details, none of which may cross
         // back into the model transcript.
         extensionLogOutputChannel.error(`Aspire language model tool ${tool} failed: ${String(error)}`);
-        return createResult(tool, 'failed', relativePath, controller, requestedMode, effectiveMode);
+        return createResult(tool, 'failed', displayPath, controller, requestedMode, effectiveMode);
     }
 
 }
@@ -946,6 +956,54 @@ function toSelectorKey(value: string): string {
  */
 function describeKnownAppHosts(targets: readonly ResolvedAppHostTarget[]): readonly string[] {
     return targets.slice(0, maxReportedKnownAppHosts).map(target => target.displayPath);
+}
+
+/**
+ * Picks the prefix that names each workspace folder in a multi-root selector, aligned with the
+ * order of `folders`.
+ *
+ * `WorkspaceFolder.name` is a display label, not an identity: a `.code-workspace` may name two
+ * roots the same, and two roots at `/a/app` and `/b/app` are both called `app` by default. If
+ * both contain `AppHost/AppHost.csproj` they would produce the same selector, which
+ * `resolveTarget` then has to reject as ambiguous — so neither AppHost could be addressed at
+ * all. Whenever a label collides, the colliding folders fall back to as many trailing segments
+ * of their own path as it takes to tell them apart (`a/app` versus `b/app`), which is unique
+ * because their absolute paths are. Folders with an unambiguous name keep it, so the common case
+ * still shows the label the explorer shows.
+ */
+function computeWorkspaceFolderQualifiers(folders: readonly vscode.WorkspaceFolder[]): string[] {
+    const states = folders.map(folder => ({
+        // `name` is used before any path segment, so a distinct label stays the displayed one.
+        segments: folder.uri.fsPath.split(/[\\/]+/).filter(segment => segment.length > 0),
+        consumed: 0,
+        qualifier: folder.name,
+    }));
+
+    // Every pass gives one more path segment to each folder still sharing a qualifier. The loop
+    // is bounded by the longest path because a folder that has spent all of its segments cannot
+    // become more specific, and distinct absolute paths differ before that point.
+    const maxPasses = states.reduce((longest, state) => Math.max(longest, state.segments.length), 0) + 1;
+    for (let pass = 0; pass < maxPasses; pass++) {
+        const countsByQualifier = new Map<string, number>();
+        for (const state of states) {
+            const key = toSelectorKey(state.qualifier);
+            countsByQualifier.set(key, (countsByQualifier.get(key) ?? 0) + 1);
+        }
+
+        const collided = states.filter(state =>
+            (countsByQualifier.get(toSelectorKey(state.qualifier)) ?? 0) > 1 &&
+            state.consumed < state.segments.length);
+        if (collided.length === 0) {
+            break;
+        }
+
+        for (const state of collided) {
+            state.consumed++;
+            state.qualifier = state.segments.slice(state.segments.length - state.consumed).join('/');
+        }
+    }
+
+    return states.map(state => state.qualifier);
 }
 
 /**
