@@ -117,7 +117,8 @@ export class ResourceSessionTermination {
      *
      * The returned promise settles only after VS Code has finished stopping, and rejects if VS Code
      * failed to stop the session. Callers that can act on (or report) the failure should await it;
-     * fire-and-forget callers should use {@link stopAndLogFailure} so the rejection is not unhandled.
+     * fire-and-forget callers should use {@link stopAndDisposeOnFailure} so the rejection is not
+     * unhandled.
      *
      * Stopping an already-finished lifecycle succeeds without touching VS Code. A browser run ends on
      * its own (`onDidTerminateDebugSession`) as often as it is stopped by DCP, and VS Code drops the
