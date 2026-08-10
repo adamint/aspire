@@ -1056,12 +1056,11 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // Windows' SIGTERM → 143 exit code which is not normalized to 0) would
     // be missed and the summary would under-report failures.
     //
-    // Each disposable is invoked defensively. Resource stop callbacks are registered here
-    // directly (see trackAlreadyStartedResourceSession) and `stopSession()` is only typed as
-    // returning a Thenable, so a contributed implementation may throw synchronously. An
-    // unguarded forEach would let that throw abort every later disposable and escape dispose()
-    // entirely - and because stopDebugging() disposes before rethrowing, it would also discard
-    // the stop failures it had just aggregated.
+    // Each disposable is invoked defensively. These are contributed from several places - the
+    // session registry, the CLI terminal, the debug adapter trackers, a VS Code event listener -
+    // and nothing constrains them not to throw. An unguarded loop would let one throw abort every
+    // later disposable and escape dispose() entirely; because stopDebugging() disposes before
+    // rethrowing, that would also discard the stop failures it had just aggregated.
     for (const disposable of this._disposables) {
       try {
         disposable.dispose();

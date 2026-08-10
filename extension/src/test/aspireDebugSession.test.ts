@@ -553,9 +553,9 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             releaseSlowResourceStop();
         }
 
-        // Promise.all settles on the first rejection, so the AppHost stop used to start while the
-        // slow resource was still tearing down - the exact ordering this method exists to enforce,
-        // broken on the path where orphaned resources are most likely.
+        // Every resource has to reach a settled state before the AppHost stop starts, whether it
+        // succeeded or failed. That ordering is the point of the method, and it is most load-bearing
+        // exactly here, on the path where a failing resource would otherwise be left orphaned.
         assert.deepStrictEqual(stopOrder, [
             'failing-resource-session',
             'slow-resource-session',
@@ -835,8 +835,9 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
                 stopSession: () => vscode.debug.stopDebugging(resourceDebugSession as unknown as vscode.DebugSession),
             },
         ];
-        // Mirrors the production registration in trackAlreadyStartedResourceSession, which pushes
-        // the raw stopSession callback into _disposables without memoizing a synchronous failure.
+        // A lifecycle disposable that throws synchronously. Nothing constrains a contributed
+        // vscode.Disposable not to, and dispose() runs on the shutdown's failure path, so the throw
+        // must not stop the disposables registered after it.
         const laterDisposable = sinon.stub();
         (aspireDebugSession as any)._disposables.push({
             dispose: () => {
