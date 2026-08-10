@@ -31,6 +31,12 @@ export type DashboardLaunchBehavior = 'none' | 'notification' | DashboardBrowser
 export type DashboardBrowserType = 'openExternalBrowser' | 'integratedBrowser' | 'debugChrome' | 'debugEdge' | 'debugFirefox';
 const resourceDebugSessionStopTimeoutMs = 10_000;
 
+/** A resource debug session's in-flight stop, kept with its id so a stop that hangs can be named. */
+interface ResourceDebugSessionStop {
+  sessionId: string;
+  promise: Promise<void>;
+}
+
 export function getLoggableDebugConfiguration(debugConfig: AspireResourceExtendedDebugConfiguration, includeEnvironment: boolean): vscode.DebugConfiguration {
   if (includeEnvironment && debugConfig.type !== 'maui') {
     return debugConfig;
@@ -134,18 +140,18 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // resource behavior this ordering exists to prevent - on exactly the path where a resource is
     // most likely to be left behind. The rejections are kept and rethrown after the AppHost and the
     // synthetic Aspire parent have been stopped.
-    const resourceStopPromises: Promise<void>[] = [];
+    const resourceStops: ResourceDebugSessionStop[] = [];
     const stopFailures: unknown[] = [];
     for (const session of resourceDebugSessions) {
       try {
-        resourceStopPromises.push(Promise.resolve(session.stopSession()));
+        resourceStops.push({ sessionId: session.id, promise: Promise.resolve(session.stopSession()) });
       }
       catch (error) {
         stopFailures.push(error);
       }
     }
 
-    stopFailures.push(...await this.waitForResourceDebugSessionStops(resourceStopPromises));
+    stopFailures.push(...await this.waitForResourceDebugSessionStops(resourceStops));
 
     // Global/E2E stop requests target the synthetic Aspire session. Stop the real AppHost session
     // explicitly before the parent so we do not rely on VS Code cascading termination before the
@@ -178,56 +184,64 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     }
   }
 
-  private stopResourceDebugSessions(): Promise<void>[] {
+  private stopResourceDebugSessions(): ResourceDebugSessionStop[] {
     const appHostDebugSessionId = this._appHostDebugSession?.id;
-    const stopPromises: Promise<void>[] = [];
+    const stops: ResourceDebugSessionStop[] = [];
     for (const session of this._resourceDebugSessions) {
       if (session.id === appHostDebugSessionId) {
         continue;
       }
 
       try {
-        stopPromises.push(Promise.resolve(session.stopSession()));
+        stops.push({ sessionId: session.id, promise: Promise.resolve(session.stopSession()) });
       }
       catch (error) {
         extensionLogOutputChannel.warn(`Failed to stop resource debug session ${session.id}: ${error}`);
       }
     }
 
-    return stopPromises;
+    return stops;
   }
 
-  private async waitForResourceDebugSessionStops(stopPromises: Promise<void>[]): Promise<unknown[]> {
-    if (stopPromises.length === 0) {
+  /**
+   * Waits for every resource stop, giving each one its own deadline, and returns the reasons the
+   * failed ones gave.
+   *
+   * The deadline is applied per stop rather than by racing a timer against the aggregate. Racing
+   * the aggregate would mean a single wedged adapter discarded the outcome of every other stop, so
+   * a resource that genuinely failed to stop would be reported as nothing more than a timeout, and
+   * the reason it gave would be lost. Each stop that times out instead contributes its own reason,
+   * naming the session that hung, and stops that already failed still contribute theirs.
+   */
+  private async waitForResourceDebugSessionStops(stops: ResourceDebugSessionStop[]): Promise<unknown[]> {
+    if (stops.length === 0) {
       return [];
     }
 
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const timeoutPromise = new Promise<'timeout'>(resolve => {
-      timeout = setTimeout(() => {
-        timeout = undefined;
-        resolve('timeout');
-      }, resourceDebugSessionStopTimeoutMs);
-    });
-
-    const results = await Promise.race([
-      Promise.allSettled(stopPromises),
-      timeoutPromise,
-    ]);
-
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-
-    if (results === 'timeout') {
-      const error = new Error(`Timed out after ${resourceDebugSessionStopTimeoutMs}ms waiting for resource debug sessions to stop.`);
-      extensionLogOutputChannel.warn(error.message);
-      return [error];
-    }
+    const results = await Promise.allSettled(stops.map(stop => AspireDebugSession.withStopDeadline(stop)));
 
     return results
       .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
       .map(result => result.reason);
+  }
+
+  private static withStopDeadline({ sessionId, promise }: ResourceDebugSessionStop): Promise<void> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => {
+        const error = new Error(`Timed out after ${resourceDebugSessionStopTimeoutMs}ms waiting for resource debug session ${sessionId} to stop.`);
+        extensionLogOutputChannel.warn(error.message);
+        reject(error);
+      }, resourceDebugSessionStopTimeoutMs);
+    });
+
+    // The stop promise is not cancellable, so a timed-out stop keeps running. Clearing the timer on
+    // every outcome is what stops the deadline itself from holding the process awake afterwards.
+    return Promise.race([promise, deadline]).finally(() => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    });
   }
 
   private trackResourceDebugSession(resourceDebugSession: AspireResourceDebugSession): AspireResourceDebugSession {
@@ -950,9 +964,9 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // VS Code stop path reaches dispose() through DAP `disconnect`/`terminate`, not through the
     // async stopDebugging() helper above, so dispose() has to preserve the same resource-first
     // ordering on its own.
-    const resourceStopPromises = this.stopResourceDebugSessions();
-    if (resourceStopPromises.length > 0) {
-      void this.waitForResourceDebugSessionStops(resourceStopPromises).then(finishDispose);
+    const resourceStops = this.stopResourceDebugSessions();
+    if (resourceStops.length > 0) {
+      void this.waitForResourceDebugSessionStops(resourceStops).then(finishDispose);
     }
     else {
       finishDispose();

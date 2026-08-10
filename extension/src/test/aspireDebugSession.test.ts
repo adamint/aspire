@@ -771,7 +771,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         const stopError = await stopPromise;
 
         assert.ok(stopError instanceof Error);
-        assert.match(stopError.message, /Timed out after 10000ms waiting for resource debug sessions to stop/);
+        assert.match(stopError.message, /Timed out after 10000ms waiting for resource debug session resource-session to stop/);
         assert.deepStrictEqual(stopOrder, [
             resourceDebugSession.id,
             appHostDebugSession.id,
@@ -779,6 +779,76 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         ]);
 
         clock.restore();
+    });
+
+    test('stopDebugging keeps a resource stop failure that happened alongside one that never settles', async () => {
+        // Applying the deadline to the aggregate instead of to each stop would collapse both of
+        // these into a single timeout, so the reason the failing resource actually gave would never
+        // reach the caller. Both reasons have to survive.
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const appHostDebugSession = {
+            id: 'apphost-session',
+            type: 'coreclr',
+            name: 'AppHost',
+            configuration: { type: 'coreclr', request: 'launch', name: 'AppHost' },
+        };
+        const terminalProvider = {
+            isCliDebugLoggingEnabled: () => false,
+        };
+        const rejectingStopError = new Error('Resource adapter refused to stop');
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(async () => { });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        (aspireDebugSession as any)._appHostDebugSession = {
+            id: appHostDebugSession.id,
+            session: appHostDebugSession as unknown as vscode.DebugSession,
+            stopSession: () => vscode.debug.stopDebugging(appHostDebugSession as unknown as vscode.DebugSession),
+        };
+        (aspireDebugSession as any)._resourceDebugSessions = [
+            {
+                id: 'hanging-resource-session',
+                session: {} as unknown as vscode.DebugSession,
+                stopSession: () => new Promise<void>(() => { }),
+            },
+            {
+                id: 'rejecting-resource-session',
+                session: {} as unknown as vscode.DebugSession,
+                stopSession: () => Promise.reject(rejectingStopError),
+            },
+        ];
+
+        try {
+            const stopPromise = aspireDebugSession.stopDebugging().then(
+                () => undefined,
+                error => error as unknown);
+
+            await clock.tickAsync(10_000);
+            const stopError = await stopPromise;
+
+            assert.ok(stopError instanceof AggregateError);
+            assert.strictEqual(stopError.errors.length, 2);
+            assert.ok(stopError.errors.includes(rejectingStopError));
+            const timeoutError = stopError.errors.find(error => error !== rejectingStopError);
+            assert.ok(timeoutError instanceof Error);
+            assert.match(timeoutError.message, /Timed out after 10000ms waiting for resource debug session hanging-resource-session to stop/);
+        }
+        finally {
+            clock.restore();
+        }
     });
 
     test('stopDebugging continues stopping resources after a synchronous resource stop failure', async () => {
