@@ -1688,10 +1688,43 @@ public class PackageJsonMergerTests
         Assert.Equal("6.0.3", GetDep(result, "devDependencies", "typescript"));
         Assert.Equal("6.0.3", overrides["typescript"]?.GetValue<string>());
 
-        // Untouched: an override for a package this merge did not rewrite, and a nested override
-        // tree, which npm scopes to that package's own dependencies rather than the direct spec.
+        // Untouched: an override for a package this merge did not rewrite, and an override tree
+        // for a different package, which scopes that package's own dependencies.
         Assert.Equal("1.3.0", overrides["left-pad"]?.GetValue<string>());
         Assert.Equal("^5.9.3", overrides["some-package"]?["typescript"]?.GetValue<string>());
+    }
+
+    /// <summary>
+    /// npm applies the same rule to an object entry's "." key, which is a spec for the package
+    /// itself rather than for its dependencies. Reproduced against the real resolver: with
+    /// <c>devDependencies.typescript "6.0.3"</c> and
+    /// <c>overrides.typescript { ".": "^5.9.3", "some-dep": "1.0.0" }</c>,
+    /// <c>npm install --package-lock-only</c> reports
+    /// <c>EOVERRIDE / Override for typescript@6.0.3 conflicts with direct dependency</c>; setting
+    /// "." to 6.0.3 installs. So the "." key has to move with the direct spec, and the tree beside
+    /// it has to survive.
+    /// </summary>
+    [Fact]
+    public void Merge_BrownfieldWithASelfScopedNestedOverride_MovesOnlyTheSelfEntry()
+    {
+        const string Existing = """
+            {
+              "name": "brownfield",
+              "devDependencies": {
+                "typescript": "^5.9.3"
+              },
+              "overrides": {
+                "typescript": { ".": "^5.9.3", "some-dep": "1.0.0" }
+              }
+            }
+            """;
+
+        var result = MergeJson(Existing, ScaffoldWithLintToolchain);
+        var typeScriptOverride = ParseJson(result)["overrides"]!["typescript"]!.AsObject();
+
+        Assert.Equal("6.0.3", GetDep(result, "devDependencies", "typescript"));
+        Assert.Equal("6.0.3", typeScriptOverride["."]?.GetValue<string>());
+        Assert.Equal("1.0.0", typeScriptOverride["some-dep"]?.GetValue<string>());
     }
 
     [Fact]

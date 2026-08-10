@@ -26,6 +26,7 @@ internal static class PackageJsonMerger
     private const string TypeScriptPackage = "typescript";
     private const string TypeScriptEslintPackage = "typescript-eslint";
     private const string OverridesKey = "overrides";
+    private const string SelfOverrideKey = ".";
     private const string AspireLintScriptName = "aspire:lint";
 
     /// <summary>
@@ -416,16 +417,33 @@ internal static class PackageJsonMerger
 
         foreach (var (packageName, rewrittenSpec) in rewrittenSpecs)
         {
-            // Only a string entry is a spec for the package itself. An object entry is a nested
-            // override tree scoped to that package's own dependencies, which npm never compares
-            // against the direct spec.
-            if (GetStringValue(overrides[packageName]) is not { } overriddenSpec ||
+            // A string entry is the spec for the package itself. An object entry is a nested
+            // override tree, but its "." key - when present - is also a spec for the package
+            // itself, and npm compares it against the direct dependency exactly the same way:
+            //
+            //   "devDependencies": { "typescript": "6.0.3" },
+            //   "overrides": { "typescript": { ".": "^5.9.3", "some-dep": "1.0.0" } }
+            //
+            // still fails with `npm error code EOVERRIDE / Override for typescript@6.0.3 conflicts
+            // with direct dependency`. An object entry without a "." key only scopes that package's
+            // own dependencies and is left alone.
+            var entry = overrides[packageName];
+            var nestedOverrides = entry as JsonObject;
+            if ((GetStringValue(entry) ?? GetStringValue(nestedOverrides?[SelfOverrideKey])) is not { } overriddenSpec ||
                 string.Equals(overriddenSpec, rewrittenSpec, StringComparison.Ordinal))
             {
                 continue;
             }
 
-            overrides[packageName] = rewrittenSpec;
+            // Rewrite in place so a nested tree sitting beside the "." key survives.
+            if (nestedOverrides is null)
+            {
+                overrides[packageName] = rewrittenSpec;
+            }
+            else
+            {
+                nestedOverrides[SelfOverrideKey] = rewrittenSpec;
+            }
 
             logger.LogWarning(
                 "Updated the '{Package}' entry in overrides from '{OverriddenVersion}' to '{RewrittenVersion}' to match the upgraded direct dependency, because npm rejects an override that does not match a direct dependency.",
