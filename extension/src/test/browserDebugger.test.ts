@@ -6,6 +6,7 @@ import { unsupportedBrowserDebugTarget } from '../loc/strings';
 
 suite('Browser Debugger Tests', () => {
     const fakeAspireDebugSession = {} as AspireDebugSession;
+    const BROWSER_RESOURCE_URL = 'http://localhost:5173';
 
     async function createConfiguration(launchConfig: BrowserLaunchConfiguration): Promise<AspireResourceExtendedDebugConfiguration> {
         const debugConfig = createDebugConfig();
@@ -76,7 +77,32 @@ suite('Browser Debugger Tests', () => {
     test('rejects a browser that has no built-in js-debug adapter', async () => {
         await assert.rejects(
             () => createConfiguration({ type: 'browser', url: 'http://localhost:5173', browser: 'firefox' }),
-            new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget('firefox', 'msedge, chrome'))));
+            new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget('firefox', BROWSER_RESOURCE_URL, 'msedge, chrome'))));
+    });
+
+    // The failure surfaces as a toast carrying only this message. An AppHost can declare several
+    // browser resources, so a message naming just the offending value leaves the user with no way
+    // to tell which resource to go and fix.
+    test('names the resource that could not be debugged', async () => {
+        await assert.rejects(
+            () => createConfiguration({ type: 'browser', url: 'http://localhost:7654/admin', browser: 'firefox' }),
+            (err: Error) => {
+                assert.ok(
+                    err.message.includes('http://localhost:7654/admin'),
+                    `Unsupported-browser failure must identify the resource: ${err.message}`);
+                return true;
+            });
+    });
+
+    // Nothing guarantees the AppHost sends a URL. The run ID is a poor identifier, but it is the
+    // only one left, and it is what the surrounding logs are keyed by.
+    test('falls back to the run ID when the browser resource has no URL', async () => {
+        await assert.rejects(
+            () => createConfiguration({ type: 'browser', browser: 'firefox' }),
+            (err: Error) => {
+                assert.strictEqual(err.message, unsupportedBrowserDebugTarget('firefox', '1', 'msedge, chrome'));
+                return true;
+            });
     });
 
     // WithBrowserDebugger(string browser = "msedge") takes an arbitrary string, so an explicit
@@ -85,13 +111,13 @@ suite('Browser Debugger Tests', () => {
     test('rejects an explicitly empty browser instead of silently defaulting to Edge', async () => {
         await assert.rejects(
             () => createConfiguration({ type: 'browser', url: 'http://localhost:5173', browser: '' }),
-            new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget('', 'msedge, chrome'))));
+            new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget('', BROWSER_RESOURCE_URL, 'msedge, chrome'))));
     });
 
     test('rejects a whitespace-only browser', async () => {
         await assert.rejects(
             () => createConfiguration({ type: 'browser', url: 'http://localhost:5173', browser: '   ' }),
-            new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget('   ', 'msedge, chrome'))));
+            new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget('   ', BROWSER_RESOURCE_URL, 'msedge, chrome'))));
     });
 
     // An AppHost predating the `browser` field omits it entirely, and a null survives untyped
@@ -115,7 +141,7 @@ suite('Browser Debugger Tests', () => {
         test(`rejects '${inheritedMember}' instead of resolving it through Object.prototype`, async () => {
             await assert.rejects(
                 () => createConfiguration({ type: 'browser', url: 'http://localhost:5173', browser: inheritedMember }),
-                new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget(inheritedMember, 'msedge, chrome'))));
+                new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget(inheritedMember, BROWSER_RESOURCE_URL, 'msedge, chrome'))));
         });
     }
 

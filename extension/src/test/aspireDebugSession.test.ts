@@ -9,6 +9,7 @@ import { appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConf
 import { AspireResourceExtendedDebugConfiguration } from '../dcp/types';
 import { __resetCommonPropertiesForTests, __setReporterForTests } from '../utils/telemetry';
 import { extensionLogOutputChannel } from '../utils/logging';
+import * as cliModule from '../debugger/languages/cli';
 
 interface RecordedEvent {
     name: string;
@@ -1359,6 +1360,59 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         await shutdown;
 
         assert.strictEqual(launchFinished, true);
+    });
+
+    // Resolving the CLI executable can hit the filesystem or the install sidecar. A Stop landing
+    // inside that window used to drain nothing and dispose, and only then would the CLI spawn -
+    // registering its stop disposable on an already-drained list, so `aspire run` outlived Stop.
+    test('a stop that lands while the CLI path is being resolved does not leave the CLI running', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+
+        let releaseCliPath: (() => void) | undefined;
+        const terminalProvider = {
+            isCliDebugLoggingEnabled: () => false,
+            getAspireCliExecutablePath: () => new Promise<string>(resolve => {
+                releaseCliPath = () => resolve('/usr/local/bin/aspire');
+            }),
+        };
+        const rpcServer = { onNewConnection: () => ({ dispose: () => { } }) };
+        const spawnStub = sinon.stub(cliModule, 'spawnCliProcess');
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(async () => { });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, rpcServer as any, {} as any, terminalProvider as any, () => { });
+
+        const launch = aspireDebugSession.spawnAspireCommand(['run'], '/workspace', false);
+        await waitFor(() => releaseCliPath !== undefined);
+
+        let stopSettled = false;
+        const shutdown = aspireDebugSession.stopDebugging();
+        void shutdown.then(() => { stopSettled = true; }, () => { stopSettled = true; });
+
+        // Several turns, so anything that resolves the stop without waiting has had every chance to.
+        for (let turn = 0; turn < 20; turn++) {
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
+
+        assert.strictEqual(stopSettled, false, 'stopDebugging() must not settle while the CLI launch is still in flight');
+
+        releaseCliPath!();
+        await launch;
+        await shutdown;
+
+        assert.strictEqual(spawnStub.callCount, 0, 'A CLI launch that lost the race with Stop must not spawn a process nothing will ever stop');
     });
 
     // Nothing can cancel a resource preparation, so the drain needs a deadline or one stalled

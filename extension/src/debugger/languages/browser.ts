@@ -49,7 +49,12 @@ export const browserDebuggerExtension: ResourceDebuggerExtension = {
         const debugType = browserDebugTypesByName.get(browser);
         if (!debugType) {
             extensionLogOutputChannel.warn(`No built-in js-debug adapter is registered for browser '${browser}'.`);
-            throw new Error(unsupportedBrowserDebugTarget(browser, [...browserDebugTypesByName.keys()].join(', ')));
+            // The toast this becomes only carries the message, and a run ID means nothing to a
+            // user staring at several browser resources. The URL is the one field of a browser
+            // launch configuration a user recognises; fall back to the run ID when the AppHost
+            // sent no URL, which is the only identifier left.
+            const resource = launchConfig.url?.trim() || debugConfiguration.runId;
+            throw new Error(unsupportedBrowserDebugTarget(browser, resource, [...browserDebugTypesByName.keys()].join(', ')));
         }
 
         debugConfiguration.type = debugType;

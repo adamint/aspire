@@ -392,6 +392,30 @@ export default class AspireDcpServer {
                     return;
                 }
 
+                // A shutdown that begins while this start is still preparing is an expected
+                // cancellation, not a launch failure: the start paths deliberately stop the late
+                // session and resolve without one. Reporting it as DebugSessionFailed/500 would
+                // record debugger_did_not_start telemetry for a run nothing was wrong with.
+                // Declared out here so the catch below can use it too - a shutdown can make the
+                // start REJECT rather than resolve empty, by releasing the run out from under a
+                // preparation the drain gave up waiting for.
+                const respondSessionStopping = (): void => {
+                    emitRunSessionCanceledEnd('debug_session_stopping');
+
+                    const error: ErrorDetails = {
+                        code: 'DebugSessionStopping',
+                        message: `Aspire debug session ${debugSessionId} is shutting down and cannot start run ${runId}`,
+                        details: []
+                    };
+
+                    extensionLogOutputChannel.info(`Refusing to start run ${runId}: ${error.message}`);
+                    const response: ErrorResponse = { error };
+                    // Deliberately not respondWithError: that pops a modal error toast, and a
+                    // start refused because the user asked the session to stop is not something
+                    // the user needs to act on. DCP just needs the status code.
+                    respondWithoutNotifyingUser(res, 409, response);
+                };
+
                 try {
                     // The whole start - preparation included - runs under the Aspire session's
                     // shutdown latch. prepareDebugSession() can take a while (resource-type
@@ -416,27 +440,6 @@ export default class AspireDcpServer {
                     // extension already spawned for the run has to go with it - the same cleanup the
                     // refusal and failure paths below run.
                     () => cleanupRun(runId));
-
-                    // A shutdown that begins while this start is still preparing is an expected
-                    // cancellation, not a launch failure: the start paths deliberately stop the late
-                    // session and resolve without one. Reporting it as DebugSessionFailed/500 would
-                    // record debugger_did_not_start telemetry for a run nothing was wrong with.
-                    const respondSessionStopping = (): void => {
-                        emitRunSessionCanceledEnd('debug_session_stopping');
-
-                        const error: ErrorDetails = {
-                            code: 'DebugSessionStopping',
-                            message: `Aspire debug session ${debugSessionId} is shutting down and cannot start run ${runId}`,
-                            details: []
-                        };
-
-                        extensionLogOutputChannel.info(`Refusing to start run ${runId}: ${error.message}`);
-                        const response: ErrorResponse = { error };
-                        // Deliberately not respondWithError: that pops a modal error toast, and a
-                        // start refused because the user asked the session to stop is not something
-                        // the user needs to act on. DCP just needs the status code.
-                        respondWithoutNotifyingUser(res, 409, response);
-                    };
 
                     if (!startOperation) {
                         respondSessionStopping();
@@ -485,6 +488,19 @@ export default class AspireDcpServer {
                     extensionLogOutputChannel.info(`New run session created with ID: ${runId}`);
                 } catch (err) {
                     extensionLogOutputChannel.error(`Error creating debug session ${runId}: ${err}`);
+
+                    // The shutdown can be what broke this start: when the drain gives up waiting for
+                    // a stalled preparation it runs cleanupRun(runId), which terminates the process a
+                    // resource-type extension spawned while that extension is still awaiting it, so
+                    // the preparation rejects. That is the same cancellation as the empty-result path
+                    // above and must not be reported as launch_failed with a modal toast.
+                    if (aspireDebugSession.isShuttingDown) {
+                        // Still release the run: the rejection may have come from something other
+                        // than the drain's own cleanupRun, and nothing else will free it now.
+                        cleanupRun(runId);
+                        respondSessionStopping();
+                        return;
+                    }
 
                     // Synchronous launch failure — emit the matching end event and update
                     // aggregate stats via the shared helper before responding so the eventual

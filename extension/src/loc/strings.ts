@@ -60,7 +60,7 @@ export const failedToStartProject = (errorMessage: string) => vscode.l10n.t('Fai
 export const dcpServerNotInitialized = vscode.l10n.t('DCP server not initialized - cannot forward debug output.');
 export const appHostSessionTerminated = vscode.l10n.t('The AppHost process has terminated. To view console output, select the AppHost session from the debug console dropdown.');
 export const debugSessionsFailedToStop = (count: number) => vscode.l10n.t('{0} debug sessions failed to stop.', count);
-export const resourceStartsDidNotFinishBeforeStopDeadline = (count: number) => vscode.l10n.t('{0} resource(s) were still starting when the debug session was stopped. They are being stopped in the background; see the Aspire output channel for the result.', count);
+export const resourceStartsDidNotFinishBeforeStopDeadline = (count: number) => vscode.l10n.t('Aspire stopped waiting for {0} resource(s) that were still starting. Any that had already launched were asked to stop; see the Aspire output channel for the result.', count);
 export const invalidTokenProvided = vscode.l10n.t('Invalid token provided.');
 export const noWorkspaceFolder = vscode.l10n.t('No workspace folder found.');
 export const aspireConfigExists = vscode.l10n.t('Aspire launch configuration already exists in launch.json.');
@@ -159,7 +159,7 @@ export const configInfoTimedOut = (seconds: number) => vscode.l10n.t('Aspire con
 export const invalidLaunchConfiguration = (projectPath: string) => vscode.l10n.t('Invalid launch configuration for {0}.', projectPath);
 export const browserDisplayName = (url: string) => vscode.l10n.t('Browser: {0}', url);
 export const browserLabel = vscode.l10n.t('Browser');
-export const unsupportedBrowserDebugTarget = (browser: string, supportedBrowsers: string) => vscode.l10n.t("Browser '{0}' cannot be debugged. Supported browsers are: {1}.", browser, supportedBrowsers);
+export const unsupportedBrowserDebugTarget = (browser: string, resource: string, supportedBrowsers: string) => vscode.l10n.t("Browser '{0}' cannot be debugged for resource '{1}'. Supported browsers are: {2}.", browser, resource, supportedBrowsers);
 export const goDisplayName = (program: string) => `Go: ${program}`;
 export const goLabel = 'Go';
 export const bunDisplayName = (script: string) => `Bun: ${script}`;

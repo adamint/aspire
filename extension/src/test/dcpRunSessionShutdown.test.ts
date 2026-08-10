@@ -61,7 +61,15 @@ suite('DCP run_session shutdown tests', () => {
     // cancellation, not a launch failure. Reporting it as DebugSessionFailed/500 tells DCP the
     // resource is broken and records debugger_did_not_start telemetry for a perfectly healthy run
     // the user simply stopped.
-    test('a run cancelled because the session started shutting down is reported as a refusal, not a failure', async () => {
+    // Both cancellation shapes - the preparation resolving after the stop began, and the preparation
+    // REJECTING because the stop tore its process out from under it - run the identical interleaving,
+    // so the scenario is built once and only the preparation body differs.
+    async function runCancelledDuringShutdown(prepare: () => Promise<unknown>): Promise<{
+        response: RunSessionResponse;
+        showErrorMessage: sinon.SinonStub;
+        telemetryEvent: sinon.SinonStub;
+        telemetryErrorEvent: sinon.SinonStub;
+    }> {
         const parentDebugSession = {
             id: 'aspire-extension-run-abc123',
             type: 'aspire',
@@ -98,10 +106,7 @@ suite('DCP run_session shutdown tests', () => {
             preparationStarted!();
             await preparationGate;
 
-            return {
-                debugConfiguration: { type: 'node', request: 'launch', name: 'resource', runId: 'run-1', debugSessionId: null } as any,
-                alreadyStartedSession: undefined,
-            } as any;
+            return await prepare() as any;
         });
 
         dcpServer = await AspireDcpServer.create(id => id === parentDebugSession.id ? aspireDebugSession : null);
@@ -115,6 +120,15 @@ suite('DCP run_session shutdown tests', () => {
 
         const response = await responsePromise;
         await stopPromise;
+
+        return { response, showErrorMessage, telemetryEvent, telemetryErrorEvent };
+    }
+
+    test('a run cancelled because the session started shutting down is reported as a refusal, not a failure', async () => {
+        const { response, showErrorMessage, telemetryEvent, telemetryErrorEvent } = await runCancelledDuringShutdown(async () => ({
+            debugConfiguration: { type: 'node', request: 'launch', name: 'resource', runId: 'run-1', debugSessionId: null },
+            alreadyStartedSession: undefined,
+        }));
 
         assert.strictEqual(response.statusCode, 409, 'A run cancelled by the shutdown must not be reported as a server-side launch failure');
         assert.strictEqual(response.body?.error.code, 'DebugSessionStopping');
@@ -131,6 +145,32 @@ suite('DCP run_session shutdown tests', () => {
 
         assert.strictEqual(endErrorEvents.length, 0, 'A run cancelled by the shutdown must not be reported as a telemetry error');
         assert.strictEqual(endEvents.length, 1, 'A run cancelled by the shutdown must still be paired with an end event');
+        assert.strictEqual((endEvents[0].args[1] as Record<string, string>).exit_code_bucket, 'canceled');
+        assert.strictEqual((endEvents[0].args[1] as Record<string, string>).end_reason, 'debug_session_stopping');
+    });
+
+    // The shutdown can be what BREAKS the preparation rather than merely outracing it: when the
+    // drain gives up on a stalled start it runs the per-run cleanup, which terminates the process a
+    // resource-type extension is still awaiting, so the preparation rejects. That rejection reaches
+    // the DCP handler's catch, which used to classify every throw as launch_failed - a 500 and a
+    // modal error toast for a resource the user themselves asked to stop.
+    test('a run whose preparation fails because the shutdown tore it down is reported as a refusal, not a failure', async () => {
+        const { response, showErrorMessage, telemetryEvent, telemetryErrorEvent } = await runCancelledDuringShutdown(async () => {
+            throw new Error('spawn func ENOENT: the host process was terminated');
+        });
+
+        assert.strictEqual(response.statusCode, 409, 'A preparation broken by the shutdown must not be reported as a server-side launch failure');
+        assert.strictEqual(response.body?.error.code, 'DebugSessionStopping');
+        assert.strictEqual(
+            showErrorMessage.called,
+            false,
+            'Tearing a preparation down because the user stopped the session must not raise a user-facing error');
+
+        const endEvents = telemetryEvent.getCalls().filter(call => call.args[0] === 'aspire/vscode/debug/runsession/end');
+        const endErrorEvents = telemetryErrorEvent.getCalls().filter(call => call.args[0] === 'aspire/vscode/debug/runsession/end');
+
+        assert.strictEqual(endErrorEvents.length, 0, 'A preparation broken by the shutdown must not be reported as a telemetry error');
+        assert.strictEqual(endEvents.length, 1, 'A preparation broken by the shutdown must still be paired with an end event');
         assert.strictEqual((endEvents[0].args[1] as Record<string, string>).exit_code_bucket, 'canceled');
         assert.strictEqual((endEvents[0].args[1] as Record<string, string>).end_reason, 'debug_session_stopping');
     });

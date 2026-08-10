@@ -629,7 +629,25 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     return this._appHostTargetVersionAtLaunch;
   }
 
+  /**
+   * Launches the Aspire CLI under the shutdown latch.
+   *
+   * The launch is not instantaneous: resolving the CLI executable can hit the filesystem or the
+   * install sidecar, and only after that does {@link spawnCliProcess} exist to be torn down. A
+   * Stop landing inside that window used to drain nothing, dispose the session, and *then* let the
+   * CLI spawn - leaving an `aspire run` process behind with its stop disposable pushed onto an
+   * already-drained list, where nothing would ever call it.
+   */
   async spawnAspireCommand(args: string[], workingDirectory: string | undefined, noDebug: boolean, commandLabel: string = 'aspire run') {
+    await this.startResourceIfNotShuttingDown(
+      () => this.spawnAspireCommandCore(args, workingDirectory, noDebug, commandLabel),
+      // Nothing to release. The core rechecks isShuttingDown after its one await and returns
+      // without spawning, so an abandoned launch has either already registered its stop
+      // disposable or never started a process at all.
+      () => { });
+  }
+
+  private async spawnAspireCommandCore(args: string[], workingDirectory: string | undefined, noDebug: boolean, commandLabel: string = 'aspire run') {
     const disposable = this._rpcServer.onNewConnection((client: ICliRpcClient) => {
       if (client.debugSessionId === this.debugSessionId) {
         this._rpcClient = client;
@@ -670,9 +688,19 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       return partial;
     };
 
+    // Resolved before the spawn call so the shutdown state can be rechecked between the two.
+    // Awaiting inline in the argument list would hand a live process to a session that has
+    // already disposed, and its stop disposable would be registered on a drained list.
+    const cliExecutablePath = await this._terminalProvider.getAspireCliExecutablePath();
+    if (this.isShuttingDown) {
+      extensionLogOutputChannel.info(`Not spawning '${commandLabel}': the debug session is shutting down.`);
+      disposable.dispose();
+      return;
+    }
+
     spawnCliProcess(
       this._terminalProvider,
-      await this._terminalProvider.getAspireCliExecutablePath(),
+      cliExecutablePath,
       args,
       {
         stdoutCallback: (data) => {

@@ -67,6 +67,9 @@
     <trans-unit id="aspire-vscode.strings.aspireRestoreFailedStatusBar">
       <source xml:lang="en">Aspire restore failed (click to retry)</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.resourceStartsDidNotFinishBeforeStopDeadline">
+      <source xml:lang="en">Aspire stopped waiting for {0} resource(s) that were still starting. Any that had already launched were asked to stop; see the Aspire output channel for the result.</source>
+    </trans-unit>
     <trans-unit id="aspire-vscode.strings.aspireTerminalName">
       <source xml:lang="en">Aspire terminal</source>
     </trans-unit>
@@ -107,7 +110,7 @@
       <source xml:lang="en">Azure Functions: {0}</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.unsupportedBrowserDebugTarget">
-      <source xml:lang="en">Browser &apos;{0}&apos; cannot be debugged. Supported browsers are: {1}.</source>
+      <source xml:lang="en">Browser &apos;{0}&apos; cannot be debugged for resource &apos;{1}&apos;. Supported browsers are: {2}.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.buildFailedForProjectWithError">
       <source xml:lang="en">Build failed for project {0} with error: {1}.</source>
@@ -852,9 +855,6 @@
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.aspireCliCommandFailed">
       <source xml:lang="en">{0} exited with code {1}{2}</source>
-    </trans-unit>
-    <trans-unit id="aspire-vscode.strings.resourceStartsDidNotFinishBeforeStopDeadline">
-      <source xml:lang="en">{0} resource(s) were still starting when the debug session was stopped. They are being stopped in the background; see the Aspire output channel for the result.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.appHostCandidateDescription">
       <source xml:lang="en">{0} · {1}</source>
