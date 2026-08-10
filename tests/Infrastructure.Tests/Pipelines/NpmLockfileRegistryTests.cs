@@ -46,9 +46,17 @@ public class NpmLockfileRegistryTests
         @"^\s*(?<key>(@[^\s:]+:)?registry|npmRegistryServer|npmPublishRegistry)\s*[=:]\s*(?<value>\S+)\s*$",
         RegexOptions.Multiline);
 
-    private static readonly Regex s_bunConfigComment = new(@"^\s*#.*$", RegexOptions.Multiline);
+    // Comments in .npmrc, .yarnrc.yml and bunfig.toml all start with '#'; .npmrc also accepts ';'.
+    // A registry URL has no fragment, so cutting at the first '#' cannot truncate a real value.
+    private static readonly Regex s_configComment = new(@"(?<=^|\s)[#;].*$", RegexOptions.Multiline);
 
-    private static readonly Regex s_bunConfigUrl = new(@"""(?<value>https?://[^""]*)""");
+    // Every URL in the file, whatever syntax holds it. This is what makes the scan independent of
+    // each format's grammar: TOML single- vs double-quoted strings, YAML flow style such as
+    // `npmScopes: { types: { npmRegistryServer: "..." } }`, and values trailed by inline comments
+    // all match, where a key-anchored line regex silently misses them. None of these config files
+    // has a setting that legitimately holds some other URL, so flagging every one is fail-closed
+    // rather than over-broad.
+    private static readonly Regex s_configUrl = new(@"https?://[^\s'"",\]}]+");
 
     private const string ApprovedNpmRegistry = "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/";
 
@@ -279,6 +287,14 @@ public class NpmLockfileRegistryTests
     [InlineData("bunfig.toml", "[install.scopes]\n\"types\" = { url = \"https://scoped.example.invalid/\" }", true)]
     [InlineData("bunfig.toml", "[install]\nregistry = \"APPROVED_FEED\"", false)]
     [InlineData("bunfig.toml", "# registry = \"https://registry.npmjs.org/\"", false)]
+    [InlineData("bunfig.toml", "[install.scopes]\ntypes = 'https://scoped.example.invalid/'", true)]
+    [InlineData(".yarnrc.yml", "npmScopes: { types: { npmRegistryServer: \"https://registry.yarnpkg.com\" } }", true)]
+    [InlineData(".yarnrc.yml", "npmRegistryServer: \"https://registry.yarnpkg.com\" # inline comment", true)]
+    [InlineData(".yarnrc.yml", "npmRegistryServer: \"APPROVED_FEED\" # inline comment", false)]
+    [InlineData(".yarnrc.yml", "nodeLinker: node-modules", false)]
+    [InlineData(".npmrc", "registry=APPROVED_FEED ; trailing comment", false)]
+    [InlineData(".yarnrc.yml", "# npmRegistryServer: \"https://registry.npmjs.org\"\nnodeLinker: node-modules", false)]
+    [InlineData(".npmrc", "; registry=https://registry.npmjs.org/\nregistry=APPROVED_FEED", false)]
     public void RegistryOverrideScan_RecognizesEveryConfigFormat(string fileName, string content, bool expectedOverride)
     {
         var workspace = Directory.CreateTempSubdirectory("aspire-registry-override-scan");
@@ -322,14 +338,20 @@ public class NpmLockfileRegistryTests
 
         var text = File.ReadAllText(path);
 
-        var matches = fileName.EndsWith("bunfig.toml", StringComparison.Ordinal)
-            ? s_bunConfigUrl.Matches(s_bunConfigComment.Replace(text, string.Empty))
-            : s_registryKey.Matches(text);
+        var uncommented = s_configComment.Replace(text, string.Empty);
 
-        return matches
+        // Two passes, unioned. The URL pass is the general one and catches values a key-anchored
+        // regex cannot reach; the key pass additionally catches a registry setting whose value is
+        // not a URL at all, such as `registry=localhost:4873`.
+        var urlFindings = s_configUrl.Matches(uncommented)
+            .Where(match => !IsApprovedFeedUrl(match.Value))
+            .Select(match => match.Value);
+
+        var keyFindings = s_registryKey.Matches(uncommented)
             .Where(match => !IsApprovedFeedUrl(match.Groups["value"].Value.Trim('"', '\'')))
-            .Select(match => match.Value.Trim())
-            .ToArray();
+            .Select(match => match.Value.Trim());
+
+        return urlFindings.Concat(keyFindings).Distinct(StringComparer.Ordinal).ToArray();
     }
 
     /// <summary>

@@ -1571,6 +1571,56 @@ public class PackageJsonMergerTests
         Assert.Equal("^7.0.2", GetDep(result, "devDependencies", "typescript"));
     }
 
+    /// <summary>
+    /// Owning typescript-eslint means owning the spec, not just the package. Narrowing a project's
+    /// range to the scaffold's exact pin removes its ability to resolve a future 8.x that supports
+    /// its compiler, and 8.58.0 peers <c>typescript: &gt;=4.8.4 &lt;6.1.0</c>, so on TypeScript 7 the
+    /// rewrite turns an install that resolved into ERESOLVE.
+    /// </summary>
+    [Fact]
+    public void Merge_BrownfieldTypeScriptEslintRange_IsNotNarrowedToTheScaffoldPin()
+    {
+        const string Existing = """
+            {
+              "name": "brownfield",
+              "devDependencies": {
+                "typescript": "^7.0.2",
+                "typescript-eslint": "^8.57.1"
+              }
+            }
+            """;
+
+        var result = MergeJson(Existing, ScaffoldWithLintToolchain);
+
+        Assert.Equal("^8.57.1", GetDep(result, "devDependencies", "typescript-eslint"));
+        Assert.Equal("^7.0.2", GetDep(result, "devDependencies", "typescript"));
+    }
+
+    /// <summary>
+    /// The same ownership holds when the project declares typescript-eslint as a runtime dependency:
+    /// the entry is left where the project put it rather than being upgraded in place.
+    /// </summary>
+    [Fact]
+    public void Merge_BrownfieldTypeScriptEslintAsRuntimeDependency_IsLeftWhereTheProjectPutIt()
+    {
+        const string Existing = """
+            {
+              "name": "brownfield",
+              "dependencies": {
+                "typescript-eslint": "^8.57.1"
+              },
+              "devDependencies": {
+                "typescript": "^7.0.2"
+              }
+            }
+            """;
+
+        var result = MergeJson(Existing, ScaffoldWithLintToolchain);
+
+        Assert.Equal("^8.57.1", GetDep(result, "dependencies", "typescript-eslint"));
+        Assert.Null(GetDep(result, "devDependencies", "typescript-eslint"));
+    }
+
     [Fact]
     public void Merge_BrownfieldUnsupportedTypeScript_PreservesExistingLintScriptsItDidNotAdd()
     {

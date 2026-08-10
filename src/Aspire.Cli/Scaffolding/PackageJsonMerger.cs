@@ -120,9 +120,15 @@ internal static class PackageJsonMerger
             MergeScripts(existingScripts, scaffoldScripts, toolchainCommand);
         }
 
-        // Handle dependency sections with semver-aware merging
-        MergeDependencySection(existing, scaffold, DependenciesKey, logger);
-        MergeDependencySection(existing, scaffold, DevDependenciesKey, logger);
+        // Handle dependency sections with semver-aware merging. A project that already declares
+        // typescript-eslint keeps its own spec verbatim: narrowing a range such as `^8.57.1` to the
+        // scaffold's exact 8.58.0 removes the project's ability to resolve a future 8.x that
+        // supports its compiler, and 8.58.0 peers `typescript: >=4.8.4 <6.1.0`, so on TypeScript 7
+        // that rewrite turns an install that worked into ERESOLVE - the failure this merger exists
+        // to avoid.
+        var projectOwnedPackage = projectAlreadyLinted ? TypeScriptEslintPackage : null;
+        MergeDependencySection(existing, scaffold, DependenciesKey, logger, projectOwnedPackage);
+        MergeDependencySection(existing, scaffold, DevDependenciesKey, logger, projectOwnedPackage);
 
         // Handle engines with overwrite semantics for "node" — since the user is running
         // "aspire init", we enforce our Node version constraint (required for ESLint 10
@@ -342,7 +348,7 @@ internal static class PackageJsonMerger
     /// the scaffold specifies a newer version. Unparseable version ranges (union ranges, workspace
     /// references, etc.) are preserved as-is.
     /// </summary>
-    private static void MergeDependencySection(JsonObject existing, JsonObject scaffold, string sectionName, ILogger logger)
+    private static void MergeDependencySection(JsonObject existing, JsonObject scaffold, string sectionName, ILogger logger, string? projectOwnedPackage = null)
     {
         var scaffoldDeps = scaffold[sectionName]?.AsObject();
         if (scaffoldDeps is null)
@@ -355,6 +361,14 @@ internal static class PackageJsonMerger
         foreach (var (packageName, versionNode) in scaffoldDeps)
         {
             if (versionNode is not JsonValue desiredValue || !desiredValue.TryGetValue<string>(out var desiredVersion))
+            {
+                continue;
+            }
+
+            // Whatever spec the project already chose for this package stays, in whichever section
+            // it chose. Skipping the whole entry - not just the upgrade - also stops
+            // TryMergeExistingDependency from moving a runtime dependency the project owns.
+            if (packageName == projectOwnedPackage)
             {
                 continue;
             }
