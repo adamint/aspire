@@ -774,6 +774,13 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes("CODE_TYPE: 'stable',"));
     });
 
+    test('pins unit-test VS Code download to avoid moving latest resolution', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const unitTestConfig = fs.readFileSync(path.join(extensionRoot, '.vscode-test.mjs'), 'utf8');
+
+        assert.ok(unitTestConfig.includes("version: '1.131.0'"));
+    });
+
     test('cleans only ExTester download archives between setup retries', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
