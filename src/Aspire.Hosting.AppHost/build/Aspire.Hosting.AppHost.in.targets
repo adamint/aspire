@@ -214,6 +214,15 @@
       risk, so the warnings after each probe say where a failure came from and that
       SkipAspireProjectResourceTargetName=true turns probing off entirely.
     -->
+    <!--
+      SetConfiguration/SetPlatform are passed because they are what ResolveProjectReferences used to build the
+      reference: the name is meant to describe the assembly this build produced, and the seeding path above
+      reads it straight off that build's output, so probing under different properties would make the two
+      paths disagree. A reference that overrides configuration or platform and also conditions AssemblyName
+      on it can therefore report a name that a runtime rebuild under the AppHost's own configuration would
+      not produce. The target name is only a hint - consumers fall back to probing TargetPath - and the
+      alternative is a second evaluation of the reference that describes output nobody built.
+    -->
     <MSBuild Projects="@(_AspirePreparedProjectResource)"
              Targets="GetTargetFrameworks"
              BuildInParallel="$(BuildInParallel)"
