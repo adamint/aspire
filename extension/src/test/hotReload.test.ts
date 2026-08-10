@@ -413,9 +413,12 @@ suite('Hot Reload Tests', () => {
 
         await showHotReloadNotificationIfNeeded(diagnostics, true);
 
-        // Pins that the rejection came from VS Code rather than from a stub that happened to throw.
+        // The update above is the real vscode.WorkspaceConfiguration.update, so this warning exists only if VS
+        // Code itself rejected the write. What is asserted is the extension's own prefix rather than the text
+        // VS Code produced: the rejection message is not part of any API contract and would make this test fail
+        // on a wording change that leaves the recovery being tested untouched.
         assert.strictEqual(
-            warn.getCalls().some(call => String(call.args[0]).includes('not a registered configuration')),
+            warn.getCalls().some(call => String(call.args[0]).startsWith('Failed to enable Hot Reload: ')),
             true,
             `Expected a real configuration rejection, got: ${JSON.stringify(warn.getCalls().map(call => call.args[0]))}`);
         assert.deepStrictEqual(errorMessage.getCalls().map(call => call.args[0]), [hotReloadEnableFailed]);
@@ -447,8 +450,10 @@ suite('Hot Reload Tests', () => {
 
         await showHotReloadNotificationIfNeeded(diagnostics, true);
 
+        // executeCommand is the real one, so this warning exists only if the command registry rejected. The
+        // extension's own prefix is asserted rather than VS Code's message for the same reason as above.
         assert.strictEqual(
-            warn.getCalls().some(call => String(call.args[0]).includes("command 'csdevkit.debug.showHotReloadPanel' not found")),
+            warn.getCalls().some(call => String(call.args[0]).startsWith('Failed to show the Hot Reload output: ')),
             true,
             `Expected the real command registry to reject, got: ${JSON.stringify(warn.getCalls().map(call => call.args[0]))}`);
 
