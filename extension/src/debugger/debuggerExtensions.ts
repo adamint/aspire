@@ -17,18 +17,9 @@ import { waitForRunStartIdle } from "./runStartRegistry";
 
 // Represents a resource-specific debugger extension for when the default session configuration is not sufficient to launch the resource.
 export interface ResourceDebuggerExtension {
-    /**
-     * The launch configuration type this debugger handles. Matches the value Aspire.Hosting publishes as
-     * the `resource.launchConfigurationType` snapshot property (from `SupportsDebuggingAnnotation`).
-     */
     resourceType: string;
     debugAdapter: string;
     extensionId: string | null;
-    /**
-     * Human-readable name of `extensionId`, used when offering to install a missing debug adapter.
-     * `null` exactly when `extensionId` is `null`, i.e. when the adapter ships with VS Code.
-     */
-    extensionDisplayName: string | null;
     getDisplayName: (launchConfig: ExecutableLaunchConfiguration) => string;
     getProjectFile: (launchConfig: ExecutableLaunchConfiguration) => string;
     getSupportedFileTypes: () => string[];
