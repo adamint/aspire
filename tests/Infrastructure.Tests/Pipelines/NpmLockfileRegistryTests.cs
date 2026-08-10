@@ -164,6 +164,107 @@ public class NpmLockfileRegistryTests
     }
 
     /// <summary>
+    /// Fails when a polyglot fixture that ships no lockfile declares a dependency as a version range.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A fixture with a lockfile installs the exact versions the lockfile records. A fixture without
+    /// one resolves every range afresh and takes the newest matching version the registry advertises,
+    /// which is precisely the version an Azure Artifacts mirror is least likely to have ingested. The
+    /// approved dotnet-public-npm feed serves only versions it has already ingested and answers 401 —
+    /// not 404 — for the rest, and its packument advertises versions whose tarballs it cannot hand
+    /// out, so the two disagree.
+    /// </para>
+    /// <para>
+    /// Measured against the approved feed on 2026-08-09, installing
+    /// tests/PolyglotAppHosts/Aspire.Hosting.Blazor/TypeScript, whose <c>tsx: "^4.22.3"</c> resolved
+    /// to 4.23.5: <c>GET /tsx/-/tsx-4.23.1.tgz</c> returned 200 while
+    /// <c>GET /tsx/-/tsx-4.23.5.tgz</c> returned 401, and <c>npm install</c> failed with
+    /// <c>npm error code E401</c>. Nothing in the fixture changed — an upstream publish was enough.
+    /// An exact version cannot drift onto an un-ingested release, so a lockfile-less fixture has to
+    /// carry one.
+    /// </para>
+    /// <para>
+    /// PolyglotFixtures_DeclareOnlyRegistryDependencySpecs covers a different failure for every
+    /// fixture: a spec that leaves the registry entirely. This one is about a spec that stays on the
+    /// registry but does not say which version it lands on.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void PolyglotFixtures_WithoutALockfile_PinExactDependencyVersions()
+    {
+        var floating = EnumeratePolyglotFiles()
+            .Where(path => Path.GetFileName(path) == "package.json")
+            .Where(path => !s_recognizedLockfileNames.Any(lockfileName =>
+                File.Exists(Path.Combine(Path.GetDirectoryName(path)!, lockfileName))))
+            .SelectMany(path => ReadDependencySpecs(path)
+                .Where(dependency => !IsPinnedDependencySpec(dependency.Value))
+                .Select(dependency => $"{Path.GetRelativePath(RepoRoot.Path, path).Replace(Path.DirectorySeparatorChar, '/')} -> \"{dependency.Key}\": \"{dependency.Value}\""))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal([], floating);
+    }
+
+    /// <summary>
+    /// The scan above only ever runs against fixtures that are already correct, so drive the
+    /// classifier with the spec forms a package.json can carry.
+    /// </summary>
+    [Theory]
+    [InlineData("4.22.3", true)]
+    [InlineData("4.22.3-beta.1", true)]
+    [InlineData("6.0.3+build.7", true)]
+    // Resolved from the checkout, never from the registry, so no upstream publish can move them.
+    [InlineData("workspace:*", true)]
+    [InlineData("file:../local-package", true)]
+    [InlineData("link:../local-package", true)]
+    [InlineData("portal:../local-package", true)]
+    // Everything below leaves the landed version up to whatever the registry advertises at install
+    // time.
+    [InlineData("^4.22.3", false)]
+    [InlineData("~4.22.3", false)]
+    [InlineData(">=4.22.3", false)]
+    [InlineData(">=1.0.0 <2.0.0", false)]
+    [InlineData("4.x", false)]
+    [InlineData("4.22", false)]
+    [InlineData("*", false)]
+    [InlineData("", false)]
+    [InlineData("latest", false)]
+    // An alias still resolves through the registry, and the range rides along inside it.
+    [InlineData("npm:@types/node@^20.0.0", false)]
+    public void PinnedDependencySpecScan_RecognizesEveryVersionForm(string spec, bool expectedPinned)
+    {
+        Assert.Equal(expectedPinned, IsPinnedDependencySpec(spec));
+    }
+
+    /// <summary>
+    /// An npm version with no range operator: <c>4.22.3</c> matches, while <c>^4.22.3</c>,
+    /// <c>~4.22.3</c>, <c>4.x</c>, <c>&gt;=4.22.3</c> and <c>*</c> do not. Prerelease and build
+    /// metadata are allowed because they still name a single exact version.
+    /// </summary>
+    private static readonly Regex s_exactNpmVersion = new(
+        @"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$",
+        RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Protocol-prefixed specs that resolve from the checkout rather than the registry, so an
+    /// upstream publish cannot change what they install.
+    /// </summary>
+    private static readonly string[] s_localDependencyPrefixes = ["workspace:", "file:", "link:", "portal:"];
+
+    /// <summary>
+    /// True when a dependency spec names exactly one version, so the same install is reproducible
+    /// without a lockfile.
+    /// </summary>
+    private static bool IsPinnedDependencySpec(string spec)
+    {
+        var trimmed = spec.Trim();
+
+        return s_exactNpmVersion.IsMatch(trimmed) ||
+            s_localDependencyPrefixes.Any(prefix => trimmed.StartsWith(prefix, StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// The scan above only ever runs against fixtures that are already correct, so it would keep
     /// passing if it stopped recognizing a config format. Feed it each format directly.
     /// </summary>

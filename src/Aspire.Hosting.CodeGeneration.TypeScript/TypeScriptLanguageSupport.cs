@@ -158,11 +158,30 @@ internal sealed class TypeScriptLanguageSupport : ILanguageSupport
             scripts["watch"] = "npm run aspire:dev";
         }
 
-        EnsureDependency(packageJson, "dependencies", "vscode-jsonrpc", "^8.2.0");
-        EnsureDependency(packageJson, "devDependencies", "@types/node", "^22.0.0");
-        EnsureDependency(packageJson, "devDependencies", "eslint", "^10.0.3");
-        EnsureDependency(packageJson, "devDependencies", "nodemon", "^3.1.14");
-        EnsureDependency(packageJson, "devDependencies", "tsx", "^4.22.3");
+        // Every version below is an exact pin, and must stay one. `aspire init` scaffolds no
+        // package-lock.json, so the `npm install` it runs resolves each range from scratch, and a
+        // range resolves to the newest matching version the configured registry advertises.
+        //
+        // That is unsafe against an Azure Artifacts npm mirror such as the approved
+        // dotnet-public-npm feed, which only serves package versions it has already ingested and
+        // answers 401 (not 404) for everything else. Its packument and its tarball store drift
+        // apart, so it advertises versions it cannot hand out. Measured against
+        // https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/ on
+        // 2026-08-09, where `^4.22.3` resolved to the 4.23.5 that packument named `latest`:
+        //
+        //   GET /tsx/-/tsx-4.23.1.tgz -> 200
+        //   GET /tsx/-/tsx-4.23.2.tgz -> 401
+        //   GET /tsx/-/tsx-4.23.5.tgz -> 401
+        //
+        // which failed `aspire init --language typescript` with `npm error code E401`. An exact
+        // version cannot drift onto an un-ingested release, so it is the only permanently safe
+        // form here. Keep these in sync with the versions the shipped ts-starter and py-starter
+        // package-lock.json resolve; TypeScriptLanguageSupportTests asserts both properties.
+        EnsureDependency(packageJson, "dependencies", "vscode-jsonrpc", "8.2.1");
+        EnsureDependency(packageJson, "devDependencies", "@types/node", "22.19.15");
+        EnsureDependency(packageJson, "devDependencies", "eslint", "10.0.3");
+        EnsureDependency(packageJson, "devDependencies", "nodemon", "3.1.14");
+        EnsureDependency(packageJson, "devDependencies", "tsx", "4.22.3");
 
         // TypeScript 6.0 is the newest release a scaffolded AppHost can take. TypeScript 7 is a native
         // (Go) compiler that ships no JavaScript compiler API, and `aspire:lint` runs typescript-eslint,

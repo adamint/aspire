@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Aspire.Shared;
 using Aspire.TypeSystem;
 
@@ -45,9 +46,9 @@ public sealed class TypeScriptLanguageSupportTests(ITestOutputHelper outputHelpe
         Assert.Equal("npm run aspire:lint", scripts["prebuild"]?.GetValue<string>());
         Assert.Equal("npm run aspire:build", scripts["build"]?.GetValue<string>());
         Assert.Equal("npm run aspire:dev", scripts["watch"]?.GetValue<string>());
-        Assert.Equal("^4.22.3", devDependencies["tsx"]?.GetValue<string>());
+        Assert.Equal("4.22.3", devDependencies["tsx"]?.GetValue<string>());
         Assert.Equal("6.0.3", devDependencies["typescript"]?.GetValue<string>());
-        Assert.Equal("^10.0.3", devDependencies["eslint"]?.GetValue<string>());
+        Assert.Equal("10.0.3", devDependencies["eslint"]?.GetValue<string>());
         Assert.Equal("8.58.0", devDependencies["typescript-eslint"]?.GetValue<string>());
 
         var engines = packageJson["engines"]!.AsObject();
@@ -117,10 +118,10 @@ public sealed class TypeScriptLanguageSupportTests(ITestOutputHelper outputHelpe
         Assert.False(scripts.ContainsKey("preview"));
 
         // Scaffold should only contain Aspire-desired dependencies (at Aspire's versions)
-        Assert.Equal("^8.2.0", dependencies["vscode-jsonrpc"]?.GetValue<string>());
-        Assert.Equal("^4.22.3", devDependencies["tsx"]?.GetValue<string>());
-        Assert.Equal("^22.0.0", devDependencies["@types/node"]?.GetValue<string>());
-        Assert.Equal("^3.1.14", devDependencies["nodemon"]?.GetValue<string>());
+        Assert.Equal("8.2.1", dependencies["vscode-jsonrpc"]?.GetValue<string>());
+        Assert.Equal("4.22.3", devDependencies["tsx"]?.GetValue<string>());
+        Assert.Equal("22.19.15", devDependencies["@types/node"]?.GetValue<string>());
+        Assert.Equal("3.1.14", devDependencies["nodemon"]?.GetValue<string>());
         Assert.Equal("6.0.3", devDependencies["typescript"]?.GetValue<string>());
         Assert.False(devDependencies.ContainsKey("vite"));
 
@@ -181,10 +182,10 @@ public sealed class TypeScriptLanguageSupportTests(ITestOutputHelper outputHelpe
 
         // Scaffold always produces Aspire's desired versions — the CLI-side
         // PackageJsonMerger handles semver comparison with existing on-disk versions.
-        Assert.Equal("^8.2.0", dependencies["vscode-jsonrpc"]?.GetValue<string>());
-        Assert.Equal("^22.0.0", devDependencies["@types/node"]?.GetValue<string>());
-        Assert.Equal("^3.1.14", devDependencies["nodemon"]?.GetValue<string>());
-        Assert.Equal("^4.22.3", devDependencies["tsx"]?.GetValue<string>());
+        Assert.Equal("8.2.1", dependencies["vscode-jsonrpc"]?.GetValue<string>());
+        Assert.Equal("22.19.15", devDependencies["@types/node"]?.GetValue<string>());
+        Assert.Equal("3.1.14", devDependencies["nodemon"]?.GetValue<string>());
+        Assert.Equal("4.22.3", devDependencies["tsx"]?.GetValue<string>());
         Assert.Equal("6.0.3", devDependencies["typescript"]?.GetValue<string>());
     }
 
@@ -373,7 +374,120 @@ public sealed class TypeScriptLanguageSupportTests(ITestOutputHelper outputHelpe
             $"{requiredTypeScriptEslintFloor} to satisfy its peer range, but the scaffold pins '{typeScriptEslintRange}'.");
     }
 
+    /// <summary>
+    /// Fails when the TypeScript AppHost scaffold declares a dependency as a version range, or at a
+    /// version the shipped starter lockfiles do not resolve.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>aspire init</c> writes no package-lock.json, so the <c>npm install</c> it runs resolves
+    /// every declared range from scratch and takes the newest matching version the registry
+    /// advertises. That is unsafe against an Azure Artifacts npm mirror such as the approved
+    /// dotnet-public-npm feed, which serves only package versions it has already ingested and
+    /// answers 401 — not 404 — for everything else, including package names that exist upstream.
+    /// Its packument and its tarball store drift apart, so it advertises versions it cannot hand
+    /// out and a caret range is a failure waiting for the next upstream publish.
+    /// </para>
+    /// <para>
+    /// Measured against the approved feed on 2026-08-09, with <c>tsx: "^4.22.3"</c> resolving to the
+    /// 4.23.5 that feed's packument named <c>latest</c>: <c>GET /tsx/-/tsx-4.23.1.tgz</c> returned
+    /// 200 while <c>GET /tsx/-/tsx-4.23.5.tgz</c> returned 401, and
+    /// <c>aspire init --language typescript</c> failed with <c>npm error code E401</c> in the
+    /// TypeScript SDK Validation job.
+    /// </para>
+    /// <para>
+    /// Requiring exact versions that match the shipped lockfiles keeps <c>aspire init</c> on the
+    /// same already-ingested toolchain <c>aspire new</c> installs, and turns a stale pin into a
+    /// reviewable diff instead of a red job. Transitive dependencies still resolve by range; those
+    /// are covered by the lockfiles for <c>aspire new</c> and are the residual risk here.
+    /// </para>
+    /// </remarks>
+    [Theory]
+    [InlineData("src/Aspire.Cli/Templating/Templates/ts-starter/package-lock.json")]
+    [InlineData("src/Aspire.Cli/Templating/Templates/py-starter/package-lock.json")]
+    public void Scaffold_PinsEveryDependencyToAnExactVersionTheShippedStarterLockfilesResolve(string relativeLockfilePath)
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        var files = _languageSupport.Scaffold(new ScaffoldRequest
+        {
+            TargetPath = workspace.Path,
+            ProjectName = "PinnedApp"
+        });
+
+        var packageJson = ParseJson(files["package.json"]);
+        var lockfile = ParseJson(File.ReadAllText(Path.Combine(FindRepoRoot(), relativeLockfilePath)));
+        var lockedPackages = lockfile["packages"]!.AsObject();
+
+        var findings = new List<string>();
+
+        foreach (var sectionName in new[] { "dependencies", "devDependencies" })
+        {
+            if (packageJson[sectionName] is not JsonObject section)
+            {
+                continue;
+            }
+
+            foreach (var (packageName, versionNode) in section)
+            {
+                var version = versionNode?.GetValue<string>() ?? "";
+
+                if (!s_exactNpmVersion.IsMatch(version))
+                {
+                    findings.Add($"{sectionName}.{packageName} is '{version}', which is a range rather than an exact version");
+                    continue;
+                }
+
+                // npm keys a lockfile's installed packages by their path under node_modules, so the
+                // top-level copy of a dependency is "node_modules/<name>":
+                //   "node_modules/tsx": { "version": "4.22.3", "resolved": "https://.../tsx-4.22.3.tgz" }
+                var lockedVersion = lockedPackages[$"node_modules/{packageName}"]?["version"]?.GetValue<string>();
+
+                if (lockedVersion is null)
+                {
+                    findings.Add($"{sectionName}.{packageName} is not installed by {relativeLockfilePath}");
+                }
+                else if (lockedVersion != version)
+                {
+                    findings.Add($"{sectionName}.{packageName} is pinned to '{version}' but {relativeLockfilePath} installs '{lockedVersion}'");
+                }
+            }
+        }
+
+        Assert.Equal([], findings);
+    }
+
     private static JsonObject ParseJson(string content) => JsonNode.Parse(content)!.AsObject();
+
+    /// <summary>
+    /// An npm version with no range operator: <c>4.22.3</c> matches, <c>^4.22.3</c>, <c>~4.22.3</c>,
+    /// <c>4.x</c>, <c>&gt;=4.22.3</c> and <c>*</c> do not. Prerelease and build metadata are allowed
+    /// because they are still a single exact version.
+    /// </summary>
+    private static readonly Regex s_exactNpmVersion = new(
+        @"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$",
+        RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Walks up from the test assembly to the directory holding <c>Aspire.slnx</c>, so the shipped
+    /// lockfiles can be read from the checkout the tests were built in.
+    /// </summary>
+    private static string FindRepoRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "Aspire.slnx")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException(
+            $"Could not find repository root containing Aspire.slnx (searched from '{AppContext.BaseDirectory}').");
+    }
 
     private static int GetPort(string url) => new Uri(url).Port;
 
