@@ -1002,6 +1002,23 @@ public class NpmRegistryResolverTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_TreatsADevNullUserConfigAsAnEmptyFile()
+    {
+        // "--userconfig=/dev/null" is the documented npm idiom for ignoring the user config, so it
+        // has to read as empty rather than be rejected for not being a regular file.
+        Assert.SkipUnless(!OperatingSystem.IsWindows() && File.Exists("/dev/null"), "Needs /dev/null.");
+
+        var resolver = CreateResolver(environment: new Dictionary<string, string>
+        {
+            ["npm_config_userconfig"] = "/dev/null"
+        });
+
+        var resolution = resolver.Resolve(PackageName);
+
+        Assert.Equal("https://registry.npmjs.org/", resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
     public void Resolve_ReadsAnNpmrcSittingExactlyOnTheSizeLimit()
     {
         // The read takes one byte past the limit to tell "at the limit" from "over it", so the

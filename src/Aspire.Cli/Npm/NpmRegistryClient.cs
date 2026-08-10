@@ -22,7 +22,13 @@ internal sealed class NpmRegistryClient : INpmRegistryClient
     // INpmRegistryResolver applies npm's own precedence and falls back to public npm.
     //
     // This is a read-only, anonymous metadata GET; no package is ever installed from this URL, and
-    // no credential from the user's .npmrc is read or sent. The approved-feed rule in AGENTS.md
+    // no credential is sent: the request carries no Authorization header, and NpmRegistryResolution
+    // strips userinfo, query, and fragment out of RequestUri. The narrower half of that guarantee
+    // is worth stating precisely, because the resolver does not refuse to read a credential that
+    // was written into the registry value itself - "registry=https://user:token@host/" is npm's own
+    // spelling, and RegistryUri keeps it so precedence still works. Credential *keys* such as
+    // "//host/:_authToken" never leave the parse, DisplayUri redacts what is logged, and only
+    // RequestUri is ever sent. The approved-feed rule in AGENTS.md
     // governs NuGet.config restore sources for the build, not runtime endpoints, and
     // SigstoreNpmProvenanceChecker already reads a registry over HTTP the same way.
 
