@@ -125,16 +125,23 @@
         was never meant to participate in it. AssignProjectConfiguration, which PrepareProjectReferences runs,
         defaults the metadata to true, so it is always populated by the time this target executes.
 
-        The probe is then only for a build that resolved no references at all - the codegen target invoked on its
-        own, or a host whose references were resolved some other way. The condition is on the set rather than on
-        each reference because the two sides cannot be correlated by path here: MSBuild canonicalizes
-        %(MSBuildSourceProjectFile) through symlinks while %(FullPath) does not, so on a machine where the sources
-        live under a symlinked directory the same project appears under two spellings. The sets agree anyway,
-        because ResolveProjectReferences and the Include below both skip exactly the BuildReference=false
-        references.
+        What is left to probe is whatever the seeding above could not answer. An empty capture means no reference
+        was resolved at all - the codegen target invoked on its own, or a host whose references were resolved some
+        other way - so everything is probed. Otherwise only the references whose output went somewhere else are,
+        which is any reference carrying a caller-supplied OutputItemType: the SDK only defaults ours onto references
+        that do not already have one, so those references build into the caller's item type and never appear in the
+        capture.
+
+        Which reference to skip is decided by metadata rather than by comparing project paths, because the two
+        sides cannot be correlated that way here: MSBuild canonicalizes %(MSBuildSourceProjectFile) through symlinks
+        while %(FullPath) does not, so under a symlinked source directory the same project appears under two
+        spellings. Both sides of the Exclude below come from the same item list, so they are the same strings.
       -->
       <_AspirePreparedProjectResource Include="@(_MSBuildProjectReferenceExistent->WithMetadataValue('IsAspireProjectResource', 'true')->WithMetadataValue('BuildReference', 'true'))"
                                       Condition="'@(_AspireProjectResourceBuildOutput)' == ''" />
+      <_AspirePreparedProjectResource Include="@(_MSBuildProjectReferenceExistent->WithMetadataValue('IsAspireProjectResource', 'true')->WithMetadataValue('BuildReference', 'true'))"
+                                      Exclude="@(_MSBuildProjectReferenceExistent->WithMetadataValue('OutputItemType', '_AspireProjectResourceBuildOutput'))"
+                                      Condition="'@(_AspireProjectResourceBuildOutput)' != ''" />
     </ItemGroup>
 
     <!--

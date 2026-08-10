@@ -607,6 +607,46 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task ProjectResourcesRoutingTheirOutputElsewhereAreStillProbed()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        // Worker keeps a caller-supplied OutputItemType, so the SDK's default does not apply to it and its build
+        // output never reaches the collection the seeding reads. Worker2 uses the default and does reach it. Only
+        // Worker still needs probing, and a build that captured something for one reference must not conclude it
+        // captured something for all of them.
+        var result = await RunProjectMetadataSourceGenerationAsync(
+            workspace,
+            referencedProjectXml: """
+                  <PropertyGroup>
+                    <OutputType>Exe</OutputType>
+                    <TargetFramework>net8.0</TargetFramework>
+                    <AssemblyName>ProbedWorker</AssemblyName>
+                  </PropertyGroup>
+                """,
+            projectReferenceMetadataXml: """
+                      <OutputItemType>SomeoneElsesItem</OutputItemType>
+                """,
+            msbuildTarget: "ResolveReferences;WriteAspireProjectMetadataSources",
+            secondReferencedProjectXml: """
+                  <PropertyGroup>
+                    <OutputType>Exe</OutputType>
+                    <TargetFramework>net8.0</TargetFramework>
+                    <AssemblyName>CapturedWorker</AssemblyName>
+                  </PropertyGroup>
+                """);
+
+        Assert.True(result.DotNetResult.ExitCode == 0, result.DotNetResult.Output);
+
+        var generatedSource = await File.ReadAllTextAsync(result.GeneratedPath);
+        Assert.Equal("""    public string? TargetName => @"ProbedWorker";""", GetGeneratedTargetNameMember(generatedSource));
+
+        var secondGeneratedPath = Path.Combine(Path.GetDirectoryName(result.GeneratedPath)!, "Worker2.ProjectMetadata.g.cs");
+        var secondGeneratedSource = await File.ReadAllTextAsync(secondGeneratedPath);
+        Assert.Equal("""    public string? TargetName => @"CapturedWorker";""", GetGeneratedTargetNameMember(secondGeneratedSource));
+    }
+
+    [Fact]
     public async Task GetTargetPathIsReachedOnProjectResourcesWithoutAspireAskingForIt()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
@@ -1333,7 +1373,9 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
         string referencedProjectDirectoryName = "Worker",
         string? ancestorDirectoryBuildPropsXml = null,
         bool buildProjectInSolution = true,
-        string msbuildTarget = "WriteAspireProjectMetadataSources")
+        string msbuildTarget = "WriteAspireProjectMetadataSources",
+        string? secondReferencedProjectXml = null,
+        string? secondProjectReferenceMetadataXml = null)
     {
         var repoRoot = GetRepoRoot();
 
@@ -1389,6 +1431,22 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
                 """);
         }
 
+        if (secondReferencedProjectXml is not null)
+        {
+            var secondWorkerDirectory = Directory.CreateDirectory(Path.Combine(workspace.Path, "Worker2")).FullName;
+            await File.WriteAllTextAsync(Path.Combine(secondWorkerDirectory, "Worker2.csproj"),
+                $"""
+                <Project Sdk="Microsoft.NET.Sdk">
+
+                {secondReferencedProjectXml}
+
+                </Project>
+                """);
+            await File.WriteAllTextAsync(Path.Combine(secondWorkerDirectory, "Program.cs"), """
+                System.Console.WriteLine("worker2");
+                """);
+        }
+
         var appHostDirectory = Directory.CreateDirectory(Path.Combine(workspace.Path, "AppHost")).FullName;
         var appHostTargetsPath = SecurityElement.Escape(Path.Combine(repoRoot, "src", "Aspire.Hosting.AppHost", "build", "Aspire.Hosting.AppHost.in.targets"));
         var appHostProjectFile = Path.Combine(appHostDirectory, "AppHost.csproj");
@@ -1399,6 +1457,20 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
                 <CurrentSolutionConfigurationContents>&lt;SolutionConfiguration&gt;&lt;ProjectConfiguration Project=&quot;{C42D47BF-C684-40EB-B438-FC98C4DC6F5D}&quot; AbsolutePath=&quot;{{SecurityElement.Escape(workerProjectFile)}}&quot; BuildProjectInSolution=&quot;{{(buildProjectInSolution ? "True" : "False")}}&quot;&gt;{{solutionProjectConfiguration}}&lt;/ProjectConfiguration&gt;&lt;/SolutionConfiguration&gt;</CurrentSolutionConfigurationContents>
               </PropertyGroup>
             """;
+
+        var secondProjectReferenceXml = secondReferencedProjectXml is null
+            ? null
+            : $"""
+                    <ProjectReference Include="../Worker2/Worker2.csproj"
+                                      IsAspireProjectResource="true"
+                                      ReferenceOutputAssembly="false"
+                                      SkipGetTargetFrameworkProperties="true"
+                                      ExcludeAssets="all"
+                                      OutputItemType="_AspireProjectResourceBuildOutput"
+                                      Private="false">
+                {secondProjectReferenceMetadataXml}
+                    </ProjectReference>
+              """;
 
         // The SDK props/targets are imported explicitly so the Aspire AppHost targets land *after*
         // Sdk.targets, which is where a NuGet package's build/*.targets normally gets imported. The
@@ -1435,6 +1507,7 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
                   <Project>{C42D47BF-C684-40EB-B438-FC98C4DC6F5D}</Project>
             {{projectReferenceMetadataXml}}
                 </ProjectReference>
+            {{secondProjectReferenceXml}}
               </ItemGroup>
 
             {{solutionConfigurationXml}}
