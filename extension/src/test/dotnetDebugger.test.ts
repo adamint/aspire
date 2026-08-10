@@ -61,7 +61,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         return { dotNetService: fakeDotNetService, extension: createProjectDebuggerExtension(() => fakeDotNetService), doesFileExistStub: sinon.stub(io, 'doesFileExist').resolves(doesOutputFileExist) };
     }
 
-    test('attach configuration uses the selected resource process ID without evaluating TargetPath', async () => {
+    test('attach configuration uses the project TargetPath process name instead of the launcher process ID', async () => {
         const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/FromTargetPath.dll', null, true, true);
 
         const configuration = await extension.createAttachDebugSessionConfigurationCallback!({
@@ -79,9 +79,9 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(configuration.type, 'coreclr');
         assert.strictEqual(configuration.request, 'attach');
         assert.strictEqual(configuration.name, 'Attach debugger: API');
-        assert.strictEqual(configuration.processId, '1234');
-        assert.strictEqual(configuration.processName, undefined);
-        assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
+        assert.strictEqual(configuration.processId, undefined);
+        assert.strictEqual(configuration.processName, 'FromTargetPath');
+        assert.ok(dotNetService.getDotNetTargetPathStub.calledOnceWithExactly('/repo/api/Api.csproj'));
     });
 
     test('attach configuration rejects file-based project resources', async () => {

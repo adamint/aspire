@@ -6,6 +6,7 @@ import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import * as capabilities from '../capabilities';
+import * as debuggerExtensions from '../debugger/debuggerExtensions';
 import * as cliModule from '../debugger/languages/cli';
 import * as cliPathModule from '../utils/cliPath';
 import * as configInfoProvider from '../utils/configInfoProvider';
@@ -2467,7 +2468,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         provider.dispose();
     });
 
-    test('attachDebuggerToResource starts CoreCLR with the selected resource process ID', async () => {
+    test('attachDebuggerToResource starts CoreCLR with the resource attach configuration', async () => {
         const provider = makeTreeProvider([
             makeAppHost({
                 resources: [
@@ -2482,6 +2483,12 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             }),
         ]);
         sandbox.stub(capabilities, 'isCsharpInstalled').returns(true);
+        sandbox.stub(debuggerExtensions, 'createAttachDebugSessionConfiguration').resolves({
+            type: 'coreclr',
+            request: 'attach',
+            name: 'Attach debugger: API',
+            processName: 'Api',
+        });
         const startDebuggingStub = sandbox.stub(vscode.debug, 'startDebugging').resolves(true);
 
         await (provider as any).attachDebuggerToResource(getFirstResourceItem(provider));
@@ -2490,12 +2497,12 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         assert.strictEqual(configuration.type, 'coreclr');
         assert.strictEqual(configuration.request, 'attach');
         assert.strictEqual(configuration.name, 'Attach debugger: API');
-        assert.strictEqual(configuration.processId, '4242');
-        assert.strictEqual(configuration.processName, undefined);
+        assert.strictEqual(configuration.processId, undefined);
+        assert.strictEqual(configuration.processName, 'Api');
         provider.dispose();
     });
 
-    test('attachDebuggerToResource uses the latest resource process ID', async () => {
+    test('attachDebuggerToResource creates the configuration from the latest resource snapshot', async () => {
         const appHost = makeAppHost({
             resources: [
                 makeResource({
@@ -2509,6 +2516,12 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         });
         const provider = makeTreeProvider([appHost]);
         sandbox.stub(capabilities, 'isCsharpInstalled').returns(true);
+        const createConfigurationStub = sandbox.stub(debuggerExtensions, 'createAttachDebugSessionConfiguration').resolves({
+            type: 'coreclr',
+            request: 'attach',
+            name: 'Attach debugger: API',
+            processName: 'Api',
+        });
         const startDebuggingStub = sandbox.stub(vscode.debug, 'startDebugging').resolves(true);
         const resourceItem = getFirstResourceItem(provider);
         appHost.resources = [
@@ -2523,8 +2536,8 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
 
         await (provider as any).attachDebuggerToResource(resourceItem);
 
-        const configuration = startDebuggingStub.firstCall.args[1] as vscode.DebugConfiguration;
-        assert.strictEqual(configuration.processId, '5252');
+        assert.ok(startDebuggingStub.calledOnce);
+        assert.strictEqual(createConfigurationStub.firstCall.args[0].properties?.['executable.pid'], '5252');
         provider.dispose();
     });
 
@@ -2633,6 +2646,12 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             }),
         ]);
         sandbox.stub(capabilities, 'isCsharpInstalled').returns(true);
+        sandbox.stub(debuggerExtensions, 'createAttachDebugSessionConfiguration').resolves({
+            type: 'coreclr',
+            request: 'attach',
+            name: 'Attach debugger: API',
+            processName: 'Api',
+        });
         sandbox.stub(vscode.debug, 'startDebugging').resolves(false);
 
         await assert.rejects(

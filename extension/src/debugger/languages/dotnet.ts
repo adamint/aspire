@@ -33,7 +33,7 @@ interface IDotNetService {
 }
 
 interface DotNetAttachDebuggerResourceInfo {
-    processId: number;
+    projectPath: string;
     resourceLabel: string;
 }
 
@@ -416,8 +416,7 @@ function getDotNetAttachDebuggerResourceInfo(resource: DebuggableResourceSnapsho
         return undefined;
     }
 
-    const processId = getAttachDebuggerProcessId(resource);
-    if (processId === undefined) {
+    if (getAttachDebuggerProcessId(resource) === undefined) {
         return undefined;
     }
 
@@ -435,7 +434,7 @@ function getDotNetAttachDebuggerResourceInfo(resource: DebuggableResourceSnapsho
     }
 
     return {
-        processId,
+        projectPath,
         resourceLabel: resource.displayName ?? resource.name,
     };
 }
@@ -473,17 +472,36 @@ function isDotNetExecutable(resource: DebuggableResourceSnapshot): boolean {
     return executableName === 'dotnet' || executableName === 'dotnet.exe';
 }
 
-function createDotNetAttachDebugSessionConfiguration(resource: DebuggableResourceSnapshot): vscode.DebugConfiguration {
+async function createDotNetAttachDebugSessionConfiguration(resource: DebuggableResourceSnapshot, dotNetService: IDotNetService): Promise<vscode.DebugConfiguration> {
     const attachInfo = getDotNetAttachDebuggerResourceInfo(resource);
     if (!attachInfo) {
         throw new AttachDebuggerConfigurationError('ResourceNotAttachable', invalidLaunchConfiguration(JSON.stringify(resource)));
+    }
+
+    let targetPath: string;
+    try {
+        targetPath = await dotNetService.getDotNetTargetPath(attachInfo.projectPath);
+    }
+    catch (error) {
+        throw new AttachDebuggerConfigurationError(
+            'ResourceNotAttachable',
+            error instanceof Error ? error.message : String(error));
+    }
+
+    // `executable.pid` is the DCP launcher (`dotnet run`), not necessarily the managed
+    // application process. Use the C# debugger's process-name selector instead, deriving
+    // the name from the same TargetPath evaluation used by the normal project launch path.
+    const fileName = targetPath.trim().split(/[\\/]/).pop() ?? '';
+    const processName = fileName.replace(/\.(dll|exe)$/i, '');
+    if (processName.length === 0) {
+        throw new AttachDebuggerConfigurationError('ResourceNotAttachable', noOutputFromMsbuild);
     }
 
     return {
         type: 'coreclr',
         request: 'attach',
         name: attachDebuggerConfigurationName(attachInfo.resourceLabel),
-        processId: String(attachInfo.processId),
+        processName,
     };
 }
 
@@ -502,7 +520,9 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
             throw new Error(invalidLaunchConfiguration(JSON.stringify(launchConfig)));
         },
         canAttachToResource: (resource) => getDotNetAttachDebuggerResourceInfo(resource) !== undefined,
-        createAttachDebugSessionConfigurationCallback: async (resource): Promise<vscode.DebugConfiguration> => createDotNetAttachDebugSessionConfiguration(resource),
+        createAttachDebugSessionConfigurationCallback: async (resource): Promise<vscode.DebugConfiguration> => {
+            return await createDotNetAttachDebugSessionConfiguration(resource, dotNetServiceProducer(undefined));
+        },
         createDebugSessionConfigurationCallback: async (launchConfig, args, env, launchOptions, debugConfiguration: AspireResourceExtendedDebugConfiguration): Promise<void> => {
             if (!isProjectLaunchConfiguration(launchConfig)) {
                 extensionLogOutputChannel.info(`The resource type was not project for ${JSON.stringify(launchConfig)}`);
