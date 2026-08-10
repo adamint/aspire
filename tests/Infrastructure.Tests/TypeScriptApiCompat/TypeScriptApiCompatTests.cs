@@ -460,16 +460,18 @@ public sealed class TypeScriptApiCompatTests(ITestOutputHelper outputHelper)
 
         // Both packages alias distinct capability ids onto the same projected method, which is what
         // [AspireExport("withRedisCommanderHostPort", MethodName = "withHostPort")] does. The ids do
-        // not collide; the generated WithHostPortOptions interfaces do.
+        // not collide; the generated WithProbePortOptions interfaces do. The projected name is
+        // deliberately absent from PackageQualifiedOptionsInterfaceNames, because a name on that
+        // list is qualified and so cannot collide.
         foreach (var root in new[] { baselineRoot, currentRoot })
         {
             WriteSurface(root, "Pkg.One", """
                 # Capabilities
-                Pkg.One/withCommanderHostPort(port?: number) -> void [method=withHostPort]
+                Pkg.One/withCommanderProbePort(port?: number) -> void [method=withProbePort]
                 """);
             WriteSurface(root, "Pkg.Two", """
                 # Capabilities
-                Pkg.Two/withInsightHostPort(port?: number) -> void [method=withHostPort]
+                Pkg.Two/withInsightProbePort(port?: number) -> void [method=withProbePort]
                 """);
         }
 
@@ -489,7 +491,7 @@ public sealed class TypeScriptApiCompatTests(ITestOutputHelper outputHelper)
         Assert.Equal(2, exitCode);
 
         var message = error.ToString();
-        Assert.Contains("WithHostPortOptions", message, StringComparison.Ordinal);
+        Assert.Contains("WithProbePortOptions", message, StringComparison.Ordinal);
         Assert.Contains("'Pkg.One'", message, StringComparison.Ordinal);
         Assert.Contains("'Pkg.Two'", message, StringComparison.Ordinal);
     }
