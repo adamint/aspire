@@ -767,7 +767,7 @@ suite('E2E launch profile', () => {
         // reusing the wrong install offline.
         assert.ok(runner.includes('CODE_VERSION: vscodeVersion,'));
         assert.ok(runner.includes('const vscodeVersion = resolveCachedVsCodeVersion('));
-        assert.ok(runner.includes('vscodeVersion,\n      extesterVersion,'));
+        assert.match(runner, /vscodeVersion,\r?\n\s+extesterVersion,/);
 
         // ExTester's codeStream falls back to CODE_TYPE when --type is absent, and an Insiders
         // build unpacks into directory names this cache does not discover.
