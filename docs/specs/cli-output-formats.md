@@ -582,3 +582,9 @@ The top-level arrays are:
 | `diagnostics` | Errors, warnings, and informational diagnostics from capability discovery. |
 
 `aspire sdk dump --format ci` emits a stable text format intended for diffs rather than JSON parsing.
+
+### `aspire sdk export`
+
+`aspire sdk export --package Name@Version --language typescript` restores the exact package version and writes one canonical JSON document to standard output. Omit `--package` to export `Aspire.Hosting` at the running CLI's SDK version. Diagnostics are written to standard error.
+
+The top-level fields are `schemaVersion`, `language`, `generator`, `package`, `modules`, and `declarations`. The language exporter owns the schema; the CLI passes it through without reshaping it.

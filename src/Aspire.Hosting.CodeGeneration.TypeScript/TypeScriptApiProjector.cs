@@ -1,7 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Globalization;
+using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 using Aspire.Shared.CodeGeneration;
@@ -40,6 +40,8 @@ internal sealed partial class TypeScriptApiProjector
     /// collapses the copies contributed by every package in the manifest to exactly one.
     /// </summary>
     private const string RuntimeDeclarationId = "aspire:runtime:base";
+
+    private static readonly TypeScriptApiGeneratorIdentity s_generatorIdentity = CreateGeneratorIdentity();
 
     /// <summary>The symbol names <see cref="RuntimeDeclarationContent"/> already declares.</summary>
     private static readonly HashSet<string> s_runtimeDeclaredNames = new(StringComparer.Ordinal)
@@ -405,12 +407,15 @@ internal sealed partial class TypeScriptApiProjector
     /// through the referenced-type closure: they contribute declaration fragments so the export
     /// type-checks, but they must not produce documentation pages here.
     /// </param>
+    /// <param name="cancellationToken">A token to cancel the export between projected items.</param>
     internal TypeScriptApiModel BuildApiModel(
         TypeScriptApiPackageIdentity package,
-        IReadOnlyCollection<string> ownedAssemblyNames)
+        IReadOnlyCollection<string> ownedAssemblyNames,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(package);
         ArgumentNullException.ThrowIfNull(ownedAssemblyNames);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var owned = new HashSet<string>(ownedAssemblyNames, StringComparer.OrdinalIgnoreCase);
 
@@ -427,6 +432,7 @@ internal sealed partial class TypeScriptApiProjector
 
         foreach (var builderModel in _resolved.Builders.OrderBy(b => b.BuilderClassName, StringComparer.Ordinal))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var (item, builderDeclarations) = ProjectBuilder(package, builderModel, owned);
 
             foreach (var declaration in builderDeclarations)
@@ -442,6 +448,7 @@ internal sealed partial class TypeScriptApiProjector
 
         foreach (var entryPoint in _resolved.ClientMethods.OrderBy(c => c.MethodName, StringComparer.Ordinal))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!owned.Contains(GetCapabilityOwningAssemblyName(entryPoint)))
             {
                 continue;
@@ -454,6 +461,7 @@ internal sealed partial class TypeScriptApiProjector
             .Where(e => e.TypeId != InputTypeTypeId)
             .OrderBy(e => e.Name, StringComparer.Ordinal))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var (item, declaration) = ProjectEnum(enumType);
 
             declarations[declaration.Id] = declaration;
@@ -468,6 +476,7 @@ internal sealed partial class TypeScriptApiProjector
             .Where(d => d.TypeId != InteractionInputTypeId)
             .OrderBy(d => d.TypeId, StringComparer.Ordinal))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var (item, declaration) = ProjectDto(dtoType);
 
             declarations[declaration.Id] = declaration;
@@ -485,6 +494,7 @@ internal sealed partial class TypeScriptApiProjector
         // package would document options interfaces belonging to its dependencies.
         foreach (var (interfaceName, optionalParams) in _optionsInterfacesToGenerate.OrderBy(kvp => kvp.Key, StringComparer.Ordinal))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var owningAssemblyName = _optionsInterfaceOwningAssemblies.GetValueOrDefault(interfaceName, package.Name);
             var (item, declaration) = ProjectOptionsInterface(owningAssemblyName, interfaceName, optionalParams);
 
@@ -515,6 +525,7 @@ internal sealed partial class TypeScriptApiProjector
 
         foreach (var typeId in _resolved.HandleTypeIds.OrderBy(id => id, StringComparer.Ordinal))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var wrapperClassName = _wrapperClassNames.GetValueOrDefault(typeId);
             var owningAssembly = GetTypeOwningAssemblyName(typeId);
 
@@ -587,10 +598,21 @@ internal sealed partial class TypeScriptApiProjector
         {
             SchemaVersion = ExportSchemaVersion,
             Language = "typescript",
+            Generator = s_generatorIdentity,
             Package = package,
             Modules = [module],
             Declarations = [.. declarations.Values.OrderBy(d => d.Id, StringComparer.Ordinal)]
         };
+    }
+
+    private static TypeScriptApiGeneratorIdentity CreateGeneratorIdentity()
+    {
+        var assembly = typeof(TypeScriptApiProjector).Assembly;
+        var version = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? throw new InvalidOperationException(
+                $"The '{assembly.GetName().Name}' assembly has no informational version.");
+
+        return new TypeScriptApiGeneratorIdentity(assembly.GetName().Name!, version);
     }
 
     /// <summary>
@@ -790,7 +812,7 @@ internal sealed partial class TypeScriptApiProjector
         {
             Id = $"method:{ownerName}.{capability.MethodName}",
             Kind = TypeScriptApiItemKind.Method,
-            Name = capability.MethodName,
+            Name = signature.MethodName,
             Declaration = signature.Declaration,
             Summary = capability.Documentation?.Summary,
             Remarks = capability.Documentation?.Remarks,
@@ -864,15 +886,16 @@ internal sealed partial class TypeScriptApiProjector
     {
         _ = package;
         var signature = ResolveEntryPointSignature(capability);
+        var owningAssemblyName = GetCapabilityOwningAssemblyName(capability);
 
         return new TypeScriptApiItem
         {
-            Id = $"method:{capability.MethodName}",
+            Id = $"entrypoint:{owningAssemblyName}:{signature.MethodName}",
             TypeId = capability.CapabilityId,
             Kind = TypeScriptApiItemKind.Method,
-            Name = capability.MethodName,
+            Name = signature.MethodName,
             Declaration = $"function {signature.Declaration}",
-            OwningAssemblyName = GetCapabilityOwningAssemblyName(capability),
+            OwningAssemblyName = owningAssemblyName,
             Summary = capability.Documentation?.Summary,
             Remarks = capability.Documentation?.Remarks,
             Members = []
@@ -1153,9 +1176,7 @@ internal sealed partial class TypeScriptApiProjector
     /// </summary>
     /// <remarks>
     /// This mirrors <c>AtsContextFilter.IsCapabilityOwnedBySelectedAssembly</c>. The two must agree,
-    /// or the exporter would document symbols the filter excluded, or drop symbols it kept. A CLI
-    /// that predates <see cref="AtsContext.CapabilityExportingAssemblyNames"/> runs the pre-map
-    /// filter as well, so both sides fall back to reflection together and still agree.
+    /// or the exporter would document symbols the filter excluded, or drop symbols it kept.
     /// </remarks>
     private string GetCapabilityOwningAssemblyName(AtsCapabilityInfo capability)
         => GetCapabilityOwningAssemblyName(_resolved.Context, capability);
@@ -1167,14 +1188,6 @@ internal sealed partial class TypeScriptApiProjector
     /// </remarks>
     private static string GetCapabilityOwningAssemblyName(AtsContext context, AtsCapabilityInfo capability)
     {
-        // Read through the compatibility shim rather than off the context directly: this method runs
-        // on the ordinary generation path, and a direct read hard-binds it to a contract member an
-        // already-shipped CLI does not have. See AtsContextCompatibility for the failure it avoids.
-        if (AtsContextCompatibility.TryGetCapabilityExportingAssemblyName(context, capability.CapabilityId, out var exportingAssemblyName))
-        {
-            return exportingAssemblyName;
-        }
-
         if (context.Methods.TryGetValue(capability.CapabilityId, out var method))
         {
             return method.DeclaringType?.Assembly.GetName().Name ?? string.Empty;
@@ -1673,103 +1686,15 @@ internal sealed partial class TypeScriptApiProjector
     }
 
     /// <summary>
-    /// Gets the options interface name for a method owned by <paramref name="owningAssemblyName"/>.
+    /// Gets the options interface name for a method.
     /// Strips any type prefix (e.g., "TypeName.methodName" -> "MethodName").
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// First-party Aspire names stay unqualified unless the checked-in shipped ATS surface already
-    /// has a real cross-package collision for that unqualified name. That preserves the old public
-    /// names for the unique option bags while still making the known collision groups a function of
-    /// the capability alone. Third-party assemblies are always qualified because their package
-    /// exports are produced one at a time and cannot rely on this repository's collision guard.
-    /// </para>
-    /// <para>
-    /// The core hosting package keeps unqualified names even inside a collision group. Other
-    /// packages in those groups carry an encoding of their full assembly name, so
-    /// <c>Aspire.Hosting.Azure.EventHubs</c> yields
-    /// <c>Aspire_x002E_Hosting_x002E_Azure_x002E_EventHubs$RunAsEmulatorOptions</c>. The TypeScript
-    /// API compatibility path guards this selective list so a new cross-package collision cannot
-    /// silently preserve an unsafe unqualified name.
-    /// </para>
-    /// </remarks>
-    internal static string GetOptionsInterfaceName(string methodName, string owningAssemblyName)
+    internal static string GetOptionsInterfaceName(string methodName)
     {
-        var unqualifiedName = TypeScriptOptionsInterfaceNaming.GetUnqualifiedOptionsInterfaceName(methodName);
-        if (string.IsNullOrEmpty(owningAssemblyName) ||
-            string.Equals(owningAssemblyName, AtsConstants.AspireHostingAssembly, StringComparison.Ordinal) ||
-            !TypeScriptOptionsInterfaceNaming.RequiresPackageQualifier(unqualifiedName, owningAssemblyName))
-        {
-            return unqualifiedName;
-        }
-
-        // '$' terminates the qualifier. Concatenating two individually injective encodings is not
-        // injective at the seam -- assembly `Contoso` with method `fooBar` and assembly `ContosoFoo`
-        // with method `bar` both yield ContosoFooBarOptions -- and the collision guard only inspects
-        // unqualified names, so two package exports could contribute conflicting declarations under
-        // one symbol. Every non-alphanumeric code unit in the qualifier is escaped, so '$' can never
-        // occur inside it: the first '$' is always the seam, whatever the method name contains.
-        return $"{GetOptionsInterfaceQualifier(owningAssemblyName)}{OptionsInterfaceQualifierSeparator}{unqualifiedName}";
-    }
-
-    private const string OptionsInterfaceQualifierSeparator = "$";
-
-    /// <summary>
-    /// Derives the name-space prefix an assembly's options interfaces carry when their unqualified
-    /// names are in a known collision group.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// The encoding has to be injective. A per-package export sees only its own assemblies, so it
-    /// cannot detect that some other package would produce the same qualifier and disambiguate the
-    /// way full generation could. Two assemblies that collide here would emit conflicting options
-    /// interfaces that fail to compile once both package exports are concatenated, which is the
-    /// failure this qualifier exists to prevent. Simply dropping separators is not injective:
-    /// <c>Contoso.Foo.Bar</c> and <c>Contoso.FooBar</c> would both yield <c>ContosoFooBar</c>.
-    /// </para>
-    /// <para>
-    /// So every non-alphanumeric UTF-16 code unit is encoded rather than removed, and the full
-    /// assembly name is kept. Each escape is <c>_xNNNN_</c> with a terminator, so
-    /// <c>Contoso.Foo-Bar</c> cannot alias <c>Contoso.Foo.x2DBar</c>, and <c>U+0123</c> followed
-    /// by <c>4</c> cannot alias <c>U+1234</c>. A leading digit is escaped too because TypeScript
-    /// identifiers may not start with one.
-    /// </para>
-    /// </remarks>
-    private static string GetOptionsInterfaceQualifier(string owningAssemblyName)
-    {
-        if (string.IsNullOrEmpty(owningAssemblyName) ||
-            string.Equals(owningAssemblyName, AtsConstants.AspireHostingAssembly, StringComparison.Ordinal))
-        {
-            return string.Empty;
-        }
-
-        var qualifier = new StringBuilder(owningAssemblyName.Length);
-        for (var i = 0; i < owningAssemblyName.Length; i++)
-        {
-            var character = owningAssemblyName[i];
-            if (char.IsAsciiLetter(character) || (i > 0 && char.IsAsciiDigit(character)))
-            {
-                qualifier.Append(character);
-                continue;
-            }
-
-            AppendEscapedCodeUnit(qualifier, character);
-        }
-
-        if (qualifier.Length == 0)
-        {
-            return string.Empty;
-        }
-
-        return qualifier.ToString();
-
-        static void AppendEscapedCodeUnit(StringBuilder builder, char codeUnit)
-        {
-            builder
-                .Append("_x")
-                .Append(((int)codeUnit).ToString("X4", CultureInfo.InvariantCulture))
-                .Append('_');
-        }
+        var simpleName = methodName.Contains('.')
+            ? methodName[(methodName.LastIndexOf('.') + 1)..]
+            : methodName;
+        return $"{ToPascalCase(simpleName)}Options";
     }
 
     /// <summary>
@@ -1784,9 +1709,7 @@ internal sealed partial class TypeScriptApiProjector
             return interfaceName;
         }
 
-        // The fallback has to derive the name the same way registration does, or a capability that
-        // never reached registration would be emitted referring to an interface nothing declares.
-        return GetOptionsInterfaceName(capability.MethodName, GetCapabilityOwningAssemblyName(capability));
+        return GetOptionsInterfaceName(capability.MethodName);
     }
 
     /// <summary>
@@ -1842,26 +1765,8 @@ internal sealed partial class TypeScriptApiProjector
     }
 
     /// <summary>
-    /// Registers an options interface to be generated later, under a name derived from the assembly
-    /// that owns <paramref name="capabilityId"/> and the method that produced it.
+    /// Registers an options interface to be generated later.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// The name must not depend on which other packages happen to be loaded. The projector runs over
-    /// whatever an app host references: <c>sdk export</c> scans one integration plus core, while
-    /// <c>sdk generate</c> scans everything the user's app host pulls in. Naming an interface after
-    /// its method alone and resolving clashes with a running counter made the result a function of
-    /// that set, so adding an unrelated integration could rename an interface the user's hand-written
-    /// TypeScript refers to, and two packages that never meet in one scan could each publish a
-    /// different <c>RunAsEmulatorOptions</c> — which is TS2717 the moment their API export fragments
-    /// are concatenated.
-    /// </para>
-    /// <para>
-    /// Qualifying by owning assembly removes both. Every assembly other than the core hosting package
-    /// gets its own name space, so no two can produce one name, and the name a capability receives is
-    /// fixed by the capability itself rather than by its company.
-    /// </para>
-    /// </remarks>
     /// <param name="capabilityId">The capability the interface is being registered for.</param>
     /// <param name="methodName">The method name the interface is derived from.</param>
     /// <param name="optionalParams">The optional parameters the interface carries.</param>
@@ -1877,7 +1782,7 @@ internal sealed partial class TypeScriptApiProjector
             return;
         }
 
-        var baseInterfaceName = GetOptionsInterfaceName(methodName, owningAssemblyName);
+        var baseInterfaceName = GetOptionsInterfaceName(methodName);
 
         // Check if an existing interface with this name is compatible
         if (_optionsInterfacesToGenerate.TryGetValue(baseInterfaceName, out var existingParams))
@@ -1889,14 +1794,10 @@ internal sealed partial class TypeScriptApiProjector
                 return;
             }
 
-            // Incompatible - find or create a suffixed interface. Two capabilities can still collide
-            // here, but only within one assembly: the qualifier already separates the rest. An
-            // assembly's own capabilities appear in the same relative order whether the context was
-            // filtered to that package or holds the whole app host, so the suffix each one draws is
-            // the same in both, which is what keeps a package export agreeing with full generation.
+            // Incompatible - find or create a suffixed interface.
             for (var suffix = 1; ; suffix++)
             {
-                var suffixedName = GetOptionsInterfaceName($"{methodName}{suffix}", owningAssemblyName);
+                var suffixedName = GetOptionsInterfaceName($"{methodName}{suffix}");
                 if (!_optionsInterfacesToGenerate.TryGetValue(suffixedName, out var suffixedParams))
                 {
                     // Create a new interface with this suffix

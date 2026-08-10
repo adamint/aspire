@@ -138,9 +138,7 @@ public static class ManifestCommand
                 {
                     Name = Path.GetFileNameWithoutExtension(asset.RelativePath),
                     Culture = asset.Culture,
-                    Path = asset.SourcePath,
-                    PackageId = asset.PackageId,
-                    PackageVersion = asset.PackageVersion
+                    Path = asset.SourcePath
                 });
             }
 

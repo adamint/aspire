@@ -1,7 +1,6 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -51,9 +50,7 @@ internal sealed class IntegrationPackageProbeManifest
             {
                 Name = NormalizeRequiredValue(assembly.Name, "managedAssemblies[].name"),
                 Culture = NormalizeCulture(assembly.Culture),
-                Path = NormalizeRequiredValue(assembly.Path, "managedAssemblies[].path"),
-                PackageId = NormalizeOptionalValue(assembly.PackageId),
-                PackageVersion = NormalizeOptionalValue(assembly.PackageVersion)
+                Path = NormalizeRequiredValue(assembly.Path, "managedAssemblies[].path")
             };
 
             managedLookup.TryAdd(
@@ -145,14 +142,6 @@ internal sealed class IntegrationPackageProbeManifest
                 {
                     writer.WriteString("culture", managedAssembly.Culture);
                 }
-                if (managedAssembly.PackageId is not null)
-                {
-                    writer.WriteString("packageId", managedAssembly.PackageId);
-                }
-                if (managedAssembly.PackageVersion is not null)
-                {
-                    writer.WriteString("packageVersion", managedAssembly.PackageVersion);
-                }
                 writer.WriteString("path", managedAssembly.Path);
                 writer.WriteEndObject();
             }
@@ -186,32 +175,6 @@ internal sealed class IntegrationPackageProbeManifest
             out var path)
             ? path
             : null;
-    }
-
-    public bool TryGetRuntimeAssemblyNamesForPackage(
-        string packageId,
-        [NotNullWhen(true)] out string? canonicalPackageId,
-        out IReadOnlyList<string> assemblyNames)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(packageId);
-
-        var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
-        canonicalPackageId = null;
-
-        foreach (var assembly in ManagedAssemblies)
-        {
-            if (assembly.Culture is not null ||
-                !string.Equals(assembly.PackageId, packageId, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            canonicalPackageId ??= assembly.PackageId;
-            names.Add(assembly.Name);
-        }
-
-        assemblyNames = names.ToList();
-        return assemblyNames.Count > 0;
     }
 
     public IReadOnlyList<string> GetNativeLibraryPaths(string unmanagedDllName)
@@ -407,11 +370,6 @@ internal sealed class IntegrationPackageProbeManifest
         return value.Trim();
     }
 
-    private static string? NormalizeOptionalValue(string? value)
-    {
-        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-    }
-
     private static IReadOnlyList<IntegrationPackageManagedAssembly> ReadManagedAssemblies(JsonElement rootElement)
     {
         if (!rootElement.TryGetProperty("managedAssemblies", out var managedAssembliesElement) ||
@@ -427,9 +385,7 @@ internal sealed class IntegrationPackageProbeManifest
             {
                 Name = NormalizeRequiredValue(ReadStringProperty(element, "name"), "managedAssemblies[].name"),
                 Culture = NormalizeCulture(ReadStringProperty(element, "culture", required: false)),
-                Path = NormalizeAndValidatePath(ReadStringProperty(element, "path"), "managedAssemblies[].path"),
-                PackageId = NormalizeOptionalValue(ReadStringProperty(element, "packageId", required: false)),
-                PackageVersion = NormalizeOptionalValue(ReadStringProperty(element, "packageVersion", required: false))
+                Path = NormalizeAndValidatePath(ReadStringProperty(element, "path"), "managedAssemblies[].path")
             });
         }
 
@@ -489,10 +445,6 @@ internal sealed class IntegrationPackageManagedAssembly
     public string? Culture { get; init; }
 
     public required string Path { get; init; }
-
-    public string? PackageId { get; init; }
-
-    public string? PackageVersion { get; init; }
 }
 
 /// <summary>

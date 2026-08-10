@@ -280,10 +280,7 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IDisposable
 
         if (packageRefs.Count > 0)
         {
-            // Show the range restore was actually given, not the raw version: `--source` and
-            // exact references both pin to `[x.y.z]`, and a reader chasing a resolution failure
-            // needs to see that the request was an equality rather than a minimum.
-            var preview = packageRefs.Take(5).Select(r => $"{r.Name} {GetRestoreVersion(r, hasOverride)}");
+            var preview = packageRefs.Take(5).Select(static r => $"{r.Name} {r.Version}");
             output.AppendError($"  packages: {string.Join(", ", preview)}{(packageRefs.Count > 5 ? $", … (+{packageRefs.Count - 5} more)" : string.Empty)}");
         }
     }
@@ -301,7 +298,7 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IDisposable
 
         var useExactPackageVersions = !string.IsNullOrWhiteSpace(packageSourceOverride);
         var packages = packageRefs
-            .Select(r => (r.Name, Version: GetRestoreVersion(r, useExactPackageVersions)))
+            .Select(r => (r.Name, Version: GetRestoreVersion(r.Name, r.Version!, useExactPackageVersions)))
             .ToList();
         using var temporaryNuGetConfig = await TryCreateTemporaryNuGetConfigAsync(requestedChannel, packageSourceOverride, cancellationToken);
         var sources = await GetNuGetSourcesAsync(requestedChannel, packageSourceOverride, cancellationToken);
@@ -493,7 +490,7 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IDisposable
                     }
                     return new XElement("PackageReference",
                         new XAttribute("Include", p.Name),
-                        new XAttribute("Version", GetRestoreVersion(p, useExactPackageVersions)));
+                        new XAttribute("Version", GetRestoreVersion(p.Name, p.Version, useExactPackageVersions)));
                 })));
         }
 
@@ -906,15 +903,15 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IDisposable
         return channels.Where(c => c.Type == PackageChannelType.Explicit).ToArray();
     }
 
-    private static string GetRestoreVersion(IntegrationReference reference, bool useExactPackageVersions)
+    private static string GetRestoreVersion(string packageName, string version, bool useExactPackageVersions)
     {
-        // The `--source` case pins Aspire packages so a private hive cannot be topped up from a
-        // public feed. A reference that already demands exactness pins regardless of package name,
-        // which is what lets `sdk export` restore a third-party integration at exactly one version.
-        var shouldUseExactAspirePackageVersion = useExactPackageVersions
-            && reference.Name.StartsWith("Aspire", StringComparison.OrdinalIgnoreCase);
+        var shouldUseExactAspirePackageVersion = useExactPackageVersions && packageName.StartsWith("Aspire", StringComparison.OrdinalIgnoreCase);
+        if (!shouldUseExactAspirePackageVersion || version.Length == 0 || version[0] is '[' or '(')
+        {
+            return version;
+        }
 
-        return reference.GetRestoreVersionRange(forceExact: shouldUseExactAspirePackageVersion);
+        return $"[{version}]";
     }
 
     // Display-safe form of a NuGet source used in user-visible error footers. Delegates to the

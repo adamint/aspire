@@ -178,6 +178,29 @@ public class AppHostServerProjectTests(ITestOutputHelper outputHelper) : IDispos
     }
 
     [Fact]
+    public async Task CreateProjectFiles_ExactAspirePackageRestoresInsteadOfUsingCheckoutProject()
+    {
+        var project = CreateProject();
+        var integrations = new[]
+        {
+            IntegrationReference.FromPackage("Aspire.Hosting.Redis", "[13.1.0]"),
+            IntegrationReference.FromPackage("Aspire.Hosting.PostgreSQL", "13.1.0")
+        };
+
+        var (projectPath, _) = await project.CreateProjectFilesAsync(integrations).DefaultTimeout();
+
+        var document = XDocument.Load(projectPath);
+        var packageReference = Assert.Single(
+            document.Descendants("PackageReference"),
+            element => element.Attribute("Include")?.Value == "Aspire.Hosting.Redis");
+
+        Assert.Equal("[13.1.0]", packageReference.Attribute("Version")?.Value);
+        Assert.DoesNotContain(
+            document.Descendants("PackageReference"),
+            element => element.Attribute("Include")?.Value == "Aspire.Hosting.PostgreSQL");
+    }
+
+    [Fact]
     public void ProjectModelPath_IsStableForSameAppPath()
     {
         // Arrange

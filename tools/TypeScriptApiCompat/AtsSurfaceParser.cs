@@ -207,31 +207,7 @@ internal static class AtsSurfaceParser
                 .Select(ParseParameter)
                 .ToArray();
 
-        // A capability whose projected TypeScript method name differs from its id carries that name
-        // as a trailing annotation:
-        //   Pkg/withRedisCommanderHostPort(port?: number) -> Pkg/Handle [method=withHostPort]
-        // The annotation is emitted only for the aliased minority, so an unannotated line -- every
-        // line in a surface written before this existed -- projects under its own id.
-        var projectedMethodName = GetMethodNameSegment(capabilityId);
-        var projectedMethodNameWasRecorded = false;
-        var annotationIndex = returnTypeId.IndexOf(MethodAnnotationPrefix, StringComparison.Ordinal);
-        if (annotationIndex >= 0 && returnTypeId.EndsWith(']'))
-        {
-            var start = annotationIndex + MethodAnnotationPrefix.Length;
-            projectedMethodName = returnTypeId[start..^1];
-            returnTypeId = returnTypeId[..annotationIndex];
-            projectedMethodNameWasRecorded = true;
-        }
-
-        return new AtsCapability(capabilityId, parameters, returnTypeId, projectedMethodName, projectedMethodNameWasRecorded);
-    }
-
-    private const string MethodAnnotationPrefix = " [method=";
-
-    private static string GetMethodNameSegment(string capabilityId)
-    {
-        var slashIndex = capabilityId.IndexOf('/');
-        return slashIndex < 0 ? capabilityId : capabilityId[(slashIndex + 1)..];
+        return new AtsCapability(capabilityId, parameters, returnTypeId);
     }
 
     private static AtsParameter ParseParameter(string parameterText)
@@ -242,19 +218,12 @@ internal static class AtsSurfaceParser
             throw new InvalidDataException($"Invalid parameter '{parameterText}'.");
         }
 
-        // Capability parameters are emitted as:
-        //   name?: type?        // optional nullable parameter
-        //   options: Pkg/Options? // required parameter whose nullability still generates an options bag
-        // Optionality lives on the parameter name, and nullability lives on the type token so the
-        // compat guard can mirror the TypeScript projector's `IsOptional || IsNullable` rule.
         var nameText = parameterText[..separatorIndex];
         var isOptional = nameText.EndsWith('?');
         var name = isOptional ? nameText[..^1] : nameText;
-        var typeText = parameterText[(separatorIndex + 2)..];
-        var isNullable = typeText.EndsWith('?');
-        var typeId = isNullable ? typeText[..^1] : typeText;
+        var typeId = parameterText[(separatorIndex + 2)..];
 
-        return new AtsParameter(name, typeId, isOptional, isNullable);
+        return new AtsParameter(name, typeId, isOptional);
     }
 
     private static string StripDescription(string value)

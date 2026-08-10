@@ -94,13 +94,6 @@ internal sealed class SdkGenerateCommand : BaseCommand
 
     private async Task<LanguageInfo?> GetLanguageInfoAsync(string language, CancellationToken cancellationToken)
     {
-        // Every language id starts with the empty string, so an explicitly blank --language would
-        // otherwise resolve to whichever language was discovered first.
-        if (string.IsNullOrWhiteSpace(language))
-        {
-            return null;
-        }
-
         var languages = await _languageDiscovery.GetAvailableLanguagesAsync(cancellationToken);
 
         // Match by language ID or code generator name

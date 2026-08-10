@@ -8,6 +8,8 @@ using Aspire.TypeSystem;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using StreamJsonRpc;
+using StreamJsonRpc.Protocol;
 using Xunit;
 
 namespace Aspire.Hosting.RemoteHost.Tests;
@@ -25,8 +27,10 @@ public class ApiReferenceExportTests
     {
         var service = CreateCodeGenerationService();
 
-        var export = service.ExportApi("TypeScript", "Aspire.Hosting", "13.5.0");
+        var export = service.ExportApi("TypeScript", "Aspire.Hosting", "13.5.0", CancellationToken.None);
+        var repeatedExport = service.ExportApi("TypeScript", "Aspire.Hosting", "13.5.0", CancellationToken.None);
 
+        Assert.Equal(export.GetRawText(), repeatedExport.GetRawText());
         Assert.Equal(1, export.GetProperty("schemaVersion").GetInt32());
         Assert.Equal("typescript", export.GetProperty("language").GetString());
         Assert.Equal("Aspire.Hosting", export.GetProperty("package").GetProperty("name").GetString());
@@ -53,7 +57,7 @@ public class ApiReferenceExportTests
     {
         var service = CreateCodeGenerationService();
 
-        var export = service.ExportApi("TypeScript", "Aspire.Hosting", "13.5.0");
+        var export = service.ExportApi("TypeScript", "Aspire.Hosting", "13.5.0", CancellationToken.None);
 
         // Referenced types reach the export through the closure so the declarations type-check, but
         // they must not be documented here: the package that owns them publishes them.
@@ -87,10 +91,27 @@ public class ApiReferenceExportTests
     }
 
     [Fact]
-    public void ExportApi_UsesPackageProbeManifestAssembliesForRequestedPackage()
+    public void ExportApi_UsesGlobalPackagesPathsForRequestedPackage()
     {
         using var manifestDirectory = new TemporaryDirectory();
         var manifestPath = Path.Combine(manifestDirectory.Path, "integration-package-probe-manifest.json");
+        var packageAssetsPath = Path.Combine(
+            manifestDirectory.Path,
+            "packages",
+            "contoso.aspire.metapackage",
+            "1.2.3");
+
+        var hostingAssemblyPath = CopyPackageAssembly(
+            typeof(IDistributedApplicationBuilder).Assembly.Location,
+            packageAssetsPath,
+            "lib",
+            "net8.0");
+        var yarpAssemblyPath = CopyPackageAssembly(
+            typeof(Yarp.YarpResource).Assembly.Location,
+            packageAssetsPath,
+            "REF",
+            "NET8.0");
+
         WriteProbeManifest(
             manifestPath,
             managedAssemblies:
@@ -98,25 +119,24 @@ public class ApiReferenceExportTests
                 new
                 {
                     Name = "Aspire.Hosting",
-                    Path = typeof(IDistributedApplicationBuilder).Assembly.Location,
-                    PackageId = "Contoso.Aspire.MetaPackage",
-                    PackageVersion = "1.2.3"
+                    Path = hostingAssemblyPath
                 },
                 new
                 {
                     Name = "Aspire.Hosting.Yarp",
-                    Path = typeof(Yarp.YarpResource).Assembly.Location,
-                    PackageId = "Contoso.Aspire.MetaPackage",
-                    PackageVersion = "1.2.3"
+                    Path = yarpAssemblyPath
                 }
             ]);
         var service = CreateCodeGenerationService(new Dictionary<string, string?>
         {
-            ["AtsAssemblies:0"] = "Contoso.Aspire.MetaPackage",
             ["ASPIRE_INTEGRATION_PROBE_MANIFEST_PATH"] = manifestPath
         });
 
-        var export = service.ExportApi("TypeScript", "contoso.aspire.metapackage", "1.2.3");
+        var versionMismatch = Assert.Throws<InvalidOperationException>(
+            () => service.ExportApi("TypeScript", "Contoso.Aspire.MetaPackage", "9.9.9", CancellationToken.None));
+        Assert.Contains("9.9.9", versionMismatch.Message, StringComparison.Ordinal);
+
+        var export = service.ExportApi("TypeScript", "Contoso.Aspire.MetaPackage", "1.2.3", CancellationToken.None);
 
         Assert.Equal("Contoso.Aspire.MetaPackage", export.GetProperty("package").GetProperty("name").GetString());
 
@@ -135,8 +155,9 @@ public class ApiReferenceExportTests
     {
         var service = CreateCodeGenerationService();
 
-        var ex = Assert.Throws<ArgumentException>(() => service.ExportApi("klingon", "Aspire.Hosting", "13.5.0"));
+        var ex = Assert.Throws<LocalRpcException>(() => service.ExportApi("klingon", "Aspire.Hosting", "13.5.0", CancellationToken.None));
 
+        Assert.Equal((int)JsonRpcErrorCode.InvalidParams, ex.ErrorCode);
         Assert.Contains("No code generator found for language: klingon", ex.Message);
         Assert.Contains("Available languages:", ex.Message);
     }
@@ -149,8 +170,9 @@ public class ApiReferenceExportTests
         // Go generates runtime source but ships no IApiReferenceExporter, so asking it for
         // an API export has to fail with a message that names the gap rather than returning an empty
         // document that a documentation site would silently publish.
-        var ex = Assert.Throws<NotSupportedException>(() => service.ExportApi("Go", "Aspire.Hosting", "13.5.0"));
+        var ex = Assert.Throws<LocalRpcException>(() => service.ExportApi("Go", "Aspire.Hosting", "13.5.0", CancellationToken.None));
 
+        Assert.Equal((int)JsonRpcErrorCode.InvalidParams, ex.ErrorCode);
         Assert.Contains("Go", ex.Message, StringComparison.Ordinal);
         Assert.Contains(nameof(IApiReferenceExporter), ex.Message, StringComparison.Ordinal);
     }
@@ -163,7 +185,8 @@ public class ApiReferenceExportTests
     {
         var service = CreateCodeGenerationService();
 
-        Assert.ThrowsAny<ArgumentException>(() => service.ExportApi("TypeScript", packageName!, "13.5.0"));
+        var ex = Assert.Throws<LocalRpcException>(() => service.ExportApi("TypeScript", packageName!, "13.5.0", CancellationToken.None));
+        Assert.Equal((int)JsonRpcErrorCode.InvalidParams, ex.ErrorCode);
     }
 
     [Theory]
@@ -174,7 +197,8 @@ public class ApiReferenceExportTests
     {
         var service = CreateCodeGenerationService();
 
-        Assert.ThrowsAny<ArgumentException>(() => service.ExportApi("TypeScript", "Aspire.Hosting", packageVersion!));
+        var ex = Assert.Throws<LocalRpcException>(() => service.ExportApi("TypeScript", "Aspire.Hosting", packageVersion!, CancellationToken.None));
+        Assert.Equal((int)JsonRpcErrorCode.InvalidParams, ex.ErrorCode);
     }
 
     [Fact]
@@ -182,7 +206,7 @@ public class ApiReferenceExportTests
     {
         var service = CreateCodeGenerationService(authenticated: false);
 
-        Assert.ThrowsAny<Exception>(() => service.ExportApi("TypeScript", "Aspire.Hosting", "13.5.0"));
+        Assert.ThrowsAny<Exception>(() => service.ExportApi("TypeScript", "Aspire.Hosting", "13.5.0", CancellationToken.None));
     }
 
     private static CodeGenerationService CreateCodeGenerationService(
@@ -248,6 +272,19 @@ public class ApiReferenceExportTests
                     PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                     WriteIndented = true
                 }));
+    }
+
+    private static string CopyPackageAssembly(
+        string assemblyPath,
+        string packageAssetsPath,
+        string assetKind,
+        string targetFramework)
+    {
+        var destinationDirectory = Path.Combine(packageAssetsPath, assetKind, targetFramework);
+        Directory.CreateDirectory(destinationDirectory);
+        var destinationPath = Path.Combine(destinationDirectory, Path.GetFileName(assemblyPath));
+        File.Copy(assemblyPath, destinationPath);
+        return destinationPath;
     }
 
     private sealed class TemporaryDirectory : IDisposable

@@ -1,4 +1,4 @@
-﻿export interface Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_Tests$WithDataVolumeOptions {
+export interface WithDataVolumeOptions {
     name?: string;
     isReadOnly?: boolean;
 }

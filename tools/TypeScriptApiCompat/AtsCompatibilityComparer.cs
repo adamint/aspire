@@ -230,31 +230,9 @@ internal static class AtsCompatibilityComparer
                     $"Capability '{capabilityId}' return type changed from '{baselineCapability.ReturnTypeId}' to '{currentCapability.ReturnTypeId}'."));
             }
 
-            // Renaming the projected method renames the generated TypeScript method even though the
-            // capability id is unchanged, so it breaks callers exactly like a removal would. Only an
-            // annotated baseline can be compared: an unannotated one has the name inferred from the
-            // id, so comparing it would report every aliased export as renamed on the single
-            // regeneration that first writes the annotations.
-            if (baselineCapability.ProjectedMethodNameWasRecorded &&
-                !string.Equals(baselineCapability.ProjectedMethodName, currentCapability.ProjectedMethodName, StringComparison.Ordinal))
-            {
-                diagnostics.Add(new ApiCompatDiagnostic(
-                    "capability-method-renamed",
-                    baseline.PackageName,
-                    capabilityId,
-                    $"Capability '{capabilityId}' projected method name changed from '{baselineCapability.ProjectedMethodName}' to '{currentCapability.ProjectedMethodName}'."));
-            }
-
             CompareCapabilityParameters(baseline.PackageName, baselineCapability, currentCapability, diagnostics);
         }
     }
-
-    // A nullable parameter projects to an optional TypeScript parameter (`name?: type`), so the
-    // TypeScript projector treats IsOptional || IsNullable as optional. Comparing on IsOptional alone
-    // would call a newly added nullable parameter a breaking addition and would miss a nullable
-    // parameter becoming non-nullable, which really does break existing callers.
-    private static bool IsEffectivelyOptional(AtsParameter parameter)
-        => parameter.IsOptional || parameter.IsNullable;
 
     private static void CompareCapabilityParameters(
         string packageName,
@@ -287,7 +265,7 @@ internal static class AtsCompatibilityComparer
                     $"Capability parameter '{symbol}' type changed from '{baselineParameter.TypeId}' to '{currentParameter.TypeId}'."));
             }
 
-            if (IsEffectivelyOptional(baselineParameter) && !IsEffectivelyOptional(currentParameter))
+            if (baselineParameter.IsOptional && !currentParameter.IsOptional)
             {
                 diagnostics.Add(new ApiCompatDiagnostic(
                     "capability-parameter-required",
@@ -299,7 +277,7 @@ internal static class AtsCompatibilityComparer
 
         foreach (var currentParameter in currentCapability.Parameters)
         {
-            if (!IsEffectivelyOptional(currentParameter) && !baselineByName.ContainsKey(currentParameter.Name))
+            if (!currentParameter.IsOptional && !baselineByName.ContainsKey(currentParameter.Name))
             {
                 var symbol = $"{baselineCapability.CapabilityId}({currentParameter.Name})";
                 diagnostics.Add(new ApiCompatDiagnostic(

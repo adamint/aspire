@@ -43,6 +43,13 @@ internal enum TypeScriptApiItemKind
 internal sealed record TypeScriptApiPackageIdentity(string Name, string Version);
 
 /// <summary>
+/// Identifies the code generator that produced a canonical export.
+/// </summary>
+/// <param name="Name">The code-generation assembly name.</param>
+/// <param name="Version">The code-generation assembly informational version.</param>
+internal sealed record TypeScriptApiGeneratorIdentity(string Name, string Version);
+
+/// <summary>
 /// A single parameter of a resolved TypeScript signature.
 /// </summary>
 internal sealed record TypeScriptApiParameter
@@ -205,6 +212,9 @@ internal sealed record TypeScriptApiModel
 
     /// <summary>Gets the export language, always <c>typescript</c>.</summary>
     public required string Language { get; init; }
+
+    /// <summary>Gets the code generator identity that produced this export.</summary>
+    public required TypeScriptApiGeneratorIdentity Generator { get; init; }
 
     /// <summary>Gets the exact package identity this export was produced for.</summary>
     public required TypeScriptApiPackageIdentity Package { get; init; }

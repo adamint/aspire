@@ -36,6 +36,10 @@ public interface IApiReferenceExporter
     /// </summary>
     /// <param name="context">The ATS context containing capabilities, types, and enums.</param>
     /// <param name="options">The package identity and ownership scope for the export.</param>
+    /// <param name="cancellationToken">A token to cancel the export between projected items.</param>
     /// <returns>A language-defined JSON document describing the generated API.</returns>
-    JsonElement ExportApi(AtsContext context, ApiReferenceExportOptions options);
+    JsonElement ExportApi(
+        AtsContext context,
+        ApiReferenceExportOptions options,
+        CancellationToken cancellationToken);
 }

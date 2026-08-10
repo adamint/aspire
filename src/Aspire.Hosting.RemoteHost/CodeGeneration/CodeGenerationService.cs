@@ -6,6 +6,7 @@ using Aspire.TypeSystem;
 using Aspire.Hosting.RemoteHost.Diagnostics;
 using Microsoft.Extensions.Logging;
 using StreamJsonRpc;
+using StreamJsonRpc.Protocol;
 
 namespace Aspire.Hosting.RemoteHost.CodeGeneration;
 
@@ -282,17 +283,31 @@ internal sealed class CodeGenerationService
     /// The version label to record for <paramref name="packageName"/>. The caller owns its accuracy;
     /// see <see cref="ApiReferenceExportOptions.PackageVersion"/>.
     /// </param>
+    /// <param name="cancellationToken">A token to cancel the export.</param>
     /// <returns>The language provider's API reference document, verbatim.</returns>
     [JsonRpcMethod(ExportApiMethodName)]
-    public JsonElement ExportApi(string language, string packageName, string packageVersion)
+    public JsonElement ExportApi(
+        string language,
+        string packageName,
+        string packageVersion,
+        CancellationToken cancellationToken)
     {
         using var rpcActivity = _profilingTelemetry.StartJsonRpcServerCall(ExportApiMethodName);
-        using var activity = _profilingTelemetry.StartCodeGenerationExportApi(language);
         try
         {
             _authenticationState.ThrowIfNotAuthenticated();
-            ArgumentException.ThrowIfNullOrWhiteSpace(packageName);
-            ArgumentException.ThrowIfNullOrWhiteSpace(packageVersion);
+            if (string.IsNullOrWhiteSpace(language))
+            {
+                throw CreateInvalidExportRequest("The export language cannot be empty.");
+            }
+            if (string.IsNullOrWhiteSpace(packageName))
+            {
+                throw CreateInvalidExportRequest("The export package name cannot be empty.");
+            }
+            if (string.IsNullOrWhiteSpace(packageVersion))
+            {
+                throw CreateInvalidExportRequest("The export package version cannot be empty.");
+            }
 
             _logger.LogDebug(">> exportApi({Language}, {PackageName}, {PackageVersion})", language, packageName, packageVersion);
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -300,7 +315,7 @@ internal sealed class CodeGenerationService
             var generator = _resolver.GetCodeGenerator(language);
             if (generator is null)
             {
-                throw new ArgumentException(BuildNoCodeGeneratorMessage(language));
+                throw CreateInvalidExportRequest(BuildNoCodeGeneratorMessage(language));
             }
 
             // Resolved through the resolver rather than cast off the generator: the exporter is
@@ -308,7 +323,7 @@ internal sealed class CodeGenerationService
             // type's eagerly resolved interface list. See AtsTypeScriptApiReferenceExporter.
             if (_resolver.GetApiReferenceExporter(language) is not { } exporter)
             {
-                throw new NotSupportedException(
+                throw CreateInvalidExportRequest(
                     $"The '{generator.Language}' language provides no {nameof(IApiReferenceExporter)}, " +
                     "so it cannot produce an API reference export. " +
                     $"Supported languages for API export: {BuildApiExportLanguageList()}.");
@@ -319,13 +334,20 @@ internal sealed class CodeGenerationService
             // package.
             var fullContext = _atsContextFactory.GetContext();
 
-            var exportingAssemblyNames = ResolvePackageExportingAssemblyNames(fullContext, packageName, out var canonicalPackageName);
+            var exportingAssemblyNames = ResolvePackageExportingAssemblyNames(
+                fullContext,
+                packageName,
+                packageVersion,
+                out var canonicalPackageName);
 
             var context = AtsContextFilter.FilterForApiExport(
                 fullContext,
                 exportingAssemblyNames);
 
-            var export = exporter.ExportApi(context, new ApiReferenceExportOptions(canonicalPackageName, packageVersion, exportingAssemblyNames));
+            var export = exporter.ExportApi(
+                context,
+                new ApiReferenceExportOptions(canonicalPackageName, packageVersion, exportingAssemblyNames),
+                cancellationToken);
 
             _logger.LogDebug("<< exportApi({Language}, {PackageName}) completed in {ElapsedMs}ms", language, packageName, sw.ElapsedMilliseconds);
 
@@ -335,7 +357,6 @@ internal sealed class CodeGenerationService
         }
         catch (Exception ex)
         {
-            activity.SetError(ex);
             _logger.LogError(ex, "<< exportApi({Language}, {PackageName}) failed", language, packageName);
             var wrapped = CodeGenerationDiagnosticBuilder.TryCreateRpcException(ex, _assemblyLoader, _logger);
             if (wrapped is not null)
@@ -346,12 +367,22 @@ internal sealed class CodeGenerationService
         }
     }
 
+    private static LocalRpcException CreateInvalidExportRequest(string message)
+        => new(message)
+        {
+            ErrorCode = (int)JsonRpcErrorCode.InvalidParams
+        };
+
     private IReadOnlyList<string> ResolvePackageExportingAssemblyNames(
         AtsContext fullContext,
         string packageName,
+        string packageVersion,
         out string canonicalPackageName)
     {
-        if (_assemblyLoader.TryGetRuntimeAssemblyNamesForPackage(packageName, out var manifestPackageName, out var manifestAssemblyNames))
+        if (_assemblyLoader.TryGetPackageAssemblyNamesFromProbePaths(
+            packageName,
+            packageVersion,
+            out var manifestAssemblyNames))
         {
             var exportingAssemblyNames = new List<string>(manifestAssemblyNames.Count);
             foreach (var assemblyName in manifestAssemblyNames)
@@ -365,10 +396,11 @@ internal sealed class CodeGenerationService
             if (exportingAssemblyNames.Count == 0)
             {
                 throw new InvalidOperationException(
-                    $"'{packageName}' restored, but none of its runtime assemblies reached the scanned API surface, so there is no API to export under it.");
+                    $"Package '{packageName}' version '{packageVersion}' was mapped from restored asset paths, " +
+                    "but none of its assemblies reached the scanned API surface.");
             }
 
-            canonicalPackageName = manifestPackageName;
+            canonicalPackageName = packageName;
             return exportingAssemblyNames;
         }
 
@@ -381,9 +413,8 @@ internal sealed class CodeGenerationService
         if (!AtsContextFilter.TryResolveCanonicalAssemblyName(fullContext, packageName, out var canonicalAssemblyNameFromContext))
         {
             throw new InvalidOperationException(
-                $"'{packageName}' restored, but the scanned API surface contains nothing under that name, so there is no API to export under it. " +
-                "An API export is scoped by assembly name, so this is what a package whose assembly is named something other than " +
-                "its package id looks like from here.");
+                $"No managed assemblies for package '{packageName}' version '{packageVersion}' could be mapped from the restored asset paths, " +
+                "and the scanned API surface contains no assembly with the package id as its name.");
         }
 
         canonicalPackageName = canonicalAssemblyNameFromContext;

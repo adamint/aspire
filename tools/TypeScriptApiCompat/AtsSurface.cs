@@ -21,28 +21,9 @@ internal sealed record AtsEnumType(string TypeId, IReadOnlyList<string> Values);
 
 internal sealed record AtsExportedValue(string Path, string TypeId, string Value);
 
-/// <param name="CapabilityId">The exported capability id, for example <c>Pkg/withRedisCommanderHostPort</c>.</param>
-/// <param name="Parameters">The exported parameters, in declaration order.</param>
-/// <param name="ReturnTypeId">The exported return type id.</param>
-/// <param name="ProjectedMethodName">
-/// The TypeScript method name the projector emits, which <c>[AspireExport(..., MethodName = "...")]</c>
-/// can make differ from the capability id. This is what the options interface is named after, so the
-/// collision guard has to use it rather than the id.
-/// </param>
-/// <param name="ProjectedMethodNameWasRecorded">
-/// Whether the surface actually carried the projected name rather than having it inferred from the
-/// capability id. Surfaces written before the annotation existed carry nothing, and comparing an
-/// inferred name against a recorded one would report every aliased export as renamed the first time
-/// a baseline is regenerated.
-/// </param>
-internal sealed record AtsCapability(
-    string CapabilityId,
-    IReadOnlyList<AtsParameter> Parameters,
-    string ReturnTypeId,
-    string ProjectedMethodName,
-    bool ProjectedMethodNameWasRecorded);
+internal sealed record AtsCapability(string CapabilityId, IReadOnlyList<AtsParameter> Parameters, string ReturnTypeId);
 
-internal sealed record AtsParameter(string Name, string TypeId, bool IsOptional, bool IsNullable);
+internal sealed record AtsParameter(string Name, string TypeId, bool IsOptional);
 
 internal sealed class AtsSurfaceSet
 {

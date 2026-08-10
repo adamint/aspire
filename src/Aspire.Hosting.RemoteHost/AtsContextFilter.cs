@@ -44,28 +44,11 @@ internal static class AtsContextFilter
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(requestedName);
 
-        // Seed with the exporting assembly names rather than gathering them afterwards. They are the
-        // first thing IsCapabilityOwnedBySelectedAssembly consults, so when a capability's recorded
-        // exporter disagrees with its declaring assembly, the exporter is the spelling that decides
-        // ownership and must be the one that wins here too. Everything else comes from
-        // GetKnownAssemblyNames so this cannot drift from the names the filter recognizes -- notably
-        // the ones parsed out of capability and type ids, which are the only trace of an assembly
-        // whose CLR types did not resolve.
-        var candidates = GetKnownAssemblyNames(context, GetExportingAssemblyNames(context));
+        var candidates = GetKnownAssemblyNames(
+            context,
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase));
 
         return candidates.TryGetValue(requestedName, out canonicalName);
-    }
-
-    private static HashSet<string> GetExportingAssemblyNames(AtsContext context)
-    {
-        var exportingAssemblyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var assemblyName in context.CapabilityExportingAssemblyNames.Values)
-        {
-            AddAssemblyName(exportingAssemblyNames, assemblyName);
-        }
-
-        return exportingAssemblyNames;
     }
 
     /// <summary>
@@ -156,13 +139,7 @@ internal static class AtsContextFilter
             DtoTypes = filteredContext.DtoTypes,
             EnumTypes = filteredContext.EnumTypes,
             ExportedValues = filteredContext.ExportedValues,
-            Diagnostics = filteredContext.Diagnostics,
-            CapabilityExportingAssemblyNames = capabilities
-                .Where(capability => context.CapabilityExportingAssemblyNames.ContainsKey(capability.CapabilityId))
-                .ToDictionary(
-                    capability => capability.CapabilityId,
-                    capability => context.CapabilityExportingAssemblyNames[capability.CapabilityId],
-                    StringComparer.Ordinal)
+            Diagnostics = filteredContext.Diagnostics
         };
 
         foreach (var capability in capabilities)
@@ -308,13 +285,7 @@ internal static class AtsContextFilter
             ExportedValues = filteredExportedValues,
             Diagnostics = context.Diagnostics
                 .Where(diagnostic => IsDiagnosticOwnedBySelectedAssembly(context, diagnostic, normalizedAssemblyNames, knownAssemblyNames))
-                .ToList(),
-            CapabilityExportingAssemblyNames = filteredCapabilities
-                .Where(capability => context.CapabilityExportingAssemblyNames.ContainsKey(capability.CapabilityId))
-                .ToDictionary(
-                    capability => capability.CapabilityId,
-                    capability => context.CapabilityExportingAssemblyNames[capability.CapabilityId],
-                    StringComparer.Ordinal)
+                .ToList()
         };
 
         foreach (var capability in filteredCapabilities)
@@ -531,11 +502,6 @@ internal static class AtsContextFilter
         AtsCapabilityInfo capability,
         HashSet<string> assemblyNames)
     {
-        if (context.CapabilityExportingAssemblyNames.TryGetValue(capability.CapabilityId, out var exportingAssemblyName))
-        {
-            return assemblyNames.Contains(exportingAssemblyName);
-        }
-
         if (context.Methods.TryGetValue(capability.CapabilityId, out var method))
         {
             return IsSelectedAssembly(method.DeclaringType?.Assembly, assemblyNames);

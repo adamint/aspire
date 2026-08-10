@@ -15,8 +15,4 @@
     <PackageReference Include="System.CommandLine" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Compile Include="$(SharedDir)CodeGeneration\TypeScriptOptionsInterfaceNaming.cs" Link="TypeScriptOptionsInterfaceNaming.cs" />
-  </ItemGroup>
-
 </Project>

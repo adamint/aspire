@@ -57,11 +57,6 @@ public static class AtsCapabilityScanner
         public Dictionary<string, PropertyInfo> Properties { get; init; } = new();
 
         /// <summary>
-        /// Runtime registry mapping capability IDs to the assemblies that exported them.
-        /// </summary>
-        internal Dictionary<string, string> CapabilityExportingAssemblyNames { get; init; } = new();
-
-        /// <summary>
         /// Converts the scan result to an AtsContext for code generation.
         /// </summary>
         public AtsContext ToAtsContext()
@@ -73,8 +68,7 @@ public static class AtsCapabilityScanner
                 DtoTypes = DtoTypes,
                 EnumTypes = EnumTypes,
                 ExportedValues = ExportedValues,
-                Diagnostics = Diagnostics,
-                CapabilityExportingAssemblyNames = CapabilityExportingAssemblyNames
+                Diagnostics = Diagnostics
             };
 
             // Copy runtime registries
@@ -86,6 +80,7 @@ public static class AtsCapabilityScanner
             {
                 context.Properties[id] = property;
             }
+
             return context;
         }
     }
@@ -151,7 +146,6 @@ public static class AtsCapabilityScanner
         var allDiagnostics = new List<AtsDiagnostic>();
         var allMethods = new Dictionary<string, MethodInfo>();
         var allProperties = new Dictionary<string, PropertyInfo>();
-        var allCapabilityExportingAssemblyNames = new Dictionary<string, string>();
         var seenCapabilities = new Dictionary<string, AtsCapabilityInfo>(); // Track capability ID -> first capability for duplicate detection
         var seenTypeIds = new HashSet<string>();
         var seenDtoTypeIds = new HashSet<string>();
@@ -218,10 +212,6 @@ public static class AtsCapabilityScanner
             {
                 allProperties.TryAdd(id, property);
             }
-            foreach (var (id, assemblyName) in result.CapabilityExportingAssemblyNames)
-            {
-                allCapabilityExportingAssemblyNames.TryAdd(id, assemblyName);
-            }
 
             // Merge diagnostics
             allDiagnostics.AddRange(result.Diagnostics);
@@ -244,8 +234,6 @@ public static class AtsCapabilityScanner
         // Pass 5: Filter method name collisions (overloaded methods) after expansion
         FilterMethodNameCollisions(allCapabilities, allDiagnostics);
 
-        PruneRegistriesToSurvivingCapabilities(allCapabilities, allCapabilityExportingAssemblyNames, allMethods, allProperties);
-
         return new ScanResult
         {
             Capabilities = allCapabilities,
@@ -255,8 +243,7 @@ public static class AtsCapabilityScanner
             ExportedValues = allExportedValues,
             Diagnostics = allDiagnostics,
             Methods = allMethods,
-            Properties = allProperties,
-            CapabilityExportingAssemblyNames = allCapabilityExportingAssemblyNames
+            Properties = allProperties
         };
     }
 
@@ -285,8 +272,6 @@ public static class AtsCapabilityScanner
         // Filter method name collisions (overloaded methods) after expansion
         FilterMethodNameCollisions(result.Capabilities, result.Diagnostics);
 
-        PruneRegistriesToSurvivingCapabilities(result.Capabilities, result.CapabilityExportingAssemblyNames, result.Methods, result.Properties);
-
         var exportedValues = DeduplicateExportedValues(result.ExportedValues, result.Diagnostics);
 
         return new ScanResult
@@ -298,8 +283,7 @@ public static class AtsCapabilityScanner
             ExportedValues = exportedValues,
             Diagnostics = result.Diagnostics,
             Methods = result.Methods,
-            Properties = result.Properties,
-            CapabilityExportingAssemblyNames = result.CapabilityExportingAssemblyNames
+            Properties = result.Properties
         };
     }
 
@@ -529,10 +513,7 @@ public static class AtsCapabilityScanner
             ExportedValues = exportedValues,
             Diagnostics = diagnostics,
             Methods = methods,
-            Properties = properties,
-            CapabilityExportingAssemblyNames = capabilities
-                .GroupBy(static capability => capability.CapabilityId, StringComparer.Ordinal)
-                .ToDictionary(static group => group.Key, _ => assemblyName, StringComparer.Ordinal)
+            Properties = properties
         };
     }
 
@@ -726,55 +707,6 @@ public static class AtsCapabilityScanner
             foreach (var memberType in typeRef.UnionTypes)
             {
                 ResolveTypeRef(memberType, validTypes);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Drops the per-capability registry entries for capabilities that scanning removed, so every
-    /// registry describes exactly the capabilities the scan kept.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// These registries are populated while assemblies are scanned, before
-    /// <see cref="FilterInvalidCapabilities"/> and <see cref="FilterMethodNameCollisions"/> run.
-    /// Those filters drop capabilities but cannot reach the registries, so an assembly whose every
-    /// capability was filtered out would still be named by them.
-    /// </para>
-    /// <para>
-    /// That is not cosmetic. <c>AtsContextFilter.TryResolveCanonicalAssemblyName</c> resolves a
-    /// requested package against the assembly names these registries carry, so such a package would
-    /// resolve, filter to nothing, and let <c>sdk export</c> publish an empty API document under a
-    /// successful exit code. Failing to resolve is what turns that into a reported error. The
-    /// ownership map alone is not enough: the method and property registries name the same assembly
-    /// through their declaring types.
-    /// </para>
-    /// <para>
-    /// Removing the entries is safe because every consumer reaches them by the capability id of a
-    /// capability it already holds, so an entry whose capability is gone is unreachable.
-    /// </para>
-    /// </remarks>
-    private static void PruneRegistriesToSurvivingCapabilities(
-        List<AtsCapabilityInfo> capabilities,
-        Dictionary<string, string> exportingAssemblyNames,
-        Dictionary<string, MethodInfo> methods,
-        Dictionary<string, PropertyInfo> properties)
-    {
-        // Expansion mutates ExpandedTargetTypes in place and never rewrites CapabilityId, so the
-        // surviving ids are exactly the keys that should remain.
-        var survivingCapabilityIds = new HashSet<string>(
-            capabilities.Select(capability => capability.CapabilityId),
-            StringComparer.Ordinal);
-
-        RemoveStaleKeys(exportingAssemblyNames, survivingCapabilityIds);
-        RemoveStaleKeys(methods, survivingCapabilityIds);
-        RemoveStaleKeys(properties, survivingCapabilityIds);
-
-        static void RemoveStaleKeys<T>(Dictionary<string, T> registry, HashSet<string> survivingCapabilityIds)
-        {
-            foreach (var capabilityId in registry.Keys.Where(id => !survivingCapabilityIds.Contains(id)).ToList())
-            {
-                registry.Remove(capabilityId);
             }
         }
     }

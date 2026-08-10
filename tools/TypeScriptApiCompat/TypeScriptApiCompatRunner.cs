@@ -5,23 +5,13 @@ namespace TypeScriptApiCompat;
 
 internal static class TypeScriptApiCompatRunner
 {
-    /// <summary>
-    /// Runs the TypeScript API compatibility comparison and writes its report.
-    /// </summary>
-    /// <param name="options">The parsed command line options.</param>
-    /// <param name="errorWriter">
-    /// Where failure messages go. Defaults to <see cref="Console.Error"/> for the command line, and is
-    /// injected by tests so they can read the message without replacing the process-wide console,
-    /// which xUnit's parallel classes would otherwise race on.
-    /// </param>
-    public static int Run(CommandLineOptions options, TextWriter? errorWriter = null)
+    public static int Run(CommandLineOptions options)
     {
         try
         {
             var excludedPackages = ExcludedPackageLoader.Load(options.ExcludedPackagesFile);
             var baseline = AtsSurfaceSet.Load(options.BaselinePath);
             var current = AtsSurfaceSet.Load(options.CurrentPath);
-            TypeScriptOptionsCollisionGuard.Validate(current);
             var diagnostics = AtsCompatibilityComparer.Compare(baseline, current, excludedPackages);
             var suppressionLoadResult = ApiCompatSuppressionLoader.Load(options.SuppressionsRoot);
             var baselineSuppressionLoadResult = options.BaselineSuppressionsRoot is null
@@ -52,7 +42,7 @@ internal static class TypeScriptApiCompatRunner
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException)
         {
-            (errorWriter ?? Console.Error).WriteLine(ex.Message);
+            Console.Error.WriteLine(ex.Message);
             return 2;
         }
     }

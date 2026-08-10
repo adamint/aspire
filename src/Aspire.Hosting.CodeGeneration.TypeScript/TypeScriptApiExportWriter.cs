@@ -18,9 +18,6 @@ namespace Aspire.Hosting.CodeGeneration.TypeScript;
 /// </remarks>
 internal static class TypeScriptApiExportWriter
 {
-    /// <summary>The schema version emitted by this writer.</summary>
-    public const int SchemaVersion = TypeScriptApiProjector.ExportSchemaVersion;
-
     public static JsonObject Write(TypeScriptApiModel model)
     {
         ArgumentNullException.ThrowIfNull(model);
@@ -46,6 +43,11 @@ internal static class TypeScriptApiExportWriter
         {
             ["schemaVersion"] = model.SchemaVersion,
             ["language"] = model.Language,
+            ["generator"] = new JsonObject
+            {
+                ["name"] = model.Generator.Name,
+                ["version"] = model.Generator.Version
+            },
             ["package"] = new JsonObject
             {
                 ["name"] = model.Package.Name,

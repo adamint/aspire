@@ -70,12 +70,32 @@ internal sealed class AssemblyLoader
         }
     }
 
-    public bool TryGetRuntimeAssemblyNamesForPackage(
+    public bool TryGetPackageAssemblyNamesFromProbePaths(
         string packageId,
-        [NotNullWhen(true)]
-        out string? canonicalPackageId,
+        string packageVersion,
         out IReadOnlyList<string> assemblyNames)
-        => _packageProbeManifest.TryGetRuntimeAssemblyNamesForPackage(packageId, out canonicalPackageId, out assemblyNames);
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(packageId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(packageVersion);
+
+        var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var assembly in _packageProbeManifest.ManagedAssemblies)
+        {
+            if (assembly.Culture is not null ||
+                !TryGetPackageIdentityFromAssetPath(assembly.Path, out var pathPackageId, out var pathPackageVersion) ||
+                !string.Equals(pathPackageId, packageId, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(pathPackageVersion, packageVersion, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            names.Add(assembly.Name);
+        }
+
+        assemblyNames = names.ToList();
+        return assemblyNames.Count > 0;
+    }
 
     /// <summary>
     /// Snapshots the currently loaded ATS integration assemblies as
@@ -134,33 +154,9 @@ internal sealed class AssemblyLoader
         var assemblyNames = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        var configuredAssemblyNames = configuration.GetSection("AtsAssemblies").Get<string[]>() ?? [];
-        foreach (var name in configuredAssemblyNames)
+        foreach (var name in configuration.GetSection("AtsAssemblies").Get<string[]>() ?? [])
         {
-            if (string.IsNullOrWhiteSpace(name))
-            {
-                continue;
-            }
-
-            // For package-backed polyglot AppHosts, AtsAssemblies can name the NuGet package the
-            // user requested rather than every assembly inside that package. The probe manifest is
-            // the only data RemoteHost receives that preserves that package-to-assembly
-            // relationship, so expand configured package ids before auto-discovering transitive
-            // Aspire.Hosting assemblies.
-            if (packageProbeManifest?.TryGetRuntimeAssemblyNamesForPackage(name, out _, out var packageAssemblyNames) == true)
-            {
-                foreach (var packageAssemblyName in packageAssemblyNames)
-                {
-                    if (seen.Add(packageAssemblyName))
-                    {
-                        assemblyNames.Add(packageAssemblyName);
-                    }
-                }
-
-                continue;
-            }
-
-            if (seen.Add(name))
+            if (!string.IsNullOrWhiteSpace(name) && seen.Add(name))
             {
                 assemblyNames.Add(name);
             }
@@ -175,6 +171,36 @@ internal sealed class AssemblyLoader
         }
 
         return assemblyNames;
+    }
+
+    private static bool TryGetPackageIdentityFromAssetPath(
+        string assemblyPath,
+        [NotNullWhen(true)] out string? packageId,
+        [NotNullWhen(true)] out string? packageVersion)
+    {
+        // NuGet's global-packages layout is:
+        //   <root>/<package-id>/<version>/lib|ref/<tfm>/<assembly>
+        // Matching from the assembly upward keeps this export-only lookup independent of the
+        // configured global-packages root without guessing across unrelated restored packages.
+        var targetFrameworkDirectory = Directory.GetParent(assemblyPath);
+        var assetKindDirectory = targetFrameworkDirectory?.Parent;
+        var versionDirectory = assetKindDirectory?.Parent;
+        var packageDirectory = versionDirectory?.Parent;
+
+        if (assetKindDirectory is null ||
+            versionDirectory is null ||
+            packageDirectory is null ||
+            (!string.Equals(assetKindDirectory.Name, "lib", StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(assetKindDirectory.Name, "ref", StringComparison.OrdinalIgnoreCase)))
+        {
+            packageId = null;
+            packageVersion = null;
+            return false;
+        }
+
+        packageId = packageDirectory.Name;
+        packageVersion = versionDirectory.Name;
+        return true;
     }
 
     internal static IReadOnlyList<string> DiscoverAspireHostingAssemblies(IEnumerable<string?> directories, IEnumerable<string>? manifestAssemblyNames = null)
