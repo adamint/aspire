@@ -238,6 +238,33 @@ suite('AspireDebugSession tests', () => {
         }
     });
 
+    test('a disposed Windows CLI process that exits releases extension ownership', async () => {
+        const platformStub = sinon.stub(process, 'platform').value('win32');
+        const cliProcess = createFakeCliProcess(4329, 0);
+        const spawnStub = sinon.stub(cliModule, 'spawnCliProcess').returns(cliProcess);
+        const removeAspireDebugSession = sinon.stub();
+        sinon.stub(cliModule, 'terminateCliProcess');
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = createSessionForSpawn(
+            async () => '/usr/local/bin/aspire',
+            removeAspireDebugSession);
+
+        try {
+            await aspireDebugSession.spawnAspireCommand(['run'], '/workspace', false, 'aspire run');
+
+            aspireDebugSession.dispose();
+            spawnStub.firstCall.args[3]?.exitCallback?.(0);
+
+            // dispose() keeps a stopped session registered while the delayed CLI termination is
+            // pending. When the Windows close callback retires that PID without signalling it, the
+            // callback has to release the same ownership because the later dispose() call is a no-op.
+            sinon.assert.calledOnceWithExactly(removeAspireDebugSession, aspireDebugSession);
+        }
+        finally {
+            platformStub.restore();
+        }
+    });
+
     test('a forced CLI process tree termination is not repeated by the exit callback', async () => {
         const cliProcess = createFakeCliProcess(4326, 0);
         const spawnStub = sinon.stub(cliModule, 'spawnCliProcess').returns(cliProcess);
@@ -1739,7 +1766,9 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         }
     }
 
-    function createSessionForSpawn(getAspireCliExecutablePath: () => Promise<string> = async () => '/usr/local/bin/aspire'): AspireDebugSession {
+    function createSessionForSpawn(
+        getAspireCliExecutablePath: () => Promise<string> = async () => '/usr/local/bin/aspire',
+        removeAspireDebugSession: (session: AspireDebugSession) => void = () => { }): AspireDebugSession {
         const parentDebugSession = {
             id: 'aspire-session',
             configuration: {},
@@ -1753,7 +1782,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
                 getAspireCliExecutablePath,
                 createEnvironment: () => ({}),
             } as any,
-            () => { });
+            removeAspireDebugSession);
     }
 
     function createFakeCliProcess(pid: number, exitCode: number | null = null): ChildProcessWithoutNullStreams & { kill: sinon.SinonStub } {

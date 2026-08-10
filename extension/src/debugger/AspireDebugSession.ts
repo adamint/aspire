@@ -236,6 +236,9 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   private abandonCliProcessTree(): void {
     this.cancelScheduledCliProcessTermination();
     this._cliProcessTreeTerminationAttempted = true;
+    if (this._disposed) {
+      this.releaseExtensionContextOwnership();
+    }
   }
 
   private releaseExtensionContextOwnership(): void {

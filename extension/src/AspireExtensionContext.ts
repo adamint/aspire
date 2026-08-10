@@ -95,6 +95,17 @@ export class AspireExtensionContext implements vscode.Disposable {
         this._debugSessionStateSubscriptions.set(debugSession.debugSessionId, debugSession.onDidChangeState(() => this._onDidChangeDebugSessions.fire()));
         this._debugSessionOutputSubscriptions.set(debugSession.debugSessionId, debugSession.onDidSendDebugConsoleOutput(event => this._onDidReceiveDebugConsoleOutput.fire(event)));
         this._onDidChangeDebugSessions.fire();
+
+        if (this._isShuttingDown) {
+            // A session can be registered while deactivation is already awaiting an earlier stop
+            // request. Ask it to stop immediately rather than waiting for the next drain-loop scan:
+            // the shared deadline may expire first, in which case the loop goes straight to the
+            // force sweep and this otherwise healthy late session would never get cooperative
+            // cleanup for resources outside the CLI process tree, such as containers.
+            void debugSession.requestCliStopForExtensionShutdown().catch(error => {
+                extensionLogOutputChannel.warn(`Failed to stop Aspire CLI during extension deactivation: ${error}`);
+            });
+        }
     }
 
     removeAspireDebugSession(debugSession: AspireDebugSession) {

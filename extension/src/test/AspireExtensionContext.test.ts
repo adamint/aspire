@@ -233,6 +233,49 @@ suite('AspireExtensionContext', () => {
         assert.ok(order.indexOf('stop late') < order.indexOf('rpc server'), `The late stop must happen before the transport is disposed: ${JSON.stringify(order)}`);
     });
 
+    test('deactivation asks a late debug session to stop even when the original batch times out', async () => {
+        const order: string[] = [];
+        const context = createContext(order);
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        addSession(context, 'hung', () => {
+            order.push('stop hung');
+            return new Promise<void>(() => { });
+        }, () => order.push('dispose hung'), () => order.push('terminate hung'));
+
+        try {
+            const shutdown = deactivateContext(context);
+            await Promise.resolve();
+            assert.deepStrictEqual(order, ['stop hung']);
+
+            addSession(context, 'late', () => {
+                order.push('stop late');
+                return Promise.resolve();
+            }, () => order.push('dispose late'), () => order.push('terminate late'));
+
+            await clock.tickAsync(5_000);
+            await shutdown;
+
+            // The timeout exits the drain loop immediately, so a late session must receive its
+            // cooperative stop from addAspireDebugSession itself. Otherwise it would only be
+            // force-terminated and resources outside the process tree could keep running.
+            assert.deepStrictEqual(order, [
+                'stop hung',
+                'stop late',
+                'terminate hung',
+                'terminate late',
+                'dispose hung',
+                'dispose late',
+                'rpc server',
+                'dcp server',
+                'terminal provider',
+                'editor command provider',
+            ]);
+        }
+        finally {
+            clock.restore();
+        }
+    });
+
     test('deactivation terminates the CLI process group after the cooperative stop resolves', async () => {
         const order: string[] = [];
         const context = createContext(order);
