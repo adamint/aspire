@@ -260,6 +260,22 @@ suite('AppHost log output coordinator tests', () => {
             []);
     });
 
+    test('does not absorb six-space-indented stdout into a completed console record', () => {
+        // Console.WriteLine("      progress") right after a log call produces a line the formatter
+        // cannot be told apart from the record's own body. Folding it in would change the text the
+        // deduplicator matches on, so the log would render a second time with the stray line in it.
+        const coordinator = new AppHostLogOutputCoordinator();
+        const entry = createEntry({ logLevel: 'Information', message: 'Done' });
+
+        assert.deepStrictEqual(coordinator.handleBackchannelEntry(entry), {
+            output: 'Example.Category: Information: Done\n',
+            category: 'stdout'
+        });
+        assert.deepStrictEqual(
+            renderConsole(coordinator, 'info: Example.Category[7]\n      Done\n      progress\n', 'stdout'),
+            [{ category: 'stdout', output: '      progress\n' }]);
+    });
+
     test('correlates an exception whose type name carries a native error code', () => {
         // Win32Exception and everything derived from it render as
         // "System.Net.Sockets.SocketException (111): Connection refused", so the exception

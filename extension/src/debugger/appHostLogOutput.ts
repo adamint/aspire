@@ -244,7 +244,8 @@ export class AppHostLogOutputCoordinator {
 
                 const pendingDebugRecord = this._pendingDebugRecords.get(category);
                 if (pendingDebugRecord) {
-                    if (startsUnrelatedDebuggerOutput(line) || this.hasUnmatchedBackchannelTwin(pendingDebugRecord)) {
+                    if (startsUnrelatedDebuggerOutput(line) ||
+                        this.hasCompletedBackchannelTwin(parseDebugLoggerRecord(pendingDebugRecord.text))) {
                         flushPassthrough();
                         this.flushPendingDebugRecord(category, outputs);
                     } else {
@@ -255,7 +256,7 @@ export class AppHostLogOutputCoordinator {
             }
 
             const pending = this._pendingRecords.get(category);
-            if (pending && isConsoleLoggerContinuation(line)) {
+            if (pending && isConsoleLoggerContinuation(line) && !this.startsUnrelatedConsoleOutput(pending, line)) {
                 pending.body += line;
                 continue;
             }
@@ -314,8 +315,11 @@ export class AppHostLogOutputCoordinator {
      *
      * Trace and Debug have no backchannel twin, so they still rely on the idle flush.
      */
-    private hasUnmatchedBackchannelTwin(pending: PendingDebugRecord): boolean {
-        const record = parseDebugLoggerRecord(pending.text);
+    /// Reports whether the record being assembled has already arrived complete over the
+    /// backchannel. Once it has, the record is finished by definition and any further line belongs
+    /// to something else, so appending it would destroy the identity the deduplicator matches on
+    /// and the record would render a second time with the unrelated line inside it.
+    private hasCompletedBackchannelTwin(record: AppHostLoggerRecord | undefined): boolean {
         if (!record) {
             return false;
         }
@@ -323,6 +327,7 @@ export class AppHostLogOutputCoordinator {
         return this._correlatedRecords.some(candidate =>
             candidate.sources.has('backchannel') &&
             !candidate.sources.has('debugLogger') &&
+            !candidate.sources.has('consoleLogger') &&
             isCompletedTwin(candidate.record, record));
     }
 
@@ -344,6 +349,26 @@ export class AppHostLogOutputCoordinator {
         if (filtered) {
             outputs.push(filtered);
         }
+    }
+
+    /// Decides whether an indented line that looks like a SimpleConsoleFormatter continuation is
+    /// really a different writer's output. Six-space indentation is the only signal the formatter
+    /// gives, so `Console.WriteLine("      progress")` right after a log call is indistinguishable
+    /// from the record's own body until the backchannel copy of that record arrives complete. Once
+    /// it has, the record is finished and absorbing the line would change the text the deduplicator
+    /// matches on, rendering the log a second time with the stray line restyled inside it.
+    private startsUnrelatedConsoleOutput(pending: PendingConsoleRecord, line: string): boolean {
+        // Two kinds of line legitimately extend a record whose message already equals its twin's.
+        // A blank one is the tail of a message that ended with a newline, which normalizeRecordText
+        // strips from both copies before they are compared. An exception block is the part of the
+        // record the AppHost could not send over the backchannel separately, so the twin carries
+        // the message alone. Neither can prove a different writer is now emitting.
+        const content = normalizeLineEndings(line).split('\n', 1)[0];
+        if (content.trim().length === 0 || startsExceptionBlock(content.slice(6))) {
+            return false;
+        }
+
+        return this.hasCompletedBackchannelTwin(parseConsoleLoggerRecord(`${pending.header}${pending.body}`));
     }
 
     private flushPendingRecord(category: string, outputs: AppHostParentOutput[]): void {
@@ -710,6 +735,10 @@ function startsUnrelatedDebuggerOutput(line: string): boolean {
         || /^-{5,}$/.test(trimmedLine);
 }
 
+function startsExceptionBlock(line: string): boolean {
+    return /^(?:[A-Za-z_][\w`]*(?:\.[A-Za-z_][\w`]*)*(?:Exception|Error)(?: \([^)]*\))?:|Unhandled exception\.)/.test(line);
+}
+
 function splitMessageAndException(value: string): { message: string; exception?: string } {
     // Exception.ToString() starts with the type name followed by ": " and the message,
     // except for the Win32Exception family, which inserts the native error code:
@@ -718,8 +747,7 @@ function splitMessageAndException(value: string): { message: string; exception?:
     //   System.ComponentModel.Win32Exception (2): No such file or directory
     // https://learn.microsoft.com/dotnet/api/system.componentmodel.win32exception.tostring
     const lines = normalizeLineEndings(value).split('\n');
-    const exceptionIndex = lines.findIndex(line =>
-        /^(?:[A-Za-z_][\w`]*(?:\.[A-Za-z_][\w`]*)*(?:Exception|Error)(?: \([^)]*\))?:|Unhandled exception\.)/.test(line));
+    const exceptionIndex = lines.findIndex(startsExceptionBlock);
 
     if (exceptionIndex < 0) {
         return { message: value };
