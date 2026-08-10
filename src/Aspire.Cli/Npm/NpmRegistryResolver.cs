@@ -37,18 +37,19 @@ namespace Aspire.Cli.Npm;
 /// </para>
 /// <para>
 /// The one credential that can outlive the parse is one the user wrote into the registry address
-/// itself, as <c>https://user:token@host/</c> or as a signed query string. That address is the
-/// request target, so removing the credential would turn a working private-feed lookup into a
-/// 401 rather than make anything safer.
-/// <see cref="NpmRegistryResolution.DisplayUri"/> exists to keep it out of the debug log and the
-/// timeout message.
+/// itself, as <c>https://user:token@host/</c> or as a signed query string. It survives only in
+/// <see cref="NpmRegistryResolution.RegistryUri"/>, which models the registry npm selected rather
+/// than anything sent anywhere. <see cref="NpmRegistryResolution.RequestUri"/> is that address
+/// with the userinfo and query removed and is the only form the client composes a request from,
+/// and <see cref="NpmRegistryResolution.DisplayUri"/> is the only form that reaches the debug log
+/// and the timeout message.
 /// </para>
 /// <para>
-/// The request itself carries no <c>Authorization</c> header and no package metadata beyond the
-/// package name, and it follows the scheme of the configured registry. A registry configured as
-/// <c>http://</c> is therefore read over plaintext HTTP; npm supports http registries, and
-/// refusing them here would silently disable the update check for an internal mirror rather than
-/// protect it.
+/// The lookup is therefore anonymous: no <c>Authorization</c> header, no credential in the
+/// request address, and no payload beyond the package name. It does follow the scheme of the
+/// configured registry, so a registry configured as <c>http://</c> is read over plaintext HTTP;
+/// npm supports http registries, and refusing them here would silently disable the update check
+/// for an internal mirror rather than protect it.
 /// </para>
 /// See https://docs.npmjs.com/cli/using-npm/config for the precedence rules implemented here.
 /// </remarks>
@@ -60,6 +61,9 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
     internal static Uri DefaultRegistryUri { get; } = new("https://registry.npmjs.org/");
 
     internal const string RegistryKey = "registry";
+
+    /// <summary>The value ini stores for a key written without an <c>=</c>.</summary>
+    private const string IniBooleanTrue = "true";
     internal const string EnvironmentVariablePrefix = "npm_config_";
 
     private const string ScopedRegistryKeySuffix = ":registry";
@@ -251,7 +255,15 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             // npm hands every layer's values to parseField, which trims them and substitutes
             // ${VAR}, so an environment layer is no more literal than a file layer. Path-typed
             // options such as userconfig are expanded where they are consumed.
-            var rawValue = value?.Trim();
+            // npm's loadEnv skips an npm_config_* variable whose value is the empty string, so an
+            // empty variable is absent rather than configured-and-unusable the way "registry=" in
+            // a .npmrc is.
+            if (value is null || value.Length == 0)
+            {
+                continue;
+            }
+
+            var rawValue = value.Trim();
 
             // npm's envReplace leaves each undefined "${VAR}" in place instead of dropping the
             // entry, so the value stays selected at this precedence and npm's own request fails.
@@ -259,7 +271,7 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             // lower-precedence layer, and it keeps a defined ${NPM_TOKEN} that sits beside an
             // undefined reference out of the retained string.
             // See https://github.com/npm/config/blob/main/lib/env-replace.js.
-            var configuredValue = rawValue is not null && TryExpandEnvironmentReferences(rawValue, out var expandedValue)
+            var configuredValue = TryExpandEnvironmentReferences(rawValue, out var expandedValue)
                 ? expandedValue
                 : rawValue;
 
@@ -365,7 +377,7 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             // "//registry.example.com/:_authToken=..." entry never becomes a token-bearing string.
             // npm substitutes ${VAR} in keys as well as values, so "@${NPM_SCOPE}:registry" has to
             // be expanded before the allow-list decides whether the entry is interesting at all.
-            if (!TryParseNpmrcKey(line, out var rawKey, out var rawValue) ||
+            if (!TryParseNpmrcKey(line, out var rawKey, out var rawValue, out var hasAssignment) ||
                 !TryExpandEnvironmentReferences(rawKey, out var key) ||
                 !IsInterestingKey(key) ||
                 !CanRetainExpandedKey(rawKey, key))
@@ -373,7 +385,10 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
                 continue;
             }
 
-            var parsedValue = ParseNpmrcValue(rawValue);
+            // ini yields the boolean true for a bare key line. npm rejects that as a url exactly
+            // as it rejects the empty string from a "registry=" line, so both have to reach the
+            // unusable marker rather than look like an absent key.
+            var parsedValue = hasAssignment ? ParseNpmrcValue(rawValue) : IniBooleanTrue;
 
             // See the matching comment in MergeEnvironment: npm leaves an undefined "${VAR}"
             // literal rather than dropping the entry, so the layer stays selected and unusable.
@@ -439,10 +454,15 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
         return contents.StartsWith("\uFEFF"u8) ? contents[3..] : contents;
     }
 
-    private static bool TryParseNpmrcKey(ReadOnlySpan<char> line, out string key, out ReadOnlySpan<char> rawValue)
+    private static bool TryParseNpmrcKey(
+        ReadOnlySpan<char> line,
+        out string key,
+        out ReadOnlySpan<char> rawValue,
+        out bool hasAssignment)
     {
         key = string.Empty;
         rawValue = default;
+        hasAssignment = false;
 
         var trimmed = line.Trim();
 
@@ -455,12 +475,17 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
 
         var separatorIndex = trimmed.IndexOf('=');
 
-        if (separatorIndex <= 0)
+        // A line with nothing before the '=' names the empty key, which is never interesting.
+        if (separatorIndex == 0)
         {
             return false;
         }
 
-        var parsedKey = trimmed[..separatorIndex].Trim();
+        // ini stores a line with no '=' as the boolean true rather than skipping it, so a bare
+        // "registry" line does configure the key. npm then rejects true as a url.
+        hasAssignment = separatorIndex > 0;
+
+        var parsedKey = hasAssignment ? trimmed[..separatorIndex].Trim() : trimmed;
 
         if (parsedKey.IsEmpty)
         {
@@ -480,7 +505,7 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             return false;
         }
 
-        rawValue = trimmed[(separatorIndex + 1)..].Trim();
+        rawValue = hasAssignment ? trimmed[(separatorIndex + 1)..].Trim() : default;
 
         return true;
     }
@@ -772,7 +797,7 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
     {
         configurationValue = null;
 
-        if (string.IsNullOrWhiteSpace(value))
+        if (value is null)
         {
             return false;
         }
@@ -781,6 +806,12 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
 
         if (!IsRegistryKey(key))
         {
+            // A path-typed redirect with no value names no file, so nothing is configured.
+            if (trimmed.Length == 0)
+            {
+                return false;
+            }
+
             configurationValue = new ConfigurationValue(trimmed, source);
             return true;
         }

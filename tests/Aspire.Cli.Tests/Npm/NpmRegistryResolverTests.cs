@@ -448,8 +448,6 @@ public class NpmRegistryResolverTests : IDisposable
     [InlineData("; registry=https://npm.contoso.example/comment/")]
     [InlineData("# registry=https://npm.contoso.example/comment/")]
     [InlineData("[section]")]
-    [InlineData("registry")]
-    [InlineData("registry=")]
     [InlineData("=https://npm.contoso.example/")]
     public void Resolve_IgnoresNpmrcLinesThatDoNotDefineAKey(string line)
     {
@@ -461,11 +459,16 @@ public class NpmRegistryResolverTests : IDisposable
     [Theory]
     [InlineData("registry=not-a-url")]
     [InlineData("registry=file:///tmp/local")]
+    // ini stores a bare key as the boolean true and an empty assignment as the empty string. npm
+    // rejects both when it validates the url, so neither can be treated as an absent key.
+    [InlineData("registry")]
+    [InlineData("registry=")]
     public void Resolve_FailsWhenTheConfiguredRegistryIsNotAnHttpAddress(string line)
     {
         // These lines do define the key, and npm keeps a defined value selected however unusable
-        // it is. Falling back to public npm would advertise an update whose recommended
-        // "npm install -g" runs against the same unusable registry and fails.
+        // it is - "npm config" throws ERR_INVALID_URL rather than reverting to the public default.
+        // Falling back here would advertise an update whose recommended "npm install -g" runs
+        // against the same unusable registry and fails.
         WriteHomeNpmrc(line);
 
         var exception = Assert.Throws<InvalidOperationException>(() => CreateResolver().Resolve(PackageName));
@@ -559,6 +562,19 @@ public class NpmRegistryResolverTests : IDisposable
         WriteHomeNpmrc($"globalconfig={globalNpmrc}", "registry=not-a-url");
 
         Assert.Throws<InvalidOperationException>(() => CreateResolver().Resolve(PackageName));
+    }
+
+    [Fact]
+    public void Resolve_IgnoresAnEmptyEnvironmentRegistryVariable()
+    {
+        // npm's loadEnv skips an npm_config_* variable set to the empty string, so it never reaches
+        // the layer at all - unlike "registry=" in a .npmrc, which does configure the key.
+        var resolver = CreateResolver(environment: new Dictionary<string, string>
+        {
+            ["npm_config_registry"] = string.Empty
+        });
+
+        Assert.Equal(PublicRegistry, resolver.Resolve(PackageName).RegistryUri.AbsoluteUri);
     }
 
     [Fact]
