@@ -454,7 +454,9 @@ internal sealed partial class TypeScriptApiProjector
                 continue;
             }
 
-            items.Add(ProjectEntryPoint(package, entryPoint));
+            var (item, declaration) = ProjectEntryPoint(entryPoint);
+            items.Add(item);
+            declarations[declaration.Id] = declaration;
         }
 
         foreach (var enumType in _resolved.Context.EnumTypes
@@ -882,13 +884,12 @@ internal sealed partial class TypeScriptApiProjector
         };
     }
 
-    private TypeScriptApiItem ProjectEntryPoint(TypeScriptApiPackageIdentity package, AtsCapabilityInfo capability)
+    private (TypeScriptApiItem Item, TypeScriptApiDeclaration Declaration) ProjectEntryPoint(AtsCapabilityInfo capability)
     {
-        _ = package;
         var signature = ResolveEntryPointSignature(capability);
         var owningAssemblyName = GetCapabilityOwningAssemblyName(capability);
 
-        return new TypeScriptApiItem
+        var item = new TypeScriptApiItem
         {
             Id = $"entrypoint:{owningAssemblyName}:{signature.MethodName}",
             TypeId = capability.CapabilityId,
@@ -900,6 +901,13 @@ internal sealed partial class TypeScriptApiProjector
             Remarks = capability.Documentation?.Remarks,
             Members = []
         };
+
+        return (item, new TypeScriptApiDeclaration
+        {
+            Id = $"{owningAssemblyName}:entrypoint:{signature.MethodName}",
+            Content = $"export {item.Declaration};",
+            OwningAssemblyName = owningAssemblyName
+        });
     }
 
     /// <summary>

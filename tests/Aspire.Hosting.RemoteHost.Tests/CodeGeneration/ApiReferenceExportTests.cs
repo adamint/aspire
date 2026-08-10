@@ -109,7 +109,9 @@ public class ApiReferenceExportTests
         var yarpAssemblyPath = CopyPackageAssembly(
             typeof(Yarp.YarpResource).Assembly.Location,
             packageAssetsPath,
-            "REF",
+            "runtimes",
+            "test-rid",
+            "lib",
             "NET8.0");
 
         WriteProbeManifest(
@@ -277,10 +279,9 @@ public class ApiReferenceExportTests
     private static string CopyPackageAssembly(
         string assemblyPath,
         string packageAssetsPath,
-        string assetKind,
-        string targetFramework)
+        params string[] assetPathSegments)
     {
-        var destinationDirectory = Path.Combine(packageAssetsPath, assetKind, targetFramework);
+        var destinationDirectory = Path.Combine([packageAssetsPath, .. assetPathSegments]);
         Directory.CreateDirectory(destinationDirectory);
         var destinationPath = Path.Combine(destinationDirectory, Path.GetFileName(assemblyPath));
         File.Copy(assemblyPath, destinationPath);

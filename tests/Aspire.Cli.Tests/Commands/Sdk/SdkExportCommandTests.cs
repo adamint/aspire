@@ -92,6 +92,28 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task SdkExportDoesNotAddTheRequestedGeneratorPackageTwice()
+    {
+        var interactionService = new TestInteractionService();
+        using var provider = CreateProvider(
+            interactionService,
+            out var workspace,
+            out _,
+            out var project);
+        using var workspaceLease = workspace;
+
+        var exitCode = await InvokeAsync(
+            provider,
+            "sdk export --language typescript --package Aspire.Hosting.CodeGeneration.TypeScript@2.0.0");
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        var package = Assert.Single(
+            project.Integrations,
+            integration => integration.Name == "Aspire.Hosting.CodeGeneration.TypeScript");
+        Assert.Equal("[2.0.0]", package.Version);
+    }
+
+    [Fact]
     public async Task SdkExportDefaultsToCoreAtTheRunningSdkVersion()
     {
         var interactionService = new TestInteractionService();

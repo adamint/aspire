@@ -37,7 +37,20 @@ public interface IApiReferenceExporter
     /// <param name="context">The ATS context containing capabilities, types, and enums.</param>
     /// <param name="options">The package identity and ownership scope for the export.</param>
     /// <param name="cancellationToken">A token to cancel the export between projected items.</param>
-    /// <returns>A language-defined JSON document describing the generated API.</returns>
+    /// <returns>
+    /// A language-defined JSON document describing the generated API. The returned element must be
+    /// detached from any owning <see cref="JsonDocument"/>, for example by calling
+    /// <see cref="JsonElement.Clone"/>.
+    /// </returns>
+    /// <exception cref="OperationCanceledException">
+    /// Thrown when <paramref name="cancellationToken"/> requests cancellation.
+    /// </exception>
+    /// <example>
+    /// <code>
+    /// using var document = JsonDocument.Parse(json);
+    /// return document.RootElement.Clone();
+    /// </code>
+    /// </example>
     JsonElement ExportApi(
         AtsContext context,
         ApiReferenceExportOptions options,

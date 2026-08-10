@@ -178,20 +178,29 @@ internal sealed class AssemblyLoader
         [NotNullWhen(true)] out string? packageId,
         [NotNullWhen(true)] out string? packageVersion)
     {
-        // NuGet's global-packages layout is:
+        // NuGet managed assets use either:
         //   <root>/<package-id>/<version>/lib|ref/<tfm>/<assembly>
+        //   <root>/<package-id>/<version>/runtimes/<rid>/lib/<tfm>/<assembly>
         // Matching from the assembly upward keeps this export-only lookup independent of the
         // configured global-packages root without guessing across unrelated restored packages.
         var targetFrameworkDirectory = Directory.GetParent(assemblyPath);
         var assetKindDirectory = targetFrameworkDirectory?.Parent;
+        var isLibAsset = string.Equals(assetKindDirectory?.Name, "lib", StringComparison.OrdinalIgnoreCase);
+        var isRefAsset = string.Equals(assetKindDirectory?.Name, "ref", StringComparison.OrdinalIgnoreCase);
         var versionDirectory = assetKindDirectory?.Parent;
+        if (isLibAsset &&
+            versionDirectory?.Parent is { } runtimesDirectory &&
+            string.Equals(runtimesDirectory.Name, "runtimes", StringComparison.OrdinalIgnoreCase))
+        {
+            versionDirectory = runtimesDirectory.Parent;
+        }
+
         var packageDirectory = versionDirectory?.Parent;
 
         if (assetKindDirectory is null ||
             versionDirectory is null ||
             packageDirectory is null ||
-            (!string.Equals(assetKindDirectory.Name, "lib", StringComparison.OrdinalIgnoreCase) &&
-             !string.Equals(assetKindDirectory.Name, "ref", StringComparison.OrdinalIgnoreCase)))
+            (!isLibAsset && !isRefAsset))
         {
             packageId = null;
             packageVersion = null;

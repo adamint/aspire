@@ -102,7 +102,9 @@ internal sealed class SdkExportCommand : BaseCommand
                 languageInfo.LanguageId,
                 cancellationToken);
 
-            if (codeGenerationPackage is not null)
+            if (codeGenerationPackage is not null &&
+                !integrations.Any(integration =>
+                    integration.Name.Equals(codeGenerationPackage, StringComparison.OrdinalIgnoreCase)))
             {
                 // Match sdk generate: repository mode uses the generator from this checkout, while
                 // installed CLIs restore the package that accompanies their build.

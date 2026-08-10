@@ -12,6 +12,9 @@ namespace Aspire.TypeSystem;
 /// types. That closure is exactly why <see cref="ExportingAssemblyNames"/> exists: it lets the exporter
 /// tell apart symbols the package owns and should document from symbols it merely needs to emit so the
 /// output is self-contained. Without it, every package would republish its dependencies' API reference.
+///
+/// The constructor snapshots the assembly-name collection. Exporters should compare these CLR
+/// assembly simple names using <see cref="StringComparer.OrdinalIgnoreCase"/>.
 /// </remarks>
 public sealed class ApiReferenceExportOptions
 {
@@ -30,7 +33,8 @@ public sealed class ApiReferenceExportOptions
     /// </exception>
     /// <exception cref="ArgumentException">
     /// Thrown when <paramref name="packageName"/> or <paramref name="packageVersion"/> is empty or
-    /// consists only of white-space characters.
+    /// consists only of white-space characters, or when <paramref name="exportingAssemblyNames"/>
+    /// is empty.
     /// </exception>
     public ApiReferenceExportOptions(
         string packageName,
@@ -40,10 +44,14 @@ public sealed class ApiReferenceExportOptions
         ArgumentException.ThrowIfNullOrWhiteSpace(packageName);
         ArgumentException.ThrowIfNullOrWhiteSpace(packageVersion);
         ArgumentNullException.ThrowIfNull(exportingAssemblyNames);
+        if (exportingAssemblyNames.Count == 0)
+        {
+            throw new ArgumentException("At least one exporting assembly name is required.", nameof(exportingAssemblyNames));
+        }
 
         PackageName = packageName;
         PackageVersion = packageVersion;
-        ExportingAssemblyNames = exportingAssemblyNames;
+        ExportingAssemblyNames = exportingAssemblyNames.ToArray();
     }
 
     /// <summary>
@@ -69,5 +77,8 @@ public sealed class ApiReferenceExportOptions
     /// <summary>
     /// Gets the assemblies whose symbols this package owns and documents.
     /// </summary>
+    /// <remarks>
+    /// The collection is a snapshot of the names passed to the constructor.
+    /// </remarks>
     public IReadOnlyCollection<string> ExportingAssemblyNames { get; }
 }

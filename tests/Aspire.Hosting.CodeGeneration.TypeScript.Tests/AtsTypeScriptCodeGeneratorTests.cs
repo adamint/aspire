@@ -2001,13 +2001,36 @@ public class AtsTypeScriptCodeGeneratorTests
     }
 
     [Fact]
+    public void ApiReferenceExportOptionsCopiesExportingAssemblyNames()
+    {
+        var exportingAssemblyNames = new List<string> { ApiExportPackageName };
+        var options = new ApiReferenceExportOptions(
+            ApiExportPackageName,
+            ApiExportPackageVersion,
+            exportingAssemblyNames);
+
+        exportingAssemblyNames.Clear();
+
+        Assert.Equal(ApiExportPackageName, Assert.Single(options.ExportingAssemblyNames));
+    }
+
+    [Fact]
+    public void ApiReferenceExportOptionsRequiresAnExportingAssembly()
+    {
+        Assert.Throws<ArgumentException>(() => new ApiReferenceExportOptions(
+            ApiExportPackageName,
+            ApiExportPackageVersion,
+            []));
+    }
+
+    [Fact]
     public void ApiExportEntrypointIdsIncludeTheOwningAssembly()
     {
         const string firstPackage = "Aspire.Hosting.Contoso.EntryPoints";
         const string secondPackage = "Aspire.Hosting.Fabrikam.EntryPoints";
 
-        var first = Assert.Single(ProjectApi(CreateEntryPointContext(firstPackage), firstPackage)
-            .Modules.SelectMany(module => module.Items));
+        var firstModel = ProjectApi(CreateEntryPointContext(firstPackage), firstPackage);
+        var first = Assert.Single(firstModel.Modules.SelectMany(module => module.Items));
         var second = Assert.Single(ProjectApi(CreateEntryPointContext(secondPackage), secondPackage)
             .Modules.SelectMany(module => module.Items));
 
@@ -2017,6 +2040,12 @@ public class AtsTypeScriptCodeGeneratorTests
         Assert.Equal(
             "function startThing(client: AspireClientRpc, name: string, retries?: number): Promise<void>",
             first.Declaration);
+        var declaration = Assert.Single(
+            firstModel.Declarations,
+            declaration => declaration.Id == $"{firstPackage}:entrypoint:startThing");
+        Assert.Equal(
+            "export function startThing(client: AspireClientRpc, name: string, retries?: number): Promise<void>;",
+            declaration.Content);
 
         var generatedSource = new AtsTypeScriptCodeGenerator()
             .GenerateDistributedApplication(CreateEntryPointContext(firstPackage))["aspire.mts"];
