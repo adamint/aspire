@@ -432,53 +432,13 @@ suite('cliPathEnvironment.syncAspireExtensionVersionEnvironment tests', () => {
         }), 'pre-release');
     });
 
-    test('reports unknown source when only a publisherId is recorded', () => {
-        // A gallery-matched side-load carries publisherId too, so it cannot stand in for `source`.
-        // Reporting unknown hands the decision to the CLI, which reads the authoritative profile index.
-        assert.strictEqual(getAspireExtensionSource({
-            __metadata: {
-                isPreReleaseVersion: false,
-                publisherId: 'publisher-id',
-            },
-        }, 'vscode'), 'unknown');
-    });
-
-    test('reports unknown source when VS Code marketplace metadata is absent', () => {
-        assert.strictEqual(getAspireExtensionSource({ version: '1.17.0' }, 'vscode'), 'unknown');
-    });
-
-    test('reports unknown source for a side-loaded VSIX that carries a matched publisherId', () => {
-        // VS Code looks a VSIX up in the gallery on install and stores the matched publisherId, so
-        // publisherId alone does not prove a Marketplace install. __metadata.source records the real
-        // origin and has to win over it, otherwise the CLI makes the Marketplace request this signal
-        // exists to suppress.
-        assert.strictEqual(getAspireExtensionSource({
-            __metadata: {
-                isPreReleaseVersion: false,
-                publisherId: 'publisher-id',
-                source: 'vsix',
-            },
-        }, 'vscode'), 'unknown');
-    });
-
-    test('reports marketplace source when VS Code records a gallery install', () => {
-        assert.strictEqual(getAspireExtensionSource({
-            __metadata: {
-                isPreReleaseVersion: false,
-                source: 'gallery',
-            },
-        }, 'vscode'), 'marketplace');
-    });
-
-    test('reports unknown source for a gallery install on a build with a different gallery', () => {
-        // VSCodium installs from Open VSX and sets urlProtocol to 'vscodium', so its 'gallery'
-        // installs must not be compared against the VS Code Marketplace.
-        assert.strictEqual(getAspireExtensionSource({
-            __metadata: {
-                isPreReleaseVersion: false,
-                source: 'gallery',
-            },
-        }, 'vscodium'), 'unknown');
+    test('never reports a marketplace source, whatever the manifest claims', () => {
+        // The extension host has no trustworthy install-origin signal. `__metadata` is normally
+        // deleted before the extension sees it, and where it survives a side-loaded VSIX can ship its
+        // own `source` in package.json, because VS Code's ManifestMetadata has no `source` field and
+        // the extracted manifest is written by merging into whatever was already there. Reporting
+        // unknown hands the decision to the CLI, which reads the authoritative profile index.
+        assert.strictEqual(getAspireExtensionSource(), 'unknown');
     });
 
     test('reads the pre-release channel from the extension description', () => {

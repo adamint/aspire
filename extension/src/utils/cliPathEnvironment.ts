@@ -352,34 +352,23 @@ export function getAspireExtensionChannel(packageJSON: AspireVsCodePackageJson |
     return isPreReleaseVersion === undefined ? 'stable' : 'unknown';
 }
 
-export function getAspireExtensionSource(
-    packageJSON: AspireVsCodePackageJson | undefined,
-    uriScheme: string,
-): AspireVsCodeExtensionSource {
-    // `__metadata.source` is the only signal that proves how the extension was installed: 'gallery'
-    // for a Marketplace install and 'vsix' for a side-load. `publisherId` is deliberately not used as
-    // a substitute, because VS Code looks a side-loaded VSIX up in the gallery on install and stores
-    // the matched publisherId on it, so inferring 'marketplace' from publisherId makes the CLI issue
-    // the outbound Marketplace request this signal exists to suppress.
+export function getAspireExtensionSource(): AspireVsCodeExtensionSource {
+    // Nothing the extension host exposes proves how the extension was installed, so the honest answer
+    // is always 'unknown'. That is not a dead end: the CLI treats an unknown reported source as
+    // "resolve it from disk", where the profile's extensions.json is readable and authoritative.
     //
-    // Current VS Code deletes `__metadata` from the manifest before building the description the
-    // extension host sees, and keeps the full metadata in the profile's extensions.json, so this
-    // normally reports 'unknown'. That is the honest answer, and it is not a dead end: the CLI treats
-    // an unknown reported source as "resolve it from disk", where the profile index is readable.
+    // `__metadata.source` is not a substitute for it, in either direction. VS Code deletes
+    // `__metadata` from the manifest before building the description the extension host sees, so it
+    // is normally absent; and where it does survive it is not trustworthy, because VS Code's
+    // `ManifestMetadata` is `Partial<{ targetPlatform, installedTimestamp, size }>` -- no `source` --
+    // and the extracted package.json is written with
+    // `manifest.__metadata = { ...manifest.__metadata, ...metaData }`, so a `source` a VSIX ships in
+    // its own package.json survives untouched. VS Code reads `source` only from the profile index for
+    // exactly that reason. `publisherId` is no better: VS Code looks a side-loaded VSIX up in the
+    // gallery on install and stores the matched publisherId on it.
     // See https://github.com/microsoft/vscode/blob/main/src/vs/platform/extensionManagement/common/extensionsScannerService.ts
-    // (`delete manifest.__metadata` in `scanExtension`).
-    const source = packageJSON?.__metadata?.source;
-    if (typeof source !== 'string' || source.trim().toLowerCase() !== 'gallery') {
-        return 'unknown';
-    }
-
-    // 'gallery' names whichever gallery the host product is configured against, not the VS Code
-    // Marketplace specifically. VSCodium builds set `extensionsGallery` to Open VSX and `urlProtocol`
-    // to 'vscodium', so reporting 'marketplace' there would have the CLI compare the install against
-    // a feed it was never published to. `env.uriScheme` is `product.json`'s `urlProtocol`, which is
-    // the only product identity the extension host exposes that the Marketplace builds set.
-    // See https://github.com/VSCodium/vscodium/blob/master/prepare_vscode.sh.
-    return uriScheme === 'vscode' || uriScheme === 'vscode-insiders' ? 'marketplace' : 'unknown';
+    // (`ManifestMetadata`, `updateManifestMetadata`, and `delete manifest.__metadata` in `scanExtension`).
+    return 'unknown';
 }
 
 /**

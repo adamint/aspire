@@ -829,6 +829,22 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             ? GetMetadataReleaseChannel(metadata)
             : VsCodeExtensionReleaseChannel.Stable;
 
+    /// <summary>
+    /// Reads the install origin an extracted manifest happens to record, which is only consulted when
+    /// the profile index has nothing to say about the folder.
+    /// </summary>
+    /// <remarks>
+    /// This is deliberately the weakest of the two signals. VS Code's <c>ManifestMetadata</c> is
+    /// <c>Partial&lt;{ targetPlatform, installedTimestamp, size }&gt;</c> -- no <c>source</c> -- and the
+    /// extracted manifest is written with <c>{ ...manifest.__metadata, ...metaData }</c>, so a
+    /// <c>source</c> a package ships in its own <c>package.json</c> survives the install. VS Code
+    /// itself reads <c>source</c> from the profile index for that reason, and so does the caller,
+    /// which only falls back here when the index does not list the folder. Dropping the fallback
+    /// entirely would be worse than the self-declaration it admits: an install whose index is missing
+    /// or unreadable would stop being update-checked at all, and the only thing a false <c>gallery</c>
+    /// buys is one Marketplace request and a link.
+    /// See https://github.com/microsoft/vscode/blob/main/src/vs/platform/extensionManagement/common/extensionsScannerService.ts.
+    /// </remarks>
     private static VsCodeExtensionInstallSource GetManifestInstallSource(JsonElement manifest)
         => TryGetManifestMetadata(manifest, out var metadata)
             ? GetMetadataInstallSource(metadata)
