@@ -173,17 +173,26 @@
                                       Condition="'$(_AspireProjectReferencesResolved)' != 'true'" />
     </ItemGroup>
 
-    <!--
-      RemoveProperties mirrors the GetTargetFrameworks probe below rather than the TargetFramework-aware
-      GetTargetPath probe: no target framework was selected for these references, which is the state
-      ResolveProjectReferences built them in.
-    -->
+    <ItemGroup>
+      <_AspireProjectResourceResolvedTargetPathProbe Update="@(_AspireProjectResourceResolvedTargetPathProbe)">
+        <EffectiveGlobalPropertiesToRemove>%(_AspireProjectResourceResolvedTargetPathProbe.GlobalPropertiesToRemove)</EffectiveGlobalPropertiesToRemove>
+        <!--
+          ResolveProjectReferences applies SetTargetFramework after GlobalPropertiesToRemove. Mirror that here so a
+          reference that keeps its output in a caller-owned item type is asked for the same inner-build TargetName
+          as the GetTargetPath request that already ran during reference resolution.
+        -->
+        <EffectiveGlobalPropertiesToRemove Condition="'%(_AspireProjectResourceResolvedTargetPathProbe.SetTargetFramework)' != ''">$([System.Text.RegularExpressions.Regex]::Replace('%(_AspireProjectResourceResolvedTargetPathProbe.GlobalPropertiesToRemove)', '(?i)(^|;)\s*TargetFramework\s*(?=;|$)', '$1'))</EffectiveGlobalPropertiesToRemove>
+        <RemoveGlobalProperties>TargetFramework;RuntimeIdentifier;SelfContained</RemoveGlobalProperties>
+        <RemoveGlobalProperties Condition="'%(_AspireProjectResourceResolvedTargetPathProbe.SetTargetFramework)' != ''">RuntimeIdentifier;SelfContained</RemoveGlobalProperties>
+      </_AspireProjectResourceResolvedTargetPathProbe>
+    </ItemGroup>
+
     <MSBuild Projects="@(_AspireProjectResourceResolvedTargetPathProbe)"
              Targets="GetTargetPath"
              BuildInParallel="$(BuildInParallel)"
-             Properties="%(_AspireProjectResourceResolvedTargetPathProbe.SetConfiguration); %(_AspireProjectResourceResolvedTargetPathProbe.SetPlatform)"
+             Properties="%(_AspireProjectResourceResolvedTargetPathProbe.SetConfiguration); %(_AspireProjectResourceResolvedTargetPathProbe.SetPlatform); %(_AspireProjectResourceResolvedTargetPathProbe.SetTargetFramework)"
              ContinueOnError="WarnAndContinue"
-             RemoveProperties="%(_AspireProjectResourceResolvedTargetPathProbe.GlobalPropertiesToRemove);TargetFramework;RuntimeIdentifier;SelfContained;$(_GlobalPropertiesToRemoveFromProjectReferences)"
+             RemoveProperties="%(_AspireProjectResourceResolvedTargetPathProbe.EffectiveGlobalPropertiesToRemove);%(_AspireProjectResourceResolvedTargetPathProbe.RemoveGlobalProperties);$(_GlobalPropertiesToRemoveFromProjectReferences)"
              SkipNonexistentProjects="true"
              SkipNonexistentTargets="true">
       <Output TaskParameter="TargetOutputs" ItemName="_AspireProjectResourceTargetPath" />

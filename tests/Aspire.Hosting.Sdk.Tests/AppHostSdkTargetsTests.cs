@@ -717,6 +717,39 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task ProjectResourcesRoutingTheirOutputElsewhereUseTheResolvedTargetFramework()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        // Worker keeps a caller-supplied OutputItemType, so ResolveReferences builds the selected inner TFM but
+        // Aspire cannot seed the target name from @(_AspireProjectResourceBuildOutput). The resolved-reference
+        // GetTargetPath shortcut still has to use the same SetTargetFramework metadata as ResolveProjectReferences;
+        // otherwise it asks the outer build/default TFM for TargetName and can publish a debugger hint for the
+        // wrong process.
+        var result = await RunProjectMetadataSourceGenerationAsync(
+            workspace,
+            referencedProjectXml: """
+                  <PropertyGroup>
+                    <OutputType>Exe</OutputType>
+                    <TargetFrameworks>net8.0;net9.0</TargetFrameworks>
+                    <AssemblyName Condition="'$(TargetFramework)' == 'net8.0'">Eight Routed Worker</AssemblyName>
+                    <AssemblyName Condition="'$(TargetFramework)' == 'net9.0'">Nine Routed Worker</AssemblyName>
+                  </PropertyGroup>
+                """,
+            projectReferenceMetadataXml: """
+                      <SetTargetFramework>TargetFramework=net9.0</SetTargetFramework>
+                      <GlobalPropertiesToRemove>TargetFramework</GlobalPropertiesToRemove>
+                      <OutputItemType>SomeoneElsesItem</OutputItemType>
+                """,
+            msbuildTarget: "ResolveReferences;WriteAspireProjectMetadataSources");
+
+        Assert.True(result.DotNetResult.ExitCode == 0, result.DotNetResult.Output);
+
+        var generatedSource = await File.ReadAllTextAsync(result.GeneratedPath);
+        Assert.Equal("""    public string? TargetName => @"Nine Routed Worker";""", GetGeneratedTargetNameMember(generatedSource));
+    }
+
+    [Fact]
     public async Task GetTargetPathIsReachedOnProjectResourcesWithoutAspireAskingForIt()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
