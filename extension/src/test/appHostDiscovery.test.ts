@@ -8,7 +8,7 @@ import { EventEmitter } from 'events';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import * as cliModule from '../debugger/languages/cli';
-import { AppHostDiscoveryService, CandidateAppHostDisplayInfo, findCandidateForEditorFile, findConfiguredAppHostPaths, getDebugTargetForCandidate, getWorkspaceAppHostProjectSearchResult, isSameFileSystemEntry, selectWorkspaceAppHostPath } from '../utils/appHostDiscovery';
+import { AppHostDiscoveryService, CandidateAppHostDisplayInfo, findCandidateForEditorFile, findConfiguredAppHostPaths, getDebugTargetForCandidate, getWorkspaceAppHostProjectSearchResult, selectWorkspaceAppHostPath } from '../utils/appHostDiscovery';
 import type { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
 import * as configInfoProvider from '../utils/configInfoProvider';
 import { lsJsonStreamCapability } from '../types/configInfo';
@@ -46,24 +46,6 @@ class FakeTelemetryReporter {
 }
 
 suite('AppHost discovery', () => {
-
-    test('isSameFileSystemEntry identifies one directory reached through two different paths', () => {
-        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-apphost-identity-'));
-        try {
-            const target = path.join(tempDir, 'AppHostRoot');
-            const link = path.join(tempDir, 'linked');
-            fs.mkdirSync(target);
-            fs.symlinkSync(target, link, 'junction');
-
-            // The two paths share no casing relationship at all, so only the filesystem's own
-            // identity can report that they reach one directory. A textual comparison cannot.
-            assert.strictEqual(isSameFileSystemEntry(link, target), true);
-            assert.strictEqual(isSameFileSystemEntry(path.join(tempDir, 'other'), target), false);
-        }
-        finally {
-            fs.rmSync(tempDir, { recursive: true, force: true });
-        }
-    });
     test('resolves SDK-style C# AppHost source file to discovered project candidate', () => {
         const appHostProjectPath = buildPath('workspace', 'AppHost', 'AppHost.csproj');
         const programPath = buildPath('workspace', 'AppHost', 'Program.cs');

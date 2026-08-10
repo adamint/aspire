@@ -363,7 +363,7 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
         return Task.FromResult(configuration[configKey]);
     }
 
-    public Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default, bool includeGlobalSettings = true)
+    public Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(startDirectory);
 
@@ -408,7 +408,7 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
         // `aspire config set -g channel <x>` continues to get their preference honored by
         // `aspire update` until that workflow is removed in a follow-up. New per-project flows
         // (`aspire add`, `aspire init`) do not consult global config and must not start to.
-        if (includeGlobalSettings && File.Exists(globalSettingsFile.FullName))
+        if (File.Exists(globalSettingsFile.FullName))
         {
             var globalConfig = LoadSettingsFileForReading(globalSettingsFile.FullName);
             var globalValue = globalConfig[configKey];

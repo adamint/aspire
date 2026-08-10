@@ -15,20 +15,6 @@ namespace Aspire.Cli.DotNet;
 /// </summary>
 internal sealed class ProcessExecutionFactory : IProcessExecutionFactory
 {
-    /// <summary>
-    /// Environment variables that describe the <em>current</em> CLI invocation rather than the machine,
-    /// the workspace, or the child being launched. They are meaningful for exactly one command run and
-    /// must not be inherited by the AppHost/build process tree.
-    /// </summary>
-    /// <remarks>
-    /// <see cref="KnownConfigNames.CliAppHostSelectionOrigin"/> records how <em>this</em> invocation's
-    /// AppHost target was chosen (for example, named by a VS Code launch configuration). ProjectLocator
-    /// uses it to decide whether resolving an AppHost may rewrite the workspace default in
-    /// aspire.config.json. If it leaked into the AppHost or a build child, a nested <c>aspire</c>
-    /// invocation somewhere in that tree would believe <em>its</em> target came from the outer launch
-    /// configuration and would silently skip recording its own workspace default.
-    /// See https://github.com/microsoft/aspire/issues/19080.
-    /// </remarks>
     internal static IReadOnlyList<string> InvocationScopedEnvVarNames { get; } = [KnownConfigNames.CliAppHostSelectionOrigin];
 
     private readonly IEnvironment _environment;
@@ -85,10 +71,9 @@ internal sealed class ProcessExecutionFactory : IProcessExecutionFactory
             startInfo.ArgumentList.Add(a);
         }
 
-        // Touching Environment here snapshots the parent env on first access, so the strips below
-        // apply even when the caller passes no explicit env. Then overlay the caller's env deltas —
-        // that overlay is how the detached-child-CLI path re-adds an invocation-scoped marker it
-        // deliberately wants to forward (see StripInvocationScopedEnvVars).
+        // Touching Environment here snapshots the parent env on first access. Strip invocation-scoped
+        // values before overlaying explicit values so the detached child CLI can deliberately receive
+        // the marker while AppHost and build children do not inherit it.
         StripIdentityEnvVars(startInfo);
         StripInvocationScopedEnvVars(startInfo);
         ApplyEnvironmentVariableFilter(startInfo, options.EnvironmentVariableFilter);
@@ -147,8 +132,7 @@ internal sealed class ProcessExecutionFactory : IProcessExecutionFactory
 
         // Strip after the copy so an ASPIRE_CLI_* var the parent happens to hold is not re-introduced
         // into the child via startInfo.Environment (which is parent-seeded). Same rationale as the
-        // other overload — see StripIdentityEnvVars / StripInvocationScopedEnvVars. This overload only
-        // serves AppHost/guest spawn paths, so an invocation-scoped marker is always stripped here.
+        // other overload — see StripIdentityEnvVars.
         StripIdentityEnvVars(isolatedStartInfo);
         StripInvocationScopedEnvVars(isolatedStartInfo);
         ApplyEnvironmentVariableFilter(isolatedStartInfo, options.EnvironmentVariableFilter);
@@ -173,9 +157,6 @@ internal sealed class ProcessExecutionFactory : IProcessExecutionFactory
         }
     }
 
-    // Callers that continue the same logical invocation in a child CLI process (AppHostLauncher's
-    // detached child) re-add these through the caller-supplied env dictionary, which the
-    // (fileName, args, env, ...) overload overlays after this strip runs.
     private static void StripInvocationScopedEnvVars(IsolatedProcessStartInfo startInfo)
     {
         foreach (var envVarName in InvocationScopedEnvVarNames)

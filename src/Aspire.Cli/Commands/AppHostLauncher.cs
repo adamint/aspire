@@ -355,18 +355,13 @@ internal sealed class AppHostLauncher(
         name.StartsWith(ExtensionEnvironmentVariablePrefix, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Builds the environment for the detached child CLI. The child continues the <em>same</em> logical
-    /// invocation, so invocation-scoped state that <see cref="ProcessExecutionFactory"/> strips from
-    /// every child by default has to be re-stated here; the factory overlays this dictionary after the
-    /// strip, and the strip itself is what keeps that state out of the AppHost/build process tree.
+    /// Builds the environment for the detached child CLI.
     /// </summary>
     /// <param name="activity">The spawn activity whose profiling context the child should join.</param>
     /// <param name="appHostSelectionOrigin">
     /// How this invocation's AppHost target was selected (<see cref="KnownConfigNames.CliAppHostSelectionOrigin"/>),
-    /// or <see langword="null"/> when nothing selected it explicitly. Forwarded so the child CLI's
-    /// ProjectLocator makes the same "may I record the workspace default?" decision the foreground CLI
-    /// made — without it, a launch-configuration target would clobber the workspace default from the
-    /// detached child instead. See https://github.com/microsoft/aspire/issues/19080.
+    /// or <see langword="null"/> when nothing selected it explicitly. The detached child continues
+    /// the same invocation, so it must make the same workspace-default persistence decision.
     /// </param>
     internal static Dictionary<string, string> CreateDetachedChildEnvironment(Activity? activity, string? appHostSelectionOrigin)
     {

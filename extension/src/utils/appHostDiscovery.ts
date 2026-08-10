@@ -1189,39 +1189,6 @@ function isCSharpSourceFileForProjectCandidate(filePath: string, projectPath: st
         && !relativePath.split(path.sep).some(segment => segment.toLowerCase() === 'bin' || segment.toLowerCase() === 'obj');
 }
 
-/**
- * Reports whether two paths reach the same filesystem entry, asking the filesystem rather than
- * inferring case sensitivity from `process.platform`. Case sensitivity belongs to the volume and,
- * on Windows, to the individual directory, so a lowercasing comparison is wrong in both directions:
- * it merges two distinct siblings on a case-sensitive volume and separates one entry reached
- * through two spellings on an insensitive one. Device and inode identify an entry exactly, and also
- * see through a symlink without resolving paths by hand.
- */
-export function isSameFileSystemEntry(left: string, right: string): boolean {
-    const resolvedLeft = path.resolve(left);
-    const resolvedRight = path.resolve(right);
-    if (resolvedLeft === resolvedRight) {
-        return true;
-    }
-
-    try {
-        const leftStat = fs.statSync(resolvedLeft, { bigint: true });
-        const rightStat = fs.statSync(resolvedRight, { bigint: true });
-
-        // Windows reports ino as 0 on filesystems with no stable file index, which would make every
-        // unrelated pair look like one entry.
-        if (leftStat.ino !== 0n && rightStat.ino !== 0n) {
-            return leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino;
-        }
-    }
-    catch {
-        // A path that cannot be stat'ed, because it is missing or unreadable, carries no identity
-        // to compare. Fall back to the textual comparison below.
-    }
-
-    return isSamePath(resolvedLeft, resolvedRight);
-}
-
 export function isSamePath(left: string, right: string): boolean {
     const comparison = process.platform === 'win32' || process.platform === 'darwin'
         ? 'case-insensitive'

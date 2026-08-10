@@ -697,10 +697,8 @@ public class AppHostLauncherTests(ITestOutputHelper outputHelper)
     [Fact]
     public void DetachedChildEnvironment_ForwardsAppHostSelectionOriginToChildCli()
     {
-        // The detached child re-resolves the AppHost, so it needs the same selection origin the
-        // foreground CLI had. ProcessExecutionFactory strips this marker from every child by default
-        // (so it cannot reach the AppHost/build tree); forwarding it here is what keeps the child CLI
-        // from clobbering the workspace default in aspire.config.json.
+        // The detached child re-resolves the AppHost, so it needs the same selection origin to avoid
+        // clobbering the workspace default in aspire.config.json.
         var environment = AppHostLauncher.CreateDetachedChildEnvironment(null, appHostSelectionOrigin: "explicit-launch-configuration");
 
         Assert.Equal("explicit-launch-configuration", environment[KnownConfigNames.CliAppHostSelectionOrigin]);

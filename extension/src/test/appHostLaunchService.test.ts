@@ -103,13 +103,6 @@ suite('AppHostLaunchService', () => {
         assert.strictEqual(config.step, 'deploy');
     });
 
-    test('launch stamps the caller-provided selection origin', async () => {
-        await service.launch('/repo/AppHost.csproj', 'run', false, undefined, 'agent-selection');
-
-        const config = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
-        assert.strictEqual(config.__aspireAppHostSelectionOrigin, 'agent-selection');
-    });
-
     test('launch owns CLI availability probe', async () => {
         resolveCliPathStub.resolves({ cliPath: 'aspire', available: false, source: 'not-found' });
         const showErrorMessageStub = sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined);

@@ -16,12 +16,9 @@ internal interface IConfigurationService
     /// Reads a configuration value scoped to a specific directory rather than the
     /// process-wide working directory. The lookup walks upward from
     /// <paramref name="startDirectory"/> for the nearest <c>aspire.config.json</c>
-    /// (or legacy <c>.aspire/settings.json</c>). The two switches act on different stages
-    /// and do not interact: <paramref name="continueSearchWhenKeyMissing"/> decides whether the
-    /// upward walk stops at the nearest config file that omits the key or keeps climbing, and
-    /// <paramref name="includeGlobalSettings"/> decides whether the global settings file is
-    /// consulted once the walk finds nothing. Requesting the longer walk therefore still falls
-    /// back to global settings. The process-wide
+    /// (or legacy <c>.aspire/settings.json</c>); if the key is not present in the nearest
+    /// local file, falls back to the global settings file unless continuing past the
+    /// nearest file is explicitly requested. The process-wide
     /// <see cref="Microsoft.Extensions.Configuration.IConfiguration"/> (which is rooted at
     /// the working directory the CLI was launched from) is intentionally NOT consulted,
     /// so commands like <c>aspire update --apphost &lt;path&gt;</c> can resolve config
@@ -31,6 +28,6 @@ internal interface IConfigurationService
     /// Throws <see cref="System.InvalidOperationException"/> if any settings file encountered
     /// during the walk cannot be parsed as JSON, matching the behavior of startup-time settings load.
     /// </remarks>
-    Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default, bool includeGlobalSettings = true);
+    Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default);
     string GetSettingsFilePath(bool isGlobal);
 }
