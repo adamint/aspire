@@ -621,7 +621,7 @@ function parseConsoleLoggerRecord(output: string): AppHostLoggerRecord | undefin
     // CoreCLR can split the header and indented body into separate DAP events;
     // AppHostLogOutputCoordinator joins that exact two-event shape before parsing.
     const normalized = normalizeLineEndings(output);
-    const match = /^(trce|dbug|info|warn|fail|crit): (.+)\[(-?\d+)\]\n([\s\S]+)$/.exec(normalized);
+    const match = /^(trce|dbug|info|warn|fail|crit): (.*)\[(-?\d+)\]\n([\s\S]+)$/.exec(normalized);
     if (!match) {
         return undefined;
     }
@@ -644,7 +644,9 @@ function parseConsoleLoggerRecord(output: string): AppHostLoggerRecord | undefin
 }
 
 function isConsoleLoggerHeader(output: string): boolean {
-    return /^(trce|dbug|info|warn|fail|crit): .+\[-?\d+\](?:\r\n|\r|\n)?$/.test(output);
+    // The category may be empty: ILoggerFactory.CreateLogger("") is legal, and
+    // SimpleConsoleFormatter still writes the header, so the record reads "info: [7]".
+    return /^(trce|dbug|info|warn|fail|crit): .*\[-?\d+\](?:\r\n|\r|\n)?$/.test(output);
 }
 
 const consoleLoggerLevelTokens = ['trce', 'dbug', 'info', 'warn', 'fail', 'crit'];
@@ -664,12 +666,14 @@ function findLastCompletedLineBreak(text: string): number {
     // one OutputEvent ends with "\r" and the next starts with "\n". Treating that
     // trailing "\r" as a completed line makes the following "\n" look like a blank
     // continuation line, which changes the record identity used for deduplication.
-    const lastLineFeed = text.lastIndexOf('\n');
-    const lastCarriageReturn = text.endsWith('\r')
-        ? text.lastIndexOf('\r', text.length - 2)
-        : text.lastIndexOf('\r');
+    // Search a copy with the trailing CR removed rather than passing a start position:
+    // lastIndexOf clamps a negative position to 0, so on the one-character chunk "\r" the
+    // position text.length - 2 is -1 and the search finds that very CR at index 0, which is
+    // the split-CRLF case this helper exists to prevent. Nothing is lost by truncating, because
+    // a trailing "\r" is by definition the last character.
+    const searchable = text.endsWith('\r') ? text.slice(0, -1) : text;
 
-    return Math.max(lastLineFeed, lastCarriageReturn);
+    return Math.max(searchable.lastIndexOf('\n'), searchable.lastIndexOf('\r'));
 }
 
 function isConsoleLoggerContinuation(output: string): boolean {
@@ -790,18 +794,18 @@ function areEquivalentRecords(left: AppHostLoggerRecord, right: AppHostLoggerRec
         return left.message === right.message && left.exception === right.exception;
     }
 
-    // Only one side separated an exception from the message, which happens in two ways:
+    // Only one side separated an exception from the message. That happens when a multi-line
+    // message has a continuation that looks like an exception, e.g. "Retry failed." followed by
+    // "System.TimeoutException: timed out" passed as a single message: the console copy splits
+    // it, the structured copy does not, and the recombined bodies match.
     //
-    //   1. The AppHost predates BackchannelLogEntry.Exception. Its structured message is
-    //      `formatter(state, exception)`, which drops the exception, while the console
-    //      copy still prints it. The formatted messages match.
-    //   2. A multi-line message whose continuation happens to look like an exception,
-    //      e.g. "Retry failed.\nSystem.TimeoutException: timed out" passed as a single
-    //      message. The console copy splits it; the structured copy does not. The
-    //      recombined bodies match.
-    //
-    // Accepting either keeps both cases correlated instead of rendering them twice.
-    return left.message === right.message || getRecordBody(left) === getRecordBody(right);
+    // The bodies have to match. Comparing the messages alone would call a console copy carrying
+    // real exception text a duplicate of a structured copy that has none, and the exception would
+    // never be rendered. An AppHost old enough to send a message with the exception already
+    // folded in cannot reach here: BackchannelLogEntry.SequenceNumber and .Exception were
+    // introduced together, so such an entry arrives with SequenceNumber 0 and RunCommand routes
+    // it down the legacy WriteDebugSessionMessage path instead of the structured one.
+    return getRecordBody(left) === getRecordBody(right);
 }
 
 function getRecordBody(record: AppHostLoggerRecord): string {
@@ -811,7 +815,10 @@ function getRecordBody(record: AppHostLoggerRecord): string {
 // Standard SGR codes, resolved through the workbench ANSI palette so the rendered
 // record follows the active color theme.
 function formatLoggerRecord(record: AppHostLoggerRecord): AppHostParentOutput {
-    const body = `${record.categoryName}: ${record.logLevel}: ${record.message}${record.exception ? `\n${record.exception}` : ''}`;
+    // The category is omitted when it is empty rather than rendered as a bare ": ", which is
+    // what a logger created with an empty category name produces.
+    const prefix = record.categoryName ? `${record.categoryName}: ${record.logLevel}` : record.logLevel;
+    const body = `${prefix}: ${record.message}${record.exception ? `\n${record.exception}` : ''}`;
     const category = record.logLevel === 'Error' || record.logLevel === 'Critical' ? 'stderr' : 'stdout';
     const style = record.logLevel === 'Trace' || record.logLevel === 'Debug'
         ? AnsiColors.Dim

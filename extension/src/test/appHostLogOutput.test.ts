@@ -241,11 +241,11 @@ suite('AppHost log output coordinator tests', () => {
             renderConsole(coordinator, loggerShapedOutput, 'stdout'),
             [{ output: loggerShapedOutput, category: 'stdout' }]);
     });
-    test('correlates a record whose exception the AppHost could not send separately', () => {
-        // BackchannelDataTypes is source-shared and the CLI runs against older AppHosts by
-        // design. An AppHost predating BackchannelLogEntry.Exception sends only the
-        // formatted message, which drops the exception, while the console copy still
-        // prints it. Without a wildcard the record would render twice.
+    test('keeps a console record carrying an exception the structured copy does not have', () => {
+        // Correlation compares recombined bodies, never the message alone. Two records whose
+        // messages match but whose bodies do not are not the same record, and suppressing the
+        // console copy would be the only chance to render this stack trace. A repeated message
+        // line is the lesser harm against silently swallowing the exception.
         const coordinator = new AppHostLogOutputCoordinator();
         const entry = createEntry({ logLevel: 'Error', message: 'Health check failed.', exception: null });
 
@@ -257,8 +257,45 @@ suite('AppHost log output coordinator tests', () => {
             renderConsole(coordinator, 
                 "fail: Example.Category[7]\n      Health check failed.\n      System.InvalidOperationException: boom\n         at Probe()\n",
                 'stderr'),
-            []);
+            [{
+                category: 'stderr',
+                output: 'Example.Category: Error: Health check failed.\nSystem.InvalidOperationException: boom\n   at Probe()\n'
+            }]);
     });
+
+    test('treats a chunk that is only a carriage return as an incomplete line', () => {
+        // A CRLF split across two chunks arrives as "\r" on its own. Treating that CR as a
+        // finished line would emit an empty record and leave the real line orphaned in the
+        // next chunk, so the record could never correlate with its structured twin.
+        const coordinator = new AppHostLogOutputCoordinator();
+        const entry = createEntry({ logLevel: 'Information', message: 'Done' });
+
+        assert.deepStrictEqual(coordinator.handleBackchannelEntry(entry), {
+            output: 'Example.Category: Information: Done\n',
+            category: 'stdout'
+        });
+        // renderConsole flushes, which would defeat the hold, so the chunks are fed directly.
+        assert.deepStrictEqual(coordinator.handleDebugAdapterOutput('\r', 'stdout'), []);
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('\n', 'stdout'),
+            [{ output: '\r\n', category: 'stdout' }]);
+        assert.deepStrictEqual(coordinator.flush(), []);
+    });
+
+    test('correlates a record logged through a category-less logger', () => {
+        // ILoggerFactory.CreateLogger("") is legal and SimpleConsoleFormatter still writes the
+        // header, so the console copy reads "info: [7]". Failing to recognize that as a header
+        // would leave the console copy uncorrelated and render the record twice.
+        const coordinator = new AppHostLogOutputCoordinator();
+        const entry = createEntry({ logLevel: 'Information', message: 'Done', categoryName: '' });
+
+        assert.deepStrictEqual(coordinator.handleBackchannelEntry(entry), {
+            output: 'Information: Done\n',
+            category: 'stdout'
+        });
+        assert.deepStrictEqual(renderConsole(coordinator, 'info: [7]\n      Done\n', 'stdout'), []);
+    });
+
 
     test('does not absorb six-space-indented stdout into a completed console record', () => {
         // Console.WriteLine("      progress") right after a log call produces a line the formatter
