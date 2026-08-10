@@ -77,7 +77,7 @@ namespace Aspire.Hosting.Testing.Properties {
                 return ResourceManager.GetString("DashboardDisabledExceptionMessage", resourceCulture);
             }
         }
-        
+
         /// <summary>
         ///   Looks up a localized string similar to The dashboard login URL is not available because anonymous dashboard access is enabled..
         /// </summary>
@@ -86,7 +86,7 @@ namespace Aspire.Hosting.Testing.Properties {
                 return ResourceManager.GetString("DashboardLoginUrlAnonymousExceptionMessage", resourceCulture);
             }
         }
-        
+
         /// <summary>
         ///   Looks up a localized string similar to The application must be started before retrieving the dashboard login URL..
         /// </summary>
@@ -95,7 +95,7 @@ namespace Aspire.Hosting.Testing.Properties {
                 return ResourceManager.GetString("DashboardLoginUrlApplicationNotStartedExceptionMessage", resourceCulture);
             }
         }
-        
+
         /// <summary>
         ///   Looks up a localized string similar to The dashboard login URL is not available in publish mode..
         /// </summary>
@@ -104,7 +104,7 @@ namespace Aspire.Hosting.Testing.Properties {
                 return ResourceManager.GetString("DashboardLoginUrlPublishModeExceptionMessage", resourceCulture);
             }
         }
-        
+
         /// <summary>
         ///   Looks up a localized string similar to The dashboard login URL is not available..
         /// </summary>
@@ -113,7 +113,7 @@ namespace Aspire.Hosting.Testing.Properties {
                 return ResourceManager.GetString("DashboardLoginUrlUnavailableExceptionMessage", resourceCulture);
             }
         }
-        
+
         /// <summary>
         ///   Looks up a localized string similar to Dashboard testing is not supported in publish mode..
         /// </summary>
@@ -122,7 +122,7 @@ namespace Aspire.Hosting.Testing.Properties {
                 return ResourceManager.GetString("DashboardTestingPublishModeExceptionMessage", resourceCulture);
             }
         }
-        
+
         /// <summary>
         ///   Looks up a localized string similar to Endpoint &apos;{0}&apos; for resource &apos;{1}&apos; not found..
         /// </summary>

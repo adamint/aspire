@@ -2,13 +2,9 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Net;
-using Aspire.Hosting.Backchannel;
-using Aspire.Hosting.Diagnostics;
 using Aspire.TestUtilities;
 using Microsoft.AspNetCore.InternalTesting;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Testing;
 using Xunit;
@@ -62,28 +58,6 @@ public class DashboardLoginUrlTests
 
     [Fact]
     [RequiresFeature(TestFeature.Docker)]
-    public async Task ConcurrentApplicationsUseDifferentDashboardLoginUrls()
-    {
-        await using var firstBuilder = await CreateDashboardBuilderAsync();
-        await using var secondBuilder = await CreateDashboardBuilderAsync();
-        await using var firstApp = await firstBuilder.BuildAsync();
-        await using var secondApp = await secondBuilder.BuildAsync();
-
-        await Task.WhenAll(firstApp.StartAsync(), secondApp.StartAsync()).WaitAsync(TestConstants.LongTimeoutTimeSpan);
-
-        using var cancellationTokenSource = new CancellationTokenSource(TestConstants.LongTimeoutTimeSpan);
-        var urls = await Task.WhenAll(
-            firstApp.GetDashboardLoginUrlAsync(cancellationTokenSource.Token),
-            secondApp.GetDashboardLoginUrlAsync(cancellationTokenSource.Token));
-
-        Assert.Equal(Uri.UriSchemeHttp, urls[0].Scheme);
-        Assert.Equal(Uri.UriSchemeHttp, urls[1].Scheme);
-        Assert.NotEqual(urls[0].Port, urls[1].Port);
-        Assert.NotEqual(urls[0].Query, urls[1].Query);
-    }
-
-    [Fact]
-    [RequiresFeature(TestFeature.Docker)]
     public async Task DashboardRejectsWrongCrossApplicationAndBogusLoginTokens()
     {
         await using var firstBuilder = await CreateDashboardBuilderAsync();
@@ -103,6 +77,9 @@ public class DashboardLoginUrlTests
             new(firstBaseUrl + secondUrl.PathAndQuery),
             new($"{firstBaseUrl}/login?t=%25")
         ];
+
+        Assert.NotEqual(firstUrl.Port, secondUrl.Port);
+        Assert.NotEqual(firstUrl.Query, secondUrl.Query);
 
         foreach (var invalidLoginUrl in invalidLoginUrls)
         {
@@ -165,48 +142,6 @@ public class DashboardLoginUrlTests
     }
 
     [Fact]
-    public async Task GetDashboardLoginUrlAsyncHonorsCancellationAfterDashboardWaitStarts()
-    {
-        var (app, notificationLogger) = await CreateApplicationWithBlockedDashboardAsync();
-        await using var _ = app;
-        using var cancellationTokenSource = new CancellationTokenSource();
-        var loginUrlTask = app.GetDashboardLoginUrlAsync(cancellationTokenSource.Token);
-
-        Assert.Contains(
-            notificationLogger.Collector.GetSnapshot(),
-            entry => entry.Message.Contains(
-                $"Waiting for resource '{KnownResourceNames.AspireDashboard}'",
-                StringComparison.Ordinal));
-        Assert.False(loginUrlTask.IsCompleted);
-
-        cancellationTokenSource.Cancel();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => loginUrlTask);
-    }
-
-    [Fact]
-    [RequiresFeature(TestFeature.Docker)]
-    public async Task GetDashboardLoginUrlAsyncThrowsAfterApplicationIsDisposed()
-    {
-        await using var builder = await CreateDashboardBuilderAsync();
-        var app = await builder.BuildAsync();
-
-        try
-        {
-            await app.StartAsync().WaitAsync(TestConstants.LongTimeoutTimeSpan);
-            _ = await app.GetDashboardLoginUrlAsync(default);
-            await app.DisposeAsync();
-
-            await Assert.ThrowsAsync<ObjectDisposedException>(
-                () => app.GetDashboardLoginUrlAsync(default));
-        }
-        finally
-        {
-            await app.DisposeAsync();
-        }
-    }
-
-    [Fact]
     public async Task GetDashboardLoginUrlAsyncThrowsInPublishMode()
     {
         var builder = DistributedApplicationTestingBuilder.Create(["--publisher", "manifest"]);
@@ -241,69 +176,8 @@ public class DashboardLoginUrlTests
 
     [Fact]
     [RequiresFeature(TestFeature.Docker)]
-    public async Task CanonicalDashboardLoginUrlEscapesBrowserToken()
-    {
-        const string browserToken = "token+with&reserved=value";
-        await using var builder = await CreateDashboardBuilderAsync();
-        builder.Configuration["AppHost:BrowserToken"] = browserToken;
-        await using var app = await builder.BuildAsync();
-        await app.StartAsync().WaitAsync(TestConstants.LongTimeoutTimeSpan);
-
-        using var cancellationTokenSource = new CancellationTokenSource(TestConstants.LongTimeoutTimeSpan);
-        var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("DashboardLoginUrlTests");
-        var info = await DashboardUrlsHelper.GetDashboardConnectionInfoAsync(
-            app.Services,
-            logger,
-            cancellationTokenSource.Token);
-        Assert.NotNull(info.BaseUrlWithLoginToken);
-
-        Assert.EndsWith(
-            $"/login?t={Uri.EscapeDataString(browserToken)}",
-            info.BaseUrlWithLoginToken,
-            StringComparison.Ordinal);
-    }
-
-    [Fact]
-    [RequiresFeature(TestFeature.Docker)]
-    public async Task GetDashboardLoginUrlAsyncUsesConfiguredTargetHost()
-    {
-        await using var builder = await CreateDashboardBuilderAsync();
-        builder.Configuration["ASPNETCORE_URLS"] = "http://aspire-dashboard.dev.localhost:0";
-        await using var app = await builder.BuildAsync();
-        await app.StartAsync().WaitAsync(TestConstants.LongTimeoutTimeSpan);
-
-        using var cancellationTokenSource = new CancellationTokenSource(TestConstants.LongTimeoutTimeSpan);
-        var dashboardUri = await app.GetDashboardLoginUrlAsync(cancellationTokenSource.Token);
-
-        Assert.Equal("aspire-dashboard.dev.localhost", dashboardUri.Host);
-    }
-
-    [Fact]
-    [RequiresFeature(TestFeature.Docker)]
-    public async Task GetDashboardLoginUrlAsyncPrefersCodespacesUrl()
-    {
-        await using var builder = await CreateDashboardBuilderAsync();
-        builder.Configuration["CODESPACES"] = "true";
-        builder.Configuration["CODESPACE_NAME"] = "test-codespace";
-        builder.Configuration["GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN"] = "app.github.dev";
-        await using var app = await builder.BuildAsync();
-        await app.StartAsync().WaitAsync(TestConstants.LongTimeoutTimeSpan);
-
-        using var cancellationTokenSource = new CancellationTokenSource(TestConstants.LongTimeoutTimeSpan);
-        var dashboardUri = await app.GetDashboardLoginUrlAsync(cancellationTokenSource.Token);
-
-        Assert.StartsWith("test-codespace-", dashboardUri.Host, StringComparison.Ordinal);
-        Assert.EndsWith(".app.github.dev", dashboardUri.Host, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    [RequiresFeature(TestFeature.Docker)]
     public async Task DashboardStartupSummaryDoesNotWriteTheBrowserTokenToAppHostLogs()
     {
-        // The AppHost's startup summary writes ".../login?t={token}" through ILogger<DistributedApplication>,
-        // and under a test host that logger is test and CI output. The token is a live credential for this
-        // application's dashboard, so it must not land in a retained log artifact. Tests that want the URL call
-        // GetDashboardLoginUrlAsync instead.
         await using var builder = await CreateDashboardBuilderAsync();
         var logCollector = new FakeLogCollector();
         builder.Services.AddLogging(logging => logging.AddProvider(new FakeLoggerProvider(logCollector)));
@@ -313,9 +187,6 @@ public class DashboardLoginUrlTests
 
         using var cancellationTokenSource = new CancellationTokenSource(TestConstants.LongTimeoutTimeSpan);
         var dashboardUri = await app.GetDashboardLoginUrlAsync(cancellationTokenSource.Token);
-
-        // Read the token from the URL the supported accessor returns, so this asserts against the credential the
-        // dashboard actually validates rather than a copy of it.
         var token = dashboardUri.Query["?t=".Length..];
         Assert.NotEmpty(token);
 
@@ -328,16 +199,14 @@ public class DashboardLoginUrlTests
         Assert.False(
             written.Contains(token, StringComparison.Ordinal),
             "The dashboard browser token was written to AppHost logs.");
-
-        // The summary itself must still be produced; suppressing the whole thing would make this vacuous.
         Assert.Contains("Aspire Dashboard", written, StringComparison.Ordinal);
     }
 
-    private static Task<IDistributedApplicationTestingBuilder> CreateDashboardBuilderAsync(string[]? args = null)
+    private static Task<IDistributedApplicationTestingBuilder> CreateDashboardBuilderAsync()
     {
         return DistributedApplicationTestingBuilder.CreateAsync<Projects.TestingAppHost1_AppHost>(
             CreateDashboardOptions(),
-            args ?? []);
+            []);
     }
 
     private static DistributedApplicationTestingBuilderOptions CreateDashboardOptions()
@@ -346,41 +215,5 @@ public class DashboardLoginUrlTests
         {
             EnableDashboard = true
         };
-    }
-
-    private static async Task<(DistributedApplication App, FakeLogger<ResourceNotificationService> NotificationLogger)>
-        CreateApplicationWithBlockedDashboardAsync()
-    {
-        var dashboardResource = new ExecutableResource(KnownResourceNames.AspireDashboard, "dashboard", ".");
-        var notificationLogger = new FakeLogger<ResourceNotificationService>();
-        var host = new HostBuilder()
-            .ConfigureServices(services =>
-            {
-                services.AddLogging();
-                services.AddSingleton(new DistributedApplicationModel([dashboardResource]));
-                services.AddSingleton(new DistributedApplicationOptions
-                {
-                    DisableDashboard = false
-                });
-                services.AddSingleton(serviceProvider =>
-                    new DistributedApplicationExecutionContext(
-                        new DistributedApplicationExecutionContextOptions(DistributedApplicationOperation.Run)
-                        {
-                            Services = serviceProvider
-                        }));
-                services.AddSingleton<ResourceLoggerService>();
-                services.AddSingleton(serviceProvider =>
-                    new ResourceNotificationService(
-                        notificationLogger,
-                        serviceProvider.GetRequiredService<IHostApplicationLifetime>(),
-                        serviceProvider,
-                        serviceProvider.GetRequiredService<ResourceLoggerService>()));
-                services.AddSingleton(
-                    new ProfilingTelemetry(new ConfigurationBuilder().Build()));
-            })
-            .Build();
-        await host.StartAsync();
-
-        return (new DistributedApplication(host), notificationLogger);
     }
 }

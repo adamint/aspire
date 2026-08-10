@@ -1,8 +1,6 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using Aspire.Hosting.ApplicationModel;
-
 namespace Aspire.Hosting.Testing;
 
 /// <summary>
@@ -11,7 +9,7 @@ namespace Aspire.Hosting.Testing;
 /// <remarks>
 /// These options are applied while the underlying distributed application builder is being constructed, because the
 /// dashboard services themselves are selected during construction and cannot be added afterwards. The settings those
-/// services read - port allocation, interactivity, dependency waiting, and the generated browser token - remain
+/// services read - port allocation, interactivity, and the generated browser token - remain
 /// adjustable through the returned builder until the application is built.
 /// </remarks>
 /// <example>
@@ -48,21 +46,4 @@ public sealed class DistributedApplicationTestingBuilderOptions
     /// authenticated URL for the running dashboard.
     /// </remarks>
     public bool EnableDashboard { get; set; }
-
-    /// <summary>
-    /// Gets or sets the default <see cref="WaitBehavior"/> applied when a resource waits on a dependency that has
-    /// become unavailable.
-    /// </summary>
-    /// <value>
-    /// The wait behavior to apply, or <see langword="null"/> to use the default.
-    /// The default is <see cref="WaitBehavior.StopOnResourceUnavailable"/>, which fails the test run instead of
-    /// hanging it.
-    /// </value>
-    /// <remarks>
-    /// Set this to <see cref="WaitBehavior.WaitOnResourceUnavailable"/> when debugging with
-    /// <see cref="EnableDashboard"/>, so that a failing dependency keeps the application alive long enough to be
-    /// inspected in the dashboard instead of tearing it down. This option has no effect unless the dashboard runs,
-    /// because the testing builder already fails fast otherwise.
-    /// </remarks>
-    public WaitBehavior? DefaultWaitBehavior { get; set; }
 }

@@ -2,10 +2,9 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 using System.Globalization;
 using Aspire.Hosting.ApplicationModel;
-using Aspire.Hosting.Backchannel;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting.Testing;
 
@@ -14,6 +13,8 @@ namespace Aspire.Hosting.Testing;
 /// </summary>
 public static class DistributedApplicationHostingTestingExtensions
 {
+    private const string DashboardResourceName = "aspire-dashboard";
+
     /// <summary>
     /// Gets the authenticated login URL for the running Aspire dashboard.
     /// </summary>
@@ -80,22 +81,31 @@ public static class DistributedApplicationHostingTestingExtensions
         ThrowIfNotStarted(app, Properties.Resources.DashboardLoginUrlApplicationNotStartedExceptionMessage);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger(
-            "Aspire.Hosting.Testing.DistributedApplicationDashboard");
-        var dashboardInfo = await DashboardUrlsHelper.GetDashboardConnectionInfoOrThrowAsync(
-            app.Services,
-            logger,
+        await app.ResourceNotifications.WaitForResourceHealthyAsync(
+            DashboardResourceName,
+            WaitBehavior.StopOnResourceUnavailable,
             cancellationToken).ConfigureAwait(false);
 
-        var dashboardUrl = dashboardInfo.CodespacesUrlWithLoginToken ?? dashboardInfo.BaseUrlWithLoginToken;
-        if (!dashboardInfo.IsHealthy || !Uri.TryCreate(dashboardUrl, UriKind.Absolute, out var dashboardUri))
+        var applicationModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        if (!applicationModel.Resources.TryGetByName(DashboardResourceName, out var resource) ||
+            resource is not IResourceWithEndpoints dashboardResource)
         {
             throw new InvalidOperationException(Properties.Resources.DashboardLoginUrlUnavailableExceptionMessage);
         }
 
-        if (!dashboardInfo.HasBrowserToken)
+        var httpsEndpoint = dashboardResource.GetEndpoint("https");
+        var httpEndpoint = dashboardResource.GetEndpoint("http");
+        var dashboardEndpoint = httpsEndpoint.Exists ? httpsEndpoint : httpEndpoint;
+        var browserToken = app.Services.GetRequiredService<IConfiguration>()["AppHost:BrowserToken"];
+        if (string.IsNullOrEmpty(browserToken))
         {
             throw new InvalidOperationException(Properties.Resources.DashboardLoginUrlAnonymousExceptionMessage);
+        }
+
+        if (!dashboardEndpoint.Exists ||
+            !Uri.TryCreate($"{dashboardEndpoint.Url.TrimEnd('/')}/login?t={browserToken}", UriKind.Absolute, out var dashboardUri))
+        {
+            throw new InvalidOperationException(Properties.Resources.DashboardLoginUrlUnavailableExceptionMessage);
         }
 
         return dashboardUri;

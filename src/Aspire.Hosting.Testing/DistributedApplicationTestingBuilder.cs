@@ -9,7 +9,6 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using Aspire.Hosting.ApplicationModel;
-using Aspire.Hosting.Dashboard;
 using Aspire.Hosting.Eventing;
 using Aspire.Hosting.Pipelines;
 using Microsoft.Extensions.Configuration;
@@ -192,15 +191,7 @@ public static class DistributedApplicationTestingBuilder
         ArgumentNullException.ThrowIfNull(configureBuilder, nameof(configureBuilder));
 
         var factory = new SuspendingDistributedApplicationFactory(entryPoint, args, testingOptions, configureBuilder);
-        try
-        {
-            return await factory.CreateBuilderAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            await factory.DisposeAsync().ConfigureAwait(false);
-            throw;
-        }
+        return await factory.CreateBuilderAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -309,7 +300,6 @@ public static class DistributedApplicationTestingBuilder
 
         dashboardTestingState = new DashboardTestingState(
             Enabled: true,
-            DefaultWaitBehavior: testingOptions?.DefaultWaitBehavior ?? WaitBehavior.StopOnResourceUnavailable,
             BrowserToken: browserToken,
             ResourceServiceApiKey: resourceServiceApiKey);
 
@@ -392,20 +382,17 @@ public static class DistributedApplicationTestingBuilder
         // because either one on its own leaves the endpoint unauthenticated. Unlike the browser token there is no
         // "deliberately chosen" value to preserve: a caller who supplied their own key still ends up in ApiKey mode
         // with that key, so this only rewrites configuration that would have been unauthenticated.
-        if (!string.Equals(builder.Configuration["AppHost:ResourceService:AuthMode"], nameof(ResourceServiceAuthMode.ApiKey), StringComparison.OrdinalIgnoreCase)
+        if (!string.Equals(builder.Configuration["AppHost:ResourceService:AuthMode"], "ApiKey", StringComparison.OrdinalIgnoreCase)
             || string.IsNullOrEmpty(builder.Configuration["AppHost:ResourceService:ApiKey"]))
         {
-            builder.Configuration["AppHost:ResourceService:AuthMode"] = nameof(ResourceServiceAuthMode.ApiKey);
+            builder.Configuration["AppHost:ResourceService:AuthMode"] = "ApiKey";
             builder.Configuration["AppHost:ResourceService:ApiKey"] = dashboardTestingState.ResourceServiceApiKey;
         }
 
         // Enabling the dashboard makes the hosting default wait indefinitely when a dependency becomes unavailable,
-        // which would hang a test run instead of failing it. Re-pin the testing builder's fail-fast default unless
-        // the caller asked for something else, since waiting is the useful behavior when the whole point is to open
-        // the dashboard and look at the stuck resource. A later user registration still overrides this.
-        var defaultWaitBehavior = dashboardTestingState.DefaultWaitBehavior;
+        // which would hang a test run instead of failing it. A later user registration can still override this.
         builder.Services.Configure<ResourceNotificationServiceOptions>(
-            options => options.DefaultWaitBehavior = defaultWaitBehavior);
+            options => options.DefaultWaitBehavior = WaitBehavior.StopOnResourceUnavailable);
     }
 
     private static void AddDashboardTestingConfiguration(IConfigurationBuilder configuration)
@@ -462,7 +449,7 @@ public static class DistributedApplicationTestingBuilder
     /// The dashboard testing configuration resolved during builder construction. Carried as a single value so the
     /// pre-construction and post-construction halves of the configuration cannot drift apart.
     /// </summary>
-    private readonly record struct DashboardTestingState(bool Enabled, WaitBehavior DefaultWaitBehavior, string? BrowserToken, string? ResourceServiceApiKey);
+    private readonly record struct DashboardTestingState(bool Enabled, string? BrowserToken, string? ResourceServiceApiKey);
 
     private sealed class SuspendingDistributedApplicationFactory(
         Type entryPoint,
@@ -472,24 +459,6 @@ public static class DistributedApplicationTestingBuilder
         : DistributedApplicationFactory(entryPoint, args)
     {
         private readonly SemaphoreSlim _continueBuilding = new(0);
-
-        // Guards the pair of (continuation state, outstanding build count). They have to move together: a caller
-        // may only start waiting for the application while no other caller has abandoned it, and an abandoning
-        // caller may only claim it once no other caller is still waiting. Interlocked operations on the two fields
-        // cannot express that, and nothing is awaited while the lock is held.
-        private readonly object _buildStateLock = new();
-
-        // Tracks whether the suspended AppHost entry point has been released, and why. Disposal must win over a
-        // concurrent BuildAsync so a rejected builder cannot continue into Build() after the factory is gone.
-        private const int ContinuationSuspended = 0;
-        private const int ContinuationReleased = 1;
-        private const int ContinuationAbandoned = 2;
-        private const int ContinuationDisposed = 3;
-
-        private int _buildingContinuationState;
-
-        // Number of BuildAsync calls that have released the AppHost and are still waiting for the application.
-        private int _outstandingBuilds;
 
         // Resolved while the builder is being constructed, because dashboard services and dashboard authentication
         // are selected during construction and the post-construction half of the configuration has to agree with it.
@@ -515,157 +484,24 @@ public static class DistributedApplicationTestingBuilder
 
             // Wait until the owner signals that building can continue by calling BuildAsync().
             _continueBuilding.Wait();
-            if (Volatile.Read(ref _buildingContinuationState) == ContinuationDisposed)
-            {
-                throw CreateDisposedException();
-            }
         }
 
         public async Task<DistributedApplication> BuildAsync(CancellationToken cancellationToken)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            bool releaseAppHost;
-            lock (_buildStateLock)
-            {
-                switch (_buildingContinuationState)
-                {
-                    case ContinuationDisposed:
-                        throw CreateDisposedException();
-                    case ContinuationAbandoned:
-                        throw CreateAbandonedException();
-                }
-
-                releaseAppHost = _buildingContinuationState == ContinuationSuspended;
-                Volatile.Write(ref _buildingContinuationState, ContinuationReleased);
-                _outstandingBuilds++;
-            }
-
-            if (releaseAppHost)
-            {
-                _continueBuilding.Release();
-            }
-
-            var canceled = false;
-            try
-            {
-                return await ResolveApplicationAsync(cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                canceled = true;
-                throw;
-            }
-            catch (OperationCanceledException) when (Volatile.Read(ref _buildingContinuationState) == ContinuationDisposed)
-            {
-                throw CreateDisposedException();
-            }
-            finally
-            {
-                if (TryAbandonApplication(canceled))
-                {
-                    // Once the AppHost has been released, it can still finish building after the caller stops waiting.
-                    // Cancellation must return to the caller promptly, so reclaim that application on a background
-                    // continuation rather than blocking here until an AppHost that may never finish completes.
-                    ReclaimApplicationInBackground();
-                }
-            }
-        }
-
-        /// <summary>
-        /// Records that a <see cref="BuildAsync"/> call stopped waiting for the application, and reports whether it
-        /// abandoned it, meaning no caller is left to take ownership of an application that still arrives.
-        /// </summary>
-        private bool TryAbandonApplication(bool canceled)
-        {
-            lock (_buildStateLock)
-            {
-                _outstandingBuilds--;
-
-                // A caller that is still waiting takes ownership of the application and disposes it through the
-                // builder, so only the last caller to cancel may reclaim it. Disposal already owns the teardown.
-                if (!canceled || _outstandingBuilds > 0 || _buildingContinuationState != ContinuationReleased)
-                {
-                    return false;
-                }
-
-                // The AppHost entry point produces exactly one application, and it is now spoken for by the
-                // background reclaim, so later builds have to be rejected rather than handed a disposed instance.
-                Volatile.Write(ref _buildingContinuationState, ContinuationAbandoned);
-                return true;
-            }
-        }
-
-        /// <summary>
-        /// Disposes the factory once a released AppHost finishes building, so an application the caller abandoned
-        /// after cancellation cannot keep running.
-        /// </summary>
-        /// <remarks>
-        /// This is best effort. If the caller disposes the builder first, this wait is aborted by that disposal and
-        /// <see cref="DistributedApplicationFactory.OnBuiltCoreAsync"/> reclaims the late-arriving application instead.
-        /// </remarks>
-        private void ReclaimApplicationInBackground()
-        {
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    _ = await ResolveApplicationAsync(CancellationToken.None).ConfigureAwait(false);
-                    await DisposeAsync().ConfigureAwait(false);
-                }
-                catch
-                {
-                    // The AppHost can fail, or this wait can be aborted by the caller's own disposal, after the
-                    // caller stopped waiting. No caller remains to observe that, and the factory reclaims any
-                    // application that arrives after disposal, so swallow it rather than raising an unobserved
-                    // task exception on the finalizer thread.
-                }
-            });
-        }
-
-        private static ObjectDisposedException CreateDisposedException()
-        {
-            // Report the public interface rather than this internal factory type so callers see the object they own.
-            return new ObjectDisposedException(
-                nameof(IDistributedApplicationTestingBuilder),
-                "The testing builder was disposed before the application was built.");
-        }
-
-        private static InvalidOperationException CreateAbandonedException()
-        {
-            return new InvalidOperationException(
-                "The application was abandoned because the BuildAsync call that released the AppHost was canceled, " +
-                "and it is being disposed. An AppHost entry point builds a single application, so building again " +
-                "requires a new testing builder.");
+            _continueBuilding.Release();
+            return await ResolveApplicationAsync(cancellationToken).ConfigureAwait(false);
         }
 
         public override async ValueTask DisposeAsync()
         {
-            PrepareForDisposal();
+            _continueBuilding.Release();
             await base.DisposeAsync().ConfigureAwait(false);
         }
 
         public override void Dispose()
         {
-            PrepareForDisposal();
+            _continueBuilding.Release();
             base.Dispose();
-        }
-
-        private void PrepareForDisposal()
-        {
-            bool releaseAppHost;
-            lock (_buildStateLock)
-            {
-                releaseAppHost = _buildingContinuationState == ContinuationSuspended;
-                Volatile.Write(ref _buildingContinuationState, ContinuationDisposed);
-            }
-
-            if (releaseAppHost)
-            {
-                // Abort on the AppHost entry-point thread instead of allowing a rejected or canceled
-                // builder to continue into Build() after the factory has already been disposed.
-                _continueBuilding.Release();
-            }
         }
 
         private sealed class Builder(SuspendingDistributedApplicationFactory factory, DistributedApplicationBuilder innerBuilder) : IDistributedApplicationTestingBuilder
