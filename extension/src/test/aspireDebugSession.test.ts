@@ -540,6 +540,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             resourceDebugSession.id,
             'cli stop',
             'resource-session-settled',
+            appHostDebugSession.id,
             parentDebugSession.id,
         ]);
     });
@@ -619,6 +620,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.deepStrictEqual(stopOrder, [
             resourceDebugSession.id,
             'cli stop',
+            appHostDebugSession.id,
             parentDebugSession.id,
         ]);
 
@@ -1398,6 +1400,67 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         finally {
             clock.restore();
         }
+    });
+
+    test('dispose stops the AppHost session after resource stops and before the Aspire parent', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const appHostDebugSession = {
+            id: 'apphost-session',
+            type: 'coreclr',
+            name: 'AppHost',
+            configuration: { type: 'coreclr', request: 'launch', name: 'AppHost' },
+        };
+        const resourceDebugSession = {
+            id: 'resource-session',
+            type: 'pwa-node',
+            name: 'Node.js: app.js',
+            configuration: { type: 'pwa-node', request: 'launch', name: 'Node.js: app.js' },
+        };
+        const terminalProvider = {
+            isCliDebugLoggingEnabled: () => false,
+        };
+        const stopOrder: string[] = [];
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(async session => {
+            stopOrder.push((session as unknown as { id: string }).id);
+        });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        (aspireDebugSession as any)._appHostDebugSession = {
+            id: appHostDebugSession.id,
+            session: appHostDebugSession as unknown as vscode.DebugSession,
+            stopSession: () => vscode.debug.stopDebugging(appHostDebugSession as unknown as vscode.DebugSession),
+        };
+        (aspireDebugSession as any)._resourceDebugSessions = [
+            (aspireDebugSession as any)._appHostDebugSession,
+            {
+                id: resourceDebugSession.id,
+                session: resourceDebugSession as unknown as vscode.DebugSession,
+                stopSession: () => vscode.debug.stopDebugging(resourceDebugSession as unknown as vscode.DebugSession),
+            },
+        ];
+
+        await aspireDebugSession.dispose();
+
+        // dispose() is the normal VS Code stop path, so it must keep the same ordering as
+        // stopDebugging() instead of leaving the AppHost to VS Code's cascade from the parent.
+        assert.deepStrictEqual(stopOrder, [
+            resourceDebugSession.id,
+            appHostDebugSession.id,
+            parentDebugSession.id,
+        ]);
     });
 
     test('stopDebugging does not stop the Aspire parent session twice when AppHost stop disposes the Aspire session', async () => {
