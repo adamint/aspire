@@ -5,7 +5,7 @@ import { AppHostDiscoveryService, getDebugTargetForCandidate } from '../utils/ap
 import type { CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
 import { extensionLogOutputChannel } from '../utils/logging';
-import { appHostTelemetryTargetPathConfigKey } from './AspireDebugConfigurationMetadata';
+import { appHostLaunchReservationTokenConfigKey, appHostTelemetryTargetPathConfigKey } from './AspireDebugConfigurationMetadata';
 import { getAspireDebugConfigurationCommand } from '../services/AppHostLaunchService';
 import { isAspireDebugConfigurationExtensionOwned, markAspireDebugConfigurationAsExtensionOwned } from './AspireDebugConfigurationProviderInternal';
 
@@ -18,6 +18,8 @@ export { stripAspireDebugConfigurationProviderInternalProperties } from './Aspir
 export interface ExternalLaunchReservation {
     /** Returns `false` when a lifecycle-owned launch already claimed this AppHost. */
     tryReserveExternalLaunch(appHostPath: string): boolean;
+    /** The token identifying the reservation this launch now holds. */
+    getLaunchReservationToken(appHostPath: string): string | undefined;
 }
 
 export class AspireDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
@@ -132,6 +134,17 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
                     // Abort this session and tell the user why rather than starting a second.
                     void vscode.window.showInformationMessage(appHostLifecycleLaunchAlreadyClaimed);
                     return undefined;
+                }
+
+                // Restarting an AppHost reuses the previous session's configuration, so the stamp
+                // is overwritten rather than preserved: this session owns the reservation it just
+                // took, and the terminate event of the session it replaces must not clear it.
+                const reservationToken = claimedPath ? this._launchReservation.getLaunchReservationToken(claimedPath) : undefined;
+                if (reservationToken) {
+                    configRecord[appHostLaunchReservationTokenConfigKey] = reservationToken;
+                }
+                else {
+                    delete configRecord[appHostLaunchReservationTokenConfigKey];
                 }
             }
         }

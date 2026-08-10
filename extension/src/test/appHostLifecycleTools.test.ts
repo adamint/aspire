@@ -13,6 +13,7 @@ import {
     AppHostStopLanguageModelTool,
     aspireAppHostStartToolName,
     aspireAppHostStopToolName,
+    computeWorkspaceFolderQualifiers,
     registerAppHostLifecycleTools,
     type AppHostLifecycleDiscoveryService,
     type AppHostLifecycleEditorSession,
@@ -345,7 +346,7 @@ suite('AppHost lifecycle language model tools', () => {
                 /prefer this tool over invoking Aspire AppHost lifecycle commands in a terminal/i);
             assert.match(
                 packageNls['languageModelTool.aspireAppHost.appHostPath.description'],
-                /In a multi-root workspace, always prefix the path with the workspace folder name/i);
+                /prefixed with the workspace folder qualifier the tools report/i);
         });
 
         test('registers runtime tool strings for localization', () => {
@@ -694,6 +695,31 @@ suite('AppHost lifecycle language model tools', () => {
             finally {
                 fs.rmSync(firstNamesake, { recursive: true, force: true });
                 fs.rmSync(secondNamesake, { recursive: true, force: true });
+            }
+        });
+
+        test('keeps duplicate-name folder qualifiers relative so the selectors stay resolvable', () => {
+            // `C:\app` and `D:\app` are two roots whose only difference is the drive designator.
+            // A qualifier of `C:` would make `C:/app/AppHost/AppHost.csproj` absolute under
+            // Windows rules, and `resolveTarget` refuses absolute selectors outright — so the
+            // registry would advertise selectors the tool itself rejects. The qualifiers are
+            // asserted under `path.win32` on every platform because the selector contract does
+            // not change with the host OS.
+            const folders = [
+                { uri: { fsPath: 'C:\\app' }, name: 'app', index: 0 },
+                { uri: { fsPath: 'D:\\app' }, name: 'app', index: 1 },
+            ] as unknown as vscode.WorkspaceFolder[];
+
+            const qualifiers = computeWorkspaceFolderQualifiers(folders);
+
+            assert.strictEqual(qualifiers.length, 2);
+            assert.strictEqual(new Set(qualifiers).size, 2, `Expected distinct qualifiers, got ${JSON.stringify(qualifiers)}`);
+            for (const qualifier of qualifiers) {
+                assert.strictEqual(
+                    path.win32.isAbsolute(`${qualifier}/AppHost/AppHost.csproj`),
+                    false,
+                    `Expected '${qualifier}' to produce a relative selector`);
+                assert.strictEqual(path.posix.isAbsolute(`${qualifier}/AppHost/AppHost.csproj`), false);
             }
         });
 

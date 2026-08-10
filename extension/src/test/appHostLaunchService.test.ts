@@ -995,6 +995,58 @@ suite('AppHostLaunchService', () => {
         }
     });
 
+    test('a superseded session termination leaves the replacement launch reservation in place', () => {
+        // Restarting an AppHost disposes the session and starts its replacement immediately, so
+        // the old session's terminate event can arrive after the replacement has reserved the same
+        // AppHost. Clearing then would drop the replacement's claim and let a second AppHost start
+        // for the same project, which is the duplicate the reservation exists to prevent.
+        const appHostPath = '/repo/AppHost.csproj';
+        assert.strictEqual(service.tryReserveExternalLaunch(appHostPath), true);
+        const supersededToken = service.getLaunchReservationToken(appHostPath);
+        assert.ok(supersededToken);
+
+        service.clearLaunching(appHostPath);
+        assert.strictEqual(service.tryReserveExternalLaunch(appHostPath), true);
+        const currentToken = service.getLaunchReservationToken(appHostPath);
+        assert.notStrictEqual(currentToken, supersededToken);
+
+        assert.ok(onDidTerminateDebugSessionCallback);
+        onDidTerminateDebugSessionCallback({
+            configuration: {
+                type: 'aspire',
+                program: appHostPath,
+                command: 'run',
+                __aspireAppHostLaunchReservationToken: supersededToken,
+            },
+        } as unknown as vscode.DebugSession);
+
+        assert.strictEqual(service.isLaunching(appHostPath), true, 'Expected the replacement reservation to survive the superseded session terminating');
+        assert.strictEqual(service.getLaunchReservationToken(appHostPath), currentToken);
+    });
+
+    test('a terminating session clears the reservation it holds itself', () => {
+        // The guard must only skip superseded tokens: a session that owns the reservation still
+        // has to clear it, or a launch that failed would leave the tree reporting "Starting..."
+        // and refuse every later start for that AppHost.
+        const appHostPath = '/repo/AppHost.csproj';
+        assert.strictEqual(service.tryReserveExternalLaunch(appHostPath), true);
+        const token = service.getLaunchReservationToken(appHostPath);
+        assert.ok(token);
+
+        assert.ok(onDidTerminateDebugSessionCallback);
+        onDidTerminateDebugSessionCallback({
+            configuration: {
+                type: 'aspire',
+                program: appHostPath,
+                command: 'run',
+                __aspireAppHostLaunchReservationToken: token,
+            },
+        } as unknown as vscode.DebugSession);
+
+        assert.strictEqual(service.isLaunching(appHostPath), false);
+        assert.strictEqual(service.getLaunchReservationToken(appHostPath), undefined);
+    });
+
     test('terminated run sessions include appHostPath and stop refresh semantics', () => {
         let terminationEvent: { appHostPath: string; command?: string; shouldRequestStopRefresh: boolean } | undefined;
         service.onDidTerminateAppHostDebugSession(event => {

@@ -971,12 +971,12 @@ function describeKnownAppHosts(targets: readonly ResolvedAppHostTarget[]): reado
  * because their absolute paths are. Folders with an unambiguous name keep it, so the common case
  * still shows the label the explorer shows.
  */
-function computeWorkspaceFolderQualifiers(folders: readonly vscode.WorkspaceFolder[]): string[] {
+export function computeWorkspaceFolderQualifiers(folders: readonly vscode.WorkspaceFolder[]): string[] {
     const states = folders.map(folder => ({
         // `name` is used before any path segment, so a distinct label stays the displayed one.
-        segments: folder.uri.fsPath.split(/[\\/]+/).filter(segment => segment.length > 0),
+        segments: folder.uri.fsPath.split(/[\\/]+/).filter(segment => segment.length > 0).map(toRelativeQualifierSegment),
         consumed: 0,
-        qualifier: folder.name,
+        qualifier: toRelativeQualifierSegment(folder.name),
     }));
 
     // Every pass gives one more path segment to each folder still sharing a qualifier. The loop
@@ -984,14 +984,8 @@ function computeWorkspaceFolderQualifiers(folders: readonly vscode.WorkspaceFold
     // become more specific, and distinct absolute paths differ before that point.
     const maxPasses = states.reduce((longest, state) => Math.max(longest, state.segments.length), 0) + 1;
     for (let pass = 0; pass < maxPasses; pass++) {
-        const countsByQualifier = new Map<string, number>();
-        for (const state of states) {
-            const key = toSelectorKey(state.qualifier);
-            countsByQualifier.set(key, (countsByQualifier.get(key) ?? 0) + 1);
-        }
-
         const collided = states.filter(state =>
-            (countsByQualifier.get(toSelectorKey(state.qualifier)) ?? 0) > 1 &&
+            countQualifier(states, state.qualifier) > 1 &&
             state.consumed < state.segments.length);
         if (collided.length === 0) {
             break;
@@ -1003,7 +997,31 @@ function computeWorkspaceFolderQualifiers(folders: readonly vscode.WorkspaceFold
         }
     }
 
-    return states.map(state => state.qualifier);
+    // Paths can still collide once they are relative: `C:\app` and `D:\app` are the same folder
+    // name under the same (dropped) drive designators. A positional suffix is the last resort
+    // that keeps every AppHost addressable, because a qualifier shared by two roots is one
+    // `resolveTarget` has to refuse as ambiguous.
+    return states.map((state, index) =>
+        countQualifier(states, state.qualifier) > 1 ? `${state.qualifier}~${index + 1}` : state.qualifier);
+}
+
+function countQualifier(states: readonly { qualifier: string }[], qualifier: string): number {
+    const key = toSelectorKey(qualifier);
+    return states.filter(state => toSelectorKey(state.qualifier) === key).length;
+}
+
+/**
+ * Makes a single qualifier segment safe to use as the head of a selector.
+ *
+ * `resolveTarget` refuses absolute input, so a qualifier that makes the selector absolute would
+ * leave every AppHost under that root unaddressable while still being advertised in
+ * `knownAppHosts`. Once separators are dropped the only segment that can do that is a Windows
+ * drive designator (`C:` in `C:/app/AppHost.csproj`), and `:` cannot appear in a Windows path
+ * segment for any other reason, so dropping it there is enough. The check runs under Windows
+ * rules on every platform because the selector contract is the same everywhere.
+ */
+function toRelativeQualifierSegment(segment: string): string {
+    return path.win32.isAbsolute(`${segment}/x`) ? segment.replace(/:/g, '') : segment;
 }
 
 /**

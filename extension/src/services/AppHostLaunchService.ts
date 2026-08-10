@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as vscode from 'vscode';
@@ -9,7 +10,7 @@ import { classifyError, isCommandCancellation, sendTelemetryEvent, type EventPro
 import { bucketAspireCommand } from '../utils/telemetryBuckets';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
-import { appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
+import { appHostLaunchReservationTokenConfigKey, appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
 import { markAspireDebugConfigurationAsExtensionOwned } from '../debugger/AspireDebugConfigurationProviderInternal';
 
 function isAspireCommandType(value: unknown): value is AspireCommandType {
@@ -138,6 +139,15 @@ export class AppHostLaunchService implements vscode.Disposable {
      * clear a launch that is still in flight and reopen the duplicate-launch window.
      */
     private readonly _externalReservationExpiries = new Map<string, NodeJS.Timeout>();
+    /**
+     * Identifies the reservation currently held for each key.
+     *
+     * A launch stamps its token onto the debug configuration it starts, so a terminating session
+     * can be told apart from the launch that reserved the same AppHost after it. Restarting an
+     * AppHost disposes the old session and starts the replacement immediately, and the old
+     * session's terminate event can arrive after the replacement has reserved the slot.
+     */
+    private readonly _reservationTokens = new Map<string, string>();
     private readonly _lifecycleLocks = new Map<string, Promise<unknown>>();
     private readonly _lifecycleLockPathKeys = new Map<string, Set<string>>();
     private readonly _lifecycleCancellationSource = new vscode.CancellationTokenSource();
@@ -166,10 +176,20 @@ export class AppHostLaunchService implements vscode.Disposable {
                 : session.configuration?.program;
             if (appHostPath && session.configuration?.type === 'aspire') {
                 const key = getAppHostPathComparisonKey(appHostPath);
-                this._lifecycleLaunchClaims.delete(key);
-                this.cancelExternalReservationExpiry(key);
-                if (this._launchingPaths.delete(key)) {
-                    this._onDidChangeLaunchingState.fire();
+                const sessionToken = session.configuration?.[appHostLaunchReservationTokenConfigKey];
+                const currentToken = this._reservationTokens.get(key);
+                // A session that presents a superseded token is not the launch that holds the
+                // reservation, so clearing here would drop a newer launch's claim and reopen the
+                // duplicate-launch window it exists to close. Sessions that carry no token at all
+                // predate no reservation of their own and keep the original behavior.
+                const ownsReservation = typeof sessionToken !== 'string' || currentToken === undefined || currentToken === sessionToken;
+                if (ownsReservation) {
+                    this._lifecycleLaunchClaims.delete(key);
+                    this.cancelExternalReservationExpiry(key);
+                    this._reservationTokens.delete(key);
+                    if (this._launchingPaths.delete(key)) {
+                        this._onDidChangeLaunchingState.fire();
+                    }
                 }
                 const command = getAspireDebugConfigurationCommand(session.configuration);
                 this._onDidTerminateAppHostDebugSession.fire({
@@ -192,6 +212,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             clearTimeout(expiry);
         }
         this._externalReservationExpiries.clear();
+        this._reservationTokens.clear();
         this._onDidChangeLaunchingState.dispose();
         this._onDidTerminateAppHostDebugSession.dispose();
         this._onDidRequestLaunch.dispose();
@@ -455,7 +476,16 @@ export class AppHostLaunchService implements vscode.Disposable {
         }
 
         this._launchingPaths.add(key);
+        this._reservationTokens.set(key, randomUUID());
         this._onDidChangeLaunchingState.fire();
+    }
+
+    /**
+     * The token identifying the reservation currently held for this AppHost, to be stamped on the
+     * debug configuration the reserving launch starts.
+     */
+    getLaunchReservationToken(appHostPath: string): string | undefined {
+        return this._reservationTokens.get(getAppHostPathComparisonKey(appHostPath));
     }
 
     /**
@@ -490,6 +520,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             }
 
             this._externalReservationExpiries.delete(key);
+            this._reservationTokens.delete(key);
             if (this._launchingPaths.delete(key)) {
                 this._onDidChangeLaunchingState.fire();
             }
@@ -516,6 +547,7 @@ export class AppHostLaunchService implements vscode.Disposable {
         const key = getAppHostPathComparisonKey(appHostPath);
         this._lifecycleLaunchClaims.delete(key);
         this.cancelExternalReservationExpiry(key);
+        this._reservationTokens.delete(key);
         if (this._launchingPaths.delete(key)) {
             this._onDidChangeLaunchingState.fire();
         }
@@ -525,6 +557,7 @@ export class AppHostLaunchService implements vscode.Disposable {
         const exactKey = getAppHostPathComparisonKey(appHostPath);
         this._lifecycleLaunchClaims.delete(exactKey);
         this.cancelExternalReservationExpiry(exactKey);
+        this._reservationTokens.delete(exactKey);
         if (this._launchingPaths.delete(exactKey)) {
             this._onDidChangeLaunchingState.fire();
             return;
@@ -541,6 +574,7 @@ export class AppHostLaunchService implements vscode.Disposable {
         this._launchingPaths.delete(matchingPaths[0]);
         this._lifecycleLaunchClaims.delete(matchingPaths[0]);
         this.cancelExternalReservationExpiry(matchingPaths[0]);
+        this._reservationTokens.delete(matchingPaths[0]);
         this._onDidChangeLaunchingState.fire();
     }
 
@@ -626,6 +660,10 @@ export class AppHostLaunchService implements vscode.Disposable {
             noDebug
         };
         markAspireDebugConfigurationAsExtensionOwned(config);
+        const reservationToken = this.getLaunchReservationToken(appHostPath);
+        if (reservationToken) {
+            (config as Record<string, unknown>)[appHostLaunchReservationTokenConfigKey] = reservationToken;
+        }
 
         if (doStep) {
             config.step = doStep;

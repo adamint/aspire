@@ -17,10 +17,16 @@ class RecordingLaunchReservation implements ExternalLaunchReservation {
     readonly reserved: string[] = [];
     /** When set, the claim is refused as if a lifecycle-owned launch already held it. */
     claimedByLifecycle = false;
+    /** The token a successful claim hands back, mirroring the launch service's per-reservation id. */
+    reservationToken: string | undefined = 'reservation-1';
 
     tryReserveExternalLaunch(appHostPath: string): boolean {
         this.reserved.push(appHostPath);
         return !this.claimedByLifecycle;
+    }
+
+    getLaunchReservationToken(): string | undefined {
+        return this.claimedByLifecycle ? undefined : this.reservationToken;
     }
 }
 
