@@ -1253,20 +1253,11 @@ internal sealed class ProjectLocator(
                     var resolvedPath = Path.GetFullPath(
                         Path.IsPathRooted(existingPath) ? existingPath : Path.Combine(configDir, existingPath));
 
-                    // Windows and default macOS APFS volumes are case-insensitive, so a
-                    // differently-cased recorded path still names the file discovery found. On a
-                    // case-sensitive volume "Foo/AppHost.csproj" and "foo/AppHost.csproj" are two
-                    // projects, and folding them together would make the second one unable to take
-                    // over the workspace default. See https://github.com/microsoft/aspire/issues/17635.
-                    var pathComparison = environment.IsWindows() || environment.IsMacOS()
-                        ? StringComparison.OrdinalIgnoreCase
-                        : StringComparison.Ordinal;
-
                     // Only skip creation if the config already points to the discovered apphost.
                     // If the path is stale/invalid, fall through so the config gets healed. For
                     // session-scoped origins, the later presence-only check still preserves the raw
                     // recorded value without resolving it.
-                    if (string.Equals(resolvedPath, projectFile.FullName, pathComparison))
+                    if (NamesTheSameFile(resolvedPath, projectFile.FullName, environment))
                     {
                         logger.LogDebug(
                             "Config at {Path} already references apphost {AppHost}, skipping creation",
@@ -1283,6 +1274,89 @@ internal sealed class ProjectLocator(
         // GetOrCreateLocalAspireConfigFile can migrate legacy .aspire/settings.json into
         // aspire.config.json, so calling it earlier would recreate the split-config bug.
         return new WorkspaceConfigTarget(GetOrCreateLocalAspireConfigFile(), AppHostDirectoryForScopedConfig: null);
+    }
+
+    /// <summary>
+    /// Determines whether two absolute paths name one file, asking the filesystem rather than
+    /// assuming the platform's usual casing rules.
+    /// </summary>
+    /// <remarks>
+    /// Case sensitivity is a property of the volume, not of the operating system: macOS APFS and
+    /// Windows NTFS can each be formatted either way, and Windows directories can opt in
+    /// individually. Guessing from the OS is wrong in a way that fails silently here, because
+    /// treating "Foo/AppHost.csproj" and "foo/AppHost.csproj" as one file on a case-sensitive
+    /// volume makes the second project unable to take over the workspace default.
+    /// See https://github.com/microsoft/aspire/issues/17635.
+    /// </remarks>
+    private static bool NamesTheSameFile(string left, string right, IEnvironment environment)
+    {
+        if (string.Equals(left, right, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (!string.Equals(left, right, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        // A casing-only difference means two files wherever the volume is case-sensitive, which is
+        // the default on Linux.
+        if (!environment.IsWindows() && !environment.IsMacOS())
+        {
+            return false;
+        }
+
+        // Windows and macOS volumes are usually case-insensitive, but APFS and NTFS can both be
+        // formatted the other way, and Windows directories can opt in individually. Only a
+        // case-sensitive volume can hold both spellings at once, so the real directory entries
+        // settle it rather than the platform default. The two paths are the same string apart from
+        // casing and therefore on the same volume, which makes the first differing component enough
+        // to answer for the whole path.
+        return !BothCaseVariantsExist(left, right);
+    }
+
+    private static bool BothCaseVariantsExist(string left, string right)
+    {
+        var separators = new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar };
+        var leftSegments = left.Split(separators);
+        var rightSegments = right.Split(separators);
+
+        if (leftSegments.Length != rightSegments.Length)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < leftSegments.Length; index++)
+        {
+            if (string.Equals(leftSegments[index], rightSegments[index], StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            // Rebuild the parent from the segments already agreed on, so the lookup is anchored at
+            // a directory both paths share.
+            var parent = string.Join(Path.DirectorySeparatorChar, leftSegments[..index]);
+
+            try
+            {
+                var siblings = Directory.EnumerateFileSystemEntries(parent)
+                    .Select(Path.GetFileName)
+                    .ToArray();
+
+                return siblings.Contains(leftSegments[index], StringComparer.Ordinal) &&
+                    siblings.Contains(rightSegments[index], StringComparer.Ordinal);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                // The probe refines the platform default rather than replacing it, so a directory
+                // that cannot be read leaves the caller with that default: on Windows and macOS the
+                // two spellings are taken to name one file.
+                return false;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
