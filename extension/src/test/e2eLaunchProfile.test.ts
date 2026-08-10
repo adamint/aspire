@@ -208,8 +208,7 @@ suite('E2E launch profile', () => {
         assert.ok(workflow.includes('Verify locked ExTester'));
         assert.ok(workflow.includes('verify_extester_feed:'));
         assert.ok(workflow.includes('run: node scripts/run-e2e.js --verify-extester-feed'));
-        // The e2e job also needs select_shards, which builds the matrix, so `needs` is now a list.
-        assert.ok(workflow.includes('needs: [verify_extester_feed, select_shards]'));
+        assert.ok(workflow.includes('needs: verify_extester_feed'));
         assert.ok(!workflow.includes('extester_feed_unavailable:'));
         assert.ok(!workflow.includes('VS Code extension E2E matrix skipped'));
     });
@@ -218,14 +217,11 @@ suite('E2E launch profile', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
         const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
-        const shards = JSON.parse(fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-shards.json'), 'utf8')) as Array<Record<string, unknown>>;
         const resourceGroupsInstallIndex = runner.indexOf("displayName: 'Azure Resource Groups'");
         const functionsInstallIndex = runner.indexOf("displayName: 'Azure Functions'");
 
-        // The matrix lives in extension-e2e-shards.json so a single-shard call can filter it; a step-level
-        // `if:` cannot unschedule a matrix cell, so these two fields moved out of the workflow.
-        assert.ok(shards.some(shard => shard.shardName === 'azure-functions'));
-        assert.ok(shards.some(shard => shard.installAzureFunctions === true));
+        assert.ok(workflow.includes('shardName: azure-functions'));
+        assert.ok(workflow.includes('installAzureFunctions: true'));
         assert.ok(workflow.includes("core_tools_version='4.12.1'"));
         assert.ok(workflow.includes('faf8fb8d50b5293df338bec70594b12f45730e9fe251805298859b2238cf627e'));
         assert.ok(workflow.includes('vscode-azureresourcegroups/0.12.7/vspackage'));
@@ -938,45 +934,7 @@ suite('E2E launch profile', () => {
         assert.ok(runner.indexOf('const downloadCacheRoot =') < runRootIndex);
         assert.ok(runner.indexOf('const vscodeVersion = resolveCachedVsCodeVersion(') < runRootIndex);
     });
-
-    test('specs reopen the Aspire view after the workspace folder open before waiting for a running AppHost', () => {
-        const extensionRoot = path.resolve(__dirname, '..', '..');
-        const specDirectory = path.join(extensionRoot, 'src', 'test-e2e');
-        const specs = fs.readdirSync(specDirectory).filter(file => file.endsWith('.e2e.test.ts')).sort();
-        assert.ok(specs.length > 0, 'Expected to find E2E spec files.');
-
-        const offenders: string[] = [];
-        for (const spec of specs) {
-            // Comments are stripped so prose naming these helpers cannot satisfy the rule.
-            const source = stripComments(fs.readFileSync(path.join(specDirectory, spec), 'utf8'));
-            const firstRunningWait = firstIndexOf(source, ['waitForRunningAppHost(', 'waitForRunningAppHostPid(']);
-            if (firstRunningWait < 0) {
-                continue;
-            }
-
-            // These helpers open the E2E workspace folder on the first spec of a shard, and that
-            // reloads the VS Code window back to the Explorer view. AppHostDataRepository only
-            // polls `aspire ps` while the Aspire panel is visible or an AppHost tab is open (its
-            // `_dataActive` gate), and `aspire ps` is the only source of `state.appHosts` --
-            // the list every running-AppHost assertion reads. A spec that waits for a running
-            // AppHost without reopening the panel after that reload waits forever, which is how
-            // the build-ownership shard timed out at 180s while the AppHost was demonstrably up.
-            const firstFolderOpen = firstIndexOf(source, ['waitForWorkspaceAppHost(', 'waitForSelectedWorkspaceAppHost(']);
-            const reopened = [...source.matchAll(/openAspireView\(\)/g)]
-                .some(match => match.index !== undefined && match.index > firstFolderOpen && match.index < firstRunningWait);
-            if (!reopened) {
-                offenders.push(spec);
-            }
-        }
-
-        assert.deepStrictEqual(offenders, []);
-    });
 });
-
-function firstIndexOf(source: string, needles: readonly string[]): number {
-    const indexes = needles.map(needle => source.indexOf(needle)).filter(index => index >= 0);
-    return indexes.length === 0 ? -1 : Math.min(...indexes);
-}
 
 function getSwitchCase(source: string, startCase: string, nextCase: string): string {
     const start = source.indexOf(`case '${startCase}':`);

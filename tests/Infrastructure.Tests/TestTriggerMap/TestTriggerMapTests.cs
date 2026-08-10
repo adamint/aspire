@@ -1,7 +1,6 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Text.Json;
 using Microsoft.Extensions.FileSystemGlobbing;
 using Xunit;
 
@@ -400,64 +399,6 @@ public sealed class TestTriggerMapTests
 
         Assert.True(wrong.Count == 0,
             $"gated jobs whose if: does not reference their own selection boolean: {string.Join("; ", wrong)}");
-    }
-
-    [Fact]
-    public void ExtensionE2eSelectionRunsTheBuildOwnershipShard()
-    {
-        var testsYml = File.ReadAllText(Path.Combine(RepoRoot.Path, ".github", "workflows", "tests.yml"));
-        var block = JobBlock(testsYml, "extension_e2e_tests");
-
-        Assert.True(block is not null, "job 'extension_e2e_tests' not found in tests.yml");
-        Assert.Contains("if: ${{ needs.setup_for_tests.outputs.run_extension_e2e == 'true' }}", block);
-        Assert.DoesNotContain("false &&", block);
-        Assert.Contains("shardName: build-ownership", block);
-        Assert.Contains("needs.extension_e2e_tests.result == 'skipped' && (needs.setup_for_tests.outputs.run_extension_e2e == 'true')", testsYml);
-    }
-
-    [Fact]
-    public void ExtensionE2eReusableWorkflowFiltersTheMatrixBeforeSchedulingRunners()
-    {
-        var workflowPath = Path.Combine(RepoRoot.Path, ".github", "workflows", "extension-e2e-tests.yml");
-        var workflow = File.ReadAllText(workflowPath);
-        var shardsPath = Path.Combine(RepoRoot.Path, ".github", "workflows", "extension-e2e-shards.json");
-
-        // A step-level `if:` cannot unschedule a matrix cell - GitHub expands the matrix and queues
-        // every cell before any step condition is evaluated - so a single-shard call would still claim
-        // a runner for all 23 cells. The matrix has to come from the filtered output instead.
-        Assert.Contains("include: ${{ fromJSON(needs.select_shards.outputs.include) }}", workflow);
-        Assert.DoesNotContain("matrix.shardName == inputs.shardName", workflow);
-
-        Assert.True(File.Exists(shardsPath), "extension-e2e-shards.json is the matrix source of truth and must exist");
-
-        using var shards = JsonDocument.Parse(File.ReadAllText(shardsPath));
-        var shardNames = shards.RootElement.EnumerateArray()
-            .Select(cell => cell.GetProperty("shardName").GetString())
-            .ToList();
-
-        Assert.Contains("build-ownership", shardNames);
-        Assert.All(shards.RootElement.EnumerateArray(), cell =>
-        {
-            Assert.True(cell.TryGetProperty("runner", out _), "every shard cell needs a runner");
-            Assert.True(cell.TryGetProperty("spec", out _), "every shard cell needs a spec");
-        });
-    }
-
-    [Fact]
-    public void ExtensionE2eShardMatrixSourceRoutesToTheJobItConfigures()
-    {
-        // extension-e2e-shards.json now supplies the matrix, so a PR that adds, removes, or retargets a
-        // shard changes what extension-e2e runs. It lives under .github/workflows/, and the generic
-        // .github/workflows/** rule routes only to Infrastructure.Tests, so without an explicit entry a
-        // shard edit would merge without ever running the job it configures.
-        const string shardsPath = ".github/workflows/extension-e2e-shards.json";
-
-        var routedTargets = s_map.PathRules
-            .Where(rule => rule.Paths.Any(glob => TestTriggerMap.GlobMatches(glob, shardsPath)))
-            .SelectMany(rule => rule.Targets)
-            .ToList();
-
-        Assert.Contains("job:extension-e2e", routedTargets);
     }
 
     [Fact]

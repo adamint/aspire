@@ -2,54 +2,8 @@ name: VS Code extension E2E tests
 
 on:
   workflow_call:
-    inputs:
-      shardName:
-        required: false
-        type: string
-        default: ''
 
 jobs:
-  # A step-level `if:` cannot keep a matrix cell from being scheduled: GitHub expands the whole
-  # matrix, queues every cell, and only then evaluates step conditions, so filtering there left 21
-  # no-op runner jobs queued for a single-shard call. This gate is selected by many CLI, Hosting, and
-  # extension changes, so the matrix itself has to be narrowed before any runner is claimed.
-  # See https://docs.github.com/actions/using-jobs/using-a-matrix-for-your-jobs.
-  select_shards:
-    name: Select E2E shards
-    runs-on: ubuntu-latest
-    outputs:
-      include: ${{ steps.select.outputs.include }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          sparse-checkout: .github/workflows/extension-e2e-shards.json
-          sparse-checkout-cone-mode: false
-
-      - name: Select shards
-        id: select
-        env:
-          SHARD_NAME: ${{ inputs.shardName }}
-        run: |
-          set -euo pipefail
-          shards=.github/workflows/extension-e2e-shards.json
-
-          if [ -z "$SHARD_NAME" ]; then
-            include=$(jq -c . "$shards")
-          else
-            include=$(jq -c --arg s "$SHARD_NAME" '[.[] | select(.shardName == $s)]' "$shards")
-
-            # An unmatched name would otherwise produce an empty matrix, which GitHub reports as a
-            # skipped job - a typo in a caller would silently retire the gate it meant to run.
-            if [ "$(printf '%s' "$include" | jq 'length')" -eq 0 ]; then
-              names=$(jq -r '[.[].shardName] | unique | join(", ")' "$shards")
-              echo "::error::No E2E shard named '$SHARD_NAME'. Known shards: $names"
-              exit 1
-            fi
-          fi
-
-          printf 'include=%s\n' "$include" >> "$GITHUB_OUTPUT"
-
   verify_extester_feed:
     name: Verify ExTester internal feed availability
     runs-on: ubuntu-latest
@@ -119,7 +73,7 @@ jobs:
 
   extension_e2e:
     name: VS Code extension E2E (${{ matrix.name }}, ${{ matrix.shardName }})
-    needs: [verify_extester_feed, select_shards]
+    needs: verify_extester_feed
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 75
     env:
@@ -128,7 +82,178 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.select_shards.outputs.include) }}
+        include:
+          - name: Linux
+            shardName: command-palette
+            spec: out/test-e2e/test-e2e/commandPalette.e2e.test.js
+            runner: ubuntu-latest
+            rid: linux-x64
+            archivePattern: aspire-cli-linux-x64*.tar.gz
+            cliBinary: aspire
+            useXvfb: true
+          - name: Windows
+            shardName: command-palette
+            spec: out/test-e2e/test-e2e/commandPalette.e2e.test.js
+            runner: windows-latest
+            rid: win-x64
+            archivePattern: aspire-cli-win-x64*.zip
+            cliBinary: aspire.exe
+            useXvfb: false
+          - name: Linux
+            shardName: settings-files
+            spec: out/test-e2e/test-e2e/settingsFiles.e2e.test.js
+            runner: ubuntu-latest
+            rid: linux-x64
+            archivePattern: aspire-cli-linux-x64*.tar.gz
+            cliBinary: aspire
+            useXvfb: true
+          - name: Windows
+            shardName: settings-files
+            spec: out/test-e2e/test-e2e/settingsFiles.e2e.test.js
+            runner: windows-latest
+            rid: win-x64
+            archivePattern: aspire-cli-win-x64*.zip
+            cliBinary: aspire.exe
+            useXvfb: false
+          - name: Linux
+            shardName: discovery-configuration
+            spec: out/test-e2e/test-e2e/discoveryConfiguration.e2e.test.js
+            runner: ubuntu-latest
+            rid: linux-x64
+            archivePattern: aspire-cli-linux-x64*.tar.gz
+            cliBinary: aspire
+            useXvfb: true
+          - name: Windows
+            shardName: discovery-configuration
+            spec: out/test-e2e/test-e2e/discoveryConfiguration.e2e.test.js
+            runner: windows-latest
+            rid: win-x64
+            archivePattern: aspire-cli-win-x64*.zip
+            cliBinary: aspire.exe
+            useXvfb: false
+          - name: Linux
+            shardName: apphost-tree
+            spec: out/test-e2e/test-e2e/appHostTree.e2e.test.js
+            runner: ubuntu-latest
+            rid: linux-x64
+            archivePattern: aspire-cli-linux-x64*.tar.gz
+            cliBinary: aspire
+            useXvfb: true
+          - name: Windows
+            shardName: apphost-tree
+            spec: out/test-e2e/test-e2e/appHostTree.e2e.test.js
+            runner: windows-latest
+            rid: win-x64
+            archivePattern: aspire-cli-win-x64*.zip
+            cliBinary: aspire.exe
+            useXvfb: false
+          - name: Linux
+            shardName: tree-actions
+            spec: out/test-e2e/test-e2e/treeActions.e2e.test.js
+            runner: ubuntu-latest
+            rid: linux-x64
+            archivePattern: aspire-cli-linux-x64*.tar.gz
+            cliBinary: aspire
+            useXvfb: true
+          - name: Windows
+            shardName: tree-actions
+            spec: out/test-e2e/test-e2e/treeActions.e2e.test.js
+            runner: windows-latest
+            rid: win-x64
+            archivePattern: aspire-cli-win-x64*.zip
+            cliBinary: aspire.exe
+            useXvfb: false
+          - name: Linux
+            shardName: debug-dashboard
+            spec: out/test-e2e/test-e2e/debugDashboard.e2e.test.js
+            runner: ubuntu-latest
+            rid: linux-x64
+            archivePattern: aspire-cli-linux-x64*.tar.gz
+            cliBinary: aspire
+            useXvfb: true
+          - name: Windows
+            shardName: debug-dashboard
+            spec: out/test-e2e/test-e2e/debugDashboard.e2e.test.js
+            runner: windows-latest
+            rid: win-x64
+            archivePattern: aspire-cli-win-x64*.zip
+            cliBinary: aspire.exe
+            useXvfb: false
+          - name: Linux
+            shardName: debug-startup-timeout
+            spec: out/test-e2e/test-e2e/debugStartupTimeout.e2e.test.js
+            runner: ubuntu-latest
+            rid: linux-x64
+            archivePattern: aspire-cli-linux-x64*.tar.gz
+            cliBinary: aspire
+            useXvfb: true
+            unsetCliStartTimeout: true
+          - name: Windows
+            shardName: debug-startup-timeout
+            spec: out/test-e2e/test-e2e/debugStartupTimeout.e2e.test.js
+            runner: windows-latest
+            rid: win-x64
+            archivePattern: aspire-cli-win-x64*.zip
+            cliBinary: aspire.exe
+            useXvfb: false
+            unsetCliStartTimeout: true
+          - name: Linux
+            shardName: zero-to-running
+            spec: out/test-e2e/test-e2e/zeroToRunning.e2e.test.js
+            runner: ubuntu-latest
+            rid: linux-x64
+            archivePattern: aspire-cli-linux-x64*.tar.gz
+            cliBinary: aspire
+            useXvfb: true
+          - name: Windows
+            shardName: zero-to-running
+            spec: out/test-e2e/test-e2e/zeroToRunning.e2e.test.js
+            runner: windows-latest
+            rid: win-x64
+            archivePattern: aspire-cli-win-x64*.zip
+            cliBinary: aspire.exe
+            useXvfb: false
+          - name: Linux
+            shardName: package-surface
+            spec: out/test-e2e/test-e2e/packageSurface.e2e.test.js
+            runner: ubuntu-latest
+            rid: linux-x64
+            archivePattern: aspire-cli-linux-x64*.tar.gz
+            cliBinary: aspire
+            useXvfb: true
+          - name: Windows
+            shardName: package-surface
+            spec: out/test-e2e/test-e2e/packageSurface.e2e.test.js
+            runner: windows-latest
+            rid: win-x64
+            archivePattern: aspire-cli-win-x64*.zip
+            cliBinary: aspire.exe
+            useXvfb: false
+          - name: Linux
+            shardName: edge-cases
+            spec: out/test-e2e/test-e2e/edgeCases.e2e.test.js
+            runner: ubuntu-latest
+            rid: linux-x64
+            archivePattern: aspire-cli-linux-x64*.tar.gz
+            cliBinary: aspire
+            useXvfb: true
+          - name: Windows
+            shardName: edge-cases
+            spec: out/test-e2e/test-e2e/edgeCases.e2e.test.js
+            runner: windows-latest
+            rid: win-x64
+            archivePattern: aspire-cli-win-x64*.zip
+            cliBinary: aspire.exe
+            useXvfb: false
+          - name: Linux
+            shardName: azure-functions
+            spec: out/test-e2e/test-e2e/azureFunctions.e2e.test.js
+            runner: ubuntu-latest
+            rid: linux-x64
+            archivePattern: aspire-cli-linux-x64*.tar.gz
+            cliBinary: aspire
+            useXvfb: true
+            installAzureFunctions: true
     defaults:
       run:
         shell: pwsh
@@ -341,11 +466,6 @@ jobs:
         run: |
           corepack yarn compile
           corepack yarn compile-e2e
-          # Fail fast with a clear message when a shard's spec did not compile, before the job spends
-          # minutes packaging the VSIX and downloading VS Code. Test-Path only understands literal
-          # paths and PowerShell wildcards (*, ?, []) -- it does NOT expand brace alternation such as
-          # {a,b}, which scripts/run-e2e.js does support. Keep every matrix spec a literal path so
-          # this guard stays accurate; use one matrix entry per spec instead of a brace group.
           if (-not (Test-Path '${{ matrix.spec }}')) {
             throw "Compiled E2E shard spec was not found: ${{ matrix.spec }}"
           }
@@ -379,7 +499,7 @@ jobs:
 
       - name: Upload E2E diagnostics
         id: upload_e2e_diagnostics
-        if: ${{ always() }}
+        if: always()
         continue-on-error: true
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -398,7 +518,7 @@ jobs:
           include-hidden-files: true
 
       - name: Print E2E diagnostics links
-        if: ${{ always() }}
+        if: always()
         working-directory: extension
         run: |
           $artifactName = "extension-e2e-diagnostics-${{ matrix.rid }}-${{ matrix.shardName }}-attempt${{ github.run_attempt }}"
