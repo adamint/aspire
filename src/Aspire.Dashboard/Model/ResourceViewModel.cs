@@ -258,7 +258,7 @@ public sealed class ResourceViewModel
         {
             if (stateSource.Properties.TryGetValue(name, out var property))
             {
-                builder[name] = property;
+                builder[name] = property.CloneForProjection();
             }
             else
             {
@@ -517,6 +517,16 @@ public sealed class ResourcePropertyViewModel
         IsHighlighted = isHighlighted;
         SortOrder = sortOrder;
         IsValueMasked = isValueSensitive;
+    }
+
+    internal ResourcePropertyViewModel CloneForProjection()
+    {
+        return new ResourcePropertyViewModel(Name, Value, IsValueSensitive, KnownProperty, SortOrder, DisplayName, IsHighlighted)
+        {
+            // The projected parent row should start from the same masking state, but future
+            // toggles are row-local UI state and must not mutate the replica row's property.
+            IsValueMasked = IsValueMasked
+        };
     }
 }
 
