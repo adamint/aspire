@@ -68,19 +68,29 @@ suite('Aspire resource debugger E2E', function () {
         assert.strictEqual(matchingFrame.line, getNodeAppBreakpointLine() + 1);
     });
 
-    test('debugs the Node resource in a session distinct from the AppHost session', async () => {
+    test('debugs the Node resource in a session distinct from the AppHost or Aspire session', async () => {
         const proof = await getSharedResourceDebugProof();
 
         const appHostSession = proof.appHostDebugSession;
         const resourceSession = proof.resourceDebugSession;
-        assert.ok(appHostSession, `Expected an Aspire AppHost debug session: ${JSON.stringify(proof.debugSessions.map(toSessionSummary))}`);
         assert.ok(resourceSession, `Expected the stopped resource debug session: ${JSON.stringify(proof.debugSessions.map(toSessionSummary))}`);
 
-        assert.strictEqual(appHostSession.type, 'coreclr');
-        assert.strictEqual(appHostSession.configuration.isApphost, true);
         assert.strictEqual(resourceSession.type, 'pwa-node');
-        assert.notStrictEqual(resourceSession.id, appHostSession.id);
-        assert.ok(isSamePath(String(appHostSession.configuration.program ?? ''), getPrimaryAppHostProjectPath()));
+        if (appHostSession) {
+            assert.strictEqual(appHostSession.type, 'coreclr');
+            assert.strictEqual(appHostSession.configuration.isApphost, true);
+            assert.notStrictEqual(resourceSession.id, appHostSession.id);
+            assert.ok(isSamePath(String(appHostSession.configuration.program ?? ''), getPrimaryAppHostProjectPath()));
+        }
+        else {
+            // Some CI runs use the .NET fallback launch path, which runs the AppHost under the
+            // synthetic Aspire session without a separate coreclr child session. The invariant this
+            // test owns is still that the resource debugger is not the Aspire session that launched
+            // it; a dedicated AppHost child session is asserted when the launch path creates one.
+            const aspireSession = proof.debugSessions.find(session => session.type === 'aspire');
+            assert.ok(aspireSession, `Expected an Aspire launcher session: ${JSON.stringify(proof.debugSessions.map(toSessionSummary))}`);
+            assert.notStrictEqual(resourceSession.id, aspireSession.id);
+        }
     });
 
     test('stopping debugging tears down the Node resource process tree', async () => {
