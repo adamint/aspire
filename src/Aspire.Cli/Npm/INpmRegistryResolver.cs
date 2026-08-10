@@ -44,18 +44,22 @@ internal sealed record NpmRegistryResolution(Uri RegistryUri, string Source)
     /// Gets the registry address to compose requests from, with any embedded credentials removed.
     /// </summary>
     /// <remarks>
-    /// <see cref="RegistryUri"/> keeps whatever npm resolved, including a <c>user:token@</c>
-    /// authority, because that is the address npm itself would use. This lookup is anonymous, so
-    /// requests are composed from this instead: even though the handler does not turn user info
-    /// into an <c>Authorization</c> header, it stays readable on
-    /// <see cref="System.Net.Http.HttpRequestMessage.RequestUri"/> for every delegating handler,
-    /// diagnostic listener, and exception message that reports the request.
+    /// <see cref="RegistryUri"/> keeps whatever npm resolved, credentials included, because that is
+    /// the address npm itself would use. Requests are composed from this instead.
     /// </remarks>
-    public Uri RequestUri { get; } = RemoveUserInfo(RegistryUri);
+    public Uri RequestUri { get; } = RemoveCredentials(RegistryUri);
 
-    private static Uri RemoveUserInfo(Uri registryUri)
+    private static Uri RemoveCredentials(Uri registryUri)
     {
-        if (string.IsNullOrEmpty(registryUri.UserInfo))
+        // Drops the same two credential carriers Redact does - the "user:token@" authority and a
+        // query token such as a SAS "?sv=...&sig=..." - so the property matches its documented
+        // contract on its own. Relative composition in NpmRegistryClient happens to discard the
+        // base query today, but this lookup is anonymous and the invariant has to hold for anything
+        // that reads the property: the request URI stays readable on every delegating handler,
+        // diagnostic listener, and exception message that reports the request.
+        if (string.IsNullOrEmpty(registryUri.UserInfo)
+            && string.IsNullOrEmpty(registryUri.Query)
+            && string.IsNullOrEmpty(registryUri.Fragment))
         {
             return registryUri;
         }
@@ -63,7 +67,9 @@ internal sealed record NpmRegistryResolution(Uri RegistryUri, string Source)
         return new UriBuilder(registryUri)
         {
             UserName = string.Empty,
-            Password = string.Empty
+            Password = string.Empty,
+            Query = string.Empty,
+            Fragment = string.Empty
         }.Uri;
     }
 

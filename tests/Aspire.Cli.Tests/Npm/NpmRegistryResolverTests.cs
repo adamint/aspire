@@ -691,6 +691,33 @@ public class NpmRegistryResolverTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_RemovesQueryAndFragmentFromTheRequestUri()
+    {
+        // RequestUri is documented as credential-free and is what a delegating handler, diagnostic
+        // listener, or exception message reads off the wire object. A signed URL carries its token
+        // in the query, so stripping only the authority would leave the property lying about itself.
+        WriteHomeNpmrc("registry=https://npm.contoso.example/feed/?sv=2021-08-06&sig=SUPERSECRETSIGNATURE#frag");
+
+        var resolution = CreateResolver().Resolve(PackageName);
+
+        Assert.Equal("https://npm.contoso.example/feed/", resolution.RequestUri.AbsoluteUri);
+        Assert.Equal("?sv=2021-08-06&sig=SUPERSECRETSIGNATURE", resolution.RegistryUri.Query);
+    }
+
+    [Fact]
+    public void Resolve_FailsWhenAnNpmrcIsLargerThanTheSizeLimit()
+    {
+        // npm has no such bound: it would read the file and install from whatever registry it names.
+        // Skipping it here would silently hand the answer to a lower-precedence layer and advertise
+        // an update from a registry the recommended command will not use.
+        WriteHomeNpmrcBytes(Encoding.UTF8.GetBytes(new string('#', (1024 * 1024) + 1)));
+
+        var exception = Assert.Throws<InvalidOperationException>(() => CreateResolver().Resolve(PackageName));
+
+        Assert.Contains(Path.Combine(_root.FullName, "home", ".npmrc"), exception.Message);
+    }
+
+    [Fact]
     public void Resolve_RedactsQueryAndFragmentFromTheDisplayUri()
     {
         // A registry address can carry its credential in the query rather than the authority - an

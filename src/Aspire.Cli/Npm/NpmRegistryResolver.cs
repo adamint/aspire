@@ -13,46 +13,38 @@ namespace Aspire.Cli.Npm;
 /// <summary>
 /// Resolves the npm registry for a package by reading the same configuration npm itself reads.
 /// </summary>
-/// <remarks>
-/// <para>
-/// The update check exists to answer "can the command we are about to recommend actually install
-/// something newer?". That command is <c>npm install -g @microsoft/aspire-cli@latest</c>, and npm
-/// resolves it against the <em>user's</em> configured registry. Enterprises routinely block
-/// registry.npmjs.org and pin <c>registry=</c> to an internal proxy, so a hardcoded public-npm
-/// lookup would fail for exactly the users whose install would have succeeded.
-/// </para>
-/// <para>
-/// Configuration is read directly rather than by shelling out to <c>npm config get registry</c>.
-/// Spawning npm costs a process launch on the command startup path and would reintroduce a
-/// Node-on-PATH requirement that the HTTP-based lookup deliberately removed.
-/// </para>
-/// <para>
-/// Nothing outside <c>registry</c>, <c>&lt;scope&gt;:registry</c>, <c>userconfig</c>, and
-/// <c>globalconfig</c> is ever retained. Credential keys such as <c>//registry.example.com/:_authToken</c> are rejected by the
-/// allow list before their value is parsed out of the line, and the environment layer keeps only
-/// the <c>npm_config_*</c> variables that clear the same allow list, so no process environment
-/// value and no credential entry outlives the parse. A <c>.npmrc</c> line and the value behind a
-/// <c>${VAR}</c> reference still pass through managed strings while they are being read, which no
-/// in-process parser can avoid; the guarantee is that they are not held afterwards.
-/// </para>
-/// <para>
-/// The one credential that can outlive the parse is one the user wrote into the registry address
-/// itself, as <c>https://user:token@host/</c> or as a signed query string. It survives only in
-/// <see cref="NpmRegistryResolution.RegistryUri"/>, which models the registry npm selected rather
-/// than anything sent anywhere. <see cref="NpmRegistryResolution.RequestUri"/> is that address
-/// with the userinfo and query removed and is the only form the client composes a request from,
-/// and <see cref="NpmRegistryResolution.DisplayUri"/> is the only form that reaches the debug log
-/// and the timeout message.
-/// </para>
-/// <para>
-/// The lookup is therefore anonymous: no <c>Authorization</c> header, no credential in the
-/// request address, and no payload beyond the package name. It does follow the scheme of the
-/// configured registry, so a registry configured as <c>http://</c> is read over plaintext HTTP;
-/// npm supports http registries, and refusing them here would silently disable the update check
-/// for an internal mirror rather than protect it.
-/// </para>
-/// See https://docs.npmjs.com/cli/using-npm/config for the precedence rules implemented here.
-/// </remarks>
+// The update check exists to answer "can the command we are about to recommend actually install
+// something newer?". That command is `npm install -g @microsoft/aspire-cli@latest`, and npm resolves
+// it against the *user's* configured registry. Enterprises routinely block registry.npmjs.org and
+// pin "registry=" to an internal proxy, so a hardcoded public-npm lookup would fail for exactly the
+// users whose install would have succeeded.
+//
+// Configuration is read directly rather than by shelling out to `npm config get registry`. Spawning
+// npm costs a process launch on the command startup path and would reintroduce a Node-on-PATH
+// requirement that the HTTP-based lookup deliberately removed.
+//
+// Nothing outside `registry`, `<scope>:registry`, `userconfig`, and `globalconfig` is ever retained.
+// Credential keys such as "//registry.example.com/:_authToken" are rejected by the allow list before
+// their value is parsed out of the line, and the environment layer keeps only the `npm_config_*`
+// variables that clear the same allow list, so no process environment value and no credential entry
+// outlives the parse. A .npmrc line and the value behind a "${VAR}" reference still pass through
+// managed strings while they are being read, which no in-process parser can avoid; the guarantee is
+// that they are not held afterwards.
+//
+// The one credential that can outlive the parse is one the user wrote into the registry address
+// itself, as a "user:token@" authority or as a signed query string. It survives only in
+// NpmRegistryResolution.RegistryUri, which models the registry npm selected rather than anything
+// sent anywhere. RequestUri is that address with the userinfo and query removed and is the only form
+// the client composes a request from, and DisplayUri is the only form that reaches the debug log and
+// the timeout message.
+//
+// The lookup is therefore anonymous: no Authorization header, no credential in the request address,
+// and no payload beyond the package name. It does follow the scheme of the configured registry, so a
+// registry configured as "http://" is read over plaintext HTTP; npm supports http registries, and
+// refusing them here would silently disable the update check for an internal mirror rather than
+// protect it.
+//
+// See https://docs.npmjs.com/cli/using-npm/config for the precedence rules implemented here.
 internal sealed class NpmRegistryResolver : INpmRegistryResolver
 {
     /// <summary>
@@ -302,8 +294,14 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
 
             if (fileInfo.Length > MaximumNpmrcSizeInBytes)
             {
-                _logger.LogDebug("Ignoring {Path} because it exceeds the {Limit} byte limit.", path, MaximumNpmrcSizeInBytes);
-                return;
+                // Skipping the file would silently hand the answer to a lower-precedence layer, and
+                // npm has no matching bound: it would read this file and install from whatever
+                // registry it names. Reporting an update from a registry the recommended command
+                // will not use is worse than reporting no update at all, so the bound stays and the
+                // lookup fails instead of quietly changing precedence. The path is named; nothing
+                // from inside the file is, because it was never read.
+                throw new InvalidOperationException(
+                    $"The npm configuration file {path} is larger than the {MaximumNpmrcSizeInBytes} byte limit this resolver will read.");
             }
 
             contents = File.ReadAllBytes(path);

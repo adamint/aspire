@@ -124,6 +124,56 @@ public class NpmRegistryClientTests
     }
 
     [Fact]
+    public async Task GetLatestVersionAsync_AsksForTheAbbreviatedPackumentTheWayNpmDoes()
+    {
+        // Byte-for-byte pacote's corgiDoc. A registry that serves "npm install -g" has satisfied
+        // pacote, not this client, so advertising only the vendor type would let a registry npm
+        // copes with refuse a request npm itself completes.
+        HttpRequestMessage? capturedRequest = null;
+        var client = CreateClient(request =>
+        {
+            capturedRequest = request;
+            return CreateJsonResponse("""{ "dist-tags": { "latest": "13.4.6" } }""");
+        });
+
+        await client.GetLatestVersionAsync(PackageName, CancellationToken.None).DefaultTimeout();
+
+        Assert.NotNull(capturedRequest);
+        Assert.Equal(
+            "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*",
+            string.Join(", ", capturedRequest.Headers.GetValues("Accept")));
+    }
+
+    [Fact]
+    public async Task GetLatestVersionAsync_RetriesWithTheFullPackumentWhenTheAbbreviatedOneIsNotFound()
+    {
+        // A registry that does not implement the abbreviated document can 404 it while serving the
+        // package as the full one, so a bare 404 does not prove the package is missing. pacote
+        // retries the same way, and without this the check reports a warning for a package the
+        // recommended command installs successfully.
+        var accepts = new List<string>();
+        var client = CreateClient(request =>
+        {
+            accepts.Add(string.Join(", ", request.Headers.GetValues("Accept")));
+
+            return accepts.Count == 1
+                ? new HttpResponseMessage(HttpStatusCode.NotFound)
+                : CreateJsonResponse("""{ "dist-tags": { "latest": "13.4.6" } }""");
+        });
+
+        var version = await client.GetLatestVersionAsync(PackageName, CancellationToken.None).DefaultTimeout();
+
+        Assert.Equal("13.4.6", version.ToString());
+        Assert.Equal(
+            new[]
+            {
+                "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*",
+                "application/json"
+            },
+            accepts);
+    }
+
+    [Fact]
     public async Task GetLatestVersionAsync_ThrowsWhenRegistryReturnsError()
     {
         var client = CreateClient(_ => new HttpResponseMessage(HttpStatusCode.NotFound));

@@ -2,12 +2,15 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Buffers;
-using System.Net.Http.Headers;
+using System.Net;
 using System.Text.Json;
 using Semver;
 
 namespace Aspire.Cli.Npm;
 
+/// <summary>
+/// Reads the latest published version of a package from the npm registry npm itself would use.
+/// </summary>
 internal sealed class NpmRegistryClient : INpmRegistryClient
 {
     // The registry is whatever npm itself would resolve for this package, not a hardcoded address.
@@ -26,10 +29,17 @@ internal sealed class NpmRegistryClient : INpmRegistryClient
     // The abbreviated packument omits README, maintainer, and per-version metadata that the update
     // check never reads. It still carries "dist-tags", and it is roughly a third of the size of the
     // full document for @microsoft/aspire-cli (6 KB versus 18 KB measured against the live
-    // registry). Registries that do not implement it fall back to the full document, which parses
-    // identically here.
+    // registry). The full document parses identically here.
     // See https://github.com/npm/registry/blob/main/docs/responses/package-metadata.md.
-    private const string AbbreviatedMetadataMediaType = "application/vnd.npm.install-v1+json";
+    //
+    // Both header values are pacote's, verbatim, because a registry that serves the recommended
+    // "npm install -g" has by definition satisfied pacote and not this client. pacote asks for the
+    // abbreviated document with weighted fallbacks so a registry that does not implement the vendor
+    // type can still answer with the full one, and advertising the vendor type alone would let such
+    // a registry refuse a request npm itself would have completed.
+    // See https://github.com/npm/pacote/blob/main/lib/registry.js (corgiDoc / fullDoc).
+    private const string AbbreviatedMetadataAccept = "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*";
+    private const string FullMetadataAccept = "application/json";
 
     private const string LatestDistTag = "latest";
     private const int MaximumResponseSize = 1024 * 1024;
@@ -68,7 +78,7 @@ internal sealed class NpmRegistryClient : INpmRegistryClient
 
         var registry = _registryResolver.Resolve(packageName);
 
-        using var request = CreateRequest(registry, packageName);
+        using var request = CreateRequest(registry, packageName, AbbreviatedMetadataAccept);
         using var timeoutCancellation = new CancellationTokenSource(_timeout, _timeProvider);
         using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
@@ -76,13 +86,10 @@ internal sealed class NpmRegistryClient : INpmRegistryClient
 
         try
         {
-            // ResponseHeadersRead returns as soon as the response headers arrive, so the body is
-            // still streaming after SendAsync completes. Both the send and the body read observe the
-            // private timeout token so a registry that returns headers and then stalls is still
-            // bounded by the timeout rather than hanging the update check.
-            using var response = await _httpClient.SendAsync(
+            using var response = await SendWithFullMetadataFallbackAsync(
+                registry,
+                packageName,
                 request,
-                HttpCompletionOption.ResponseHeadersRead,
                 linkedCancellation.Token);
 
             response.EnsureSuccessStatusCode();
@@ -100,7 +107,7 @@ internal sealed class NpmRegistryClient : INpmRegistryClient
         }
     }
 
-    private static HttpRequestMessage CreateRequest(NpmRegistryResolution registry, string packageName)
+    private static HttpRequestMessage CreateRequest(NpmRegistryResolution registry, string packageName, string accept)
     {
         // Scoped names carry a '/' that has to be percent-encoded, because the registry addresses a
         // package as a single path segment: "@microsoft/aspire-cli" is requested as
@@ -111,9 +118,45 @@ internal sealed class NpmRegistryClient : INpmRegistryClient
         // drops the base query, but it carries the authority - and therefore "user:token@" - through.
         var requestUri = new Uri(registry.RequestUri, Uri.EscapeDataString(packageName));
         var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(AbbreviatedMetadataMediaType));
+        request.Headers.TryAddWithoutValidation("Accept", accept);
 
         return request;
+    }
+
+    private async Task<HttpResponseMessage> SendWithFullMetadataFallbackAsync(
+        NpmRegistryResolution registry,
+        string packageName,
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        // ResponseHeadersRead returns as soon as the response headers arrive, so the body is
+        // still streaming after SendAsync completes. Both the send and the body read observe the
+        // private timeout token so a registry that returns headers and then stalls is still
+        // bounded by the timeout rather than hanging the update check.
+        var response = await _httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+
+        if (response.StatusCode is not HttpStatusCode.NotFound)
+        {
+            return response;
+        }
+
+        // A registry that does not implement the abbreviated packument can answer 404 for it while
+        // serving the package perfectly well as the full document, so a bare 404 does not prove the
+        // package is missing. pacote treats it the same way and retries once with the full
+        // document, which is what makes "npm install -g" succeed where this check would otherwise
+        // report a warning. Only one retry: pacote sets fullMetadata before recursing, so a second
+        // 404 is terminal there too.
+        response.Dispose();
+
+        using var fullMetadataRequest = CreateRequest(registry, packageName, FullMetadataAccept);
+
+        return await _httpClient.SendAsync(
+            fullMetadataRequest,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
     }
 
     private static async Task<ReadOnlyMemory<byte>> ReadBoundedResponseAsync(
