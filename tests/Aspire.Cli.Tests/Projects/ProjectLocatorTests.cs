@@ -671,8 +671,14 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
 
         // Two directories that differ only in casing are one project on Windows and macOS but two
         // on Linux, so folding the recorded path against the discovered one would leave the second
-        // project unable to become the workspace default.
+        // project unable to become the workspace default. That second project only exists where the
+        // volume keeps the two spellings apart; where it folds them, CreateSubdirectory("foo")
+        // hands back "Foo" and there is no second project to promote.
         var upperDirectory = workspace.WorkspaceRoot.CreateSubdirectory("Foo");
+        Assert.SkipWhen(
+            Directory.Exists(Path.Combine(workspace.WorkspaceRoot.FullName, "foo")),
+            "The volume backing this test is case-insensitive, so the two spellings name one project.");
+
         var lowerDirectory = workspace.WorkspaceRoot.CreateSubdirectory("foo");
         await File.WriteAllTextAsync(Path.Combine(upperDirectory.FullName, "AppHost.csproj"), "Not a real apphost");
         await File.WriteAllTextAsync(Path.Combine(lowerDirectory.FullName, "AppHost.csproj"), "Not a real apphost");
