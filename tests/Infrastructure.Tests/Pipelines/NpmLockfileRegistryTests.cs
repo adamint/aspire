@@ -360,6 +360,14 @@ public class NpmLockfileRegistryTests
     /// registry guards therefore do not cover it, and neither does the lockfile guard for a fixture
     /// such as Aspire.Hosting.Blazor/TypeScript that ships no lockfile at all.
     /// </summary>
+    /// <remarks>
+    /// This covers the override sections as well as the dependency sections, because an
+    /// <c>overrides</c>, <c>resolutions</c> or <c>pnpm.overrides</c> entry rewrites the spec of a
+    /// package anywhere in the resolved tree using the same grammar. That path bypasses a lockfile
+    /// too: a package manager re-resolves when package.json and the lockfile disagree, so a remote
+    /// spec added to an override takes effect in a fixture that ships a lockfile just as it does in
+    /// one that does not.
+    /// </remarks>
     [Fact]
     public void PolyglotFixtures_DeclareOnlyRegistryDependencySpecs()
     {
@@ -388,17 +396,36 @@ public class NpmLockfileRegistryTests
     [InlineData("workspace:*", true)]
     [InlineData("file:../local-package", true)]
     [InlineData("link:../local-package", true)]
+    [InlineData("portal:../local-package", true)]
     [InlineData("npm:@types/node@^20.0.0", true)]
+    [InlineData("1.2.3 - 2.3.4", true)]
+    [InlineData("^1 || ^2", true)]
+    [InlineData("4.x", true)]
+    [InlineData("v1.2.3", true)]
+    [InlineData(">= 1.0.0", true)]
     // Everything below fetches from somewhere other than the configured registry.
     [InlineData("https://evil.example/pkg.tgz", false)]
     [InlineData("http://evil.example/pkg.tgz", false)]
     [InlineData("git+https://github.com/owner/repo.git", false)]
+    [InlineData("git+ssh://git@github.com/owner/repo.git", false)]
     [InlineData("git://github.com/owner/repo.git", false)]
     [InlineData("github:owner/repo", false)]
     [InlineData("gitlab:owner/repo", false)]
     [InlineData("bitbucket:owner/repo", false)]
     [InlineData("owner/repo", false)]
     [InlineData("owner/repo#semver:^1.0.0", false)]
+    // A GitHub owner may begin with a digit or a "v", so a shorthand can look like the start of a
+    // semver range. npm-package-arg resolves every one of these as type=git, registry=false.
+    [InlineData("0xproject/repo", false)]
+    [InlineData("1owner/repo", false)]
+    [InlineData("9front/thing#semver:^1.0.0", false)]
+    [InlineData("v8/repo", false)]
+    // A relative or home-anchored path is a directory dependency, not a registry one.
+    [InlineData("./local-package", false)]
+    [InlineData("../local-package", false)]
+    [InlineData("~/local-package", false)]
+    // An alias that names no version resolves the `latest` dist-tag.
+    [InlineData("npm:@types/node", false)]
     // A dist-tag resolves through the registry, but which version it lands on is not pinned by
     // anything in the repository, so it is not a spec a guarded fixture should carry either.
     [InlineData("latest", false)]
@@ -409,13 +436,166 @@ public class NpmLockfileRegistryTests
     }
 
     /// <summary>
-    /// Reads every dependency spec a package.json declares, across all four dependency sections.
+    /// The scan above judges only the specs it is handed, so prove the reader hands it every section
+    /// a package.json can put one in.
+    /// </summary>
+    /// <remarks>
+    /// Before this covered the override sections, the fixtures already carried 57 override entries
+    /// that no guard read at all — an <c>overrides</c> entry naming a tarball URL rewrites the spec of
+    /// a package anywhere in the resolved tree and is installed from that URL, whether or not the
+    /// fixture ships a lockfile.
+    /// </remarks>
+    [Fact]
+    public void DependencySpecReader_ReadsEverySectionThatCanCarryASpec()
+    {
+        const string content = """
+            {
+              "name": "fixture",
+              "dependencies": { "a": "1.0.0" },
+              "devDependencies": { "b": "2.0.0" },
+              "optionalDependencies": { "c": "3.0.0" },
+              "peerDependencies": { "d": "4.0.0" },
+              "overrides": { "e": "5.0.0", "f": { ".": "6.0.0", "g": "7.0.0" } },
+              "resolutions": { "**/h": "8.0.0" },
+              "pnpm": { "overrides": { "i": "9.0.0" } }
+            }
+            """;
+
+        Assert.Equal(
+            [
+                "dependencies.a=1.0.0",
+                "devDependencies.b=2.0.0",
+                "optionalDependencies.c=3.0.0",
+                "peerDependencies.d=4.0.0",
+                "overrides.e=5.0.0",
+                "overrides.f=6.0.0",
+                "overrides.f.g=7.0.0",
+                "resolutions.**/h=8.0.0",
+                "pnpm.overrides.i=9.0.0",
+            ],
+            ReadDependencySpecsFromContent(content).Select(spec => $"{spec.Key}={spec.Value}").ToArray());
+    }
+
+    /// <summary>
+    /// The package.json sections that map a package name straight to a dependency spec.
+    /// </summary>
+    private static readonly string[] s_dependencySections =
+        ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
+
+    /// <summary>
+    /// The package.json sections that rewrite the spec of a package somewhere in the tree. npm reads
+    /// <c>overrides</c>, Yarn reads <c>resolutions</c>, and pnpm reads <c>pnpm.overrides</c>. Each
+    /// takes the same spec grammar as a dependency, so each can name a remote source.
+    /// </summary>
+    private static readonly string[] s_overrideSections = ["overrides", "resolutions"];
+
+    /// <summary>
+    /// Every section of a fixture package.json that this guard reads, plus the metadata keys that
+    /// cannot carry a dependency spec at all.
+    /// </summary>
+    private static readonly string[] s_specFreePackageJsonKeys =
+    [
+        "name", "version", "description", "private", "type", "license", "author", "keywords",
+        "main", "module", "types", "exports", "files", "bin", "browser", "scripts", "engines",
+        "workspaces", "packageManager",
+    ];
+
+    /// <summary>
+    /// The keys this guard reads inside the <c>pnpm</c> section.
+    /// </summary>
+    private static readonly string[] s_readPnpmKeys = ["overrides"];
+
+    /// <summary>
+    /// Fails when a fixture package.json carries a section this guard does not read.
+    /// </summary>
+    /// <remarks>
+    /// PolyglotFixtures_DeclareOnlyRegistryDependencySpecs can only judge specs it is handed, so its
+    /// coverage is exactly the set of sections ReadDependencySpecs walks. package.json keeps growing
+    /// sections that carry the same spec grammar — <c>overrides</c>, <c>resolutions</c>,
+    /// <c>pnpm.overrides</c>, <c>pnpm.packageExtensions</c> — and a spec placed in one this guard has
+    /// not learned about is installed exactly the same way while nothing goes red. Naming the keys
+    /// that provably cannot carry a spec, and failing on everything else, means a new section has to
+    /// be classified deliberately instead of arriving unnoticed.
+    ///
+    /// When this fails: if the new key cannot name a package, add it to
+    /// <see cref="s_specFreePackageJsonKeys"/>; otherwise teach <see cref="ReadDependencySpecs"/> to
+    /// walk it.
+    /// </remarks>
+    [Fact]
+    public void PolyglotFixtures_DeclareOnlyPackageJsonSectionsThisGuardReads()
+    {
+        var unread = EnumeratePolyglotFiles()
+            .Where(path => Path.GetFileName(path) == "package.json")
+            .SelectMany(path => FindUnreadPackageJsonSections(File.ReadAllText(path))
+                .Select(section => $"{Path.GetRelativePath(RepoRoot.Path, path).Replace(Path.DirectorySeparatorChar, '/')} -> {section}"))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal([], unread);
+    }
+
+    /// <summary>
+    /// The scan above only ever runs against fixtures that are already correct, so drive it with the
+    /// sections a package.json can carry.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"name":"x","version":"1.0.0","scripts":{"build":"tsc"}}""", "")]
+    [InlineData("""{"dependencies":{"a":"1.0.0"},"devDependencies":{"b":"1.0.0"}}""", "")]
+    [InlineData("""{"overrides":{"a":"1.0.0"},"resolutions":{"b":"1.0.0"}}""", "")]
+    [InlineData("""{"pnpm":{"overrides":{"a":"1.0.0"}}}""", "")]
+    // A section that carries the same spec grammar but that ReadDependencySpecs does not walk.
+    [InlineData("""{"bundleDependencies":["a"]}""", "bundleDependencies")]
+    [InlineData("""{"peerDependenciesMeta":{"a":{"optional":true}}}""", "peerDependenciesMeta")]
+    [InlineData("""{"pnpm":{"packageExtensions":{"a":{"dependencies":{"b":"1.0.0"}}}}}""", "pnpm.packageExtensions")]
+    [InlineData("""{"pnpm":{"patchedDependencies":{"a@1.0.0":"patches/a.patch"}}}""", "pnpm.patchedDependencies")]
+    public void PackageJsonSectionScan_FlagsEverySectionItDoesNotRead(string content, string expectedUnread)
+    {
+        var expected = expectedUnread.Length == 0 ? [] : expectedUnread.Split(',');
+
+        Assert.Equal(expected, FindUnreadPackageJsonSections(content).ToArray());
+    }
+
+    private static IEnumerable<string> FindUnreadPackageJsonSections(string content)
+    {
+        using var document = JsonDocument.Parse(content);
+
+        foreach (var property in document.RootElement.EnumerateObject())
+        {
+            if (s_specFreePackageJsonKeys.Contains(property.Name, StringComparer.Ordinal) ||
+                s_dependencySections.Contains(property.Name, StringComparer.Ordinal) ||
+                s_overrideSections.Contains(property.Name, StringComparer.Ordinal))
+            {
+                continue;
+            }
+
+            if (property.Name != "pnpm")
+            {
+                yield return property.Name;
+                continue;
+            }
+
+            foreach (var pnpmProperty in property.Value.EnumerateObject())
+            {
+                if (!s_readPnpmKeys.Contains(pnpmProperty.Name, StringComparer.Ordinal))
+                {
+                    yield return $"pnpm.{pnpmProperty.Name}";
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reads every dependency spec a package.json declares, across the dependency sections and the
+    /// override sections that rewrite specs elsewhere in the tree.
     /// </summary>
     private static IEnumerable<KeyValuePair<string, string>> ReadDependencySpecs(string path)
-    {
-        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        => ReadDependencySpecsFromContent(File.ReadAllText(path));
 
-        foreach (var section in new[] { "dependencies", "devDependencies", "optionalDependencies", "peerDependencies" })
+    private static IEnumerable<KeyValuePair<string, string>> ReadDependencySpecsFromContent(string content)
+    {
+        using var document = JsonDocument.Parse(content);
+
+        foreach (var section in s_dependencySections)
         {
             if (!document.RootElement.TryGetProperty(section, out var dependencies) || dependencies.ValueKind != JsonValueKind.Object)
             {
@@ -424,10 +604,93 @@ public class NpmLockfileRegistryTests
 
             foreach (var dependency in dependencies.EnumerateObject())
             {
-                yield return new KeyValuePair<string, string>(dependency.Name, dependency.Value.GetString() ?? string.Empty);
+                yield return new KeyValuePair<string, string>($"{section}.{dependency.Name}", dependency.Value.GetString() ?? string.Empty);
+            }
+        }
+
+        foreach (var section in s_overrideSections)
+        {
+            if (document.RootElement.TryGetProperty(section, out var overrides))
+            {
+                foreach (var entry in ReadOverrideSpecs(section, overrides))
+                {
+                    yield return entry;
+                }
+            }
+        }
+
+        if (!document.RootElement.TryGetProperty("pnpm", out var pnpm) || pnpm.ValueKind != JsonValueKind.Object)
+        {
+            yield break;
+        }
+
+        foreach (var section in s_overrideSections)
+        {
+            if (pnpm.TryGetProperty(section, out var pnpmOverrides))
+            {
+                foreach (var entry in ReadOverrideSpecs($"pnpm.{section}", pnpmOverrides))
+                {
+                    yield return entry;
+                }
             }
         }
     }
+
+    /// <summary>
+    /// Walks an override section, which nests: a value is either a spec or an object of nested
+    /// overrides whose "." key is the spec for the package named by the enclosing key.
+    /// </summary>
+    /// <remarks>
+    /// <code>
+    /// "overrides": {
+    ///   "brace-expansion": "5.0.8",
+    ///   "foo": { ".": "1.2.3", "bar": "2.0.0" }
+    /// }
+    /// </code>
+    /// See https://docs.npmjs.com/cli/v11/configuring-npm/package-json#overrides.
+    /// </remarks>
+    private static IEnumerable<KeyValuePair<string, string>> ReadOverrideSpecs(string prefix, JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            yield break;
+        }
+
+        foreach (var property in element.EnumerateObject())
+        {
+            // "." names the enclosing package rather than a new one, so it does not extend the path.
+            var name = property.Name == "." ? prefix : $"{prefix}.{property.Name}";
+
+            if (property.Value.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var nested in ReadOverrideSpecs(name, property.Value))
+                {
+                    yield return nested;
+                }
+
+                continue;
+            }
+
+            yield return new KeyValuePair<string, string>(name, property.Value.GetString() ?? string.Empty);
+        }
+    }
+
+    /// <summary>
+    /// One semver comparator: an optional operator, an optional <c>v</c>, then a partial version
+    /// whose parts may be digits or an <c>x</c>/<c>*</c> wildcard, with optional prerelease and build
+    /// metadata. See https://github.com/npm/node-semver#ranges.
+    /// </summary>
+    private const string SemverComparatorPattern =
+        @"(?:\^|~>?|>=?|<=?|=)?\s*v?(?:\d+|[xX*])(?:\.(?:\d+|[xX*]))?(?:\.(?:\d+|[xX*]))?(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?";
+
+    /// <summary>
+    /// A full semver range: comparators joined by whitespace or a hyphen range, and comparator sets
+    /// joined by <c>||</c>. Matches <c>^4.22.3</c>, <c>&gt;=1.0.0 &lt;2.0.0</c>, <c>1.2.3 - 2.3.4</c>,
+    /// <c>4.x</c> and <c>^1 || ^2</c>, and nothing containing a path, scheme or host.
+    /// </summary>
+    private static readonly Regex s_semverRange = new(
+        $@"^{SemverComparatorPattern}(?:(?:\s*-\s*|\s+){SemverComparatorPattern})*(?:\s*\|\|\s*{SemverComparatorPattern}(?:(?:\s*-\s*|\s+){SemverComparatorPattern})*)*$",
+        RegexOptions.CultureInvariant);
 
     /// <summary>
     /// True when a dependency spec resolves through the configured registry at a version the
@@ -440,27 +703,40 @@ public class NpmLockfileRegistryTests
     /// dist-tag such as `latest` does go through the registry, but nothing in the repository pins
     /// which version it lands on, so it is excluded for the same reason.
     /// See https://docs.npmjs.com/cli/v11/configuring-npm/package-json#dependencies.
+    ///
+    /// The spec has to parse as a whole semver range, not merely start like one. Testing only the
+    /// first character accepted `0xproject/repo`, which npm-package-arg resolves as
+    /// `type=git, registry=false, hosted=github` — a GitHub clone that never touches the configured
+    /// registry — because a GitHub owner may begin with a digit. Requiring the entire spec to match
+    /// the range grammar rejects it, along with any other shorthand whose owner happens to start with
+    /// a digit or a `v`.
     /// </remarks>
     private static bool IsRegistryDependencySpec(string spec)
     {
         var trimmed = spec.Trim();
 
-        if (trimmed.Length == 0 || trimmed == "*")
+        if (trimmed.Length == 0)
         {
             return true;
         }
 
-        if (trimmed.StartsWith("workspace:", StringComparison.Ordinal) ||
-            trimmed.StartsWith("file:", StringComparison.Ordinal) ||
-            trimmed.StartsWith("link:", StringComparison.Ordinal) ||
-            trimmed.StartsWith("npm:", StringComparison.Ordinal))
+        if (s_localDependencyPrefixes.Any(prefix => trimmed.StartsWith(prefix, StringComparison.Ordinal)))
         {
             return true;
         }
 
-        // A semver range starts with a digit, a comparator, or a range operator. Nothing that fetches
-        // from a remote source does, so anything else is rejected.
-        return trimmed[0] is >= '0' and <= '9' or '^' or '~' or '>' or '<' or '=' or 'v';
+        // An alias resolves through the registry, but only when it names a version: `npm:<name>@<range>`.
+        // npm-package-arg rejects an alias whose subspec is not a registry spec, so the range is the
+        // only part that still needs checking. Bare `npm:<name>` means the `latest` dist-tag.
+        if (trimmed.StartsWith("npm:", StringComparison.Ordinal))
+        {
+            var aliased = trimmed["npm:".Length..];
+            var separator = aliased.LastIndexOf('@');
+
+            return separator > 0 && s_semverRange.IsMatch(aliased[(separator + 1)..]);
+        }
+
+        return s_semverRange.IsMatch(trimmed);
     }
 
     /// <summary>
