@@ -311,6 +311,33 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal("2.0.0", requested.Version);
     }
 
+    /// <summary>
+    /// The four-segment path normalizes separately from the semver one, so it gets the same
+    /// build-metadata guarantee: NuGet ignores metadata for identity, and the document must be
+    /// labelled with the version a feed can actually serve.
+    /// </summary>
+    [Fact]
+    public async Task SdkExportPublishesAFourSegmentVersionWithoutItsBuildMetadata()
+    {
+        var interactionService = new TestInteractionService();
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostServerProject = new CapturingAppHostServerProject(workspace.WorkspaceRoot.FullName);
+        var rpcClient = new StubExportRpcClient();
+        using var provider = CreateProvider(interactionService, workspace, rpcClient, appHostServerProject);
+
+        var exitCode = await InvokeAsync(
+            provider,
+            "sdk export --language typescript --package Contoso.Aspire.Widgets@2.0.0.4+fake");
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Equal(("TypeScript", "Contoso.Aspire.Widgets", "2.0.0.4"), rpcClient.LastExportRequest);
+
+        var requested = Assert.Single(
+            appHostServerProject.Integrations,
+            integration => integration.Name == "Contoso.Aspire.Widgets");
+        Assert.Equal("2.0.0.4", requested.Version);
+    }
+
     [Theory]
     [InlineData("13.5.*")]
     [InlineData("[13.5.0,14.0.0)")]
