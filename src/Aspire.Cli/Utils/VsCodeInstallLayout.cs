@@ -92,13 +92,13 @@ internal static class VsCodeInstallLayout
         if (!string.IsNullOrWhiteSpace(overrideDirectory))
         {
             // VSCODE_EXTENSIONS names a directory, not a product: VS Code, VSCodium, and code-oss all
-            // honor it, so an override cannot establish which gallery the build installs from. The
-            // path is still matched against the known data folders, which covers the common case of
-            // pointing the override at a build's own root, and anything else stays unknown rather
-            // than being guessed into a Marketplace comparison.
-            yield return new VsCodeExtensionRoot(
-                overrideDirectory,
-                UsesMicrosoftGalleryByPath(environment, overrideDirectory, homeDirectory));
+            // honor it, and nothing stops VSCodium from pointing it at ~/.vscode/extensions, where a
+            // recorded "gallery" means Open VSX. Matching the path against known data folders would
+            // read product identity out of a string that carries none, so an overridden root is
+            // always unknown. An install whose product identity is known independently -- the
+            // extension reporting its own source, which it derives from env.uriScheme -- is still
+            // classified from that signal.
+            yield return new VsCodeExtensionRoot(overrideDirectory, UsesMicrosoftGallery: false);
             yield break;
         }
 
@@ -125,44 +125,6 @@ internal static class VsCodeInstallLayout
                 yield return new VsCodeExtensionRoot(path, variant.UsesMicrosoftGallery);
             }
         }
-    }
-
-    // An override that points at a build's own extensions root still identifies the build, so the
-    // path is matched against the known data folders before giving up. Only a Microsoft-gallery
-    // folder promotes the root; an OSS or VSCodium folder, or a path matching nothing, does not.
-    private static bool UsesMicrosoftGalleryByPath(IEnvironment environment, string extensionsDirectory, DirectoryInfo homeDirectory)
-    {
-        var home = homeDirectory.FullName;
-
-        // Case-insensitively on Windows and macOS, where the file system is, and exactly on Linux,
-        // where ~/.VSCODE/extensions is a genuinely different directory from ~/.vscode/extensions.
-        // Matching case-insensitively there would promote a VSCodium or custom-gallery override to
-        // the Microsoft Marketplace and make the outbound request this classification prevents.
-        var pathComparison = environment.IsWindows() || environment.IsMacOS()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-
-        foreach (var variant in s_knownVariants)
-        {
-            if (!variant.UsesMicrosoftGallery)
-            {
-                continue;
-            }
-
-            foreach (var dataFolderName in new[] { variant.DesktopDataFolderName, variant.ServerDataFolderName })
-            {
-                var root = Path.Combine(home, dataFolderName, "extensions");
-                if (string.Equals(
-                        Path.TrimEndingDirectorySeparator(extensionsDirectory),
-                        Path.TrimEndingDirectorySeparator(root),
-                        pathComparison))
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
     }
 
     /// <summary>
