@@ -982,6 +982,43 @@ public class NpmRegistryResolverTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_FailsWhenAnNpmrcStreamsMoreBytesThanItsLengthReports()
+    {
+        // A character device reports no length, so a bound taken from file metadata does not apply
+        // to it at all and the read grows until the process runs out of memory. /dev/zero is the
+        // reachable case because the path comes from configuration a user controls.
+        Assert.SkipUnless(
+            !OperatingSystem.IsWindows() && File.Exists("/dev/zero"),
+            "Needs a character device that reports no length.");
+
+        var resolver = CreateResolver(environment: new Dictionary<string, string>
+        {
+            ["npm_config_userconfig"] = "/dev/zero"
+        });
+
+        var exception = Assert.Throws<InvalidOperationException>(() => resolver.Resolve(PackageName));
+
+        Assert.Contains("/dev/zero", exception.Message);
+    }
+
+    [Fact]
+    public void Resolve_ReadsAnNpmrcSittingExactlyOnTheSizeLimit()
+    {
+        // The read takes one byte past the limit to tell "at the limit" from "over it", so the
+        // boundary itself has to stay readable.
+        const string registryLine = "registry=https://npm.contoso.example/feed/\n";
+        var padding = new string('#', (1024 * 1024) - registryLine.Length);
+        var contents = Encoding.UTF8.GetBytes(registryLine + padding);
+
+        Assert.Equal(1024 * 1024, contents.Length);
+        WriteHomeNpmrcBytes(contents);
+
+        var resolution = CreateResolver().Resolve(PackageName);
+
+        Assert.Equal("https://npm.contoso.example/feed/", resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
     public void Resolve_RedactsQueryAndFragmentFromTheDisplayUri()
     {
         // A registry address can carry its credential in the query rather than the authority - an

@@ -288,52 +288,74 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             return;
         }
 
-        byte[] contents;
+        // One byte past the limit is read so that a file sitting exactly on the limit is still
+        // accepted while anything larger is recognizable without reading the rest of it.
+        var contents = ArrayPool<byte>.Shared.Rent(MaximumNpmrcSizeInBytes + 1);
 
         try
         {
-            var fileInfo = new FileInfo(path);
+            int contentLength;
 
-            if (fileInfo.Length > MaximumNpmrcSizeInBytes)
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+
+                // The bound is enforced against the bytes this read actually returns rather than
+                // against FileInfo.Length, because the length is only a snapshot taken through a
+                // different handle: the file can grow before the read starts, and a character
+                // device such as /dev/zero reports no length at all while producing bytes forever.
+                // Sizing an allocation from that number is what would let a 1 MiB cap consume all
+                // available memory on the command startup path.
+                contentLength = stream.ReadAtLeast(
+                    contents.AsSpan(0, MaximumNpmrcSizeInBytes + 1),
+                    MaximumNpmrcSizeInBytes + 1,
+                    throwOnEndOfStream: false);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or NotSupportedException)
+            {
+                // An unreadable .npmrc must not fail the update check; the next layer (or the npm
+                // default) still produces a usable answer.
+                _logger.LogDebug(exception, "Could not read npm configuration from {Path}.", path);
+                return;
+            }
+
+            if (contentLength > MaximumNpmrcSizeInBytes)
             {
                 // Skipping the file would silently hand the answer to a lower-precedence layer, and
                 // npm has no matching bound: it would read this file and install from whatever
                 // registry it names. Reporting an update from a registry the recommended command
                 // will not use is worse than reporting no update at all, so the bound stays and the
                 // lookup fails instead of quietly changing precedence. The path is named; nothing
-                // from inside the file is, because it was never read.
+                // from inside the file is, because none of it is parsed.
                 throw new InvalidOperationException(
                     $"The npm configuration file {path} is larger than the {MaximumNpmrcSizeInBytes} byte limit this resolver will read.");
             }
 
-            contents = File.ReadAllBytes(path);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or NotSupportedException)
-        {
-            // An unreadable .npmrc must not fail the update check; the next layer (or the npm
-            // default) still produces a usable answer.
-            _logger.LogDebug(exception, "Could not read npm configuration from {Path}.", path);
-            return;
-        }
+            // The file is decoded into a pooled buffer and scanned as spans rather than read into
+            // strings. Reading lines would put every "//registry.example.com/:_authToken=..." entry
+            // on the managed heap as a string that lives until a collection runs; here only
+            // allow-listed keys and their values are ever materialized, and every buffer is cleared
+            // on the way out.
+            var buffer = ArrayPool<char>.Shared.Rent(Encoding.UTF8.GetMaxCharCount(contentLength));
 
-        // The file is decoded into a pooled buffer and scanned as spans rather than read into
-        // strings. Reading lines would put every "//registry.example.com/:_authToken=..." entry on
-        // the managed heap as a string that lives until a collection runs; here only allow-listed
-        // keys and their values are ever materialized, and both buffers are cleared on the way out.
-        // The size cap above is what makes a single-shot read safe.
-        var buffer = ArrayPool<char>.Shared.Rent(Encoding.UTF8.GetMaxCharCount(contents.Length));
+            try
+            {
+                var characterCount = Encoding.UTF8.GetChars(
+                    RemoveByteOrderMark(contents.AsSpan(0, contentLength)),
+                    buffer);
 
-        try
-        {
-            var characterCount = Encoding.UTF8.GetChars(RemoveByteOrderMark(contents), buffer);
-
-            MergeNpmrcLines(configuration, buffer.AsSpan(0, characterCount), path);
+                MergeNpmrcLines(configuration, buffer.AsSpan(0, characterCount), path);
+            }
+            finally
+            {
+                Array.Clear(buffer);
+                ArrayPool<char>.Shared.Return(buffer);
+            }
         }
         finally
         {
-            Array.Clear(buffer);
-            ArrayPool<char>.Shared.Return(buffer);
             Array.Clear(contents);
+            ArrayPool<byte>.Shared.Return(contents);
         }
     }
 

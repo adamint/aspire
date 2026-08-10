@@ -14,7 +14,7 @@ Registry selection follows npm's own precedence, highest first:
 
 1. `npm_config_registry` / `npm_config_@scope:registry` environment variables, which npm also injects when it runs the CLI through `npm exec` or `npx`.
 2. The user `.npmrc`, at `npm_config_userconfig` when set and `~/.npmrc` otherwise.
-3. The global `.npmrc`, but only when something above explicitly names it through `globalconfig`.
+3. The global `.npmrc`, whenever its path can be derived without launching npm: `globalconfig` names it outright, and a configured `prefix` or a `PREFIX` variable places it at `$PREFIX/etc/npmrc`.
 4. npm's built-in default, `https://registry.npmjs.org`.
 
 A scoped `@microsoft:registry` outranks the global `registry` for this package, matching npm's scope-to-registry association. npm's builtin layer is not read: locating it requires npm's *install* prefix, which is only discoverable by running npm — the process launch this lookup exists to avoid. The global `.npmrc` is read whenever its path can be derived without that launch, because a registry pinned there is the one the recommended global install would use. That covers two cases: an explicit `globalconfig`, from either the environment or the user `.npmrc`; and npm's own default of `$PREFIX/etc/npmrc` whenever `prefix` is itself configured, which is how an enterprise that redirects its global install root pins the feed underneath it. Only npm's *built-in* prefix stays out of reach.
