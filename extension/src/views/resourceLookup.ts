@@ -79,15 +79,37 @@ export function findAppHostForResource(repository: AppHostDataRepository, elemen
         : undefined;
 }
 
-// Deliberately returns the remembered path without re-resolving it, which is the opposite of what
-// findAppHostForResource does. The split is by what the caller then does: commands that change resource
-// state (_runResourceCommand) and attach both require findLatestResourceForElement to resolve and return
-// early when it does not, so a stale path never reaches them. The diagnostic callers - View logs and Open
-// terminal - fall back to the remembered resource on purpose, because a resource missing from the current
-// snapshot is usually a refresh window rather than a gone app host, and dropping the action there would
-// break a routine command far more often than it would prevent reading the wrong app host's output.
 export function getAppHostPathForResource(repository: AppHostDataRepository, element: ResourceElementRef): string | undefined {
-    return element.appHostPath ?? findAppHostForResource(repository, element)?.appHostPath ?? repository.workspaceAppHostPath;
+    const selectedAppHostPath = repository.workspaceAppHost?.appHostPath ?? repository.workspaceAppHostPath;
+
+    if (element.appHostPath) {
+        const elementAppHostPath = element.appHostPath;
+        // Terminal-backed actions can intentionally fall back to the tree item's stale resource
+        // snapshot during refresh windows, so validate the cached AppHost path before it becomes a
+        // CLI --apphost argument.
+        const matchingAppHosts = repository.appHosts.filter(appHost => isMatchingAppHostPath(appHost.appHostPath, elementAppHostPath));
+        const appHostByPid = element.appHostPid !== null
+            ? matchingAppHosts.find(appHost => appHost.appHostPid === element.appHostPid)
+            : undefined;
+
+        if (appHostByPid) {
+            return appHostByPid.appHostPath;
+        }
+
+        if (matchingAppHosts.length === 1) {
+            return matchingAppHosts[0].appHostPath;
+        }
+
+        if (matchingAppHosts.length > 1) {
+            return undefined;
+        }
+
+        return selectedAppHostPath && isMatchingAppHostPath(elementAppHostPath, selectedAppHostPath)
+            ? selectedAppHostPath
+            : undefined;
+    }
+
+    return findAppHostForResource(repository, element)?.appHostPath ?? selectedAppHostPath;
 }
 
 function hasNoResources(resources: readonly ResourceJson[] | null | undefined): boolean {

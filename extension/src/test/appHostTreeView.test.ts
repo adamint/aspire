@@ -3412,6 +3412,46 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         provider.dispose();
     });
 
+    test('workspace resource terminal actions abort when cached AppHost path becomes ambiguous', async () => {
+        const commands: AspireSubcommand[] = [];
+        const appHostPath = '/repo/apps/Store/AppHost.csproj';
+        const appHosts = [
+            makeAppHost({ appHostPath, appHostPid: 1234, resources: [makeResource({ name: 'cache', displayName: 'cache' })] }),
+        ];
+        const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
+        const repository = {
+            viewMode: 'workspace' as ViewMode,
+            appHosts,
+            workspaceResources: [],
+            workspaceAppHost: undefined,
+            workspaceAppHostPath: undefined,
+            workspaceAppHostName: undefined,
+            workspaceAppHostCandidatePaths: [appHostPath],
+            workspaceAppHostDescription: undefined,
+            onDidChangeData,
+        } as unknown as AppHostDataRepository;
+        const terminalProvider = {
+            getAspireCliExecutablePath: async () => 'aspire',
+            createEnvironment: () => ({}),
+            sendAspireCommandToAspireTerminal: (command: AspireSubcommand) => commands.push(command),
+        } as unknown as AspireTerminalProvider;
+        const provider = new AspireAppHostTreeProvider(repository, terminalProvider, makeLaunchService());
+
+        const [runningAppHostItem] = provider.getChildren();
+        const resourceItem = provider.getChildren(runningAppHostItem)[0];
+        appHosts.splice(
+            0,
+            appHosts.length,
+            makeAppHost({ appHostPath, appHostPid: 5678, resources: [makeResource({ name: 'cache' })] }),
+            makeAppHost({ appHostPath, appHostPid: 9012, resources: [makeResource({ name: 'cache' })] }));
+
+        await provider.viewResourceLogs(resourceItem as any);
+        await provider.openResourceTerminal(resourceItem as any);
+
+        assert.deepStrictEqual(commands, []);
+        provider.dispose();
+    });
+
     test('openResourceTerminal adds replica when terminal metadata includes index', async () => {
         const commands: AspireSubcommand[] = [];
         const appHostPath = '/repo/apps/Store/AppHost.csproj';

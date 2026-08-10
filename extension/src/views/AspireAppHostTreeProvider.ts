@@ -1539,6 +1539,9 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         const resourceName = resource.displayName ?? resource.name;
         if (this._repository.viewMode === 'workspace') {
             const appHostPath = getAppHostPathForResource(this._repository, element);
+            if (element.appHostPath && appHostPath === undefined) {
+                return;
+            }
             const command = appHostPath
                 ? ['logs', shellArg(resourceName), '--apphost', shellArg(appHostPath)]
                 : ['logs', shellArg(resourceName)];
@@ -1556,6 +1559,9 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         const latestResource = findLatestResourceForElement(this._repository, element) ?? element.resource;
         const command: Array<string | ShellArg> = ['terminal', 'attach', shellArg(latestResource.name)];
         const appHostPath = getAppHostPathForResource(this._repository, element);
+        if (element.appHostPath && appHostPath === undefined) {
+            return;
+        }
         if (appHostPath) {
             command.push('--apphost', shellArg(appHostPath));
         }
@@ -1759,6 +1765,9 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         const appHostPath = this._repository.viewMode === 'workspace'
             ? getAppHostPathForResource(this._repository, element)
             : findAppHostForResource(this._repository, element)?.appHostPath;
+        if (element.appHostPath && appHostPath === undefined) {
+            return undefined;
+        }
         const resource = findLatestResourceForElement(this._repository, element) ?? element.resource;
 
         const loader = createResourceCommandArgumentLoader({
