@@ -1298,6 +1298,71 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual((aspireDebugSession as any)._disposed, true, 'The session must still be disposed after a failed stop');
     });
 
+    // VS Code disposes an inline debug adapter as soon as the disconnect response is sent, so the
+    // ordered shutdown started by that disconnect is still in flight when dispose() runs. Disposal
+    // must not fire the owned-session stop callbacks behind its back: doing so stops every resource
+    // at once and lets the AppHost stop start before a resource has finished.
+    test('disposal while a shutdown is in flight leaves session stopping to the shutdown', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = { isCliDebugLoggingEnabled: () => false };
+        const events: string[] = [];
+        let releaseResourceStop: (() => void) | undefined;
+        const resourceStopGate = new Promise<void>(resolve => { releaseResourceStop = resolve; });
+        const resourceStop = sinon.stub().callsFake(async () => {
+            events.push('resource-stop-started');
+            await resourceStopGate;
+            events.push('resource-stop-finished');
+        });
+        const appHostStop = sinon.stub().callsFake(async () => { events.push('apphost-stop'); });
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(async () => { });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        const resourceDebugSession = {
+            id: 'resource-session',
+            session: { id: 'resource-session' } as unknown as vscode.DebugSession,
+            stopSession: resourceStop,
+        };
+        (aspireDebugSession as any)._resourceDebugSessions = [resourceDebugSession];
+        // Registered the way trackAlreadyStartedResourceSession registers it, which is the list
+        // dispose() used to fire unconditionally.
+        (aspireDebugSession as any)._ownedSessionStops.push({ dispose: resourceStop });
+        (aspireDebugSession as any)._appHostDebugSession = {
+            id: 'apphost-session',
+            session: { id: 'apphost-session' } as unknown as vscode.DebugSession,
+            stopSession: appHostStop,
+        };
+
+        const shutdown = aspireDebugSession.stopDebugging();
+        await new Promise(resolve => setTimeout(resolve, 0));
+
+        // This is VS Code tearing down the inline adapter after the disconnect response.
+        aspireDebugSession.dispose();
+
+        assert.deepStrictEqual(events, ['resource-stop-started'], 'Disposal must not stop the AppHost while a resource stop is still in flight');
+
+        releaseResourceStop!();
+        await shutdown;
+
+        assert.deepStrictEqual(
+            events,
+            ['resource-stop-started', 'resource-stop-finished', 'apphost-stop'],
+            'The shutdown must keep the resources-before-AppHost ordering across a concurrent disposal');
+        assert.strictEqual(resourceStop.callCount, 1, 'The resource must be stopped once, by the shutdown, not again by disposal');
+    });
+
     // Two overlapping stop requests must not both run the ordered shutdown: they would race over the
     // late-stop queue, and one caller could be told the shutdown succeeded while the other was told
     // it failed.
