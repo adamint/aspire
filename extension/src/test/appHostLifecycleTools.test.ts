@@ -500,6 +500,23 @@ suite('AppHost lifecycle language model tools', () => {
             assert.deepStrictEqual(launchService.launchCalls, [{ appHostPath: hiddenAppHost, command: 'run', noDebug: true }]);
         });
 
+        test('resolves a registry entry in a child folder whose name starts with a space', async () => {
+            // The selector is compared against the exact paths handed back in `knownAppHosts`.
+            // Trimming it first would advertise ` spaced/AppHost.csproj` and then never accept it,
+            // so this discovered AppHost would be permanently unaddressable.
+            const spacedDirectory = path.join(workspaceRoot, ' spaced');
+            const spacedAppHost = path.join(spacedDirectory, 'AppHost.csproj');
+            fs.mkdirSync(spacedDirectory, { recursive: true });
+            fs.writeFileSync(spacedAppHost, appHostProjectContents);
+            discoveryService.registeredPaths.push(spacedAppHost);
+
+            const result = await service.start({ appHostPath: ' spaced/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'started');
+            assert.strictEqual(result.appHostPath, ' spaced/AppHost.csproj');
+            assert.deepStrictEqual(launchService.launchCalls, [{ appHostPath: spacedAppHost, command: 'run', noDebug: true }]);
+        });
+
         test('rejects a selector carrying invisible characters that the registry cannot match', async () => {
             // A zero-width joiner distinguishes two strings while rendering identically.
             // Because the selector is only ever compared against enumerated candidates, a

@@ -862,6 +862,28 @@ suite('AppHostLaunchService', () => {
         assert.strictEqual(getAppHostIdentityKey(linkedProject), getAppHostIdentityKey(realProject));
     });
 
+    test('a symlinked project does not make its own directory look ambiguous', function () {
+        const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+        const realProject = path.join(directory, 'AppHost.csproj');
+        const linkedProject = path.join(directory, 'Linked.csproj');
+        const sourceFile = path.join(directory, 'Program.cs');
+        try {
+            fs.symlinkSync(realProject, linkedProject);
+        }
+        catch {
+            // Creating a symlink needs elevation or developer mode on Windows.
+            this.skip();
+            return;
+        }
+
+        // The link and its target are one file, so the directory still holds exactly one project
+        // and one source file. Counting the alias as a second project would report `ambiguous`
+        // and make every lifecycle call refuse a pair it can actually prove.
+        assert.strictEqual(service.compareAppHostIdentity(linkedProject, sourceFile), 'same');
+        assert.strictEqual(service.compareAppHostIdentity(realProject, sourceFile), 'same');
+        assert.strictEqual(getAppHostIdentityKey(linkedProject), getAppHostIdentityKey(sourceFile));
+    });
+
     test('returns only editor-owned run sessions for the requested AppHost identity', () => {
         const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
         const runSession = {
@@ -993,6 +1015,34 @@ suite('AppHostLaunchService', () => {
             restore();
             __resetCommonPropertiesForTests();
         }
+    });
+
+    test('a repeated external reservation issues a fresh token so the superseded session cannot clear it', () => {
+        // During an early restart the replacement session reserves while the old session's
+        // terminate event is still pending, so the key is already marked launching. Reusing the
+        // existing token there would stamp the replacement with the token the old session carries,
+        // and that terminate would then clear the reservation the replacement just took.
+        const appHostPath = '/repo/AppHost.csproj';
+        assert.strictEqual(service.tryReserveExternalLaunch(appHostPath), true);
+        const supersededToken = service.getLaunchReservationToken(appHostPath);
+        assert.ok(supersededToken);
+
+        assert.strictEqual(service.tryReserveExternalLaunch(appHostPath), true);
+        const currentToken = service.getLaunchReservationToken(appHostPath);
+
+        assert.ok(onDidTerminateDebugSessionCallback);
+        onDidTerminateDebugSessionCallback({
+            configuration: {
+                type: 'aspire',
+                program: appHostPath,
+                command: 'run',
+                __aspireAppHostLaunchReservationToken: supersededToken,
+            },
+        } as unknown as vscode.DebugSession);
+
+        assert.strictEqual(service.isLaunching(appHostPath), true, 'Expected the replacement reservation to survive the superseded session terminating');
+        assert.notStrictEqual(currentToken, supersededToken);
+        assert.strictEqual(service.getLaunchReservationToken(appHostPath), currentToken);
     });
 
     test('a superseded session termination leaves the replacement launch reservation in place', () => {

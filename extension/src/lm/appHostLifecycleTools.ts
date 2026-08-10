@@ -525,10 +525,15 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             return { resolved: false, outcome: 'invalidInput' };
         }
 
-        const selector = rawAppHost.trim();
-        if (selector.length === 0 || selector.length > maxAppHostSelectorLength) {
+        // Trimming would change the selector before it is matched against the exact paths handed
+        // out in `knownAppHosts`, so a discovered path whose first segment starts with a space,
+        // or whose last segment ends with one, could be advertised and then never accepted back.
+        // trim() is only used to recognize an all-whitespace selector as empty.
+        if (rawAppHost.trim().length === 0 || rawAppHost.length > maxAppHostSelectorLength) {
             return { resolved: false, outcome: 'invalidInput' };
         }
+
+        const selector = rawAppHost;
 
         // The manifest, the README, and the tool description all say the selector is a
         // workspace-relative path. An absolute path would still have to match a registry

@@ -471,12 +471,17 @@ export class AppHostLaunchService implements vscode.Disposable {
         const key = getAppHostPathComparisonKey(appHostPath);
         // Any pending expiry belongs to a reservation this one supersedes.
         this.cancelExternalReservationExpiry(key);
+        // A repeated reservation is a new owner taking over an in-flight one: during a debug
+        // session restart the replacement reserves before the old session's terminate event
+        // arrives, so the key is still marked launching. It has to be issued its own token, or
+        // the replacement would be stamped with the token the old session is still carrying and
+        // that session's termination would clear the replacement's reservation.
+        this._reservationTokens.set(key, randomUUID());
         if (this._launchingPaths.has(key)) {
             return;
         }
 
         this._launchingPaths.add(key);
-        this._reservationTokens.set(key, randomUUID());
         this._onDidChangeLaunchingState.fire();
     }
 

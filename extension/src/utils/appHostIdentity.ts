@@ -195,14 +195,27 @@ function readDirectoryAppHostShapes(directoryPath: string): DirectoryAppHostShap
 
         const entryPath = path.join(directoryPath, entry.name);
         if (isAppHostProjectFile(entry.name)) {
-            projectFiles.push(entryPath);
+            addUniquePath(projectFiles, entryPath);
         }
         else if (isAppHostSourceFile(entry.name)) {
-            sourceFiles.push(entryPath);
+            addUniquePath(sourceFiles, entryPath);
         }
     }
 
     return { projectFiles, sourceFiles, enumerated: true };
+}
+
+/**
+ * Adds a path unless the list already holds an alias of it.
+ *
+ * A symlink and its target are the same file, so counting both would make a directory look
+ * like it holds two projects and downgrade a provable pair to `ambiguous`. The comparison
+ * key already resolves symlinks, so it is what decides whether an entry is genuinely new.
+ */
+function addUniquePath(paths: string[], candidate: string): void {
+    if (!containsPath(paths, candidate)) {
+        paths.push(candidate);
+    }
 }
 
 function containsPath(paths: readonly string[], candidate: string): boolean {
