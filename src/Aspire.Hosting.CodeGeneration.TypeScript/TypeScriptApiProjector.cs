@@ -905,7 +905,7 @@ internal sealed partial class TypeScriptApiProjector
         return (item, new TypeScriptApiDeclaration
         {
             Id = $"{owningAssemblyName}:entrypoint:{signature.MethodName}",
-            Content = $"export {item.Declaration};",
+            Content = $"export declare {item.Declaration};",
             OwningAssemblyName = owningAssemblyName
         });
     }

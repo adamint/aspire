@@ -7,14 +7,17 @@ namespace Aspire.TypeSystem;
 /// Describes the package identity and ownership scope of an <see cref="IApiReferenceExporter"/> export.
 /// </summary>
 /// <remarks>
+/// <para>
 /// The ATS context handed to an exporter is already filtered to the exporting assemblies, their
 /// reference closure, and the reduced member shapes needed to resolve wrappers for referenced handle
 /// types. That closure is exactly why <see cref="ExportingAssemblyNames"/> exists: it lets the exporter
 /// tell apart symbols the package owns and should document from symbols it merely needs to emit so the
 /// output is self-contained. Without it, every package would republish its dependencies' API reference.
-///
+/// </para>
+/// <para>
 /// The constructor snapshots the assembly-name collection. Exporters should compare these CLR
 /// assembly simple names using <see cref="StringComparer.OrdinalIgnoreCase"/>.
+/// </para>
 /// </remarks>
 public sealed class ApiReferenceExportOptions
 {
@@ -34,7 +37,7 @@ public sealed class ApiReferenceExportOptions
     /// <exception cref="ArgumentException">
     /// Thrown when <paramref name="packageName"/> or <paramref name="packageVersion"/> is empty or
     /// consists only of white-space characters, or when <paramref name="exportingAssemblyNames"/>
-    /// is empty.
+    /// is empty or contains a null, empty, or white-space assembly name.
     /// </exception>
     public ApiReferenceExportOptions(
         string packageName,
@@ -48,10 +51,14 @@ public sealed class ApiReferenceExportOptions
         {
             throw new ArgumentException("At least one exporting assembly name is required.", nameof(exportingAssemblyNames));
         }
+        if (exportingAssemblyNames.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new ArgumentException("Exporting assembly names cannot be null or white-space.", nameof(exportingAssemblyNames));
+        }
 
         PackageName = packageName;
         PackageVersion = packageVersion;
-        ExportingAssemblyNames = exportingAssemblyNames.ToArray();
+        ExportingAssemblyNames = Array.AsReadOnly(exportingAssemblyNames.ToArray());
     }
 
     /// <summary>

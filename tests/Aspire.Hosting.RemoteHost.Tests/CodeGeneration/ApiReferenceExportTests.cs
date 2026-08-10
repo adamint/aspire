@@ -104,14 +104,14 @@ public class ApiReferenceExportTests
         var hostingAssemblyPath = CopyPackageAssembly(
             typeof(IDistributedApplicationBuilder).Assembly.Location,
             packageAssetsPath,
+            "runtimes",
+            "test-rid",
             "lib",
             "net8.0");
         var yarpAssemblyPath = CopyPackageAssembly(
             typeof(Yarp.YarpResource).Assembly.Location,
             packageAssetsPath,
-            "runtimes",
-            "test-rid",
-            "lib",
+            "REF",
             "NET8.0");
 
         WriteProbeManifest(

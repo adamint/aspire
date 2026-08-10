@@ -35,7 +35,11 @@ public interface IApiReferenceExporter
     /// Exports the API reference for the surface the generator would produce from the same context.
     /// </summary>
     /// <param name="context">The ATS context containing capabilities, types, and enums.</param>
-    /// <param name="options">The package identity and ownership scope for the export.</param>
+    /// <param name="options">
+    /// The package identity and ownership scope for the export. Assembly ownership matching follows
+    /// the case-insensitive contract documented by
+    /// <see cref="ApiReferenceExportOptions.ExportingAssemblyNames"/>.
+    /// </param>
     /// <param name="cancellationToken">A token to cancel the export between projected items.</param>
     /// <returns>
     /// A language-defined JSON document describing the generated API. The returned element must be

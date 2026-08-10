@@ -2015,12 +2015,36 @@ public class AtsTypeScriptCodeGeneratorTests
     }
 
     [Fact]
+    public void ApiReferenceExportOptionsExposesReadOnlyExportingAssemblyNames()
+    {
+        var options = new ApiReferenceExportOptions(
+            ApiExportPackageName,
+            ApiExportPackageVersion,
+            [ApiExportPackageName]);
+        var exportingAssemblyNames = Assert.IsAssignableFrom<IList<string>>(options.ExportingAssemblyNames);
+
+        Assert.Throws<NotSupportedException>(() => exportingAssemblyNames[0] = "Changed");
+    }
+
+    [Fact]
     public void ApiReferenceExportOptionsRequiresAnExportingAssembly()
     {
         Assert.Throws<ArgumentException>(() => new ApiReferenceExportOptions(
             ApiExportPackageName,
             ApiExportPackageVersion,
             []));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    public void ApiReferenceExportOptionsRequiresValidExportingAssemblyNames(string? exportingAssemblyName)
+    {
+        Assert.Throws<ArgumentException>(() => new ApiReferenceExportOptions(
+            ApiExportPackageName,
+            ApiExportPackageVersion,
+            [exportingAssemblyName!]));
     }
 
     [Fact]
@@ -2044,7 +2068,7 @@ public class AtsTypeScriptCodeGeneratorTests
             firstModel.Declarations,
             declaration => declaration.Id == $"{firstPackage}:entrypoint:startThing");
         Assert.Equal(
-            "export function startThing(client: AspireClientRpc, name: string, retries?: number): Promise<void>;",
+            "export declare function startThing(client: AspireClientRpc, name: string, retries?: number): Promise<void>;",
             declaration.Content);
 
         var generatedSource = new AtsTypeScriptCodeGenerator()
