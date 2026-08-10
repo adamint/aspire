@@ -1017,6 +1017,32 @@ suite('AppHostLaunchService', () => {
         }
     });
 
+    test('a session terminating under a rewritten program path still clears the reservation it holds', () => {
+        // The configuration provider rewrites `program` to the resolved AppHost, so a launch
+        // reserved for a source file can terminate as the sibling project. Looking the
+        // reservation up by path alone would leave the source key marked launching forever, and
+        // every later start for that AppHost would be refused as already starting.
+        const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+        const reservedPath = path.join(directory, 'Program.cs');
+        const rewrittenPath = path.join(directory, 'AppHost.csproj');
+        service.reserveLaunch(reservedPath);
+        const token = service.getLaunchReservationToken(reservedPath);
+        assert.ok(token);
+
+        assert.ok(onDidTerminateDebugSessionCallback);
+        onDidTerminateDebugSessionCallback({
+            configuration: {
+                type: 'aspire',
+                program: rewrittenPath,
+                command: 'run',
+                __aspireAppHostLaunchReservationToken: token,
+            },
+        } as unknown as vscode.DebugSession);
+
+        assert.strictEqual(service.isLaunching(reservedPath), false, 'Expected the reservation taken under the source path to be cleared');
+        assert.strictEqual(service.getLaunchReservationToken(reservedPath), undefined);
+    });
+
     test('a repeated external reservation issues a fresh token so the superseded session cannot clear it', () => {
         // During an early restart the replacement session reserves while the old session's
         // terminate event is still pending, so the key is already marked launching. Reusing the

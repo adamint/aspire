@@ -175,8 +175,14 @@ export class AppHostLaunchService implements vscode.Disposable {
                 ? telemetryTargetPath
                 : session.configuration?.program;
             if (appHostPath && session.configuration?.type === 'aspire') {
-                const key = getAppHostPathComparisonKey(appHostPath);
                 const sessionToken = session.configuration?.[appHostLaunchReservationTokenConfigKey];
+                // The path a session reports can differ from the one its reservation was taken
+                // under: the configuration provider rewrites `program` to the resolved AppHost
+                // before the session exists, so a launch reserved for `Program.cs` can terminate
+                // as the sibling `.csproj`. The token survives that rewrite, so it locates the
+                // reservation whenever the path key no longer would.
+                const tokenKey = typeof sessionToken === 'string' ? this.findReservationKeyByToken(sessionToken) : undefined;
+                const key = tokenKey ?? getAppHostPathComparisonKey(appHostPath);
                 const currentToken = this._reservationTokens.get(key);
                 // A session that presents a superseded token is not the launch that holds the
                 // reservation, so clearing here would drop a newer launch's claim and reopen the
@@ -491,6 +497,17 @@ export class AppHostLaunchService implements vscode.Disposable {
      */
     getLaunchReservationToken(appHostPath: string): string | undefined {
         return this._reservationTokens.get(getAppHostPathComparisonKey(appHostPath));
+    }
+
+    /** The key of the reservation a token was issued for, or `undefined` once it is superseded. */
+    private findReservationKeyByToken(token: string): string | undefined {
+        for (const [key, issued] of this._reservationTokens) {
+            if (issued === token) {
+                return key;
+            }
+        }
+
+        return undefined;
     }
 
     /**
