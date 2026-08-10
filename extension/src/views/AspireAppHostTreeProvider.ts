@@ -1493,7 +1493,16 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
     }
 
     async attachDebuggerToResource(element: ResourceItem): Promise<AttachDebuggerHandledFailure | void> {
-        const latestElement = this.findResourceElement(element.resource.name, element.appHostPath);
+        // Global resource items retain the AppHost PID rather than its path. Resolve that
+        // owner again before refreshing the resource snapshot so duplicate resource names
+        // in different AppHosts cannot attach to whichever host happens to render first.
+        const ownerAppHostPath = element.appHostPath ?? this._findAppHostForResource(element)?.appHostPath;
+        if (!ownerAppHostPath) {
+            vscode.window.showWarningMessage(attachDebuggerResourceNotFound);
+            return { success: false, errorKind: 'ResourceNotFound' };
+        }
+
+        const latestElement = this.findResourceElement(element.resource.name, ownerAppHostPath);
         if (!(latestElement instanceof ResourceItem)) {
             vscode.window.showWarningMessage(attachDebuggerResourceNotFound);
             return { success: false, errorKind: 'ResourceNotFound' };

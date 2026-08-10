@@ -2541,6 +2541,56 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         provider.dispose();
     });
 
+    test('attachDebuggerToResource refreshes duplicate resource names from the owning AppHost', async () => {
+        const appHosts = [
+            makeAppHost({
+                appHostPath: '/repo/first/AppHost.csproj',
+                appHostPid: 1111,
+                resources: [
+                    makeResource({
+                        name: 'api',
+                        displayName: 'First API',
+                        resourceType: 'Project',
+                        state: ResourceState.Running,
+                        properties: makeAttachableProjectProperties({ 'executable.pid': '111' }),
+                    }),
+                ],
+            }),
+            makeAppHost({
+                appHostPath: '/repo/second/AppHost.csproj',
+                appHostPid: 2222,
+                resources: [
+                    makeResource({
+                        name: 'api',
+                        displayName: 'Second API',
+                        resourceType: 'Project',
+                        state: ResourceState.Running,
+                        properties: makeAttachableProjectProperties({ 'executable.pid': '222' }),
+                    }),
+                ],
+            }),
+        ];
+        const provider = makeTreeProvider(appHosts);
+        sandbox.stub(capabilities, 'isCsharpInstalled').returns(true);
+        const createConfigurationStub = sandbox.stub(debuggerExtensions, 'createAttachDebugSessionConfiguration').resolves({
+            type: 'coreclr',
+            request: 'attach',
+            name: 'Attach debugger: Second API',
+            processName: 'SecondApi',
+        });
+        sandbox.stub(vscode.debug, 'startDebugging').resolves(true);
+        const secondAppHostItem = provider.getChildren()[1];
+        const resourcesGroup = provider.getChildren(secondAppHostItem).find(item => item.contextValue === 'resourcesGroup');
+        assert.ok(resourcesGroup, 'Expected resources group for the second AppHost');
+        const secondResourceItem = provider.getChildren(resourcesGroup)[0];
+
+        await (provider as any).attachDebuggerToResource(secondResourceItem);
+
+        assert.strictEqual(createConfigurationStub.firstCall.args[0].displayName, 'Second API');
+        assert.strictEqual(createConfigurationStub.firstCall.args[0].properties?.['executable.pid'], '222');
+        provider.dispose();
+    });
+
     test('attachDebuggerToResource rejects a resource removed before invocation', async () => {
         const appHosts = [
             makeAppHost({
