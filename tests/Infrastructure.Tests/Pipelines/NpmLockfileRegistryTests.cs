@@ -232,6 +232,115 @@ public class NpmLockfileRegistryTests
     }
 
     /// <summary>
+    /// A dependency spec can name a remote source directly - a tarball URL, a git remote, a GitHub
+    /// shorthand - and every package manager honours it whatever the configured registry is. The
+    /// registry guards therefore do not cover it, and neither does the lockfile guard for a fixture
+    /// such as Aspire.Hosting.Blazor/TypeScript that ships no lockfile at all.
+    /// </summary>
+    [Fact]
+    public void PolyglotFixtures_DeclareOnlyRegistryDependencySpecs()
+    {
+        var remoteSpecs = EnumeratePolyglotFiles()
+            .Where(path => Path.GetFileName(path) == "package.json")
+            .SelectMany(path => ReadDependencySpecs(path)
+                .Where(dependency => !IsRegistryDependencySpec(dependency.Value))
+                .Select(dependency => $"{Path.GetRelativePath(RepoRoot.Path, path).Replace(Path.DirectorySeparatorChar, '/')} -> \"{dependency.Key}\": \"{dependency.Value}\""))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal([], remoteSpecs);
+    }
+
+    /// <summary>
+    /// The scan above only ever runs against fixtures that are already correct, so drive the
+    /// classifier with the spec forms npm, Yarn, pnpm and bun accept.
+    /// </summary>
+    [Theory]
+    [InlineData("^4.22.3", true)]
+    [InlineData("6.0.3", true)]
+    [InlineData("~1.2.3", true)]
+    [InlineData(">=1.0.0 <2.0.0", true)]
+    [InlineData("*", true)]
+    [InlineData("", true)]
+    [InlineData("workspace:*", true)]
+    [InlineData("file:../local-package", true)]
+    [InlineData("link:../local-package", true)]
+    [InlineData("npm:@types/node@^20.0.0", true)]
+    // Everything below fetches from somewhere other than the configured registry.
+    [InlineData("https://evil.example/pkg.tgz", false)]
+    [InlineData("http://evil.example/pkg.tgz", false)]
+    [InlineData("git+https://github.com/owner/repo.git", false)]
+    [InlineData("git://github.com/owner/repo.git", false)]
+    [InlineData("github:owner/repo", false)]
+    [InlineData("gitlab:owner/repo", false)]
+    [InlineData("bitbucket:owner/repo", false)]
+    [InlineData("owner/repo", false)]
+    [InlineData("owner/repo#semver:^1.0.0", false)]
+    // A dist-tag resolves through the registry, but which version it lands on is not pinned by
+    // anything in the repository, so it is not a spec a guarded fixture should carry either.
+    [InlineData("latest", false)]
+    [InlineData("next", false)]
+    public void DependencySpecScan_RejectsSpecsThatBypassTheRegistry(string spec, bool expectedAcceptable)
+    {
+        Assert.Equal(expectedAcceptable, IsRegistryDependencySpec(spec));
+    }
+
+    /// <summary>
+    /// Reads every dependency spec a package.json declares, across all four dependency sections.
+    /// </summary>
+    private static IEnumerable<KeyValuePair<string, string>> ReadDependencySpecs(string path)
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+
+        foreach (var section in new[] { "dependencies", "devDependencies", "optionalDependencies", "peerDependencies" })
+        {
+            if (!document.RootElement.TryGetProperty(section, out var dependencies) || dependencies.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            foreach (var dependency in dependencies.EnumerateObject())
+            {
+                yield return new KeyValuePair<string, string>(dependency.Name, dependency.Value.GetString() ?? string.Empty);
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when a dependency spec resolves through the configured registry at a version the
+    /// repository pins.
+    /// </summary>
+    /// <remarks>
+    /// An allow-list rather than a deny-list, because the set of remote spec forms keeps growing -
+    /// `github:`, `gitlab:`, `bitbucket:`, a bare `owner/repo` shorthand, `git+ssh://`, a plain
+    /// tarball URL - while the set of forms a pinned fixture legitimately needs does not. A
+    /// dist-tag such as `latest` does go through the registry, but nothing in the repository pins
+    /// which version it lands on, so it is excluded for the same reason.
+    /// See https://docs.npmjs.com/cli/v11/configuring-npm/package-json#dependencies.
+    /// </remarks>
+    private static bool IsRegistryDependencySpec(string spec)
+    {
+        var trimmed = spec.Trim();
+
+        if (trimmed.Length == 0 || trimmed == "*")
+        {
+            return true;
+        }
+
+        if (trimmed.StartsWith("workspace:", StringComparison.Ordinal) ||
+            trimmed.StartsWith("file:", StringComparison.Ordinal) ||
+            trimmed.StartsWith("link:", StringComparison.Ordinal) ||
+            trimmed.StartsWith("npm:", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        // A semver range starts with a digit, a comparator, or a range operator. Nothing that fetches
+        // from a remote source does, so anything else is rejected.
+        return trimmed[0] is >= '0' and <= '9' or '^' or '~' or '>' or '<' or '=' or 'v';
+    }
+
+    /// <summary>
     /// A file is lockfile-shaped when its name ends in .lock/.lockb, or pairs a "lock" or
     /// "shrinkwrap" word with a data extension — package-lock.json, pnpm-lock.yaml,
     /// npm-shrinkwrap.json. Deliberately broader than the recognized set so a new format is caught.
