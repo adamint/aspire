@@ -31,6 +31,12 @@ suite('Aspire AppHost build ownership E2E', function () {
         await openAspireView();
         await waitForRepositoryIdle();
         const discovered = await waitForWorkspaceAppHost();
+        // waitForWorkspaceAppHost opens the E2E workspace folder on the first spec of a shard, and
+        // that reloads the VS Code window back to the Explorer view. AppHostDataRepository only
+        // polls `aspire ps` while the Aspire panel is visible or an AppHost tab is open (see
+        // `_dataActive`), and `appHosts` is what `waitForRunningAppHost` reads -- so the panel has
+        // to be reopened after the reload or no running AppHost is ever observed.
+        await openAspireView();
         const appHostPath = discovered.state.workspaceAppHostPath ?? getPrimaryAppHostProjectPath();
         appHostSourcePath = path.join(path.dirname(appHostPath), 'AppHost.cs');
         originalSource = fs.readFileSync(appHostSourcePath, 'utf8');

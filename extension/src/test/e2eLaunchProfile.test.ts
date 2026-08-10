@@ -938,7 +938,45 @@ suite('E2E launch profile', () => {
         assert.ok(runner.indexOf('const downloadCacheRoot =') < runRootIndex);
         assert.ok(runner.indexOf('const vscodeVersion = resolveCachedVsCodeVersion(') < runRootIndex);
     });
+
+    test('specs reopen the Aspire view after the workspace folder open before waiting for a running AppHost', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const specDirectory = path.join(extensionRoot, 'src', 'test-e2e');
+        const specs = fs.readdirSync(specDirectory).filter(file => file.endsWith('.e2e.test.ts')).sort();
+        assert.ok(specs.length > 0, 'Expected to find E2E spec files.');
+
+        const offenders: string[] = [];
+        for (const spec of specs) {
+            // Comments are stripped so prose naming these helpers cannot satisfy the rule.
+            const source = stripComments(fs.readFileSync(path.join(specDirectory, spec), 'utf8'));
+            const firstRunningWait = firstIndexOf(source, ['waitForRunningAppHost(', 'waitForRunningAppHostPid(']);
+            if (firstRunningWait < 0) {
+                continue;
+            }
+
+            // These helpers open the E2E workspace folder on the first spec of a shard, and that
+            // reloads the VS Code window back to the Explorer view. AppHostDataRepository only
+            // polls `aspire ps` while the Aspire panel is visible or an AppHost tab is open (its
+            // `_dataActive` gate), and `aspire ps` is the only source of `state.appHosts` --
+            // the list every running-AppHost assertion reads. A spec that waits for a running
+            // AppHost without reopening the panel after that reload waits forever, which is how
+            // the build-ownership shard timed out at 180s while the AppHost was demonstrably up.
+            const firstFolderOpen = firstIndexOf(source, ['waitForWorkspaceAppHost(', 'waitForSelectedWorkspaceAppHost(']);
+            const reopened = [...source.matchAll(/openAspireView\(\)/g)]
+                .some(match => match.index !== undefined && match.index > firstFolderOpen && match.index < firstRunningWait);
+            if (!reopened) {
+                offenders.push(spec);
+            }
+        }
+
+        assert.deepStrictEqual(offenders, []);
+    });
 });
+
+function firstIndexOf(source: string, needles: readonly string[]): number {
+    const indexes = needles.map(needle => source.indexOf(needle)).filter(index => index >= 0);
+    return indexes.length === 0 ? -1 : Math.min(...indexes);
+}
 
 function getSwitchCase(source: string, startCase: string, nextCase: string): string {
     const start = source.indexOf(`case '${startCase}':`);
