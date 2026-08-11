@@ -5,6 +5,7 @@ import { createDebugSessionConfiguration, ResourceDebuggerExtension } from '../d
 import { ExecutableLaunchConfiguration } from '../dcp/types';
 import {
     ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR,
+    ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR,
     ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR,
     getAspireExtensionEnvironment,
 } from '../utils/cliPathEnvironment';
@@ -15,6 +16,9 @@ suite('debuggerExtensions tests', () => {
         const extensionEnvironment = getAspireExtensionEnvironment({
             version: '1.17.0',
             preRelease: true,
+        }, {
+            appName: 'Visual Studio Code - Insiders',
+            uriScheme: 'vscode-insiders',
         });
         assert.ok(extensionEnvironment);
         const debuggerExtension: ResourceDebuggerExtension = {
@@ -38,6 +42,7 @@ suite('debuggerExtensions tests', () => {
                             env: {
                                 aspire_vscode_extension_version: 'debugger-version',
                                 aspire_vscode_extension_channel: 'stable',
+                                aspire_vscode_extension_source: 'other',
                                 CALLER_SETTING: 'preserved',
                             },
                         },
@@ -51,6 +56,7 @@ suite('debuggerExtensions tests', () => {
                 [
                     { name: 'aspire_vscode_extension_version', value: 'cli-version' },
                     { name: 'aspire_vscode_extension_channel', value: 'stable' },
+                    { name: 'aspire_vscode_extension_source', value: 'other' },
                 ],
                 {
                     debug: true,
@@ -63,8 +69,10 @@ suite('debuggerExtensions tests', () => {
 
             assert.strictEqual(configuration.env?.[ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR], '1.17.0');
             assert.strictEqual(configuration.env?.[ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR], 'prerelease');
+            assert.strictEqual(configuration.env?.[ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR], 'microsoft-marketplace');
             assert.strictEqual(configuration.env?.aspire_vscode_extension_version, undefined);
             assert.strictEqual(configuration.env?.aspire_vscode_extension_channel, undefined);
+            assert.strictEqual(configuration.env?.aspire_vscode_extension_source, undefined);
             assert.strictEqual(configuration.env?.CALLER_SETTING, 'preserved');
         }
         finally {

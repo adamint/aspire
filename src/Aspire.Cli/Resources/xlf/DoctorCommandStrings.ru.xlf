@@ -491,6 +491,11 @@ The current layout continues to work — this is a non-blocking warning.</target
         <target state="new">The installed extension channel could not be determined, so the update check was skipped.</target>
         <note />
       </trans-unit>
+      <trans-unit id="VsCodeExtensionLatestVersionCheckSkippedUnknownSourceDetails">
+        <source>The active editor is not known to use the Microsoft VS Code Marketplace, so the update check was skipped.</source>
+        <target state="new">The active editor is not known to use the Microsoft VS Code Marketplace, so the update check was skipped.</target>
+        <note />
+      </trans-unit>
       <trans-unit id="VsCodeExtensionLatestVersionCheckUnavailableDetails">
         <source>Could not check for Aspire extension updates because the VS Code Marketplace is unavailable.</source>
         <target state="new">Could not check for Aspire extension updates because the VS Code Marketplace is unavailable.</target>

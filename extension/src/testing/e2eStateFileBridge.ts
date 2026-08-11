@@ -12,7 +12,11 @@ import { createStateSnapshot, getSensitiveDashboardUrl, isSamePath } from '../ex
 import { AppHostLaunchRequestedEvent, AppHostLaunchService } from '../services/AppHostLaunchService';
 import type { AspireDebugConsoleOutputEvent, AspireExtensionE2ECommandInvocation, AspireExtensionE2EControlCommand, AspireExtensionE2EControlPayload, AspireExtensionE2EControlStatus, AspireExtensionE2EDebugConsoleOutput, AspireExtensionE2EDebugLaunch, AspireExtensionE2EStoppingPathEvent, AspireExtensionE2ETaskProcessEvent, AspireExtensionE2ETerminalCommand, AspireExtensionStateSnapshot } from '../types/extensionApi';
 import { AspireTerminalCommandEvent, AspireTerminalProvider } from '../utils/AspireTerminalProvider';
-import { ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR, ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR } from '../utils/cliPathEnvironment';
+import {
+  ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR,
+  ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR,
+  ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR,
+} from '../utils/cliPathEnvironment';
 import { dashboardDefaultChangedNotificationKey } from '../utils/dashboardNotificationState';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { onDidInvokeCommand } from '../utils/telemetry';
@@ -594,6 +598,7 @@ async function executeE2eControlCommand(
       return {
         version: context.environmentVariableCollection.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR)?.value,
         channel: context.environmentVariableCollection.get(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR)?.value,
+        source: context.environmentVariableCollection.get(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR)?.value,
       };
     }
     case 'getExtensionFileStatus': {

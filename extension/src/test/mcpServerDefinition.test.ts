@@ -5,6 +5,7 @@ import * as cliPath from '../utils/cliPath';
 import { AspireMcpServerDefinitionProvider, createAspireMcpServerDefinition } from '../mcp/AspireMcpServerDefinitionProvider';
 import {
     ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR,
+    ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR,
     ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR,
     getAspireExtensionEnvironment,
 } from '../utils/cliPathEnvironment';
@@ -15,6 +16,9 @@ suite('AspireMcpServerDefinitionProvider definition tests', () => {
         const extensionEnvironment = getAspireExtensionEnvironment({
             version: '1.17.0',
             preRelease: true,
+        }, {
+            appName: 'Visual Studio Code - Insiders',
+            uriScheme: 'vscode-insiders',
         });
         assert.ok(extensionEnvironment);
         const inheritedEnvironment: NodeJS.ProcessEnv = {
@@ -23,6 +27,7 @@ suite('AspireMcpServerDefinitionProvider definition tests', () => {
             ASPIRE_MCP_SECRET_TEST: 'secret-value',
             aspire_vscode_extension_version: 'spoofed-version',
             aspire_vscode_extension_channel: 'stable',
+            aspire_vscode_extension_source: 'other',
         };
         const originalEnvironment = { ...inheritedEnvironment };
         const processEnvironmentStub = sinon.stub(process, 'env').value(inheritedEnvironment);
@@ -44,8 +49,10 @@ suite('AspireMcpServerDefinitionProvider definition tests', () => {
             assert.deepStrictEqual(definition.env, {
                 [ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR]: '1.17.0',
                 [ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR]: 'prerelease',
+                [ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR]: 'microsoft-marketplace',
                 aspire_vscode_extension_version: null,
                 aspire_vscode_extension_channel: null,
+                aspire_vscode_extension_source: null,
             });
             assert.deepStrictEqual(process.env, originalEnvironment);
         }
@@ -58,6 +65,9 @@ suite('AspireMcpServerDefinitionProvider definition tests', () => {
     test('passes native executables through with only stable identity overrides', () => {
         const extensionEnvironment = getAspireExtensionEnvironment({
             version: '1.16.0',
+        }, {
+            appName: 'Visual Studio Code',
+            uriScheme: 'vscode',
         });
         assert.ok(extensionEnvironment);
         const inheritedEnvironment: NodeJS.ProcessEnv = {
@@ -65,6 +75,7 @@ suite('AspireMcpServerDefinitionProvider definition tests', () => {
             ASPIRE_MCP_SECRET_TEST: 'secret-value',
             [ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR]: 'spoofed-version',
             [ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR]: 'prerelease',
+            [ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR]: 'other',
         };
         const originalEnvironment = { ...inheritedEnvironment };
         const processEnvironmentStub = sinon.stub(process, 'env').value(inheritedEnvironment);
@@ -77,6 +88,7 @@ suite('AspireMcpServerDefinitionProvider definition tests', () => {
             assert.deepStrictEqual(definition.env, {
                 [ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR]: '1.16.0',
                 [ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR]: 'stable',
+                [ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR]: 'microsoft-marketplace',
             });
             assert.deepStrictEqual(process.env, originalEnvironment);
         }

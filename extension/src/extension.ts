@@ -63,7 +63,10 @@ export async function activate(context: vscode.ExtensionContext) {
     workspace_folders: vscode.workspace.workspaceFolders?.length ?? 0,
   });
 
-  const extensionEnvironment = getAspireExtensionEnvironment(context.extension.packageJSON);
+  const extensionEnvironment = getAspireExtensionEnvironment(context.extension.packageJSON, {
+    appName: vscode.env.appName,
+    uriScheme: vscode.env.uriScheme,
+  });
   const terminalProvider = new AspireTerminalProvider(context.subscriptions, undefined, extensionEnvironment);
   const testRunSessionManager = new TestRunSessionManager();
 

@@ -46,6 +46,7 @@ interface DiagnosticResult {
 interface AspireExtensionEnvironment {
     version?: string;
     channel?: string;
+    source?: string;
 }
 
 type AspireExtensionChannel = 'stable' | 'prerelease';
@@ -73,6 +74,7 @@ suite('Aspire package contribution surface E2E', function () {
         assert.deepStrictEqual(extensionEnvironment, {
             version: installedPackage.version,
             channel: getExpectedExtensionChannel(),
+            source: 'microsoft-marketplace',
         });
         const sourceCommandIds = getPackageCommandIds(sourcePackage);
         const installedCommandIds = getPackageCommandIds(installedPackage);

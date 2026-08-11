@@ -107,6 +107,9 @@
   <data name="VsCodeExtensionLatestVersionCheckSkippedUnknownChannelDetails" xml:space="preserve">
     <value>The installed extension channel could not be determined, so the update check was skipped.</value>
   </data>
+  <data name="VsCodeExtensionLatestVersionCheckSkippedUnknownSourceDetails" xml:space="preserve">
+    <value>The active editor is not known to use the Microsoft VS Code Marketplace, so the update check was skipped.</value>
+  </data>
   <data name="VsCodeExtensionLatestVersionNotFoundDetails" xml:space="preserve">
     <value>The VS Code Marketplace did not report an Aspire extension version for the detected channel.</value>
   </data>

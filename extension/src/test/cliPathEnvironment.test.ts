@@ -4,6 +4,7 @@ import * as vscode from 'vscode';
 import {
     ASPIRE_CLI_PATH_ENV_VAR,
     ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR,
+    ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR,
     ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR,
     CliPathEnvironmentCollection,
     CliPathEnvironmentDependencies,
@@ -75,10 +76,14 @@ suite('cliPathEnvironment.syncAspireExtensionEnvironment tests', () => {
 
             syncAspireExtensionEnvironment(collection, getAspireExtensionEnvironment({
                 version: '1.16.0',
+            }, {
+                appName: 'Visual Studio Code',
+                uriScheme: 'vscode',
             }));
 
             assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), '1.16.0');
             assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR), 'stable');
+            assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR), 'microsoft-marketplace');
         });
     });
 
@@ -89,6 +94,9 @@ suite('cliPathEnvironment.syncAspireExtensionEnvironment tests', () => {
             syncAspireExtensionEnvironment(collection, getAspireExtensionEnvironment({
                 version: '1.17.0',
                 preRelease: true,
+            }, {
+                appName: 'Visual Studio Code',
+                uriScheme: 'vscode',
             }));
 
             assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), '1.17.0');
@@ -103,6 +111,9 @@ suite('cliPathEnvironment.syncAspireExtensionEnvironment tests', () => {
             syncAspireExtensionEnvironment(collection, getAspireExtensionEnvironment({
                 version: '1.17.0',
                 preRelease: false,
+            }, {
+                appName: 'Visual Studio Code',
+                uriScheme: 'vscode',
             }));
 
             assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), '1.17.0');
@@ -117,6 +128,9 @@ suite('cliPathEnvironment.syncAspireExtensionEnvironment tests', () => {
             syncAspireExtensionEnvironment(collection, getAspireExtensionEnvironment({
                 version: '1.17.0',
                 preRelease: false,
+            }, {
+                appName: 'Visual Studio Code',
+                uriScheme: 'vscode',
             }));
 
             assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), '1.17.0');
@@ -128,11 +142,24 @@ suite('cliPathEnvironment.syncAspireExtensionEnvironment tests', () => {
         const collection = createFakeCollection();
         collection.entries.set(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR, '1.16.0');
         collection.entries.set(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR, 'stable');
+        collection.entries.set(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR, 'microsoft-marketplace');
 
         syncAspireExtensionEnvironment(collection, undefined);
 
         assert.strictEqual(collection.entries.has(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), false);
         assert.strictEqual(collection.entries.has(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR), false);
+        assert.strictEqual(collection.entries.has(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR), false);
+    });
+
+    test('marks non-Microsoft editor products as another extension source', () => {
+        const extensionEnvironment = getAspireExtensionEnvironment({
+            version: '1.16.0',
+        }, {
+            appName: 'VSCodium',
+            uriScheme: 'vscodium',
+        });
+
+        assert.strictEqual(extensionEnvironment?.[ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR], 'other');
     });
 });
 

@@ -204,6 +204,15 @@ namespace Aspire.Cli.Resources {
         }
 
         /// <summary>
+        ///   Looks up a localized string similar to The active editor is not known to use the Microsoft VS Code Marketplace, so the update check was skipped..
+        /// </summary>
+        public static string VsCodeExtensionLatestVersionCheckSkippedUnknownSourceDetails {
+            get {
+                return ResourceManager.GetString("VsCodeExtensionLatestVersionCheckSkippedUnknownSourceDetails", resourceCulture);
+            }
+        }
+
+        /// <summary>
         ///   Looks up a localized string similar to The VS Code Marketplace did not report an Aspire extension version for the detected channel..
         /// </summary>
         public static string VsCodeExtensionLatestVersionNotFoundDetails {

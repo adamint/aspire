@@ -20,6 +20,7 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
     internal const string MarketplaceUrl = "https://aka.ms/aspire/vscode-extension";
     internal const string ExtensionVersionEnvironmentVariable = "ASPIRE_VSCODE_EXTENSION_VERSION";
     internal const string ExtensionChannelEnvironmentVariable = "ASPIRE_VSCODE_EXTENSION_CHANNEL";
+    internal const string ExtensionSourceEnvironmentVariable = "ASPIRE_VSCODE_EXTENSION_SOURCE";
 
     private readonly IEnvironment _environment;
     private readonly CliExecutionContext _executionContext;
@@ -104,6 +105,14 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             return [CreateUnknownChannelResult(metadata)];
         }
 
+        // Older extension versions do not report their editor product. Treat the missing source as
+        // unknown rather than assuming Microsoft VS Code, so side-loaded installs in Code - OSS
+        // products never receive an irrelevant Marketplace link.
+        if (detection.ExtensionSource != VsCodeExtensionSource.MicrosoftMarketplace)
+        {
+            return [CreateUnknownSourceResult(metadata)];
+        }
+
         try
         {
             var versions = await _marketplaceClient.GetLatestVersionsAsync(cancellationToken);
@@ -185,12 +194,6 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         DirectoryInfo homeDirectory,
         Func<string, string?> commandResolver)
     {
-        var vsCodeInstalled = IsVsCodeInstalled(environment, homeDirectory, commandResolver);
-        if (!vsCodeInstalled)
-        {
-            return new VsCodeExtensionDetection(false, false);
-        }
-
         var reportedVersion = environment.GetEnvironmentVariable(ExtensionVersionEnvironmentVariable)?.Trim();
         if (!string.IsNullOrEmpty(reportedVersion))
         {
@@ -198,7 +201,14 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
                 true,
                 true,
                 reportedVersion,
-                ParseReleaseChannel(environment.GetEnvironmentVariable(ExtensionChannelEnvironmentVariable)));
+                ParseReleaseChannel(environment.GetEnvironmentVariable(ExtensionChannelEnvironmentVariable)),
+                ParseExtensionSource(environment.GetEnvironmentVariable(ExtensionSourceEnvironmentVariable)));
+        }
+
+        var vsCodeInstalled = IsVsCodeInstalled(environment, homeDirectory, commandResolver);
+        if (!vsCodeInstalled)
+        {
+            return new VsCodeExtensionDetection(false, false);
         }
 
         var extension = FindExtension(environment, homeDirectory);
@@ -332,7 +342,8 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             if (File.Exists(manifestPath))
             {
                 using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
-                if (document.RootElement.TryGetProperty("version", out var version) &&
+                if (document.RootElement.ValueKind == JsonValueKind.Object &&
+                    document.RootElement.TryGetProperty("version", out var version) &&
                     version.ValueKind == JsonValueKind.String &&
                     SemVersion.TryParse(version.GetString(), SemVersionStyles.Strict, out _))
                 {
@@ -370,6 +381,16 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             _ => VsCodeExtensionReleaseChannel.Unknown
         };
 
+    private static VsCodeExtensionSource ParseExtensionSource(string? source)
+        => source?.Trim() switch
+        {
+            var value when string.Equals(value, "microsoft-marketplace", StringComparison.OrdinalIgnoreCase)
+                => VsCodeExtensionSource.MicrosoftMarketplace,
+            var value when string.Equals(value, "other", StringComparison.OrdinalIgnoreCase)
+                => VsCodeExtensionSource.Other,
+            _ => VsCodeExtensionSource.Unknown
+        };
+
     private static EnvironmentCheckResult CreateInstalledResult(JsonObject metadata)
         => new()
         {
@@ -398,6 +419,17 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             Status = EnvironmentCheckStatus.Warning,
             Message = DoctorCommandStrings.VsCodeExtensionInstalledMessage,
             Details = DoctorCommandStrings.VsCodeExtensionLatestVersionCheckSkippedUnknownChannelDetails,
+            Metadata = metadata
+        };
+
+    private static EnvironmentCheckResult CreateUnknownSourceResult(JsonObject metadata)
+        => new()
+        {
+            Category = EnvironmentCheckCategories.DevelopmentTools,
+            Name = CheckName,
+            Status = EnvironmentCheckStatus.Warning,
+            Message = DoctorCommandStrings.VsCodeExtensionInstalledMessage,
+            Details = DoctorCommandStrings.VsCodeExtensionLatestVersionCheckSkippedUnknownSourceDetails,
             Metadata = metadata
         };
 
@@ -446,6 +478,12 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
                 VsCodeExtensionReleaseChannel.PreRelease => "prerelease",
                 _ => "unknown"
             };
+            metadata["extensionSource"] = detection.ExtensionSource switch
+            {
+                VsCodeExtensionSource.MicrosoftMarketplace => "microsoft-marketplace",
+                VsCodeExtensionSource.Other => "other",
+                _ => "unknown"
+            };
         }
 
         return metadata;
@@ -463,10 +501,21 @@ internal enum VsCodeExtensionReleaseChannel
 }
 
 /// <summary>
+/// The extension gallery source inferred from the active editor product.
+/// </summary>
+internal enum VsCodeExtensionSource
+{
+    Unknown,
+    MicrosoftMarketplace,
+    Other
+}
+
+/// <summary>
 /// The detected VS Code and Aspire extension state.
 /// </summary>
 internal sealed record VsCodeExtensionDetection(
     bool VsCodeInstalled,
     bool ExtensionInstalled,
     string? ExtensionVersion = null,
-    VsCodeExtensionReleaseChannel ReleaseChannel = VsCodeExtensionReleaseChannel.Unknown);
+    VsCodeExtensionReleaseChannel ReleaseChannel = VsCodeExtensionReleaseChannel.Unknown,
+    VsCodeExtensionSource ExtensionSource = VsCodeExtensionSource.Unknown);

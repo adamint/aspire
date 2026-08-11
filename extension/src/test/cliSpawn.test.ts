@@ -13,6 +13,7 @@ import type { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
 import { getCmdShimSpawnCommandWithoutVerbatimArguments } from '../utils/cmdShim';
 import {
     ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR,
+    ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR,
     ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR,
     getAspireExtensionEnvironment,
 } from '../utils/cliPathEnvironment';
@@ -25,12 +26,16 @@ suite('spawnCliProcess tests', () => {
         const spawnStub = sinon.stub(nodeChildProcess, 'spawn').returns(childProcess);
         const extensionEnvironment = getAspireExtensionEnvironment({
             version: '1.16.0',
+        }, {
+            appName: 'Visual Studio Code',
+            uriScheme: 'vscode',
         });
         assert.ok(extensionEnvironment);
         const terminalProvider = {
             createEnvironment: () => ({
                 aspire_vscode_extension_version: 'parent-version',
                 aspire_vscode_extension_channel: 'prerelease',
+                aspire_vscode_extension_source: 'other',
             }),
             aspireExtensionEnvironment: extensionEnvironment,
         } as unknown as AspireTerminalProvider;
@@ -40,14 +45,17 @@ suite('spawnCliProcess tests', () => {
                 env: [
                     { name: 'aspire_vscode_extension_version', value: 'caller-version' },
                     { name: 'aspire_vscode_extension_channel', value: 'prerelease' },
+                    { name: 'aspire_vscode_extension_source', value: 'other' },
                 ],
             });
 
             const env = spawnStub.firstCall.args[2]?.env;
             assert.strictEqual(env?.[ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR], '1.16.0');
             assert.strictEqual(env?.[ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR], 'stable');
+            assert.strictEqual(env?.[ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR], 'microsoft-marketplace');
             assert.strictEqual(env?.aspire_vscode_extension_version, undefined);
             assert.strictEqual(env?.aspire_vscode_extension_channel, undefined);
+            assert.strictEqual(env?.aspire_vscode_extension_source, undefined);
         }
         finally {
             spawnStub.restore();
