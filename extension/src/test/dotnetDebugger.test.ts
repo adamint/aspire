@@ -62,6 +62,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         getHotReloadDiagnostics = sinon.stub(hotReload, 'getHotReloadDiagnostics').returns({
             devKitInstalled: true,
             workspaceTrusted: true,
+            settingContributed: true,
             settingEnabled: false,
             reloadOnSaveEnabled: true
         });
@@ -337,12 +338,14 @@ suite('Dotnet Debugger Extension Tests', () => {
         getHotReloadDiagnostics.onFirstCall().returns({
             devKitInstalled: false,
             workspaceTrusted: true,
+            settingContributed: true,
             settingEnabled: false,
             reloadOnSaveEnabled: true
         });
         getHotReloadDiagnostics.onSecondCall().returns({
             devKitInstalled: true,
             workspaceTrusted: true,
+            settingContributed: true,
             settingEnabled: true,
             reloadOnSaveEnabled: true
         });
@@ -357,6 +360,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         const diagnostics = {
             devKitInstalled: true,
             workspaceTrusted: true,
+            settingContributed: true,
             settingEnabled: false,
             reloadOnSaveEnabled: true
         };

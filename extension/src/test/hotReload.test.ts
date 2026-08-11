@@ -11,6 +11,7 @@ import { extensionLogOutputChannel } from '../utils/logging';
 
 suite('Hot Reload Tests', () => {
     let restoreTrust: (() => void) | undefined;
+    type HotReloadInspection = NonNullable<ReturnType<vscode.WorkspaceConfiguration['inspect']>>;
 
     teardown(() => {
         restoreTrust?.();
@@ -35,10 +36,20 @@ suite('Hot Reload Tests', () => {
         };
     }
 
-    function stubHotReloadSettings(enabled: boolean, onSave: boolean): void {
+    function createHotReloadInspection(values: Partial<HotReloadInspection> = {}): HotReloadInspection {
+        return {
+            key: 'csharp.experimental.debug.hotReload',
+            ...values
+        };
+    }
+
+    function stubHotReloadSettings(enabled: boolean | undefined, onSave: boolean, inspection: HotReloadInspection | undefined = enabled !== undefined
+        ? createHotReloadInspection({ defaultValue: enabled })
+        : undefined): void {
         const getConfiguration = sinon.stub(vscode.workspace, 'getConfiguration');
         getConfiguration.withArgs('csharp.experimental.debug').returns({
-            get: (name: string) => name === 'hotReload' ? enabled : undefined
+            get: (name: string) => name === 'hotReload' ? enabled : undefined,
+            inspect: (name: string) => name === 'hotReload' ? inspection : undefined
         } as vscode.WorkspaceConfiguration);
         getConfiguration.withArgs('csharp.debug').returns({
             get: (name: string) => name === 'hotReloadOnSave' ? onSave : undefined
@@ -58,13 +69,15 @@ suite('Hot Reload Tests', () => {
         assert.deepStrictEqual(diagnostics, {
             devKitInstalled: true,
             workspaceTrusted: false,
+            settingContributed: true,
             settingEnabled: false,
             reloadOnSaveEnabled: true
         });
         assert.strictEqual(
             info.calledOnceWithExactly(
                 'Hot Reload state for api: devKitInstalled=true, workspaceTrusted=false, ' +
-                'csharp.experimental.debug.hotReload=false, csharp.debug.hotReloadOnSave=true'),
+                'csharp.experimental.debug.hotReload.contributed=true, csharp.experimental.debug.hotReload=false, ' +
+                'csharp.debug.hotReloadOnSave=true'),
             true);
     });
 
@@ -80,13 +93,15 @@ suite('Hot Reload Tests', () => {
         assert.deepStrictEqual(diagnostics, {
             devKitInstalled: true,
             workspaceTrusted: true,
+            settingContributed: true,
             settingEnabled: true,
             reloadOnSaveEnabled: false
         });
         assert.strictEqual(
             info.calledOnceWithExactly(
                 'Hot Reload state for worker: devKitInstalled=true, workspaceTrusted=true, ' +
-                'csharp.experimental.debug.hotReload=true, csharp.debug.hotReloadOnSave=false'),
+                'csharp.experimental.debug.hotReload.contributed=true, csharp.experimental.debug.hotReload=true, ' +
+                'csharp.debug.hotReloadOnSave=false'),
             true);
     });
 
@@ -101,12 +116,46 @@ suite('Hot Reload Tests', () => {
         assert.strictEqual(notification.called, false);
     });
 
+    test('does not show the advisory when C# Dev Kit does not contribute the Hot Reload setting', async () => {
+        stubDevKit(true);
+        stubWorkspaceTrust(true);
+        stubHotReloadSettings(undefined, true);
+        const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+
+        await showHotReloadDisabledAdvisoryIfNeeded(getHotReloadDiagnostics());
+
+        assert.strictEqual(notification.called, false);
+    });
+
+    test('does not show the advisory when C# Dev Kit reports only a key-only Hot Reload inspection', async () => {
+        stubDevKit(true);
+        stubWorkspaceTrust(true);
+        stubHotReloadSettings(undefined, true, createHotReloadInspection());
+        const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+
+        await showHotReloadDisabledAdvisoryIfNeeded(getHotReloadDiagnostics());
+
+        assert.strictEqual(notification.called, false);
+    });
+
+    test('does not show the advisory when C# Dev Kit reports only a user-value Hot Reload inspection', async () => {
+        stubDevKit(true);
+        stubWorkspaceTrust(true);
+        stubHotReloadSettings(false, true, createHotReloadInspection({ globalValue: false }));
+        const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+
+        await showHotReloadDisabledAdvisoryIfNeeded(getHotReloadDiagnostics());
+
+        assert.strictEqual(notification.called, false);
+    });
+
     test('does not show the advisory when Hot Reload is enabled', async () => {
         const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
 
         await showHotReloadDisabledAdvisoryIfNeeded({
             devKitInstalled: true,
             workspaceTrusted: true,
+            settingContributed: true,
             settingEnabled: true,
             reloadOnSaveEnabled: true
         });
@@ -126,6 +175,7 @@ suite('Hot Reload Tests', () => {
         const diagnostics = {
             devKitInstalled: true,
             workspaceTrusted: true,
+            settingContributed: true,
             settingEnabled: false,
             reloadOnSaveEnabled: true
         };

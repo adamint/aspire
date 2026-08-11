@@ -13,17 +13,22 @@ const hotReloadSetting = `${hotReloadConfigurationSection}.${hotReloadConfigurat
 export interface HotReloadDiagnostics {
     devKitInstalled: boolean;
     workspaceTrusted: boolean;
+    settingContributed: boolean;
     settingEnabled: boolean;
     reloadOnSaveEnabled: boolean;
 }
 
 export function getHotReloadDiagnostics(): HotReloadDiagnostics {
+    const hotReloadConfiguration = vscode.workspace.getConfiguration(hotReloadConfigurationSection);
+    // VS Code can keep returning a key-only inspection, or just a user-scoped value, after an extension
+    // stops contributing a setting. The default value is the reliable signal that the setting still exists.
+    const hotReloadSettingInspection = hotReloadConfiguration.inspect<boolean>(hotReloadConfigurationName);
+
     return {
         devKitInstalled: isCsDevKitInstalled(),
         workspaceTrusted: vscode.workspace.isTrusted,
-        settingEnabled: vscode.workspace
-            .getConfiguration(hotReloadConfigurationSection)
-            .get<boolean>(hotReloadConfigurationName) === true,
+        settingContributed: hotReloadSettingInspection?.defaultValue !== undefined,
+        settingEnabled: hotReloadConfiguration.get<boolean>(hotReloadConfigurationName) === true,
         reloadOnSaveEnabled: vscode.workspace
             .getConfiguration(hotReloadOnSaveConfigurationSection)
             .get<boolean>(hotReloadOnSaveConfigurationName) !== false
@@ -34,6 +39,7 @@ export function logHotReloadDiagnostics(resourceIdentifier: string, diagnostics:
     extensionLogOutputChannel.info(
         `Hot Reload state for ${resourceIdentifier}: devKitInstalled=${diagnostics.devKitInstalled}, ` +
         `workspaceTrusted=${diagnostics.workspaceTrusted}, ` +
+        `${hotReloadSetting}.contributed=${diagnostics.settingContributed}, ` +
         `${hotReloadSetting}=${diagnostics.settingEnabled}, ` +
         `${hotReloadOnSaveConfigurationSection}.${hotReloadOnSaveConfigurationName}=${diagnostics.reloadOnSaveEnabled}`);
 }
@@ -43,6 +49,7 @@ let hotReloadDisabledAdvisoryShown = false;
 export async function showHotReloadDisabledAdvisoryIfNeeded(diagnostics: HotReloadDiagnostics): Promise<void> {
     if (hotReloadDisabledAdvisoryShown
         || !diagnostics.devKitInstalled
+        || !diagnostics.settingContributed
         || diagnostics.settingEnabled) {
         return;
     }
