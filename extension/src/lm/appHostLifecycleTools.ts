@@ -665,7 +665,11 @@ function isLifecycleMode(value: unknown): value is AppHostLifecycleMode {
 }
 
 function isAbsolutePath(value: string): boolean {
-    return path.isAbsolute(value) || path.posix.isAbsolute(value) || path.win32.isAbsolute(value);
+    // Selectors are opaque values emitted by discovery. Syntax from another platform can be a
+    // legal filename on this host, so only the host platform's absolute-path rules apply.
+    return process.platform === 'win32'
+        ? path.win32.isAbsolute(value)
+        : path.posix.isAbsolute(value);
 }
 
 function toVisibleDisplayText(value: string): string {
@@ -681,7 +685,9 @@ function toPlainTextMarkdown(value: string): vscode.MarkdownString {
 }
 
 function toSelectorKey(value: string): string {
-    const normalized = value.replace(/\\/g, '/').replace(/^\.\//, '');
+    // A backslash is a path separator on Windows but a legal filename character on POSIX.
+    const normalized = (process.platform === 'win32' ? value.replace(/\\/g, '/') : value)
+        .replace(/^\.\//, '');
     return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 }
 

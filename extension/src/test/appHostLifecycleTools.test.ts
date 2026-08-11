@@ -25,6 +25,17 @@ interface LaunchCall {
     readonly noDebug: boolean;
 }
 
+interface AppHostLifecycleToolServiceTestAccess {
+    discoverTargets(token: vscode.CancellationToken): Promise<{
+        readonly targets: readonly {
+            readonly launchPath: string;
+            readonly absolutePath: string;
+            readonly selector: string;
+        }[];
+        readonly hadFailures: boolean;
+    }>;
+}
+
 class FakeLaunchService implements AppHostLifecycleLaunchService {
     readonly launchCalls: LaunchCall[] = [];
     readonly launchingPaths = new Set<string>();
@@ -407,6 +418,90 @@ suite('AppHost lifecycle language model tools', () => {
         assert.strictEqual(unknownResult.outcome, 'unknownAppHost');
         assert.deepStrictEqual(unknownResult.knownAppHosts, ['AppHost/AppHost.csproj']);
         assert.strictEqual(launchService.launchCalls.length, 0);
+    });
+
+    test('POSIX selectors distinguish literal backslashes from path separators', async () => {
+        sandbox.stub(process, 'platform').value('linux');
+        const backslashLaunchPath = path.resolve(workspaceRoot, 'literal-backslash.csproj');
+        const slashLaunchPath = path.resolve(workspaceRoot, 'slash-separated.csproj');
+        sandbox.stub(service as unknown as AppHostLifecycleToolServiceTestAccess, 'discoverTargets').resolves({
+            targets: [
+                {
+                    launchPath: backslashLaunchPath,
+                    absolutePath: backslashLaunchPath,
+                    selector: 'foo\\bar.csproj',
+                },
+                {
+                    launchPath: slashLaunchPath,
+                    absolutePath: slashLaunchPath,
+                    selector: 'foo/bar.csproj',
+                },
+            ],
+            hadFailures: false,
+        });
+
+        const backslashResult = await service.start({ appHostPath: 'foo\\bar.csproj', mode: 'run' }, token);
+        const slashResult = await service.start({ appHostPath: 'foo/bar.csproj', mode: 'run' }, token);
+
+        assert.strictEqual(backslashResult.outcome, 'started');
+        assert.strictEqual(slashResult.outcome, 'started');
+        assert.deepStrictEqual(launchService.launchCalls.map(call => call.appHostPath), [
+            backslashLaunchPath,
+            slashLaunchPath,
+        ]);
+    });
+
+    test('POSIX selectors treat Windows absolute syntax as opaque discovery values', async () => {
+        sandbox.stub(process, 'platform').value('linux');
+        const driveLaunchPath = path.resolve(workspaceRoot, 'drive-selector.csproj');
+        const rootedLaunchPath = path.resolve(workspaceRoot, 'rooted-selector.csproj');
+        sandbox.stub(service as unknown as AppHostLifecycleToolServiceTestAccess, 'discoverTargets').resolves({
+            targets: [
+                {
+                    launchPath: driveLaunchPath,
+                    absolutePath: driveLaunchPath,
+                    selector: 'C:\\AppHost.csproj',
+                },
+                {
+                    launchPath: rootedLaunchPath,
+                    absolutePath: rootedLaunchPath,
+                    selector: '\\AppHost.csproj',
+                },
+            ],
+            hadFailures: false,
+        });
+
+        const driveResult = await service.start({ appHostPath: 'C:\\AppHost.csproj', mode: 'run' }, token);
+        const rootedResult = await service.start({ appHostPath: '\\AppHost.csproj', mode: 'run' }, token);
+
+        assert.strictEqual(driveResult.outcome, 'started');
+        assert.strictEqual(rootedResult.outcome, 'started');
+        assert.deepStrictEqual(launchService.launchCalls.map(call => call.appHostPath), [
+            driveLaunchPath,
+            rootedLaunchPath,
+        ]);
+    });
+
+    test('Windows selectors normalize backslash separators and reject Windows absolute syntax', async () => {
+        sandbox.stub(process, 'platform').value('win32');
+        const launchPath = path.resolve(workspaceRoot, 'windows-selector.csproj');
+        sandbox.stub(service as unknown as AppHostLifecycleToolServiceTestAccess, 'discoverTargets').resolves({
+            targets: [{
+                launchPath,
+                absolutePath: launchPath,
+                selector: 'foo/bar.csproj',
+            }],
+            hadFailures: false,
+        });
+
+        const relativeResult = await service.start({ appHostPath: 'foo\\bar.csproj', mode: 'run' }, token);
+        const driveResult = await service.start({ appHostPath: 'C:\\AppHost.csproj', mode: 'run' }, token);
+        const rootedResult = await service.start({ appHostPath: '\\AppHost.csproj', mode: 'run' }, token);
+
+        assert.strictEqual(relativeResult.outcome, 'started');
+        assert.strictEqual(driveResult.outcome, 'invalidInput');
+        assert.strictEqual(rootedResult.outcome, 'invalidInput');
+        assert.deepStrictEqual(launchService.launchCalls.map(call => call.appHostPath), [launchPath]);
     });
 
     test('uses unique folder qualifiers to disambiguate multi-root selectors', async () => {
