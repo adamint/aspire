@@ -719,6 +719,12 @@ export default class AspireDcpServer {
                     wss.handleUpgrade(request, socket, head, (ws) => {
                         extensionLogOutputChannel.info(`WebSocket connection established for DCP ID: ${dcpId}`);
                         const routingDcpId = getDcpIdPrefix(dcpId) ?? dcpId;
+                        const displacedSocket = wsBySession.get(routingDcpId);
+                        if (displacedSocket?.readyState === WebSocket.OPEN) {
+                            // A reconnect transfers routing ownership, so make that transfer visible
+                            // to the displaced client instead of leaving a connected but inert socket.
+                            displacedSocket.close(1000, 'Replaced by a newer DCP connection');
+                        }
                         wsBySession.set(routingDcpId, ws);
 
                         const pendingNotifications = pendingNotificationQueueByDcpId.get(routingDcpId);

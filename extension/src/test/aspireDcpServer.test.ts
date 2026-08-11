@@ -422,12 +422,12 @@ suite('Aspire DCP run session lifecycle', () => {
         const runId = await createRun(harness, 'node', stopSession);
         const reconnectedDcpId = 'aspire-extension-run-test-reconnected';
         const reconnectedClient = await openNotificationClient(harness, reconnectedDcpId);
+        await waitFor(() => originalClient.socket.readyState === WebSocket.CLOSED, 1_000);
 
         const deleteResponse = await request(harness, 'DELETE', `/run_session/${runId}`, undefined, reconnectedDcpId);
 
         assert.strictEqual(deleteResponse.statusCode, 200, deleteResponse.body);
         const terminal = await reconnectedClient.waitForNotification();
-        await drainNotifications(originalClient);
         assert.deepStrictEqual(reconnectedClient.notifications, [terminal]);
         assert.deepStrictEqual(originalClient.notifications, []);
         assert.strictEqual(stopSession.calledOnce, true);
