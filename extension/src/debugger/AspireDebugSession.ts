@@ -704,9 +704,18 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       return partial;
     };
 
+    const aspireCliExecutablePath = await this._terminalProvider.getAspireCliExecutablePath();
+    // CLI resolution can outlive the ordered shutdown. Do not create a process or register a
+    // disposable after disposeCore has already torn down the session, and release the connection
+    // listener that was installed before the await.
+    if (this.isShuttingDown) {
+      disposable.dispose();
+      return;
+    }
+
     spawnCliProcess(
       this._terminalProvider,
-      await this._terminalProvider.getAspireCliExecutablePath(),
+      aspireCliExecutablePath,
       args,
       {
         stdoutCallback: (data) => {

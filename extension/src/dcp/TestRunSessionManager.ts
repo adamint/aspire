@@ -134,7 +134,10 @@ export class TestRunSessionManager {
             return existingRelease;
         }
 
-        const release = this.releaseLeaseCore(id);
+        // Defer the stop until the single-flight promise is registered. A stop can synchronously
+        // raise the parent termination event, which re-enters releaseLease and must join this
+        // release rather than starting another stop.
+        const release = Promise.resolve().then(() => this.releaseLeaseCore(id));
         this.leaseReleasePromises.set(id, release);
         const clearRelease = () => {
             if (this.leaseReleasePromises.get(id) === release) {
@@ -148,8 +151,8 @@ export class TestRunSessionManager {
 
     private async releaseLeaseCore(id: string): Promise<TestRunSessionLease | undefined> {
         const lease = this.leases.get(id);
-        this.leases.delete(id);
         await this.stopLeasedDebugSession(id);
+        this.leases.delete(id);
 
         return lease;
     }

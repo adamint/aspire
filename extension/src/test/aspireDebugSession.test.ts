@@ -403,6 +403,57 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(spawnStub.called, false);
     });
 
+    test('does not spawn Aspire when disposal completes during CLI path resolution', async () => {
+        let resolveCliPath: ((value: string) => void) | undefined;
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const connectionSubscription = { dispose: sinon.spy() };
+        const rpcServer = {
+            onNewConnection: sinon.stub().returns(connectionSubscription),
+        };
+        const terminalProvider = {
+            getAspireCliExecutablePath: sinon.stub().returns(new Promise<string>(resolve => {
+                resolveCliPath = resolve;
+            })),
+        };
+        const removeSession = sinon.spy();
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const spawnCliProcessStub = sinon.stub(cliModule, 'spawnCliProcess');
+        const aspireDebugSession = new AspireDebugSession(
+            parentDebugSession as unknown as vscode.DebugSession,
+            rpcServer as any,
+            {} as any,
+            terminalProvider as any,
+            removeSession);
+
+        const spawnPromise = aspireDebugSession.spawnAspireCommand(['run'], '/workspace', true);
+
+        assert.strictEqual(rpcServer.onNewConnection.callCount, 1);
+        assert.strictEqual(terminalProvider.getAspireCliExecutablePath.callCount, 1);
+        aspireDebugSession.dispose();
+        await aspireDebugSession.stopDebugging();
+        assert.strictEqual(removeSession.callCount, 1, 'Disposal must finish before CLI path resolution resumes');
+
+        resolveCliPath!('/workspace/aspire');
+        await spawnPromise;
+
+        assert.strictEqual(spawnCliProcessStub.callCount, 0);
+        assert.strictEqual(connectionSubscription.dispose.callCount, 1);
+    });
+
     test('stopDebugging stops resource sessions before the AppHost and Aspire parent sessions', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
