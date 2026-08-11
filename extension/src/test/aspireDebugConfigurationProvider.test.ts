@@ -113,6 +113,23 @@ suite('AspireDebugConfigurationProvider', () => {
         assert.strictEqual(config?.__aspireAppHostSelectionOrigin, 'default-discovery');
     });
 
+    test('treats macOS launch target differing from workspace folder only by casing as explicit', async () => {
+        sandbox.stub(process, 'platform').value('darwin');
+        const workspacePath = path.join(tempDir, 'workspace');
+        const programPath = path.join(tempDir, 'Workspace');
+        const folder = createWorkspaceFolder(workspacePath);
+        const provider = new AspireDebugConfigurationProvider(createAppHostDiscoveryService(programPath));
+
+        const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, {
+            name: 'Debug AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: programPath
+        });
+
+        assert.strictEqual(config?.__aspireAppHostSelectionOrigin, 'explicit-launch-configuration');
+    });
+
     test('provides dynamic launch config when active file resolves to AppHost candidate', async () => {
         const folder = createWorkspaceFolder(tempDir);
         const programPath = path.join(tempDir, 'AppHost', 'Program.cs');

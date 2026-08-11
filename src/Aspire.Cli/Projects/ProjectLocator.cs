@@ -1062,6 +1062,18 @@ internal sealed class ProjectLocator(
         return result.SelectedProjectFile;
     }
 
+    /// <summary>
+    /// Determines whether a persisted AppHost path identifies the selected project on the current platform.
+    /// </summary>
+    internal static bool IsSamePersistedAppHostPath(string persistedPath, string selectedPath, IEnvironment environment)
+    {
+        var pathComparison = environment.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        return string.Equals(persistedPath, selectedPath, pathComparison);
+    }
+
     private async Task CreateSettingsFileAsync(FileInfo projectFile, CancellationToken cancellationToken)
     {
         var selectionOrigin = configuration[KnownConfigNames.CliAppHostSelectionOrigin];
@@ -1116,11 +1128,8 @@ internal sealed class ProjectLocator(
         {
             var resolvedPath = PathNormalizer.NormalizePathForCurrentPlatform(
                 Path.IsPathRooted(existingPath) ? existingPath : Path.Combine(settingsFile.Directory!.FullName, existingPath));
-            var pathComparison = environment.IsWindows() || environment.IsMacOS()
-                ? StringComparison.OrdinalIgnoreCase
-                : StringComparison.Ordinal;
 
-            if (string.Equals(resolvedPath, projectFile.FullName, pathComparison))
+            if (IsSamePersistedAppHostPath(resolvedPath, projectFile.FullName, environment))
             {
                 logger.LogDebug(
                     "Config at {Path} already references apphost {AppHost}, skipping creation",

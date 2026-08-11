@@ -86,6 +86,17 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public void PersistedAppHostPathComparisonIsCaseInsensitiveOnlyOnWindows()
+    {
+        const string configuredPath = "/workspace/Foo/AppHost.csproj";
+        const string selectedPath = "/workspace/foo/AppHost.csproj";
+
+        Assert.True(ProjectLocator.IsSamePersistedAppHostPath(configuredPath, selectedPath, TestEnvironment.CreateWindows()));
+        Assert.False(ProjectLocator.IsSamePersistedAppHostPath(configuredPath, selectedPath, TestEnvironment.CreateLinux()));
+        Assert.False(ProjectLocator.IsSamePersistedAppHostPath(configuredPath, selectedPath, TestEnvironment.CreateMacOS()));
+    }
+
+    [Fact]
     public async Task UseOrFindAppHostProjectFileReplacesDeletedDefaultForLaunchConfiguration()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
