@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
+import * as ts from 'typescript';
 
 function readSourcePattern(source: string, name: string): RegExp {
     const declaration = new RegExp(`const ${name} = /(.+)/;`).exec(source);
@@ -19,19 +20,146 @@ function stripComments(source: string): string {
     return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 }
 
+function getDirectCallExpression(statement: ts.Statement, name: string): ts.CallExpression | undefined {
+    if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) {
+        return undefined;
+    }
+
+    return ts.isIdentifier(statement.expression.expression) && statement.expression.expression.text === name
+        ? statement.expression
+        : undefined;
+}
+
+function getLiteralText(expression: ts.Expression | undefined): string | undefined {
+    return expression !== undefined && ts.isStringLiteralLike(expression)
+        ? expression.text
+        : undefined;
+}
+
+function getSuiteStatements(sourceFile: ts.SourceFile, suiteName: string): readonly ts.Statement[] {
+    for (const statement of sourceFile.statements) {
+        const suiteCall = getDirectCallExpression(statement, 'suite');
+        if (suiteCall === undefined || getLiteralText(suiteCall.arguments[0]) !== suiteName) {
+            continue;
+        }
+
+        const callback = suiteCall.arguments[1];
+        if (callback !== undefined && (ts.isFunctionExpression(callback) || ts.isArrowFunction(callback)) && ts.isBlock(callback.body)) {
+            return callback.body.statements;
+        }
+    }
+
+    return [];
+}
+
 function getTestBlock(source: string, testName: string): string {
-    const testStart = source.indexOf(`test('${testName}'`);
-    assert.ok(testStart >= 0, `Expected to find test '${testName}'.`);
+    const sourceFile = ts.createSourceFile('debugDashboard.e2e.test.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const suiteStatements = getSuiteStatements(sourceFile, 'Aspire debug dashboard E2E');
 
-    const nextTestStart = source.indexOf('\n    test(', testStart + 1);
-    const suiteEnd = source.indexOf('\n});', testStart + 1);
-    const testEnd = nextTestStart >= 0 && nextTestStart < suiteEnd ? nextTestStart : suiteEnd;
-    assert.ok(testEnd > testStart, `Expected to find the end of test '${testName}'.`);
+    // Walk the parsed suite body instead of scanning raw text so comments, nested template
+    // literals, and regular expressions like `/\)/` cannot masquerade as structure.
+    for (const statement of suiteStatements) {
+        const testCall = getDirectCallExpression(statement, 'test');
+        if (testCall !== undefined && getLiteralText(testCall.arguments[0]) === testName) {
+            return source.slice(statement.getStart(sourceFile), statement.getEnd());
+        }
+    }
 
-    return source.slice(testStart, testEnd);
+    assert.fail(`Expected to find test '${testName}'.`);
 }
 
 suite('E2E launch profile', () => {
+    test('finds test blocks when the test name uses double quotes', () => {
+        const source = [
+            "suite('Aspire debug dashboard E2E', function () {",
+            '  test("keeps long-running CLI run status out of notifications", async () => {',
+            '    await waitForAnyWorkbenchText(cliRunStatusTexts, 120000);',
+            '    const notificationMessages = await getNotificationMessages();',
+            '  });',
+            "  test('another test', async () => {",
+            "    throw new Error('should not be included');",
+            '  });',
+            '});',
+        ].join('\n');
+
+        const block = getTestBlock(source, 'keeps long-running CLI run status out of notifications');
+
+        assert.ok(block.includes('waitForAnyWorkbenchText(cliRunStatusTexts, 120000);'));
+        assert.ok(block.includes('const notificationMessages = await getNotificationMessages();'));
+        assert.ok(!block.includes("test('another test'"));
+    });
+
+    test('finds test blocks when whitespace changes around the test declaration', () => {
+        const source = [
+            "suite('Aspire debug dashboard E2E', function () {",
+            "\ttest ( 'keeps long-running CLI run status out of notifications' , async () => {",
+            '        const observedStatuses = cliRunStatusTexts.map(status => `(${status})`);',
+            "        assert.ok(observedStatuses.some(status => status.includes('Building AppHost...')));",
+            '    });',
+            "\ttest('another test', async () => {",
+            '        assert.fail("should not be included");',
+            '    });',
+            '});',
+        ].join('\n');
+
+        const block = getTestBlock(source, 'keeps long-running CLI run status out of notifications');
+
+        assert.ok(block.includes('const observedStatuses = cliRunStatusTexts.map(status => `(${status})`);'));
+        assert.ok(block.includes("assert.ok(observedStatuses.some(status => status.includes('Building AppHost...')));"));
+        assert.ok(!block.includes("assert.fail(\"should not be included\");"));
+    });
+
+    test('finds test blocks when the body contains a regex literal with a closing parenthesis', () => {
+        const source = [
+            "suite('Aspire debug dashboard E2E', function () {",
+            "  test('keeps long-running CLI run status out of notifications', async () => {",
+            "    assert.ok(/\\)/.test(')'));",
+            '    const notificationMessages = await getNotificationMessages();',
+            '  });',
+            '});',
+        ].join('\n');
+
+        const block = getTestBlock(source, 'keeps long-running CLI run status out of notifications');
+
+        assert.ok(block.includes("assert.ok(/\\)/.test(')'));"));
+        assert.ok(block.includes('const notificationMessages = await getNotificationMessages();'));
+    });
+
+    test('finds test blocks when the body contains nested template literals with closing parentheses', () => {
+        const source = [
+            "suite('Aspire debug dashboard E2E', function () {",
+            "  test('keeps long-running CLI run status out of notifications', async () => {",
+            "    const shape = `outer ${`inner )`}`;",
+            "    assert.ok(shape.includes('inner )'));",
+            '  });',
+            '});',
+        ].join('\n');
+
+        const block = getTestBlock(source, 'keeps long-running CLI run status out of notifications');
+
+        assert.ok(block.includes("const shape = `outer ${`inner )`}`;"));
+        assert.ok(block.includes("assert.ok(shape.includes('inner )'));"));
+    });
+
+    test('ignores block-commented target declarations', () => {
+        const source = [
+            "suite('Aspire debug dashboard E2E', function () {",
+            '  /*',
+            "  test('keeps long-running CLI run status out of notifications', async () => {",
+            "    throw new Error('comment only');",
+            '  });',
+            '  */',
+            "  test('another test', async () => {",
+            '    assert.ok(true);',
+            '  });',
+            '});',
+        ].join('\n');
+
+        assert.throws(
+            () => getTestBlock(source, 'keeps long-running CLI run status out of notifications'),
+            /Expected to find test 'keeps long-running CLI run status out of notifications'\./);
+    });
+
     test('creates nothing in the per-run root that a later module-scope throw could strand', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
