@@ -727,12 +727,12 @@ jobs:
 
                 $testCount = 0
                 if (-not [int]::TryParse([string]$countersNode.total, [ref]$testCount)) {
-                  Write-Error "  $($trxFile.Name) has an unparseable ResultSummary/Counters/@total value '$($countersNode.total)'."
+                  Write-Host "::error::  $($trxFile.Name) has an unparseable ResultSummary/Counters/@total value '$($countersNode.total)'."
                   exit 1
                 }
 
                 if ($testCount -lt 0) {
-                  Write-Error "  $($trxFile.Name) has a negative ResultSummary/Counters/@total value '$testCount'."
+                  Write-Host "::error::  $($trxFile.Name) has a negative ResultSummary/Counters/@total value '$testCount'."
                   exit 1
                 }
 

@@ -252,6 +252,7 @@ public sealed class RunTestsWorkflowTests
     }
 
     [Theory]
+    [RequiresTools(["pwsh"])]
     [InlineData(3)]
     [InlineData(7)]
     public async Task TestResultValidationAllowsIncompleteTrxWhenIgnoredRunHasToleratedExitCode(int exitCode)
@@ -264,7 +265,7 @@ public sealed class RunTestsWorkflowTests
             File.WriteAllText(Path.Combine(scratchDirectory, "test-exit-code.txt"), exitCode.ToString());
             WriteTrxFileWithoutCounters(Path.Combine(testResultsDirectory, "truncated.trx"));
 
-            using var command = new PowerShellCommand(CreateTestResultValidationScript(scratchDirectory, allowZeroTests: true, ignoreTestFailures: true), _output).WithTimeout(TimeSpan.FromMinutes(1));
+            using var command = new PowerShellCommand(CreateTestResultValidationScript(scratchDirectory, allowZeroTests: true, ignoreTestFailures: true, stopOnError: true), _output).WithTimeout(TimeSpan.FromMinutes(1));
 
             CommandResult result = await command.ExecuteAsync(scratchDirectory);
 
@@ -279,6 +280,7 @@ public sealed class RunTestsWorkflowTests
     }
 
     [Theory]
+    [RequiresTools(["pwsh"])]
     [InlineData(1)]
     [InlineData(9)]
     public async Task TestResultValidationFailsIgnoredRunWithUntoleratedExitCode(int exitCode)
@@ -305,6 +307,7 @@ public sealed class RunTestsWorkflowTests
     }
 
     [Theory]
+    [RequiresTools(["pwsh"])]
     [InlineData(3)]
     [InlineData(7)]
     public async Task TestResultValidationFailsIncompleteTrxInNormalCiEvenWhenExitCodeWouldBeTolerated(int exitCode)
@@ -373,6 +376,33 @@ public sealed class RunTestsWorkflowTests
 
             Assert.Equal(1, result.ExitCode);
             Assert.Contains("has a negative ResultSummary/Counters/@total value '-1'", result.Output);
+        }
+        finally
+        {
+            DeleteScratchDirectory(scratchDirectory);
+        }
+    }
+
+    [Theory]
+    [RequiresTools(["pwsh"])]
+    [InlineData("not-a-number", "has an unparseable ResultSummary/Counters/@total value 'not-a-number'")]
+    [InlineData("-1", "has a negative ResultSummary/Counters/@total value '-1'")]
+    public async Task TestResultValidationFailsInvalidCounterWhenIgnoredRunHasToleratedExitCode(string totalTests, string expectedError)
+    {
+        string scratchDirectory = CreateScratchDirectory();
+        try
+        {
+            string testResultsDirectory = Path.Combine(scratchDirectory, "testresults");
+            Directory.CreateDirectory(testResultsDirectory);
+            File.WriteAllText(Path.Combine(scratchDirectory, "test-exit-code.txt"), "3");
+            WriteTrxFile(Path.Combine(testResultsDirectory, "invalid-count.trx"), totalTests);
+
+            using var command = new PowerShellCommand(CreateTestResultValidationScript(scratchDirectory, allowZeroTests: true, ignoreTestFailures: true, stopOnError: true), _output).WithTimeout(TimeSpan.FromMinutes(1));
+
+            CommandResult result = await command.ExecuteAsync(scratchDirectory);
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains(expectedError, result.Output);
         }
         finally
         {
@@ -464,13 +494,15 @@ public sealed class RunTestsWorkflowTests
         return scriptPath;
     }
 
-    private static string CreateTestResultValidationScript(string scratchDirectory, bool allowZeroTests = false, bool ignoreTestFailures = true)
+    private static string CreateTestResultValidationScript(string scratchDirectory, bool allowZeroTests = false, bool ignoreTestFailures = true, bool stopOnError = false)
     {
         string scriptPath = Path.Combine(scratchDirectory, "validate-test-results.ps1");
         string script = ExtractPowerShellStep("Verify test results exist")
             .Replace("${{ github.workspace }}", "$Workspace", StringComparison.Ordinal)
             .Replace("'${{ inputs.ignoreTestFailures }}'", $"'{ignoreTestFailures.ToString().ToLowerInvariant()}'", StringComparison.Ordinal)
             .Replace("'${{ inputs.allowZeroTests }}'", $"'{allowZeroTests.ToString().ToLowerInvariant()}'", StringComparison.Ordinal);
+        // GitHub Actions' pwsh shell prepends this assignment before invoking the workflow script.
+        string errorActionPreference = stopOnError ? "$ErrorActionPreference = 'Stop'" : "";
 
         File.WriteAllText(
             scriptPath,
@@ -479,6 +511,7 @@ public sealed class RunTestsWorkflowTests
               [Parameter(Mandatory=$true)][string]$Workspace
             )
 
+            {{errorActionPreference}}
             {{script}}
             """);
 
