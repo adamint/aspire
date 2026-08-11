@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Net;
+using System.Text;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Tests.Utils;
 using Aspire.Cli.Utils.EnvironmentChecker;
@@ -53,7 +55,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         {
             ["TERM_PROGRAM"] = "vscode",
             [VsCodeExtensionCheck.ExtensionVersionEnvironmentVariable] = "1.3.0",
-            [VsCodeExtensionCheck.ExtensionChannelEnvironmentVariable] = "pre-release"
+            [VsCodeExtensionCheck.ExtensionChannelEnvironmentVariable] = "prerelease"
         });
         var executionContext = TestExecutionContextHelper.CreateExecutionContext(home, homeDirectory: home);
         var marketplaceClient = new TestMarketplaceClient(
@@ -72,6 +74,37 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
         Assert.Equal("stable", result.Metadata!["latestVersionChannel"]!.GetValue<string>());
         Assert.Equal("9.0.0", result.Metadata["latestVersion"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task CheckAsync_UsesPrereleaseChannelVocabulary()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            [VsCodeExtensionCheck.ExtensionVersionEnvironmentVariable] = "1.3.0",
+            [VsCodeExtensionCheck.ExtensionChannelEnvironmentVariable] = "prerelease"
+        });
+        var executionContext = TestExecutionContextHelper.CreateExecutionContext(home, homeDirectory: home);
+        var marketplaceClient = new TestMarketplaceClient(
+            new VsCodeExtensionMarketplaceVersions(
+                SemVersion.Parse("1.2.0", SemVersionStyles.Strict),
+                SemVersion.Parse("1.4.0", SemVersionStyles.Strict)));
+        var check = new VsCodeExtensionCheck(
+            environment,
+            executionContext,
+            marketplaceClient,
+            NullLogger<VsCodeExtensionCheck>.Instance,
+            _ => null);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
+        Assert.Equal("prerelease", result.Metadata!["extensionChannel"]!.GetValue<string>());
+        Assert.Equal("prerelease", result.Metadata["latestVersionChannel"]!.GetValue<string>());
+        Assert.Equal("1.4.0", result.Metadata["latestVersion"]!.GetValue<string>());
     }
 
     [Fact]
@@ -132,6 +165,81 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task CheckAsync_DistinguishesMissingStableVersionFromMarketplaceFailure()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            [VsCodeExtensionCheck.ExtensionVersionEnvironmentVariable] = "1.2.3",
+            [VsCodeExtensionCheck.ExtensionChannelEnvironmentVariable] = "stable"
+        });
+        var executionContext = TestExecutionContextHelper.CreateExecutionContext(home, homeDirectory: home);
+        using var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """
+                {
+                  "results": [{
+                    "extensions": [{
+                      "versions": [{
+                        "version": "1.4.0",
+                        "properties": [{
+                          "key": "Microsoft.VisualStudio.Code.PreRelease",
+                          "value": "true"
+                        }]
+                      }]
+                    }]
+                  }]
+                }
+                """,
+                Encoding.UTF8,
+                "application/json")
+        };
+        using var httpClient = new HttpClient(new MockHttpMessageHandler(response));
+        var check = new VsCodeExtensionCheck(
+            environment,
+            executionContext,
+            new VsCodeExtensionMarketplaceClient(httpClient),
+            NullLogger<VsCodeExtensionCheck>.Instance,
+            _ => null);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
+        Assert.Equal(DoctorCommandStrings.VsCodeExtensionLatestVersionNotFoundDetails, result.Details);
+        Assert.False(result.Metadata!["latestVersionKnown"]!.GetValue<bool>());
+        Assert.Null(result.Metadata["latestVersionError"]);
+    }
+
+    [Fact]
+    public async Task CheckAsync_ReturnsWarning_WhenReportedVersionIsUnparseable()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            [VsCodeExtensionCheck.ExtensionVersionEnvironmentVariable] = "not-a-version",
+            [VsCodeExtensionCheck.ExtensionChannelEnvironmentVariable] = "stable"
+        });
+        var executionContext = TestExecutionContextHelper.CreateExecutionContext(home, homeDirectory: home);
+        var check = new VsCodeExtensionCheck(
+            environment,
+            executionContext,
+            new TestMarketplaceClient(new InvalidOperationException("Marketplace must not be queried.")),
+            NullLogger<VsCodeExtensionCheck>.Instance,
+            _ => null);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
+        Assert.Equal(DoctorCommandStrings.VsCodeExtensionVersionUnknownMessage, result.Message);
+        Assert.False(result.Metadata!["extensionVersionKnown"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public async Task CheckAsync_PropagatesCallerCancellation()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
@@ -188,7 +296,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
         // No TERM_PROGRAM and nothing resolvable on PATH, so real detection reports VS Code absent.
-        var environment = new TestEnvironment(new Dictionary<string, string?>());
+        var environment = TestEnvironment.CreateLinux();
         var executionContext = TestExecutionContextHelper.CreateExecutionContext(home, homeDirectory: home);
         var check = new VsCodeExtensionCheck(
             environment,
@@ -237,7 +345,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task CheckAsync_ReturnsPass_WhenExtensionInstalled()
+    public async Task CheckAsync_ReturnsWarning_WhenDiskFallbackChannelIsUnknown()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
@@ -263,7 +371,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
 
         Assert.Equal(EnvironmentCheckCategories.DevelopmentTools, result.Category);
-        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
         Assert.Equal(DoctorCommandStrings.VsCodeExtensionInstalledMessage, result.Message);
         Assert.Null(result.Fix);
         Assert.Null(result.Link);
@@ -271,6 +379,10 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         Assert.True(result.Metadata["vsCodeInstalled"]!.GetValue<bool>());
         Assert.True(result.Metadata["extensionInstalled"]!.GetValue<bool>());
         Assert.Equal(VsCodeExtensionCheck.ExtensionId, result.Metadata["extensionId"]!.GetValue<string>());
+        Assert.Equal("unknown", result.Metadata["extensionChannel"]!.GetValue<string>());
+        Assert.False(result.Metadata["latestVersionKnown"]!.GetValue<bool>());
+        Assert.Null(result.Metadata["latestVersionError"]);
+        Assert.Equal(DoctorCommandStrings.VsCodeExtensionLatestVersionNotFoundDetails, result.Details);
     }
 
     [Fact]
@@ -291,6 +403,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
 
         Assert.True(detection.VsCodeInstalled);
         Assert.True(detection.ExtensionInstalled);
+        Assert.Equal("Unknown", detection.ReleaseChannel.ToString());
     }
 
     [Theory]
@@ -348,7 +461,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         var home = workspace.CreateDirectory("home");
         // No TERM_PROGRAM, so detection falls back to probing the CLI launchers on PATH via the
         // injected resolver.
-        var environment = new TestEnvironment(new Dictionary<string, string?>());
+        var environment = TestEnvironment.CreateLinux();
         string? Resolver(string command) => string.Equals(command, launcherOnPath, StringComparison.Ordinal) ? "/usr/bin/" + command : null;
 
         var detection = VsCodeExtensionCheck.Detect(environment, home, Resolver);
@@ -362,12 +475,27 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var environment = new TestEnvironment(new Dictionary<string, string?>());
+        var environment = TestEnvironment.CreateLinux();
 
         var detection = VsCodeExtensionCheck.Detect(environment, home, _ => null);
 
         Assert.False(detection.VsCodeInstalled);
         Assert.False(detection.ExtensionInstalled);
+    }
+
+    [Theory]
+    [InlineData("Visual Studio Code.app")]
+    [InlineData("Visual Studio Code - Insiders.app")]
+    public void Detect_DetectsMacOSApplication_WhenShellCommandIsNotInstalled(string applicationName)
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        Directory.CreateDirectory(Path.Combine(home.FullName, "Applications", applicationName));
+        var environment = TestEnvironment.CreateMacOS();
+
+        var detection = VsCodeExtensionCheck.Detect(environment, home, _ => null);
+
+        Assert.True(detection.VsCodeInstalled);
     }
 
     [Fact]

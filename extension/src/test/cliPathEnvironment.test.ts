@@ -52,13 +52,18 @@ function normalizeCandidate(candidate: string): string {
 }
 
 suite('cliPathEnvironment.syncAspireExtensionEnvironment tests', () => {
-    test('contributes the running extension version and channel', () => {
+    test('contributes the production Marketplace pre-release metadata', () => {
         const collection = createFakeCollection();
 
-        syncAspireExtensionEnvironment(collection, '1.17.0', true);
+        syncAspireExtensionEnvironment(collection, {
+            version: '1.17.0',
+            __metadata: {
+                isPreReleaseVersion: true,
+            },
+        });
 
         assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), '1.17.0');
-        assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR), 'pre-release');
+        assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR), 'prerelease');
     });
 
     test('clears stale extension signals when the manifest version is unavailable', () => {
@@ -66,7 +71,7 @@ suite('cliPathEnvironment.syncAspireExtensionEnvironment tests', () => {
         collection.entries.set(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR, '1.16.0');
         collection.entries.set(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR, 'stable');
 
-        syncAspireExtensionEnvironment(collection, undefined, false);
+        syncAspireExtensionEnvironment(collection, undefined);
 
         assert.strictEqual(collection.entries.has(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), false);
         assert.strictEqual(collection.entries.has(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR), false);

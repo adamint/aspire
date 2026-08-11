@@ -104,6 +104,12 @@
   <data name="VsCodeExtensionLatestVersionCheckUnavailableDetails" xml:space="preserve">
     <value>Could not check for Aspire extension updates because the VS Code Marketplace is unavailable.</value>
   </data>
+  <data name="VsCodeExtensionLatestVersionNotFoundDetails" xml:space="preserve">
+    <value>The VS Code Marketplace did not report an Aspire extension version for the detected channel.</value>
+  </data>
+  <data name="VsCodeExtensionVersionUnknownMessage" xml:space="preserve">
+    <value>Aspire extension for VS Code is installed, but its version could not be determined</value>
+  </data>
   <data name="SummaryFormat" xml:space="preserve">
     <value>Summary: {0} passed, {1} warnings, {2} failed</value>
   </data>

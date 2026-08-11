@@ -49,6 +49,13 @@ export interface ForwardableCliPathDependencies {
     isRejectedForForwarding: (cliPath: string) => boolean;
 }
 
+interface ExtensionPackageJson {
+    version?: unknown;
+    __metadata?: {
+        isPreReleaseVersion?: unknown;
+    };
+}
+
 /**
  * Test seam: the synchronizer asks its dependencies for both configured and
  * unpersisted resolved paths so unit tests can avoid mocking `vscode.workspace`.
@@ -221,10 +228,11 @@ export function syncAspireCliPathEnvironment(
  */
 export function syncAspireExtensionEnvironment(
     collection: CliPathEnvironmentCollection,
-    version: string | undefined,
-    preRelease: boolean,
+    packageJson: ExtensionPackageJson | undefined,
 ): void {
-    const trimmedVersion = version?.trim();
+    const trimmedVersion = typeof packageJson?.version === 'string'
+        ? packageJson.version.trim()
+        : undefined;
     if (trimmedVersion === undefined || trimmedVersion.length === 0) {
         collection.delete(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR);
         collection.delete(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR);
@@ -232,7 +240,9 @@ export function syncAspireExtensionEnvironment(
     }
 
     collection.replace(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR, trimmedVersion);
-    collection.replace(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR, preRelease ? 'pre-release' : 'stable');
+    collection.replace(
+        ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR,
+        packageJson?.__metadata?.isPreReleaseVersion === true ? 'prerelease' : 'stable');
 }
 
 /**

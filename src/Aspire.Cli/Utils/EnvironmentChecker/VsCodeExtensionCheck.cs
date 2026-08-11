@@ -88,8 +88,12 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
 
         if (!SemVersion.TryParse(detection.ExtensionVersion, SemVersionStyles.Strict, out var installedVersion))
         {
-            return [CreateInstalledResult(metadata)];
+            metadata["extensionVersionKnown"] = false;
+            return [CreateUnknownVersionResult(metadata)];
         }
+
+        metadata["extensionVersionKnown"] = true;
+        metadata["latestVersionKnown"] = false;
 
         try
         {
@@ -97,12 +101,13 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             var (latestVersion, channel) = GetLatestVersion(detection.ReleaseChannel, versions);
             if (latestVersion is null)
             {
-                return [CreateMarketplaceUnavailableResult(metadata)];
+                return [CreateLatestVersionNotFoundResult(metadata)];
             }
 
             var updateAvailable = SemVersion.ComparePrecedence(installedVersion, latestVersion) < 0;
             metadata["latestVersion"] = latestVersion.ToString();
             metadata["latestVersionChannel"] = channel;
+            metadata["latestVersionKnown"] = true;
             metadata["updateAvailable"] = updateAvailable;
 
             if (!updateAvailable)
@@ -143,15 +148,24 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         VsCodeExtensionReleaseChannel installedChannel,
         VsCodeExtensionMarketplaceVersions versions)
     {
-        if (installedChannel == VsCodeExtensionReleaseChannel.Stable ||
-            versions.PreReleaseVersion is null ||
+        if (installedChannel == VsCodeExtensionReleaseChannel.Unknown)
+        {
+            return (null, "unknown");
+        }
+
+        if (installedChannel == VsCodeExtensionReleaseChannel.Stable)
+        {
+            return (versions.StableVersion, "stable");
+        }
+
+        if (versions.PreReleaseVersion is null ||
             versions.StableVersion is not null &&
             SemVersion.ComparePrecedence(versions.StableVersion, versions.PreReleaseVersion) >= 0)
         {
             return (versions.StableVersion, "stable");
         }
 
-        return (versions.PreReleaseVersion, "pre-release");
+        return (versions.PreReleaseVersion, "prerelease");
     }
 
     internal static VsCodeExtensionDetection Detect(IEnvironment environment, DirectoryInfo homeDirectory)
@@ -162,7 +176,7 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         DirectoryInfo homeDirectory,
         Func<string, string?> commandResolver)
     {
-        var vsCodeInstalled = IsVsCodeInstalled(environment, commandResolver);
+        var vsCodeInstalled = IsVsCodeInstalled(environment, homeDirectory, commandResolver);
         if (!vsCodeInstalled)
         {
             return new VsCodeExtensionDetection(false, false);
@@ -183,18 +197,42 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             true,
             extension.Found,
             extension.Version,
-            VsCodeExtensionReleaseChannel.Stable);
+            VsCodeExtensionReleaseChannel.Unknown);
     }
 
-    private static bool IsVsCodeInstalled(IEnvironment environment, Func<string, string?> commandResolver)
+    private static bool IsVsCodeInstalled(
+        IEnvironment environment,
+        DirectoryInfo homeDirectory,
+        Func<string, string?> commandResolver)
     {
         if (string.Equals(environment.GetEnvironmentVariable("TERM_PROGRAM"), "vscode", StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
 
+        // VS Code's macOS application does not install the `code` shell launcher unless the user
+        // explicitly requests it, so also probe the standard system and per-user application roots.
+        if (environment.IsMacOS() && IsMacOsApplicationInstalled(homeDirectory))
+        {
+            return true;
+        }
+
         return commandResolver("code") is not null ||
             commandResolver("code-insiders") is not null;
+    }
+
+    private static bool IsMacOsApplicationInstalled(DirectoryInfo homeDirectory)
+    {
+        foreach (var applicationName in new[] { "Visual Studio Code.app", "Visual Studio Code - Insiders.app" })
+        {
+            if (Directory.Exists(Path.Combine("/Applications", applicationName)) ||
+                Directory.Exists(Path.Combine(homeDirectory.FullName, "Applications", applicationName)))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static (bool Found, string? Version, SemVersion? ParsedVersion) FindExtension(
@@ -314,9 +352,14 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
     }
 
     private static VsCodeExtensionReleaseChannel ParseReleaseChannel(string? channel)
-        => string.Equals(channel?.Trim(), "pre-release", StringComparison.OrdinalIgnoreCase)
-            ? VsCodeExtensionReleaseChannel.PreRelease
-            : VsCodeExtensionReleaseChannel.Stable;
+        => channel?.Trim() switch
+        {
+            var value when string.Equals(value, "stable", StringComparison.OrdinalIgnoreCase)
+                => VsCodeExtensionReleaseChannel.Stable,
+            var value when string.Equals(value, "prerelease", StringComparison.OrdinalIgnoreCase)
+                => VsCodeExtensionReleaseChannel.PreRelease,
+            _ => VsCodeExtensionReleaseChannel.Unknown
+        };
 
     private static EnvironmentCheckResult CreateInstalledResult(JsonObject metadata)
         => new()
@@ -328,8 +371,33 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             Metadata = metadata
         };
 
-    private static EnvironmentCheckResult CreateMarketplaceUnavailableResult(JsonObject metadata)
+    private static EnvironmentCheckResult CreateUnknownVersionResult(JsonObject metadata)
         => new()
+        {
+            Category = EnvironmentCheckCategories.DevelopmentTools,
+            Name = CheckName,
+            Status = EnvironmentCheckStatus.Warning,
+            Message = DoctorCommandStrings.VsCodeExtensionVersionUnknownMessage,
+            Metadata = metadata
+        };
+
+    private static EnvironmentCheckResult CreateLatestVersionNotFoundResult(JsonObject metadata)
+        => new()
+        {
+            Category = EnvironmentCheckCategories.DevelopmentTools,
+            Name = CheckName,
+            Status = EnvironmentCheckStatus.Warning,
+            Message = DoctorCommandStrings.VsCodeExtensionInstalledMessage,
+            Details = DoctorCommandStrings.VsCodeExtensionLatestVersionNotFoundDetails,
+            Metadata = metadata
+        };
+
+    private static EnvironmentCheckResult CreateMarketplaceUnavailableResult(JsonObject metadata)
+    {
+        metadata["latestVersionKnown"] = false;
+        metadata["latestVersionError"] = "unavailable";
+
+        return new()
         {
             Category = EnvironmentCheckCategories.DevelopmentTools,
             Name = CheckName,
@@ -338,6 +406,7 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             Details = DoctorCommandStrings.VsCodeExtensionLatestVersionCheckUnavailableDetails,
             Metadata = metadata
         };
+    }
 
     private static JsonObject BuildMetadata(VsCodeExtensionDetection detection)
     {
@@ -351,9 +420,12 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         if (detection.ExtensionVersion is not null)
         {
             metadata["extensionVersion"] = detection.ExtensionVersion;
-            metadata["extensionChannel"] = detection.ReleaseChannel == VsCodeExtensionReleaseChannel.PreRelease
-                ? "pre-release"
-                : "stable";
+            metadata["extensionChannel"] = detection.ReleaseChannel switch
+            {
+                VsCodeExtensionReleaseChannel.Stable => "stable",
+                VsCodeExtensionReleaseChannel.PreRelease => "prerelease",
+                _ => "unknown"
+            };
         }
 
         return metadata;
@@ -365,6 +437,7 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
 /// </summary>
 internal enum VsCodeExtensionReleaseChannel
 {
+    Unknown,
     Stable,
     PreRelease
 }
@@ -376,4 +449,4 @@ internal sealed record VsCodeExtensionDetection(
     bool VsCodeInstalled,
     bool ExtensionInstalled,
     string? ExtensionVersion = null,
-    VsCodeExtensionReleaseChannel ReleaseChannel = VsCodeExtensionReleaseChannel.Stable);
+    VsCodeExtensionReleaseChannel ReleaseChannel = VsCodeExtensionReleaseChannel.Unknown);

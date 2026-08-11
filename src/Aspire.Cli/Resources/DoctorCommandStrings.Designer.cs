@@ -195,6 +195,24 @@ namespace Aspire.Cli.Resources {
         }
 
         /// <summary>
+        ///   Looks up a localized string similar to The VS Code Marketplace did not report an Aspire extension version for the detected channel..
+        /// </summary>
+        public static string VsCodeExtensionLatestVersionNotFoundDetails {
+            get {
+                return ResourceManager.GetString("VsCodeExtensionLatestVersionNotFoundDetails", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Aspire extension for VS Code is installed, but its version could not be determined.
+        /// </summary>
+        public static string VsCodeExtensionVersionUnknownMessage {
+            get {
+                return ResourceManager.GetString("VsCodeExtensionVersionUnknownMessage", resourceCulture);
+            }
+        }
+
+        /// <summary>
         ///   Looks up a localized string similar to Summary: {0} passed, {1} warnings, {2} failed.
         /// </summary>
         public static string SummaryFormat {

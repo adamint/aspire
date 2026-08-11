@@ -491,6 +491,11 @@ The current layout continues to work — this is a non-blocking warning.</target
         <target state="new">Could not check for Aspire extension updates because the VS Code Marketplace is unavailable.</target>
         <note />
       </trans-unit>
+      <trans-unit id="VsCodeExtensionLatestVersionNotFoundDetails">
+        <source>The VS Code Marketplace did not report an Aspire extension version for the detected channel.</source>
+        <target state="new">The VS Code Marketplace did not report an Aspire extension version for the detected channel.</target>
+        <note />
+      </trans-unit>
       <trans-unit id="VsCodeExtensionMissingFix">
         <source>Install the Aspire extension from the VS Code Marketplace for an integrated Aspire experience.</source>
         <target state="new">Install the Aspire extension from the VS Code Marketplace for an integrated Aspire experience.</target>
@@ -510,6 +515,11 @@ The current layout continues to work — this is a non-blocking warning.</target
         <source>Aspire extension for VS Code {0} is out of date (latest: {1})</source>
         <target state="new">Aspire extension for VS Code {0} is out of date (latest: {1})</target>
         <note>{0} is the installed extension version. {1} is the latest extension version.</note>
+      </trans-unit>
+      <trans-unit id="VsCodeExtensionVersionUnknownMessage">
+        <source>Aspire extension for VS Code is installed, but its version could not be determined</source>
+        <target state="new">Aspire extension for VS Code is installed, but its version could not be determined</target>
+        <note />
       </trans-unit>
     </body>
   </file>
