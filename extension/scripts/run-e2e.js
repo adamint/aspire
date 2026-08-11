@@ -16,6 +16,7 @@ const {
   runWithRetries,
   terminateOrphanedDescendants,
 } = require('./e2e-download-retry');
+const { assertShardExecutedTests } = require('./e2e-shard-results');
 
 const extensionRoot = path.resolve(__dirname, '..');
 const extensionPackageJson = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.json'), 'utf8'));
@@ -708,6 +709,9 @@ async function main() {
     try {
       logStep('Running VS Code extension E2E tests');
       await runWithProcessTreeTimeout(process.execPath, [extesterCli, 'run-tests', testSpec, '--storage', storageDir, '--extensions_dir', extensionsDir, '--code_version', vscodeVersion, '--code_settings', path.join(extensionRoot, 'test-e2e', 'settings.json'), '--mocha_config', path.join(extensionRoot, '.mocharc.e2e.js'), '--offline'], extestEnv, getRunTestsTimeoutMs());
+      // ExTester can exit 0 when Mocha only discovers pending tests, so opted-in proof shards must
+      // validate the reporter output before the runner treats the process exit as success.
+      assertShardExecutedTests({ shardName, results: readMochaResults() });
     }
     catch (error) {
       testFailure = error;
