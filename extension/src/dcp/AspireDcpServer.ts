@@ -449,6 +449,11 @@ export default class AspireDcpServer {
                     debugger_extension_matched: foundDebuggerExtension ? 'true' : 'false',
                     mode,
                 });
+                // Aggregate membership starts at the same boundary as run-session telemetry.
+                // DELETE can cancel startup before either the success or failure path runs.
+                const aggregate = getOrCreateDebugSessionStats(debugSessionId);
+                aggregate.totalChildSessions += 1;
+                aggregate.distinctResourceTypes.add(supportedResourceType);
 
                 // Emits a `debug/runsession/end` event paired with the start above and
                 // updates the parent AppHost aggregate so failures captured on early-
@@ -456,9 +461,6 @@ export default class AspireDcpServer {
                 // post-start failure paths in this handler must route through here so
                 // we never leave an orphaned start event in the telemetry pipeline.
                 const emitRunSessionFailureEnd = (endReason: string, errorKind?: string): void => {
-                    const aggregate = getOrCreateDebugSessionStats(debugSessionId);
-                    aggregate.totalChildSessions += 1;
-                    aggregate.distinctResourceTypes.add(supportedResourceType);
                     aggregate.anyNonZeroExit = true;
 
                     sendTelemetryErrorEvent('aspire/vscode/debug/runsession/end', {
@@ -593,12 +595,6 @@ export default class AspireDcpServer {
                         return;
                     }
                     extensionLogOutputChannel.info(`Debugging session created with ID: ${runId}`);
-
-                    // Track aggregate stats for the parent AppHost debug session so we can
-                    // emit a single `debug/apphost/end` summary when the AppHost terminates.
-                    const aggregate = getOrCreateDebugSessionStats(debugSessionId);
-                    aggregate.totalChildSessions += 1;
-                    aggregate.distinctResourceTypes.add(supportedResourceType);
 
                     res.status(201).set('Location', `https://${req.get('host')}/run_session/${runId}`).end();
                     extensionLogOutputChannel.info(`New run session created with ID: ${runId}`);

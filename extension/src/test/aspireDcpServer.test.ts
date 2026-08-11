@@ -14,6 +14,7 @@ import type {
     BrowserLaunchConfiguration,
     NodeLaunchConfiguration,
     ProcessRestartedNotification,
+    RunSessionNotification,
     RunSessionPayload,
     ServiceLogsNotification,
     SessionTerminatedNotification,
@@ -30,7 +31,9 @@ interface DcpServerInternals {
         size: number;
     };
     _runTelemetryById: Map<string, unknown>;
+    pendingNotificationQueueByDcpId: Map<string, RunSessionNotification[]>;
     server: https.Server;
+    wsBySession: Map<string, WebSocket>;
 }
 
 interface DcpServerOptions {
@@ -187,7 +190,11 @@ suite('Aspire DCP run session lifecycle', () => {
         });
         assert.strictEqual(endEvents[0].measurements?.exit_code, 17);
         assert.strictEqual(endEvents[0].isError, true);
-        assert.strictEqual(harness.dcpServer.takeDebugSessionAggregateStats('aspire-extension-run-test')?.anyNonZeroExit, true);
+        assert.deepStrictEqual(harness.dcpServer.takeDebugSessionAggregateStats('aspire-extension-run-test'), {
+            totalChildSessions: 1,
+            distinctResourceTypes: ['node'],
+            anyNonZeroExit: true,
+        });
     });
 
     test('DELETE after a natural adapter exit schedules debugger teardown once', async () => {
@@ -332,6 +339,11 @@ suite('Aspire DCP run session lifecycle', () => {
             session_id: runId,
             exit_code: -1,
         }]);
+        assert.deepStrictEqual(harness.dcpServer.takeDebugSessionAggregateStats('aspire-extension-run-test'), {
+            totalChildSessions: 1,
+            distinctResourceTypes: ['node'],
+            anyNonZeroExit: true,
+        });
     });
 
     test('debugger did not start terminates exactly once', async () => {
@@ -471,6 +483,11 @@ suite('Aspire DCP run session lifecycle', () => {
             });
             assert.strictEqual(endEvents[0].measurements?.exit_code, -1);
             assert.strictEqual(endEvents[0].isError, undefined);
+            assert.deepStrictEqual(harness.dcpServer.takeDebugSessionAggregateStats('aspire-extension-run-test'), {
+                totalChildSessions: 1,
+                distinctResourceTypes: ['node'],
+                anyNonZeroExit: false,
+            });
         } finally {
             startCompleted.resolve(undefined);
             cleanupRun(runId);
@@ -561,6 +578,11 @@ suite('Aspire DCP run session lifecycle', () => {
             });
             assert.strictEqual(endEvents[0].measurements?.exit_code, -1);
             assert.strictEqual(endEvents[0].isError, undefined);
+            assert.deepStrictEqual(harness.dcpServer.takeDebugSessionAggregateStats('aspire-extension-run-test'), {
+                totalChildSessions: 1,
+                distinctResourceTypes: ['node'],
+                anyNonZeroExit: false,
+            });
         } finally {
             cleanupRun(runId);
         }
@@ -646,6 +668,41 @@ suite('Aspire DCP run session lifecycle', () => {
         const terminal = await reconnectedClient.waitForNotification();
         assert.deepStrictEqual(reconnectedClient.notifications, [terminal]);
         assert.deepStrictEqual(originalClient.notifications, []);
+        assert.strictEqual(stopSession.calledOnce, true);
+    });
+
+    test('disconnected DELETE queues one terminal notification for same-prefix reconnect', async () => {
+        const originalClient = await openNotificationClient(harness);
+        const stopSession = sinon.stub().resolves();
+        const runId = await createRun(harness, 'node', stopSession);
+        const routingDcpId = 'aspire-extension-run-test';
+        const reconnectedDcpId = `${routingDcpId}-reconnected`;
+        const originalClosed = once(originalClient.socket, 'close');
+        originalClient.socket.close();
+        await originalClosed;
+        await waitFor(() => !getInternals(harness.dcpServer).wsBySession.has(routingDcpId));
+
+        const deleteResponse = await request(harness, 'DELETE', `/run_session/${runId}`, undefined, reconnectedDcpId);
+
+        assert.strictEqual(deleteResponse.statusCode, 200);
+        assert.strictEqual(deleteResponse.body, '');
+        assert.deepStrictEqual(getInternals(harness.dcpServer).pendingNotificationQueueByDcpId.get(routingDcpId), [{
+            notification_type: 'sessionTerminated',
+            session_id: runId,
+            dcp_id: routingDcpId,
+        }]);
+
+        const reconnectedClient = await openNotificationClient(harness, reconnectedDcpId);
+        const terminal = await reconnectedClient.waitForNotification();
+        await drainNotifications(reconnectedClient);
+
+        assert.deepStrictEqual(terminal, {
+            notification_type: 'sessionTerminated',
+            session_id: runId,
+        });
+        assert.deepStrictEqual(reconnectedClient.notifications, [terminal]);
+        assert.deepStrictEqual(originalClient.notifications, []);
+        assert.strictEqual(getInternals(harness.dcpServer).pendingNotificationQueueByDcpId.has(routingDcpId), false);
         assert.strictEqual(stopSession.calledOnce, true);
     });
 
