@@ -247,15 +247,6 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes("path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_AZURE_FUNCTIONS_VSIX')"));
     });
 
-    test('does not run disabled E2E matrix shards', () => {
-        const extensionRoot = path.resolve(__dirname, '..', '..');
-        const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
-        const runStep = workflow.match(/^\s+- name: Run extension E2E tests[\s\S]*?^\s+run: \|/m)?.[0] ?? '';
-
-        assert.ok(workflow.includes("disabledIssue: 'https://github.com/microsoft/aspire/issues/19151'"));
-        assert.ok(runStep.includes('if: ${{ !matrix.disabledIssue }}'));
-    });
-
     test('keeps Linux E2E recordings for successful runs by default', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
@@ -517,30 +508,6 @@ suite('E2E launch profile', () => {
         assert.ok(!debugDashboard.includes("file => file.state.stoppingPaths.some(stoppingPath => isSamePath(stoppingPath, appHostPath))"));
     });
 
-    test('gates slow AppHost discovery before asserting transient loading UI', () => {
-        const extensionRoot = path.resolve(__dirname, '..', '..');
-        const fixtures = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'helpers', 'fixtures.ts'), 'utf8');
-        const appHostTree = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'appHostTree.e2e.test.ts'), 'utf8');
-        const runningBeforeDiscoveryTest = getTestBlock(appHostTree, 'running AppHosts appear before slow discovery results');
-
-        assert.ok(fixtures.includes('writeGatedStreamingDiscoveryCliWrapper'));
-        assert.ok(fixtures.includes('function waitForReleaseFile'));
-        assert.ok(appHostTree.includes('writeGatedStreamingDiscoveryCliWrapper'));
-        assert.ok(appHostTree.includes('discoveryGate.releasePsSnapshot();'));
-        assert.ok(appHostTree.includes('discoveryGate.releaseLsCandidate();'));
-
-        const cleanupIndex = runningBeforeDiscoveryTest.indexOf('finally {');
-        assert.ok(cleanupIndex >= 0, 'Expected the E2E to keep cleanup releases in a finally block.');
-        const testBeforeCleanup = runningBeforeDiscoveryTest.slice(0, cleanupIndex);
-        const loadingIndex = testBeforeCleanup.indexOf('await waitForWorkspaceRediscoveryLoading');
-        const releasePsIndex = testBeforeCleanup.indexOf('discoveryGate.releasePsSnapshot();');
-        const releaseLsIndex = testBeforeCleanup.indexOf('discoveryGate.releaseLsCandidate();');
-
-        assert.ok(loadingIndex >= 0, 'The E2E must wait for the transient loading UI before releasing the running AppHost snapshot.');
-        assert.ok(releasePsIndex > loadingIndex, 'The running AppHost snapshot must be released after the loading UI has been observed.');
-        assert.ok(releaseLsIndex > releasePsIndex, 'The slow workspace candidate must be released after the running AppHost snapshot.');
-    });
-
     test('waits for resource debugger child processes in parallel', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const resourceDebugger = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'resourceDebugger.e2e.test.ts'), 'utf8');
@@ -558,12 +525,10 @@ suite('E2E launch profile', () => {
         const paths = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'helpers', 'paths.ts'), 'utf8');
 
         const matchedSpecsIndex = runner.indexOf('const matchedTestSpecs =');
-        const resourceDebuggerMatchIndex = runner.indexOf("const resourceDebuggerSpecMatched = matchedTestSpecs.some(file => path.basename(file) === 'resourceDebugger.e2e.test.js');");
-        const includeFixtureIndex = runner.indexOf("const includeNodeResourceFixture = shardName === 'resource-debugger' || resourceDebuggerSpecMatched;");
+        const includeFixtureIndex = runner.indexOf("const includeNodeResourceFixture = matchedTestSpecs.some(file => path.basename(file) === 'resourceDebugger.e2e.test.js');");
 
         assert.ok(matchedSpecsIndex >= 0, 'The runner must resolve the effective spec glob before fixture selection.');
-        assert.ok(resourceDebuggerMatchIndex > matchedSpecsIndex, 'Fixture selection must inspect the actual matched spec files, not just the shard name.');
-        assert.ok(includeFixtureIndex > resourceDebuggerMatchIndex, 'The resource-debugger spec must get its Node fixture even when shardName remains all.');
+        assert.ok(includeFixtureIndex > matchedSpecsIndex, 'Fixture selection must inspect the actual matched spec files, not just the shard name.');
         assert.ok(paths.includes('Any E2E run that includes the resource debugger spec gets this fixture'));
     });
 

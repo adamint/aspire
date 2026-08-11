@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { createDebugAdapterOutputCapture, findAppHostDebugSession, getResourceDebugProofRequest, resourceDebugProofPhaseBudgetMs } from '../testing/e2eStateFileBridge';
+import { createDebugAdapterOutputCapture, findAppHostDebugSession, getResourceDebugProofRequest, resourceDebugProofPhaseBudgetMs, stopSessionsThenSettle } from '../testing/e2eStateFileBridge';
 import type { AspireExtensionE2EControlCommand } from '../types/extensionApi';
 
 suite('Resource debug proof request', () => {
@@ -248,5 +248,67 @@ suite('Resource debug proof output capture', () => {
             ['ASPIRE_E2E_NODE_PID=12345\n', 'ASPIRE_E2E_NODE_CHILD_PID=12346\n']);
         assert.strictEqual(capture.observedOutputEventCount, 23);
         assert.strictEqual(capture.getOutputSampleEvents().length, 5);
+    });
+});
+
+suite('E2E stop cleanup', () => {
+    test('requests the AppHost refresh and settle wait even when a tracked session stop rejects', async () => {
+        let settled = false;
+        const stopped: string[] = [];
+
+        const error = await stopSessionsThenSettle(
+            [
+                () => { stopped.push('healthy'); return Promise.resolve(); },
+                () => { stopped.push('failing'); return Promise.reject(new Error('stop rejected')); },
+            ],
+            async () => { settled = true; }).then(() => undefined, (reason: unknown) => reason);
+
+        // The refresh and the settle wait are what leave the extension quiet for the next E2E test.
+        // Skipping them because a stop rejected strands the AppHost in the state file, so the
+        // failure has to be reported only after the cleanup has run.
+        assert.ok(settled, 'the cleanup must run even when a stop rejects');
+        assert.deepStrictEqual(stopped, ['healthy', 'failing']);
+        assert.strictEqual((error as Error | undefined)?.message, 'stop rejected');
+    });
+
+    test('reports every stop failure once the cleanup has run', async () => {
+        let settled = false;
+
+        const error = await stopSessionsThenSettle(
+            [
+                // A synchronous throw must not escape before the other stops or the cleanup run.
+                () => { throw new Error('synchronous stop failure'); },
+                () => Promise.reject(new Error('asynchronous stop failure')),
+            ],
+            async () => { settled = true; }).then(() => undefined, (reason: unknown) => reason);
+
+        assert.ok(settled, 'the cleanup must run even when every stop fails');
+        assert.ok(error instanceof AggregateError, `Expected an AggregateError, got ${error}.`);
+        assert.deepStrictEqual(
+            error.errors.map((reason: unknown) => (reason as Error).message),
+            ['synchronous stop failure', 'asynchronous stop failure']);
+    });
+
+    test('reports a cleanup failure alongside the stop failure that preceded it', async () => {
+        const error = await stopSessionsThenSettle(
+            [() => Promise.reject(new Error('stop rejected'))],
+            () => Promise.reject(new Error('timed out waiting for Aspire debug sessions to stop'))).then(() => undefined, (reason: unknown) => reason);
+
+        // A stop failure usually makes the settle wait time out too. Replacing the original reason
+        // with the timeout would hide why the state never settled.
+        assert.ok(error instanceof AggregateError, `Expected an AggregateError, got ${error}.`);
+        assert.deepStrictEqual(
+            error.errors.map((reason: unknown) => (reason as Error).message),
+            ['stop rejected', 'timed out waiting for Aspire debug sessions to stop']);
+    });
+
+    test('resolves and runs the cleanup once when every stop succeeds', async () => {
+        let settleCount = 0;
+
+        await stopSessionsThenSettle(
+            [() => Promise.resolve(), () => Promise.resolve()],
+            async () => { settleCount++; });
+
+        assert.strictEqual(settleCount, 1);
     });
 });

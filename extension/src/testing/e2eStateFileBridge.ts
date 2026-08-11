@@ -1344,6 +1344,55 @@ async function waitForE2eValue<T>(description: string, timeoutMs: number, getVal
   throw new Error(`Timed out after ${timeoutMs}ms waiting for ${description}. Last error: ${lastError ?? '<none>'}`);
 }
 
+/**
+ * Stops every session, runs `settle` even when a stop failed, and only then reports the failures.
+ *
+ * The settle step is what leaves the extension quiet for whatever runs next: it requests the AppHost
+ * stop refresh and waits for the state file to drain. Letting a rejected or timed-out stop skip it
+ * strands the AppHost in the state snapshot, so the next E2E test sees a run that never ended and
+ * fails for a reason that has nothing to do with what it is testing.
+ *
+ * Every reason is preserved, including a `settle` failure, because a failed stop usually makes the
+ * settle wait time out too and the timeout on its own does not say why the state never settled.
+ */
+export async function stopSessionsThenSettle(
+  stopSessions: readonly (() => Thenable<void> | Promise<void>)[],
+  settle: () => Promise<void>
+): Promise<void> {
+  const failures: unknown[] = [];
+  const stops = stopSessions.map(stopSession => {
+    try {
+      return Promise.resolve(stopSession());
+    }
+    catch (error) {
+      // A synchronous throw has to become a rejected result; otherwise it escapes before the
+      // remaining stops have been started and before the cleanup has run.
+      return Promise.reject(error);
+    }
+  });
+
+  for (const result of await Promise.allSettled(stops)) {
+    if (result.status === 'rejected') {
+      failures.push(result.reason);
+    }
+  }
+
+  try {
+    await settle();
+  }
+  catch (error) {
+    failures.push(error);
+  }
+
+  if (failures.length === 1) {
+    throw failures[0];
+  }
+
+  if (failures.length > 1) {
+    throw new AggregateError(failures, `${failures.length} failures occurred while stopping Aspire debug sessions for E2E.`);
+  }
+}
+
 async function stopDebuggingForE2E(
   aspireContext: AspireExtensionContext,
   dataRepository: AppHostDataRepository,
@@ -1356,19 +1405,23 @@ async function stopDebuggingForE2E(
     const stoppedAppHostPaths = trackedSessions
       .map(debugSession => debugSession.appHostPath)
       .filter(path => path !== undefined);
-    await Promise.all(trackedSessions.map(debugSession => debugSession.stopDebugging()));
-    for (const appHostPath of stoppedAppHostPaths) {
-      dataRepository.requestAppHostStopRefresh(appHostPath);
-    }
 
-    await waitForE2eValue('Aspire debug sessions to stop', 120000, () => {
-      const state = createStateSnapshot(dataRepository, appHostLaunchService, appHostTreeProvider, aspireContext, true);
-      const stoppedSessionsAreGone = aspireContext.aspireDebugSessions.every(debugSession => !stoppedDebugSessionIds.has(debugSession.debugSessionId));
-      const stoppedAppHostsAreGone = stoppedAppHostPaths.every(appHostPath => !hasRunningAppHost(state, appHostPath));
-      return stoppedSessionsAreGone && stoppedAppHostsAreGone && state.launchingPaths.length === 0 && state.stoppingPaths.length === 0
-        ? true
-        : undefined;
-    });
+    await stopSessionsThenSettle(
+      trackedSessions.map(debugSession => () => debugSession.stopDebugging()),
+      async () => {
+        for (const appHostPath of stoppedAppHostPaths) {
+          dataRepository.requestAppHostStopRefresh(appHostPath);
+        }
+
+        await waitForE2eValue('Aspire debug sessions to stop', 120000, () => {
+          const state = createStateSnapshot(dataRepository, appHostLaunchService, appHostTreeProvider, aspireContext, true);
+          const stoppedSessionsAreGone = aspireContext.aspireDebugSessions.every(debugSession => !stoppedDebugSessionIds.has(debugSession.debugSessionId));
+          const stoppedAppHostsAreGone = stoppedAppHostPaths.every(appHostPath => !hasRunningAppHost(state, appHostPath));
+          return stoppedSessionsAreGone && stoppedAppHostsAreGone && state.launchingPaths.length === 0 && state.stoppingPaths.length === 0
+            ? true
+            : undefined;
+        });
+      });
 
     return;
   }

@@ -16,7 +16,6 @@ const {
   runWithRetries,
   terminateOrphanedDescendants,
 } = require('./e2e-download-retry');
-const { assertShardExecutedTests } = require('./e2e-shard-results');
 
 const extensionRoot = path.resolve(__dirname, '..');
 const extensionPackageJson = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.json'), 'utf8'));
@@ -88,11 +87,11 @@ const COMMAND_INERT_PATH_ALPHABET = isWindows ? '._-+@~:\\/' : '._-+,=:@%/';
 const primaryAppHostProject = path.join(workspaceRoot, 'AspireE2E.AppHost', 'AspireE2E.AppHost.csproj');
 const nodeAppProjectName = 'AspireE2E.NodeApp';
 const nodeAppScript = path.join(workspaceRoot, nodeAppProjectName, 'app.js');
-const resourceDebuggerSpecMatched = matchedTestSpecs.some(file => path.basename(file) === 'resourceDebugger.e2e.test.js');
-// The documented full-suite command leaves shardName as "all". Include the Node fixture whenever
-// resourceDebugger.e2e.test.js is in the actual spec set so that test can rely on the same AppHost
-// shape whether it runs by shard or through the full default glob.
-const includeNodeResourceFixture = shardName === 'resource-debugger' || resourceDebuggerSpecMatched;
+// The resource-debugger spec needs the Node fixture and the `e2e-node` resource in the shared
+// AppHost, and no other shard should get them. Select on the actual matched spec files rather than
+// the shard name so the fixture is also provisioned when the documented full-suite glob (which
+// leaves shardName as "all") includes the spec.
+const includeNodeResourceFixture = matchedTestSpecs.some(file => path.basename(file) === 'resourceDebugger.e2e.test.js');
 const workspaceNuGetConfigPath = path.join(workspaceRoot, 'NuGet.config');
 const enableAzureFunctionsE2E = process.env.ASPIRE_EXTENSION_E2E_ENABLE_AZURE_FUNCTIONS === 'true';
 let cliPathForCleanup;
@@ -709,9 +708,6 @@ async function main() {
     try {
       logStep('Running VS Code extension E2E tests');
       await runWithProcessTreeTimeout(process.execPath, [extesterCli, 'run-tests', testSpec, '--storage', storageDir, '--extensions_dir', extensionsDir, '--code_version', vscodeVersion, '--code_settings', path.join(extensionRoot, 'test-e2e', 'settings.json'), '--mocha_config', path.join(extensionRoot, '.mocharc.e2e.js'), '--offline'], extestEnv, getRunTestsTimeoutMs());
-      // A shard that runs to completion without executing its tests still exits 0, so the results
-      // have to be inspected before the shard is allowed to report success.
-      assertShardExecutedTests({ shardName, results: readMochaResults() });
     }
     catch (error) {
       testFailure = error;

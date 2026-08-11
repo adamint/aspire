@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { isSamePath, waitForNoDebugSessions, waitForNoRunningAppHost, waitForRepositoryIdle, waitForWorkspaceAppHost } from './helpers/assertions';
-import { clearBreakpoints, executeE2eControlCommand, getAppHostPidFromState, getNodeAppBreakpointLine, isProcessAlive, runE2eTeardown, stopPrimaryAppHostIfRunning, waitForProcessExit } from './helpers/fixtures';
+import { clearBreakpoints, executeE2eControlCommand, getAppHostPidFromState, getNodeAppBreakpointLine, isProcessRunning, runE2eTeardown, stopPrimaryAppHostIfRunning, waitForProcessExit } from './helpers/fixtures';
 import { getNodeAppScriptPath, getPrimaryAppHostProjectPath } from './helpers/paths';
 import { openAspireView } from './helpers/vscode';
 import { readReportedPidFromDebugOutput } from '../testing/resourceDebugOutput';
@@ -110,6 +110,10 @@ suite('Aspire resource debugger E2E', function () {
     });
 
     test('stopping debugging tears down the Node resource process tree', async () => {
+        // The teardown this asserts on depends on the resource stop ordering fixed in
+        // https://github.com/microsoft/aspire/pull/19145, which this PR declares as a prerequisite:
+        // stopping while a resource is suspended on a breakpoint has to stop the resource session
+        // before the AppHost or the debuggee and its children are left running.
         const proof = await runResourceDebugProof({ stopDebuggingOnCompletion: false });
 
         assert.ok(proof.resourceDebugSession, `Expected the stopped resource debug session: ${JSON.stringify(proof.debugSessions.map(toSessionSummary))}`);
@@ -126,8 +130,8 @@ suite('Aspire resource debugger E2E', function () {
         // See https://github.com/microsoft/vscode-js-debug/blob/main/src/vsDebugServer.ts
         const debuggeePid = readReportedPidFromDebugOutput(proof, 'ASPIRE_E2E_NODE_PID');
         const childPid = readReportedPidFromDebugOutput(proof, 'ASPIRE_E2E_NODE_CHILD_PID');
-        assert.ok(isProcessAlive(debuggeePid), `Expected the Node resource process ${debuggeePid} to still be running before debugging stops.`);
-        assert.ok(isProcessAlive(childPid), `Expected the Node child process ${childPid} to still be running before debugging stops.`);
+        assert.ok(isProcessRunning(debuggeePid), `Expected the Node resource process ${debuggeePid} to still be running before debugging stops.`);
+        assert.ok(isProcessRunning(childPid), `Expected the Node child process ${childPid} to still be running before debugging stops.`);
 
         // Captured while the AppHost is still running so the teardown assertion below can check the
         // real process rather than the extension's view of it.

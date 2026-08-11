@@ -7,11 +7,8 @@ import AspireDcpServer from './dcp/AspireDcpServer';
 import { AspireTerminalProvider } from './utils/AspireTerminalProvider';
 import { AspireEditorCommandProvider } from './editor/AspireEditorCommandProvider';
 import type { AspireDebugConsoleOutputEvent } from './types/extensionApi';
-import { extensionLogOutputChannel } from './utils/logging';
 
 export class AspireExtensionContext implements vscode.Disposable {
-    private static readonly _debugSessionDisposalTimeoutMs = 5_000;
-
     private _rpcServer?: AspireRpcServer;
     private _dcpServer?: AspireDcpServer;
     private _extensionContext?: vscode.ExtensionContext;
@@ -24,7 +21,6 @@ export class AspireExtensionContext implements vscode.Disposable {
     private readonly _debugSessionOutputSubscriptions = new Map<string, vscode.Disposable>();
     private readonly _onDidChangeDebugSessions = new vscode.EventEmitter<void>();
     private readonly _onDidReceiveDebugConsoleOutput = new vscode.EventEmitter<AspireDebugConsoleOutputEvent>();
-    private _disposePromise?: Promise<void>;
     readonly onDidChangeDebugSessions = this._onDidChangeDebugSessions.event;
     readonly onDidReceiveDebugConsoleOutput = this._onDidReceiveDebugConsoleOutput.event;
 
@@ -98,59 +94,17 @@ export class AspireExtensionContext implements vscode.Disposable {
         return this._debugConfigProvider;
     }
 
-    dispose(): Promise<void> {
-        this._disposePromise ??= this.disposeCore();
-
-        return this._disposePromise;
-    }
-
-    private async disposeCore(): Promise<void> {
-        // AspireDebugSession.dispose() stops resource debug sessions before it runs the AppHost/CLI
-        // shutdown disposables. VS Code only awaits extension deactivation when a Promise is
-        // returned, so wait for those per-session disposals before tearing down the shared transport.
-        const debugSessionDisposals = this._aspireDebugSessions.map(session => session.dispose());
-        await this.waitForDebugSessionDisposals(debugSessionDisposals);
-
+    dispose() {
         this._rpcServer?.dispose();
         this._dcpServer?.dispose();
         this._debugSessionStateSubscriptions.forEach(disposable => disposable.dispose());
         this._debugSessionStateSubscriptions.clear();
         this._debugSessionOutputSubscriptions.forEach(disposable => disposable.dispose());
         this._debugSessionOutputSubscriptions.clear();
+        this._aspireDebugSessions.forEach(session => session.dispose());
         this._terminalProvider?.dispose();
         this._editorCommandProvider?.dispose();
         this._onDidChangeDebugSessions.dispose();
         this._onDidReceiveDebugConsoleOutput.dispose();
-    }
-
-    private async waitForDebugSessionDisposals(debugSessionDisposals: Promise<void>[]): Promise<void> {
-        if (debugSessionDisposals.length === 0) {
-            return;
-        }
-
-        const allDisposals = Promise.allSettled(debugSessionDisposals);
-        let timeout: ReturnType<typeof setTimeout> | undefined;
-        const outcome = await Promise.race([
-            allDisposals.then(results => ({ timedOut: false as const, results })),
-            new Promise<{ timedOut: true }>(resolve => {
-                timeout = setTimeout(() => {
-                    timeout = undefined;
-                    resolve({ timedOut: true });
-                }, AspireExtensionContext._debugSessionDisposalTimeoutMs);
-            }),
-        ]);
-
-        if (timeout) {
-            clearTimeout(timeout);
-        }
-
-        if (outcome.timedOut) {
-            extensionLogOutputChannel.warn(`Timed out after ${AspireExtensionContext._debugSessionDisposalTimeoutMs}ms waiting for Aspire debug session disposal; continuing extension teardown.`);
-            return;
-        }
-
-        for (const failure of outcome.results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')) {
-            extensionLogOutputChannel.warn(`Aspire debug session disposal failed during extension deactivation: ${failure.reason}`);
-        }
     }
 }

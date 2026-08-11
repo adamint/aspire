@@ -424,7 +424,7 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate() {
-  return aspireExtensionContext.dispose();
+  aspireExtensionContext.dispose();
 }
 
 function getExtensionModeForTelemetry(mode: vscode.ExtensionMode): string {
