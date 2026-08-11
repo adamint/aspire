@@ -98,8 +98,18 @@ export interface AppHostLifecycleToolDependencies {
 }
 
 interface ResolvedAppHostTarget {
+    // AppHostLaunchService tracks in-flight launches by path.resolve(program), so preserve
+    // the lexical workspace-relative path even when the underlying file lives under a symlink.
+    readonly launchPath: string;
+    // Containment checks and AppHost identity comparisons still run on the canonical path so
+    // symlinked workspaces collapse to the same physical AppHost.
     readonly absolutePath: string;
     readonly selector: string;
+}
+
+interface DiscoveredTargets {
+    readonly targets: readonly ResolvedAppHostTarget[];
+    readonly hadFailures: boolean;
 }
 
 type TargetResolution =
@@ -176,7 +186,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 getSessionMode(editorSessions.sessions[0]));
         }
 
-        if (this._pendingStarts.has(identityKey) || this._dependencies.launchService.isLaunching(target.absolutePath)) {
+        if (this._pendingStarts.has(identityKey) || this._dependencies.launchService.isLaunching(target.launchPath)) {
             return createResult(aspireAppHostStartToolName, 'alreadyStarting', target.selector, 'editor', input.mode);
         }
 
@@ -202,7 +212,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                     getSessionMode(sessionsAfterProbe.sessions[0]));
             }
 
-            if (this._dependencies.launchService.isLaunching(target.absolutePath)) {
+            if (this._dependencies.launchService.isLaunching(target.launchPath)) {
                 return createResult(aspireAppHostStartToolName, 'alreadyStarting', target.selector, 'editor', input.mode);
             }
 
@@ -218,7 +228,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 return createResult(aspireAppHostStartToolName, 'cancelled', target.selector, 'none', input.mode);
             }
 
-            await this._dependencies.launchService.launch(target.absolutePath, 'run', input.mode === 'run');
+            await this._dependencies.launchService.launch(target.launchPath, 'run', input.mode === 'run');
             return createResult(aspireAppHostStartToolName, 'started', target.selector, 'editor', input.mode, input.mode);
         }
         catch (error) {
@@ -251,6 +261,10 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         }
 
         const target = resolution.target;
+        if (this._disposed || token.isCancellationRequested) {
+            return createResult(aspireAppHostStopToolName, 'cancelled', target.selector, 'none');
+        }
+
         const identityKey = getAppHostPathComparisonKey(target.absolutePath);
         if (this._pendingStops.has(identityKey)) {
             return createResult(aspireAppHostStopToolName, 'alreadyStopping', target.selector, 'editor');
@@ -277,7 +291,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             }
         }
 
-        if (this._pendingStarts.has(identityKey) || this._dependencies.launchService.isLaunching(target.absolutePath)) {
+        if (this._pendingStarts.has(identityKey) || this._dependencies.launchService.isLaunching(target.launchPath)) {
             return createResult(aspireAppHostStopToolName, 'alreadyStarting', target.selector, 'editor');
         }
 
@@ -311,17 +325,21 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         }
 
         try {
-            const targets = await this.discoverTargets(token);
             const selectorKey = toSelectorKey(rawAppHostPath);
-            const matches = targets.filter(target => toSelectorKey(target.selector) === selectorKey);
+            const discoveredTargets = await this.discoverTargets(token);
+            const matches = discoveredTargets.targets.filter(target => toSelectorKey(target.selector) === selectorKey);
             if (matches.length === 1) {
                 return { resolved: true, target: matches[0] };
+            }
+
+            if (discoveredTargets.hadFailures) {
+                return { resolved: false, outcome: 'discoveryFailed' };
             }
 
             return {
                 resolved: false,
                 outcome: 'unknownAppHost',
-                knownAppHosts: targets.slice(0, maxReportedKnownAppHosts).map(target => target.selector),
+                knownAppHosts: discoveredTargets.targets.slice(0, maxReportedKnownAppHosts).map(target => target.selector),
             };
         }
         catch (error) {
@@ -334,28 +352,50 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         }
     }
 
-    private async discoverTargets(token: vscode.CancellationToken): Promise<readonly ResolvedAppHostTarget[]> {
+    private async discoverTargets(token: vscode.CancellationToken): Promise<DiscoveredTargets> {
         const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
-        const discoveredByFolder = await Promise.all(workspaceFolders.map(async folder => ({
-            folder,
-            candidates: await this._dependencies.discoveryService.discover(folder, false, token),
-        })));
+        const discoveredByFolder = await Promise.all(workspaceFolders.map(async folder => {
+            try {
+                return {
+                    folder,
+                    candidates: await this._dependencies.discoveryService.discover(folder, false, token),
+                    failed: false,
+                };
+            }
+            catch (error) {
+                if (isCommandCancellation(error)) {
+                    throw error;
+                }
+
+                // One noisy workspace folder should not hide buildable AppHosts discovered from
+                // the other roots. Cancellation is still handled above so the whole request can stop.
+                extensionLogOutputChannel.warn(`Aspire AppHost lifecycle tool discovery skipped workspace folder '${folder.name}': ${String(error)}`);
+                return {
+                    folder,
+                    candidates: [] as readonly CandidateAppHostDisplayInfo[],
+                    failed: true,
+                };
+            }
+        }));
         const folderQualifiers = workspaceFolders.map(folder => this.getWorkspaceFolderQualifier(folder));
         const targets = new Map<string, ResolvedAppHostTarget>();
+        let hadFailures = false;
 
-        for (const [index, { folder, candidates }] of discoveredByFolder.entries()) {
+        for (const [index, { folder, candidates, failed }] of discoveredByFolder.entries()) {
+            hadFailures ||= failed;
             for (const candidate of candidates) {
                 if (candidate.status !== 'buildable' || !path.isAbsolute(candidate.path) || !fs.existsSync(candidate.path)) {
                     continue;
                 }
 
-                const absolutePath = canonicalizeAppHostPath(candidate.path);
-                const relativePath = toContainedRelativePath(folder.uri.fsPath, absolutePath);
+                const relativePath = toContainedRelativePath(folder.uri.fsPath, candidate.path);
                 if (!relativePath ||
                     identityChangingCharacters.test(relativePath)) {
                     continue;
                 }
 
+                const launchPath = path.resolve(candidate.path);
+                const absolutePath = canonicalizeAppHostPath(launchPath);
                 const selector = workspaceFolders.length > 1
                     ? `${folderQualifiers[index]}/${relativePath}`
                     : relativePath;
@@ -366,12 +406,15 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 const selectorKey = toSelectorKey(selector);
                 const existing = targets.get(selectorKey);
                 if (!existing || getAppHostPathComparisonKey(existing.absolutePath) === getAppHostPathComparisonKey(absolutePath)) {
-                    targets.set(selectorKey, { absolutePath, selector });
+                    targets.set(selectorKey, { launchPath, absolutePath, selector });
                 }
             }
         }
 
-        return [...targets.values()].sort((left, right) => left.selector.localeCompare(right.selector));
+        return {
+            targets: [...targets.values()].sort((left, right) => left.selector.localeCompare(right.selector)),
+            hadFailures,
+        };
     }
 
     private getWorkspaceFolderQualifier(folder: vscode.WorkspaceFolder): string {

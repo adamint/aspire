@@ -440,6 +440,8 @@ const expectedActivationEvents = [
     'workspaceContains:**/apphost.cjs',
     'onCommand:aspire-vscode.installCli',
     'onCommand:aspire-vscode.verifyCliInstalled',
+    'onLanguageModelTool:aspire_apphost_start',
+    'onLanguageModelTool:aspire_apphost_stop',
 ];
 
 const expectedCommandIds = [

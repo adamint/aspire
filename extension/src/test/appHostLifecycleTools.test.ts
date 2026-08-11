@@ -15,7 +15,7 @@ import {
     type AppHostLifecycleLaunchService,
     type AppHostLifecycleToolResult,
 } from '../lm/appHostLifecycleTools';
-import { compareAppHostIdentity, getAppHostPathComparisonKey } from '../utils/appHostIdentity';
+import { compareAppHostIdentity } from '../utils/appHostIdentity';
 import { type CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
 
 interface LaunchCall {
@@ -31,7 +31,8 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
     onLaunch: (() => void) | undefined;
 
     isLaunching(appHostPath: string): boolean {
-        return this.launchingPaths.has(getAppHostPathComparisonKey(appHostPath));
+        const normalizedPath = path.resolve(appHostPath);
+        return this.launchingPaths.has(process.platform === 'win32' ? normalizedPath.toLowerCase() : normalizedPath);
     }
 
     async launch(appHostPath: string, command: 'run', noDebug: boolean): Promise<void> {
@@ -43,11 +44,18 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
 
 class FakeDiscoveryService implements AppHostLifecycleDiscoveryService {
     readonly candidatesByFolder = new Map<string, CandidateAppHostDisplayInfo[]>();
+    readonly errorsByFolder = new Map<string, Error>();
+    discoverGate: Promise<void> | undefined;
+    onDiscover: ((folder: vscode.WorkspaceFolder) => void) | undefined;
     error: Error | undefined;
 
     async discover(folder: vscode.WorkspaceFolder): Promise<readonly CandidateAppHostDisplayInfo[]> {
-        if (this.error) {
-            throw this.error;
+        this.onDiscover?.(folder);
+        await this.discoverGate;
+
+        const error = this.errorsByFolder.get(folder.uri.fsPath) ?? this.error;
+        if (error) {
+            throw error;
         }
 
         return this.candidatesByFolder.get(folder.uri.fsPath) ?? [];
@@ -158,6 +166,24 @@ suite('AppHost lifecycle language model tools', () => {
         assert.strictEqual((await firstStart).outcome, 'started');
     });
 
+    test('uses the lexical discovery path when the AppHost is already launching through a symlinked directory', async () => {
+        const realAppHostDirectory = path.join(workspaceRoot, 'RealAppHost');
+        const linkedAppHostDirectory = path.join(workspaceRoot, 'LinkedAppHost');
+        const linkedAppHostPath = path.join(linkedAppHostDirectory, 'AppHost.csproj');
+        const realAppHostPath = path.join(realAppHostDirectory, 'AppHost.csproj');
+        fs.mkdirSync(realAppHostDirectory, { recursive: true });
+        fs.writeFileSync(realAppHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        createDirectoryLink(linkedAppHostDirectory, realAppHostDirectory);
+
+        discoveryService.candidatesByFolder.set(workspaceRoot, [createCandidate(linkedAppHostPath)]);
+        launchService.launchingPaths.add(normalizeLexicalPath(linkedAppHostPath));
+
+        const result = await service.start({ appHostPath: 'RealAppHost/AppHost.csproj', mode: 'run' }, token);
+
+        assert.strictEqual(result.outcome, 'alreadyStarting');
+        assert.strictEqual(launchService.launchCalls.length, 0);
+    });
+
     test('does not start a second editor-owned session', async () => {
         debugSessions.push(createDebugSession(appHostPath, false));
 
@@ -201,6 +227,47 @@ suite('AppHost lifecycle language model tools', () => {
         assert.strictEqual(result.controller, 'editor');
         assert.strictEqual(result.effectiveMode, 'run');
         assert.deepStrictEqual(stoppedSessions, [session]);
+    });
+
+    test('does not stop the editor session when cancellation wins the discovery race', async () => {
+        const session = createDebugSession(appHostPath, true, stoppedSession => stoppedSessions.push(stoppedSession));
+        const discoveryStarted = createDeferred<void>();
+        const releaseDiscovery = createDeferred<void>();
+        const cancellationSource = new vscode.CancellationTokenSource();
+
+        debugSessions.push(session);
+        discoveryService.onDiscover = () => discoveryStarted.resolve();
+        discoveryService.discoverGate = releaseDiscovery.promise;
+
+        const stopPromise = service.stop({ appHostPath: 'AppHost/AppHost.csproj' }, cancellationSource.token);
+        await discoveryStarted.promise;
+        cancellationSource.cancel();
+        releaseDiscovery.resolve();
+
+        const result = await stopPromise;
+
+        assert.strictEqual(result.outcome, 'cancelled');
+        assert.deepStrictEqual(stoppedSessions, []);
+    });
+
+    test('does not stop the editor session when disposal wins the discovery race', async () => {
+        const session = createDebugSession(appHostPath, true, stoppedSession => stoppedSessions.push(stoppedSession));
+        const discoveryStarted = createDeferred<void>();
+        const releaseDiscovery = createDeferred<void>();
+
+        debugSessions.push(session);
+        discoveryService.onDiscover = () => discoveryStarted.resolve();
+        discoveryService.discoverGate = releaseDiscovery.promise;
+
+        const stopPromise = service.stop({ appHostPath: 'AppHost/AppHost.csproj' }, token);
+        await discoveryStarted.promise;
+        service.dispose();
+        releaseDiscovery.resolve();
+
+        const result = await stopPromise;
+
+        assert.strictEqual(result.outcome, 'cancelled');
+        assert.deepStrictEqual(stoppedSessions, []);
     });
 
     test('refuses to stop an externally-owned AppHost', async () => {
@@ -257,6 +324,35 @@ suite('AppHost lifecycle language model tools', () => {
 
         assert.strictEqual(firstPath, 'workspace~1/AppHost/AppHost.csproj');
         assert.strictEqual(secondPath, 'workspace~2/AppHost/AppHost.csproj');
+    });
+
+    test('uses successful workspace roots when another root discovery fails', async () => {
+        const secondRoot = createFixtureDirectory('workspace');
+        const secondFolder = createWorkspaceFolder(secondRoot, 'workspace', 1);
+        workspaceFoldersStub.value([workspaceFolder, secondFolder]);
+        discoveryService.errorsByFolder.set(secondRoot, new Error('discovery failed'));
+
+        const result = await service.start({ appHostPath: 'workspace~1/AppHost/AppHost.csproj', mode: 'run' }, token);
+
+        assert.strictEqual(result.outcome, 'started');
+        assert.deepStrictEqual(launchService.launchCalls, [{
+            appHostPath: path.resolve(appHostPath),
+            command: 'run',
+            noDebug: true,
+        }]);
+    });
+
+    test('reports discoveryFailed when a selector is unresolved and another workspace root failed discovery', async () => {
+        const secondRoot = createFixtureDirectory('workspace');
+        const secondFolder = createWorkspaceFolder(secondRoot, 'workspace', 1);
+        workspaceFoldersStub.value([workspaceFolder, secondFolder]);
+        discoveryService.errorsByFolder.set(secondRoot, new Error('discovery failed'));
+
+        const result = await service.start({ appHostPath: 'workspace~1/Missing/AppHost.csproj', mode: 'run' }, token);
+
+        assert.strictEqual(result.outcome, 'discoveryFailed');
+        assert.strictEqual(result.knownAppHosts, undefined);
+        assert.strictEqual(launchService.launchCalls.length, 0);
     });
 
     test('returns cancellation instead of throwing when the running AppHost probe is cancelled', async () => {
@@ -365,6 +461,24 @@ function createWorkspaceFolder(folderPath: string, name: string, index: number):
         name,
         index,
     };
+}
+
+function createDirectoryLink(linkPath: string, targetPath: string): void {
+    try {
+        fs.symlinkSync(targetPath, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+    }
+    catch (error) {
+        throw new Error(`Test setup failed: unable to create ${process.platform === 'win32' ? 'junction' : 'directory symlink'} '${linkPath}' -> '${targetPath}': ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    if (!fs.lstatSync(linkPath).isSymbolicLink()) {
+        throw new Error(`Test setup failed: expected '${linkPath}' to be a symbolic link or junction.`);
+    }
+}
+
+function normalizeLexicalPath(value: string): string {
+    const normalizedPath = path.resolve(value);
+    return process.platform === 'win32' ? normalizedPath.toLowerCase() : normalizedPath;
 }
 
 function createCandidate(candidatePath: string): CandidateAppHostDisplayInfo {
