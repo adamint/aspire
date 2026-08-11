@@ -2,7 +2,9 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Globalization;
+using System.IO.Hashing;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 using Aspire.Cli.Configuration;
@@ -148,6 +150,7 @@ internal sealed class ProjectLocator(
     private const string AspireConfigAppHostPathKey = "appHost.path";
     private const string LegacySettingsAppHostPathKey = "appHostPath";
     private const string ExplicitLaunchConfigurationSelectionOrigin = "explicit-launch-configuration";
+    private static readonly TimeSpan s_workspaceConfigLockTimeout = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Finds all candidate AppHost projects in the specified search directory with language metadata.
@@ -1078,50 +1081,16 @@ internal sealed class ProjectLocator(
     {
         var selectionOrigin = configuration[KnownConfigNames.CliAppHostSelectionOrigin];
         var isExplicitLaunchConfiguration = string.Equals(selectionOrigin, ExplicitLaunchConfigurationSelectionOrigin, StringComparison.OrdinalIgnoreCase);
-        FileInfo? settingsFile = null;
-        DirectoryInfo? appHostDirForScopedConfig = null;
-        AspireConfigFile? existingConfig = null;
 
-        // Search from the apphost's directory upward for an existing config file.
-        // This handles the case where "aspire new" created a project in a subdirectory
-        // and the user runs "aspire run" from the parent without cd-ing first.
-        if (projectFile.Directory is { } appHostDir)
-        {
-            var nearAppHost = ConfigurationHelper.FindNearestConfigFilePath(appHostDir);
-            if (nearAppHost is not null)
-            {
-                var configDir = Path.GetDirectoryName(nearAppHost)!;
-                var targetSettingsFilePath = nearAppHost;
+        var (settingsFile, appHostDirForScopedConfig) = ResolveWorkspaceConfigTarget(projectFile);
 
-                // For legacy .aspire/settings.json, the config root is the parent of .aspire/
-                var trimmedConfigDir = configDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                if (string.Equals(Path.GetFileName(trimmedConfigDir), ".aspire", StringComparison.OrdinalIgnoreCase))
-                {
-                    var parentDir = Directory.GetParent(trimmedConfigDir);
-                    if (parentDir is not null)
-                    {
-                        configDir = parentDir.FullName;
-                    }
+        // Compound launch configurations start multiple CLI processes together. The default check
+        // and the whole-file writes must share one cross-process critical section so only the first
+        // launch can establish a missing workspace default.
+        using var configLock = await TryAcquireWorkspaceConfigLockAsync(settingsFile, cancellationToken);
 
-                    targetSettingsFilePath = Path.Combine(configDir, AspireConfigFile.FileName);
-                    existingConfig = AspireConfigFile.LoadOrCreate(configDir);
-                }
-                else
-                {
-                    existingConfig = AspireConfigFile.Load(configDir);
-                }
-
-                settingsFile = new FileInfo(targetSettingsFilePath);
-                appHostDirForScopedConfig = appHostDir;
-            }
-        }
-
-        // Only use the working-directory config after checking the selected AppHost's tree.
-        // GetOrCreateLocalAspireConfigFile can migrate legacy .aspire/settings.json into
-        // aspire.config.json, so calling it earlier would recreate the split-config bug.
-        settingsFile ??= GetOrCreateLocalAspireConfigFile();
+        var existingConfig = LoadOrMigrateWorkspaceConfig(settingsFile);
         var fileExisted = settingsFile.Exists;
-        existingConfig ??= fileExisted ? AspireConfigFile.Load(settingsFile.Directory!.FullName) : null;
 
         if (existingConfig?.AppHost?.Path is { } existingPath &&
             IsValidConfiguredAppHostPath(existingPath, settingsFile.FullName, AspireConfigAppHostPathKey, silent: true))
@@ -1183,42 +1152,89 @@ internal sealed class ProjectLocator(
         interactionService.DisplayMessage(KnownEmojis.FloppyDisk, string.Format(CultureInfo.CurrentCulture, message, $"[bold]'{relativeSettingsFilePath.EscapeMarkup()}'[/]"), allowMarkup: true);
     }
 
-    private FileInfo GetOrCreateLocalAspireConfigFile()
+    private (FileInfo SettingsFile, DirectoryInfo? AppHostDirectoryForScopedConfig) ResolveWorkspaceConfigTarget(FileInfo projectFile)
     {
-        var settingsFile = new FileInfo(configurationService.GetSettingsFilePath(isGlobal: false));
-
-        if (string.Equals(settingsFile.Name, AspireConfigFile.FileName, StringComparison.OrdinalIgnoreCase))
+        // Search from the AppHost's directory first so a config beside the AppHost wins over one
+        // associated with the working directory.
+        if (projectFile.Directory is { } appHostDirectory &&
+            ConfigurationHelper.FindNearestConfigFilePath(appHostDirectory) is { } configPath)
         {
-            logger.LogDebug("Using existing config file at {Path}", settingsFile.FullName);
-            return settingsFile;
+            var configDirectoryPath = Path.GetDirectoryName(configPath)!;
+            var targetSettingsFilePath = configPath;
+
+            // For legacy .aspire/settings.json, the config root is the parent of .aspire/.
+            var trimmedConfigDirectoryPath = configDirectoryPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (string.Equals(Path.GetFileName(trimmedConfigDirectoryPath), ".aspire", StringComparison.OrdinalIgnoreCase) &&
+                Directory.GetParent(trimmedConfigDirectoryPath) is { } parentDirectory)
+            {
+                targetSettingsFilePath = Path.Combine(parentDirectory.FullName, AspireConfigFile.FileName);
+            }
+
+            return (new FileInfo(targetSettingsFilePath), appHostDirectory);
         }
 
-        var legacySettingsRootDirectory = ConfigurationHelper.GetLegacySettingsRootDirectory(settingsFile);
-        if (legacySettingsRootDirectory is null)
+        var configuredSettingsFile = new FileInfo(configurationService.GetSettingsFilePath(isGlobal: false));
+
+        if (string.Equals(configuredSettingsFile.Name, AspireConfigFile.FileName, StringComparison.OrdinalIgnoreCase))
         {
-            var newConfigPath = Path.Combine(executionContext.WorkingDirectory.FullName, AspireConfigFile.FileName);
-            logger.LogDebug("No existing config found, will create new config at {Path}", newConfigPath);
-            return new FileInfo(newConfigPath);
+            logger.LogDebug("Using existing config file at {Path}", configuredSettingsFile.FullName);
+            return (configuredSettingsFile, null);
         }
 
-        var aspireConfigFile = new FileInfo(Path.Combine(legacySettingsRootDirectory.FullName, AspireConfigFile.FileName));
-        if (!aspireConfigFile.Exists)
-        {
-            logger.LogInformation("Migrating legacy settings from {LegacyDir} to {ConfigFile}", legacySettingsRootDirectory.FullName, aspireConfigFile.FullName);
-            MigrateLegacySettings(legacySettingsRootDirectory);
-        }
+        var configRoot = ConfigurationHelper.GetLegacySettingsRootDirectory(configuredSettingsFile)
+            ?? executionContext.WorkingDirectory;
+        var newConfigPath = Path.Combine(configRoot.FullName, AspireConfigFile.FileName);
+        logger.LogDebug("Will use workspace config at {Path}", newConfigPath);
 
-        return aspireConfigFile;
+        return (new FileInfo(newConfigPath), null);
     }
 
-    private void MigrateLegacySettings(DirectoryInfo settingsRootDirectory)
+    private AspireConfigFile? LoadOrMigrateWorkspaceConfig(FileInfo settingsFile)
     {
-        var configFilePath = Path.Combine(settingsRootDirectory.FullName, AspireConfigFile.FileName);
-        logger.LogInformation("Migrating legacy settings to {SettingsFilePath}", configFilePath);
+        var configRoot = settingsFile.Directory!;
+        if (settingsFile.Exists)
+        {
+            return AspireConfigFile.Load(configRoot.FullName);
+        }
 
-        // LoadOrCreate handles the legacy fallback and migration internally,
-        // including saving the migrated config to disk.
-        _ = AspireConfigFile.LoadOrCreate(settingsRootDirectory.FullName);
+        var legacySettingsFile = new FileInfo(ConfigurationHelper.BuildPathToSettingsJsonFile(configRoot.FullName));
+        if (!legacySettingsFile.Exists)
+        {
+            return null;
+        }
+
+        logger.LogInformation("Migrating legacy settings from {LegacyDir} to {ConfigFile}", configRoot.FullName, settingsFile.FullName);
+        return AspireConfigFile.LoadOrCreate(configRoot.FullName);
+    }
+
+    private async Task<FileLock?> TryAcquireWorkspaceConfigLockAsync(FileInfo settingsFile, CancellationToken cancellationToken)
+    {
+        var lockPath = GetWorkspaceConfigLockPath(settingsFile);
+
+        try
+        {
+            return await FileLock.AcquireAsync(lockPath, cancellationToken, s_workspaceConfigLockTimeout);
+        }
+        catch (Exception ex) when (ex is TimeoutException or IOException or UnauthorizedAccessException)
+        {
+            // Persisting the workspace default is bookkeeping around the requested command. Preserve
+            // the previous best-effort behavior if the cache directory cannot host the lock.
+            logger.LogDebug(ex, "Proceeding without the workspace config lock at {LockPath}.", lockPath);
+            return null;
+        }
+    }
+
+    private string GetWorkspaceConfigLockPath(FileInfo settingsFile)
+    {
+        // Lock files live in the cache so read-only workspaces remain usable. Canonicalizing and
+        // folding the config path makes aliases on symlinked or case-insensitive volumes contend;
+        // on a case-sensitive volume this can only serialize two otherwise independent writes.
+        var normalizedSettingsPath = PathNormalizer.ResolveSymlinks(settingsFile.FullName)
+            .Normalize(NormalizationForm.FormC)
+            .ToUpperInvariant();
+        var lockFileName = Convert.ToHexString(XxHash3.Hash(Encoding.UTF8.GetBytes(normalizedSettingsPath))).ToLowerInvariant();
+
+        return Path.Combine(executionContext.CacheDirectory.FullName, "workspace-config-locks", $"{lockFileName}.lock");
     }
 
     private string? GetNuGetPackagesCachePath()
