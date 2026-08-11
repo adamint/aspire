@@ -337,7 +337,6 @@ suite('Aspire DCP run session lifecycle', () => {
         assert.deepStrictEqual(client.notifications, [{
             notification_type: 'sessionTerminated',
             session_id: runId,
-            exit_code: -1,
         }]);
         assert.deepStrictEqual(harness.dcpServer.takeDebugSessionAggregateStats('aspire-extension-run-test'), {
             totalChildSessions: 1,
@@ -360,7 +359,6 @@ suite('Aspire DCP run session lifecycle', () => {
         assert.deepStrictEqual(terminal, {
             notification_type: 'sessionTerminated',
             session_id: terminal.session_id,
-            exit_code: -1,
         });
 
         harness.dcpServer.sendNotification({

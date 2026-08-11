@@ -91,7 +91,7 @@ export class RunSessionRegistry {
         }
 
         if (notification.notification_type === 'sessionTerminated') {
-            this.terminate(record.runId, (notification as SessionTerminatedNotification).exit_code ?? -1);
+            this.terminate(record.runId, (notification as SessionTerminatedNotification).exit_code);
             return;
         }
 
@@ -132,7 +132,7 @@ export class RunSessionRegistry {
         return true;
     }
 
-    terminate(runId: string, exitCode: number): void {
+    terminate(runId: string, exitCode: number | undefined): void {
         const record = this._records.get(runId);
         if (this._disposed || !record) {
             return;
@@ -141,7 +141,8 @@ export class RunSessionRegistry {
         const started = record.lifecycle !== 'starting';
         const naturalCompletion = record.lifecycle === 'running';
         this._sendTerminal(record, exitCode);
-        this._recordCompletion(record, exitCode);
+        // DCP omits exit_code when no process started, while telemetry uses -1 for cancellation.
+        this._recordCompletion(record, exitCode ?? -1);
         record.lifecycle = 'completed';
 
         if (record.kind === 'adapter' && naturalCompletion) {

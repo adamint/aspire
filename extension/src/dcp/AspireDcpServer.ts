@@ -564,7 +564,7 @@ export default class AspireDcpServer {
 
                         runTelemetryById.delete(runId);
                         emitRunSessionFailureEnd('debugger_did_not_start');
-                        runSessions.terminate(runId, -1);
+                        runSessions.terminate(runId, undefined);
 
                         // Clean up any processes associated with this run (registered by resource-type extensions)
                         cleanupRun(runId);
@@ -626,7 +626,7 @@ export default class AspireDcpServer {
                     // The HTTP failure and terminal notification are both required. Route
                     // termination through the same lifecycle choke point as adapter exits so
                     // a partially-started adapter cannot publish a duplicate terminal event.
-                    runSessions.terminate(runId, -1);
+                    runSessions.terminate(runId, undefined);
 
                     const error: ErrorDetails = {
                         code: 'DebugSessionFailed',

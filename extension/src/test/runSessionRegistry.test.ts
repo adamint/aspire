@@ -55,6 +55,31 @@ suite('RunSessionRegistry', () => {
         assert.deepStrictEqual(completions, [{ runId: 'run-1', exitCode: 17 }]);
     });
 
+    test('terminal notification without an exit code omits it on the wire and records canceled telemetry', () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true, toFake: ['setTimeout', 'clearTimeout'] });
+        const { completions, deliveries, registry } = createRegistry(1_000);
+        registerAdapterRun(registry, 'run-1');
+
+        registry.notify({
+            notification_type: 'sessionTerminated',
+            session_id: 'run-1',
+            dcp_id: 'aspire-extension-run-owner-instance',
+        } as SessionTerminatedNotification);
+
+        assert.deepStrictEqual(deliveries, [{
+            ownerDcpId: 'aspire-extension-run-owner-instance',
+            notification: {
+                notification_type: 'sessionTerminated',
+                session_id: 'run-1',
+                dcp_id: 'aspire-extension-run-owner-instance',
+            },
+        }]);
+        assert.deepStrictEqual(completions, [{ runId: 'run-1', exitCode: -1 }]);
+
+        registry.dispose();
+        assert.strictEqual(clock.countTimers(), 0);
+    });
+
     test('retention expiry closes telemetry as canceled and evicts the run', async () => {
         const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true, toFake: ['setTimeout', 'clearTimeout'] });
         const { completions, registry } = createRegistry(1_000);
