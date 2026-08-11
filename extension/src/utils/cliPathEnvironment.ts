@@ -26,6 +26,11 @@ export const ASPIRE_CLI_PATH_ENV_VAR = 'AspireCliPath';
 export const ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR = 'ASPIRE_VSCODE_EXTENSION_VERSION';
 export const ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR = 'ASPIRE_VSCODE_EXTENSION_CHANNEL';
 
+export type AspireExtensionEnvironment = Readonly<{
+    [ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR]: string;
+    [ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR]: 'stable' | 'prerelease';
+}>;
+
 /**
  * Configuration key under the `aspire` namespace whose value the user-facing
  * "Aspire Cli Executable Path" setting writes into.
@@ -220,27 +225,75 @@ export function syncAspireCliPathEnvironment(
 }
 
 /**
- * Contributes the running extension's version and Marketplace channel to terminals created by
- * VS Code. `aspire doctor` uses these signals because the extension host knows which extension
- * instance is active, while several desktop and remote extension roots can coexist on disk.
+ * Derives the running extension's version and release channel once so every child-process
+ * boundary forwards the same identity. `aspire doctor` relies on the active extension host because
+ * several desktop and remote extension roots can coexist on disk.
  */
-export function syncAspireExtensionEnvironment(
-    collection: CliPathEnvironmentCollection,
+export function getAspireExtensionEnvironment(
     packageJson: ExtensionPackageJson | undefined,
-): void {
+): AspireExtensionEnvironment | undefined {
     const trimmedVersion = typeof packageJson?.version === 'string'
         ? packageJson.version.trim()
         : undefined;
     if (trimmedVersion === undefined || trimmedVersion.length === 0) {
+        return undefined;
+    }
+
+    // Marketplace installs synthesize packageJSON.preRelease, but VS Code reports false for a
+    // pre-release VSIX installed from disk. Webpack replaces this package-time value in the
+    // extension bundle so the artifact retains its channel regardless of how it was installed.
+    const isPreRelease = packageJson?.preRelease === true
+        || process.env.ASPIRE_VSCODE_EXTENSION_PACKAGE_PRERELEASE === 'true';
+
+    return {
+        [ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR]: trimmedVersion,
+        [ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR]: isPreRelease ? 'prerelease' : 'stable',
+    };
+}
+
+export function overlayAspireExtensionEnvironment(
+    target: Record<string, string | undefined>,
+    extensionEnvironment: AspireExtensionEnvironment | undefined,
+    platform: NodeJS.Platform = process.platform,
+): void {
+    if (extensionEnvironment === undefined) {
+        return;
+    }
+
+    for (const [name, value] of Object.entries(extensionEnvironment)) {
+        if (platform === 'win32') {
+            // Windows environment variables are case-insensitive, and Node keeps only one
+            // casing when spawning. Remove stale aliases before writing the authoritative pair.
+            for (const existingName of Object.keys(target)) {
+                if (existingName !== name && existingName.toLowerCase() === name.toLowerCase()) {
+                    delete target[existingName];
+                }
+            }
+        }
+
+        target[name] = value;
+    }
+}
+
+/**
+ * Contributes the package-derived identity to terminals and tasks created by VS Code.
+ */
+export function syncAspireExtensionEnvironment(
+    collection: CliPathEnvironmentCollection,
+    extensionEnvironment: AspireExtensionEnvironment | undefined,
+): void {
+    if (extensionEnvironment === undefined) {
         collection.delete(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR);
         collection.delete(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR);
         return;
     }
 
-    collection.replace(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR, trimmedVersion);
+    collection.replace(
+        ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR,
+        extensionEnvironment[ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR]);
     collection.replace(
         ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR,
-        packageJson?.preRelease === true ? 'prerelease' : 'stable');
+        extensionEnvironment[ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR]);
 }
 
 /**

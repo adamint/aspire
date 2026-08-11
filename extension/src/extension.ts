@@ -48,7 +48,7 @@ import { cloneAppHostState, createStateSnapshot, getDashboardUrl } from './exten
 import { createE2eStateFileBridge, isE2eBridgeEnabled } from './testing/e2eStateFileBridge';
 import type { AspireAppHostState, AspireExtensionApi, AspireExtensionStateSnapshot, WaitForStateOptions } from './types/extensionApi';
 import { AppHostsViewTelemetry } from './views/AppHostsViewTelemetry';
-import { initializeCliPathEnvironmentSync, syncAspireExtensionEnvironment } from './utils/cliPathEnvironment';
+import { getAspireExtensionEnvironment, initializeCliPathEnvironmentSync, syncAspireExtensionEnvironment } from './utils/cliPathEnvironment';
 
 let aspireExtensionContext = new AspireExtensionContext();
 
@@ -63,7 +63,8 @@ export async function activate(context: vscode.ExtensionContext) {
     workspace_folders: vscode.workspace.workspaceFolders?.length ?? 0,
   });
 
-  const terminalProvider = new AspireTerminalProvider(context.subscriptions);
+  const extensionEnvironment = getAspireExtensionEnvironment(context.extension.packageJSON);
+  const terminalProvider = new AspireTerminalProvider(context.subscriptions, undefined, extensionEnvironment);
   const testRunSessionManager = new TestRunSessionManager();
 
   // Keep VS Code's contributed terminal/task environment in sync with the
@@ -79,7 +80,7 @@ export async function activate(context: vscode.ExtensionContext) {
   });
   syncAspireExtensionEnvironment(
     context.environmentVariableCollection,
-    context.extension.packageJSON);
+    extensionEnvironment);
 
   const rpcServer = await AspireRpcServer.create(
     (rpcServerConnectionInfo: RpcServerConnectionInfo, connection: MessageConnection, token: string, debugSessionId: string | null) => {
@@ -370,7 +371,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Register Aspire MCP server definition provider so the Aspire MCP server
   // appears automatically in VS Code's MCP tools list for Aspire workspaces.
-  const mcpProvider = new AspireMcpServerDefinitionProvider();
+  const mcpProvider = new AspireMcpServerDefinitionProvider(extensionEnvironment);
   if (typeof vscode.lm?.registerMcpServerDefinitionProvider === 'function') {
     context.subscriptions.push(vscode.lm.registerMcpServerDefinitionProvider('aspire-mcp-server', mcpProvider));
     context.subscriptions.push(mcpProvider);

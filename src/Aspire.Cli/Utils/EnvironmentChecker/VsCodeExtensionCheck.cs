@@ -101,7 +101,7 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         // misleading connectivity error.
         if (detection.ReleaseChannel == VsCodeExtensionReleaseChannel.Unknown)
         {
-            return [CreateLatestVersionNotFoundResult(metadata)];
+            return [CreateUnknownChannelResult(metadata)];
         }
 
         try
@@ -387,6 +387,17 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             Name = CheckName,
             Status = EnvironmentCheckStatus.Warning,
             Message = DoctorCommandStrings.VsCodeExtensionVersionUnknownMessage,
+            Metadata = metadata
+        };
+
+    private static EnvironmentCheckResult CreateUnknownChannelResult(JsonObject metadata)
+        => new()
+        {
+            Category = EnvironmentCheckCategories.DevelopmentTools,
+            Name = CheckName,
+            Status = EnvironmentCheckStatus.Warning,
+            Message = DoctorCommandStrings.VsCodeExtensionInstalledMessage,
+            Details = DoctorCommandStrings.VsCodeExtensionLatestVersionCheckSkippedUnknownChannelDetails,
             Metadata = metadata
         };
 

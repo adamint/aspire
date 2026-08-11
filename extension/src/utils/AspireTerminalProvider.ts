@@ -8,6 +8,7 @@ import { getRunSessionInfo, getSupportedCapabilities } from '../capabilities';
 import { EnvironmentVariables, getEnvironmentWithoutE2EBridgeVariables } from './environment';
 import { resolveCliPath } from './cliPath';
 import { ASPIRE_CLI_PATH_ENV_VAR, getForwardableAspireCliPath } from './cliPathEnvironment';
+import type { AspireExtensionEnvironment } from './cliPathEnvironment';
 import path from 'path';
 import { assertNoTerminalControlCharacters } from './cmdShim';
 
@@ -124,6 +125,7 @@ export class AspireTerminalProvider implements vscode.Disposable {
     constructor(
         subscriptions: vscode.Disposable[],
         private readonly _isPowerShell7Available = isPowerShell7Available,
+        private readonly _aspireExtensionEnvironment?: AspireExtensionEnvironment,
     ) {
         subscriptions.push(vscode.window.onDidCloseTerminal(closedTerminal => {
             this._invalidatedSharedTerminals.delete(closedTerminal);
@@ -134,6 +136,10 @@ export class AspireTerminalProvider implements vscode.Disposable {
                 }
             }
         }));
+    }
+
+    get aspireExtensionEnvironment(): AspireExtensionEnvironment | undefined {
+        return this._aspireExtensionEnvironment;
     }
 
     get rpcServerConnectionInfo() {

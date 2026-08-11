@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
+const { readVSIXPackage } = require('@vscode/vsce/out/zip');
 const {
   ensureDownloadCache,
   projectDownloadCache,
@@ -628,6 +629,8 @@ async function main() {
       throw new Error(`VSIX not found at ${vsixPath}`);
     }
     validateVsix(vsixPath);
+    const expectedExtensionChannel = await getVsixChannel(vsixPath);
+    console.log(`VSIX channel from extension.vsixmanifest: ${expectedExtensionChannel}`);
     const azureFunctionsVsixPaths = resolveAzureFunctionsVsixPaths();
     if (enableAzureFunctionsE2E) {
       validateAzureFunctionsCoreTools();
@@ -652,6 +655,7 @@ async function main() {
       ASPIRE_EXTENSION_E2E_APPHOST_SDK_VERSION: appHostSdkVersion,
       ASPIRE_EXTENSION_E2E_EXTESTER_MODULE: extesterModule,
       ASPIRE_EXTENSION_E2E_ENABLE_AZURE_FUNCTIONS: enableAzureFunctionsE2E ? 'true' : 'false',
+      ASPIRE_EXTENSION_E2E_EXPECTED_CHANNEL: expectedExtensionChannel,
       VSCODE_NLS_CONFIG: JSON.stringify({ locale: 'en', availableLanguages: {} }),
       LANG: 'C.UTF-8',
       LC_ALL: 'C.UTF-8',
@@ -870,7 +874,11 @@ function validateAzureFunctionsCoreTools() {
 }
 
 function packageVsix() {
-  run('corepack', ['yarn@1.22.22', 'run', 'vsce', 'package', '--pre-release', '-o', defaultVsixPath], {}, { timeout: 300000 });
+  run(
+    'corepack',
+    ['yarn@1.22.22', 'run', 'vsce', 'package', '--pre-release', '-o', defaultVsixPath],
+    { ASPIRE_VSCODE_EXTENSION_PACKAGE_PRERELEASE: 'true' },
+    { timeout: 300000 });
   return defaultVsixPath;
 }
 
@@ -892,6 +900,37 @@ function validateVsix(resolvedVsixPath) {
   if (header.toString('utf8') !== 'PK\u0003\u0004') {
     throw new Error(`VSIX at ${resolvedVsixPath} does not look like a ZIP package.`);
   }
+}
+
+async function getVsixChannel(resolvedVsixPath) {
+  // Use the parser from the pinned vsce dependency so package expectations come from the artifact
+  // installed by this run, without extracting it through a platform-specific command.
+  const { xmlManifest } = await readVSIXPackage(resolvedVsixPath);
+  const metadata = xmlManifest?.PackageManifest?.Metadata;
+  if (!Array.isArray(metadata)) {
+    throw new Error(`VSIX at ${resolvedVsixPath} does not contain PackageManifest.Metadata.`);
+  }
+
+  const properties = metadata
+    .flatMap(entry => entry.Properties ?? [])
+    .flatMap(propertyGroup => propertyGroup.Property ?? []);
+  // vsce records a pre-release package as:
+  //   <Property Id="Microsoft.VisualStudio.Code.PreRelease" Value="true" />
+  // Stable packages omit the property, though accepting an explicit false keeps the reader
+  // compatible with equivalent VSIX producers.
+  const preReleaseProperty = properties
+    .find(property => property?.$?.Id === 'Microsoft.VisualStudio.Code.PreRelease');
+  const preReleaseValue = preReleaseProperty?.$?.Value;
+
+  if (preReleaseValue === undefined || preReleaseValue === 'false') {
+    return 'stable';
+  }
+
+  if (preReleaseValue === 'true') {
+    return 'prerelease';
+  }
+
+  throw new Error(`VSIX at ${resolvedVsixPath} has unsupported Microsoft.VisualStudio.Code.PreRelease value '${preReleaseValue}'.`);
 }
 
 function ensureExtester() {

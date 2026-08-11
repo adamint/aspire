@@ -6,6 +6,7 @@ import { CmdShimSpawnCommand, getCmdShimSpawnCommand, shouldWrapWithCmd } from "
 import * as readline from 'readline';
 import * as vscode from 'vscode';
 import { EnvironmentVariables } from "../../utils/environment";
+import { overlayAspireExtensionEnvironment } from "../../utils/cliPathEnvironment";
 
 const processShutdownGracePeriodMs = 5_000;
 const managedPosixProcessGroups = new WeakSet<ChildProcessWithoutNullStreams>();
@@ -64,6 +65,9 @@ export function spawnCliProcess(terminalProvider: AspireTerminalProvider, comman
 
     Object.assign(env, terminalProvider.createEnvironment(options?.debugSessionId, options?.noDebug, options?.noExtensionVariables));
     mergeCliSpawnEnvironment(env, options?.env);
+    // These values describe the extension instance that owns this child process, so stale
+    // inherited values and caller-provided CLI options must not override the active identity.
+    overlayAspireExtensionEnvironment(env, terminalProvider.aspireExtensionEnvironment);
 
     extensionLogOutputChannel.info(getCliSpawnDiagnostics(spawnCommand.command, spawnCommand.diagnosticArgs ?? spawnCommand.args, workingDirectory, options?.noDebug, options?.debugSessionId, env));
 

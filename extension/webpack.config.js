@@ -3,6 +3,7 @@
 'use strict';
 
 const path = require('path');
+const webpack = require('webpack');
 
 //@ts-check
 /** @typedef {import('webpack').Configuration} WebpackConfig **/
@@ -44,6 +45,14 @@ const extensionConfig = {
       },
     ]
   },
+  plugins: [
+    // VS Code does not surface extension.vsixmanifest pre-release metadata through packageJSON for
+    // offline VSIX installs, so preserve the package channel in the generated extension bundle.
+    new webpack.DefinePlugin({
+      'process.env.ASPIRE_VSCODE_EXTENSION_PACKAGE_PRERELEASE': JSON.stringify(
+        process.env.ASPIRE_VSCODE_EXTENSION_PACKAGE_PRERELEASE === 'true' ? 'true' : 'false'),
+    }),
+  ],
   devtool: 'source-map',
   infrastructureLogging: {
     level: "log", // enables logging required for problem matchers

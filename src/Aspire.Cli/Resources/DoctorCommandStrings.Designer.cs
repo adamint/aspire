@@ -195,6 +195,15 @@ namespace Aspire.Cli.Resources {
         }
 
         /// <summary>
+        ///   Looks up a localized string similar to The installed extension channel could not be determined, so the update check was skipped..
+        /// </summary>
+        public static string VsCodeExtensionLatestVersionCheckSkippedUnknownChannelDetails {
+            get {
+                return ResourceManager.GetString("VsCodeExtensionLatestVersionCheckSkippedUnknownChannelDetails", resourceCulture);
+            }
+        }
+
+        /// <summary>
         ///   Looks up a localized string similar to The VS Code Marketplace did not report an Aspire extension version for the detected channel..
         /// </summary>
         public static string VsCodeExtensionLatestVersionNotFoundDetails {

@@ -8,6 +8,7 @@ import {
     CliPathEnvironmentCollection,
     CliPathEnvironmentDependencies,
     createAspireCliPathProcessEnvironment,
+    getAspireExtensionEnvironment,
     getForwardableAspireCliPath,
     initializeCliPathEnvironmentSync,
     registerCliPathEnvironmentSync,
@@ -34,6 +35,22 @@ function createFakeCollection(): CliPathEnvironmentCollection & { entries: Map<s
     };
 }
 
+function withPackagePreReleaseMarker(value: string, action: () => void): void {
+    const originalValue = process.env.ASPIRE_VSCODE_EXTENSION_PACKAGE_PRERELEASE;
+    process.env.ASPIRE_VSCODE_EXTENSION_PACKAGE_PRERELEASE = value;
+    try {
+        action();
+    }
+    finally {
+        if (originalValue === undefined) {
+            delete process.env.ASPIRE_VSCODE_EXTENSION_PACKAGE_PRERELEASE;
+        }
+        else {
+            process.env.ASPIRE_VSCODE_EXTENSION_PACKAGE_PRERELEASE = originalValue;
+        }
+    }
+}
+
 function makeDeps(overrides: Partial<CliPathEnvironmentDependencies> = {}): CliPathEnvironmentDependencies {
     return {
         getConfiguredPath: () => '',
@@ -52,16 +69,59 @@ function normalizeCandidate(candidate: string): string {
 }
 
 suite('cliPathEnvironment.syncAspireExtensionEnvironment tests', () => {
-    test('contributes the production Marketplace pre-release metadata', () => {
-        const collection = createFakeCollection();
+    test('contributes stable Marketplace metadata when the pre-release flag is absent', () => {
+        withPackagePreReleaseMarker('false', () => {
+            const collection = createFakeCollection();
 
-        syncAspireExtensionEnvironment(collection, {
-            version: '1.17.0',
-            preRelease: true,
+            syncAspireExtensionEnvironment(collection, getAspireExtensionEnvironment({
+                version: '1.16.0',
+            }));
+
+            assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), '1.16.0');
+            assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR), 'stable');
         });
+    });
 
-        assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), '1.17.0');
-        assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR), 'prerelease');
+    test('contributes the production Marketplace pre-release metadata', () => {
+        withPackagePreReleaseMarker('false', () => {
+            const collection = createFakeCollection();
+
+            syncAspireExtensionEnvironment(collection, getAspireExtensionEnvironment({
+                version: '1.17.0',
+                preRelease: true,
+            }));
+
+            assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), '1.17.0');
+            assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR), 'prerelease');
+        });
+    });
+
+    test('contributes the package-time pre-release marker for an offline VSIX install', () => {
+        withPackagePreReleaseMarker('true', () => {
+            const collection = createFakeCollection();
+
+            syncAspireExtensionEnvironment(collection, getAspireExtensionEnvironment({
+                version: '1.17.0',
+                preRelease: false,
+            }));
+
+            assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), '1.17.0');
+            assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR), 'prerelease');
+        });
+    });
+
+    test('contributes the stable channel when no pre-release signal is present', () => {
+        withPackagePreReleaseMarker('false', () => {
+            const collection = createFakeCollection();
+
+            syncAspireExtensionEnvironment(collection, getAspireExtensionEnvironment({
+                version: '1.17.0',
+                preRelease: false,
+            }));
+
+            assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), '1.17.0');
+            assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR), 'stable');
+        });
     });
 
     test('clears stale extension signals when the manifest version is unavailable', () => {

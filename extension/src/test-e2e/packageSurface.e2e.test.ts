@@ -8,6 +8,8 @@ import { openAspireView, waitForEditorTitle } from './helpers/vscode';
 
 interface PackageJson {
     name?: string;
+    version?: string;
+    preRelease?: boolean;
     icon?: string;
     activationEvents?: string[];
     contributes?: {
@@ -41,6 +43,13 @@ interface DiagnosticResult {
     code?: string | number;
 }
 
+interface AspireExtensionEnvironment {
+    version?: string;
+    channel?: string;
+}
+
+type AspireExtensionChannel = 'stable' | 'prerelease';
+
 suite('Aspire package contribution surface E2E', function () {
     this.timeout(240000);
 
@@ -57,8 +66,14 @@ suite('Aspire package contribution surface E2E', function () {
 
         const sourcePackage = readSourcePackageJson();
         const installedPackage = (await executeE2eControlCommand({ name: 'getExtensionPackageJson' })).result as PackageJson;
+        const extensionEnvironment = (await executeE2eControlCommand({ name: 'getAspireExtensionEnvironment' })).result as AspireExtensionEnvironment;
         const registeredCommands = (await executeE2eControlCommand({ name: 'getRegisteredAspireCommands' })).result as string[];
 
+        assert.strictEqual(installedPackage.preRelease, false, 'Offline VSIX installation should exercise the package-time channel marker rather than Marketplace metadata.');
+        assert.deepStrictEqual(extensionEnvironment, {
+            version: installedPackage.version,
+            channel: getExpectedExtensionChannel(),
+        });
         const sourceCommandIds = getPackageCommandIds(sourcePackage);
         const installedCommandIds = getPackageCommandIds(installedPackage);
         assert.deepStrictEqual(sourcePackage.activationEvents, expectedActivationEvents);
@@ -344,6 +359,14 @@ function removeProbeDirectory(probeDirectory: string): void {
 
 function readSourcePackageJson(): PackageJson {
     return JSON.parse(fs.readFileSync(path.join(getExtensionRoot(), 'package.json'), 'utf8')) as PackageJson;
+}
+
+function getExpectedExtensionChannel(): AspireExtensionChannel {
+    const channel = process.env.ASPIRE_EXTENSION_E2E_EXPECTED_CHANNEL;
+    assert.ok(
+        channel === 'stable' || channel === 'prerelease',
+        `ASPIRE_EXTENSION_E2E_EXPECTED_CHANNEL must be 'stable' or 'prerelease'. Actual value: ${channel ?? '(unset)'}.`);
+    return channel;
 }
 
 function getPackageCommandIds(packageJson: PackageJson): string[] {

@@ -11,9 +11,50 @@ import { getCliSpawnCommand, getCliSpawnDiagnostics, mergeCliSpawnEnvironment, s
 import { terminalCommandArgumentControlCharacters } from '../loc/strings';
 import type { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
 import { getCmdShimSpawnCommandWithoutVerbatimArguments } from '../utils/cmdShim';
+import {
+    ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR,
+    ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR,
+    getAspireExtensionEnvironment,
+} from '../utils/cliPathEnvironment';
 import { EnvironmentVariables } from '../utils/environment';
 
 suite('spawnCliProcess tests', () => {
+    test('uses the active stable extension identity over explicit CLI environment overrides', () => {
+        const platformStub = sinon.stub(process, 'platform').value('win32');
+        const childProcess = createTestChildProcess(4001);
+        const spawnStub = sinon.stub(nodeChildProcess, 'spawn').returns(childProcess);
+        const extensionEnvironment = getAspireExtensionEnvironment({
+            version: '1.16.0',
+        });
+        assert.ok(extensionEnvironment);
+        const terminalProvider = {
+            createEnvironment: () => ({
+                aspire_vscode_extension_version: 'parent-version',
+                aspire_vscode_extension_channel: 'prerelease',
+            }),
+            aspireExtensionEnvironment: extensionEnvironment,
+        } as unknown as AspireTerminalProvider;
+
+        try {
+            spawnCliProcess(terminalProvider, '/usr/local/bin/aspire', ['doctor'], {
+                env: [
+                    { name: 'aspire_vscode_extension_version', value: 'caller-version' },
+                    { name: 'aspire_vscode_extension_channel', value: 'prerelease' },
+                ],
+            });
+
+            const env = spawnStub.firstCall.args[2]?.env;
+            assert.strictEqual(env?.[ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR], '1.16.0');
+            assert.strictEqual(env?.[ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR], 'stable');
+            assert.strictEqual(env?.aspire_vscode_extension_version, undefined);
+            assert.strictEqual(env?.aspire_vscode_extension_channel, undefined);
+        }
+        finally {
+            spawnStub.restore();
+            platformStub.restore();
+        }
+    });
+
     test('creates POSIX process groups only for lifecycle-managed CLI processes', () => {
         const platformStub = sinon.stub(process, 'platform').value('linux');
         const children = [createTestChildProcess(4101), createTestChildProcess(4102)];

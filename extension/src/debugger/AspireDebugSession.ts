@@ -97,6 +97,10 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   public readonly debugSessionId: string;
   public configuration: AspireExtendedDebugConfiguration;
 
+  get aspireExtensionEnvironment() {
+    return this._terminalProvider.aspireExtensionEnvironment;
+  }
+
   get appHostPath(): string | undefined {
     return typeof this.configuration.program === 'string' ? this.configuration.program : undefined;
   }

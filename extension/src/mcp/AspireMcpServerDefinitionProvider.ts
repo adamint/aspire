@@ -7,6 +7,7 @@ import {
 import { extensionLogOutputChannel } from '../utils/logging';
 import { getCmdShimSpawnCommandWithoutVerbatimArguments, shouldWrapWithCmd } from '../utils/cmdShim';
 import { getRegisterMcpServerInWorkspace, registerMcpServerInWorkspaceSetting } from '../utils/settings';
+import type { AspireExtensionEnvironment } from '../utils/cliPathEnvironment';
 
 const mcpServerLabel = 'Aspire';
 const mcpServerArgs = ['agent', 'mcp'];
@@ -20,13 +21,48 @@ const aspireCliExecutablePathSetting = 'aspire.aspireCliExecutablePath';
  * literal. See:
  * https://github.com/microsoft/vscode/blob/1.102.3/src/vs/workbench/api/node/extHostMcpNode.ts#L141-L167
  */
-export function createAspireMcpServerDefinition(cliPath: string): vscode.McpStdioServerDefinition {
+export function createAspireMcpServerDefinition(
+    cliPath: string,
+    extensionEnvironment: AspireExtensionEnvironment | undefined,
+): vscode.McpStdioServerDefinition {
+    const env = createAspireMcpServerEnvironment(extensionEnvironment);
+
     if (!shouldWrapWithCmd(cliPath)) {
-        return new vscode.McpStdioServerDefinition(mcpServerLabel, cliPath, [...mcpServerArgs]);
+        return new vscode.McpStdioServerDefinition(mcpServerLabel, cliPath, [...mcpServerArgs], env);
     }
 
     const { command, args } = getCmdShimSpawnCommandWithoutVerbatimArguments(cliPath, mcpServerArgs);
-    return new vscode.McpStdioServerDefinition(mcpServerLabel, command, args);
+    return new vscode.McpStdioServerDefinition(mcpServerLabel, command, args, env);
+}
+
+function createAspireMcpServerEnvironment(
+    extensionEnvironment: AspireExtensionEnvironment | undefined,
+    inheritedEnvironment: NodeJS.ProcessEnv = process.env,
+    platform: NodeJS.Platform = process.platform,
+): Record<string, string | number | null> {
+    if (extensionEnvironment === undefined) {
+        return {};
+    }
+
+    // VS Code clones process.env before applying this map and appends any explicit PATH value.
+    // Passing only overrides avoids caching unrelated credentials and duplicating PATH.
+    // See https://github.com/microsoft/vscode/blob/1.132.0/src/vs/workbench/api/node/extHostMcpNode.ts#L55-L76.
+    const environment: Record<string, string | number | null> = { ...extensionEnvironment };
+    if (platform !== 'win32') {
+        return environment;
+    }
+
+    for (const identityName of Object.keys(extensionEnvironment)) {
+        for (const inheritedName of Object.keys(inheritedEnvironment)) {
+            if (inheritedName !== identityName && inheritedName.toLowerCase() === identityName.toLowerCase()) {
+                // A null override removes the inherited case-insensitive alias before VS Code
+                // spawns the server, while the canonical key above carries the active identity.
+                environment[inheritedName] = null;
+            }
+        }
+    }
+
+    return environment;
 }
 
 /**
@@ -46,7 +82,7 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
     private _workspaceFolderChangeDisposable: vscode.Disposable | undefined;
     private _cliPathForwardingChangeDisposable: vscode.Disposable | undefined;
 
-    constructor() {
+    constructor(private readonly _extensionEnvironment: AspireExtensionEnvironment | undefined) {
         // Re-evaluate when the setting changes
         this._configChangeDisposable = vscode.workspace.onDidChangeConfiguration(e => {
             if (e.affectsConfiguration(registerMcpServerInWorkspaceSetting)
@@ -100,7 +136,7 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
             return [];
         }
 
-        return [createAspireMcpServerDefinition(this._cliPath)];
+        return [createAspireMcpServerDefinition(this._cliPath, this._extensionEnvironment)];
     }
 
     dispose(): void {

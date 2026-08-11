@@ -644,6 +644,8 @@ jobs:
         run: corepack yarn version --new-version "${{ inputs.extensionVersionOverride }}" --no-git-tag-version
       - name: Package VSIX
         run: corepack yarn run vsce package --pre-release -o out/aspire-extension.vsix
+        env:
+          ASPIRE_VSCODE_EXTENSION_PACKAGE_PRERELEASE: 'true'
       - name: Upload VSIX
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:

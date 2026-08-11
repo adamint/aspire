@@ -197,6 +197,7 @@ export type AspireExtensionE2EControlCommand =
     | { name: 'closeAllEditors' }
     | { name: 'getRegisteredAspireCommands' }
     | { name: 'getExtensionPackageJson' }
+    | { name: 'getAspireExtensionEnvironment' }
     | { name: 'getExtensionFileStatus'; relativePaths: readonly string[] }
     | { name: 'getDiagnostics'; filePath: string }
     | { name: 'snapshotClipboard' }

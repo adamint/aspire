@@ -208,7 +208,9 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
 
         Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
-        Assert.Equal(DoctorCommandStrings.VsCodeExtensionLatestVersionNotFoundDetails, result.Details);
+        Assert.Equal(
+            "The VS Code Marketplace did not report an Aspire extension version for the detected channel.",
+            result.Details);
         Assert.False(result.Metadata!["latestVersionKnown"]!.GetValue<bool>());
         Assert.Null(result.Metadata["latestVersionError"]);
     }
@@ -379,7 +381,9 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         Assert.Equal("unknown", result.Metadata["extensionChannel"]!.GetValue<string>());
         Assert.False(result.Metadata["latestVersionKnown"]!.GetValue<bool>());
         Assert.Null(result.Metadata["latestVersionError"]);
-        Assert.Equal(DoctorCommandStrings.VsCodeExtensionLatestVersionNotFoundDetails, result.Details);
+        Assert.Equal(
+            "The installed extension channel could not be determined, so the update check was skipped.",
+            result.Details);
     }
 
     [Fact]
