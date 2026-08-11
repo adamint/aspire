@@ -39,6 +39,7 @@ export function getDebuggerInstallHintForResource(resource: DebuggableResourceSn
 }
 
 export class DebuggerInstallHintService {
+    private static readonly _extensionRegistrationTimeoutMs = 5_000;
     private readonly _notificationsShown = new Set<string>();
 
     constructor(private readonly _globalState: vscode.Memento) {
@@ -65,14 +66,54 @@ export class DebuggerInstallHintService {
             await vscode.commands.executeCommand('workbench.extensions.installExtension', hint.extensionId);
 
             // Installing an already-installed but disabled extension is a no-op, and disabled
-            // extensions remain absent from this registry. Re-check before reporting success.
-            const message = vscode.extensions.getExtension(hint.extensionId)
+            // extensions remain absent from this registry. A fresh install can also appear after
+            // the command resolves, so wait for the registry change before deciding it is disabled.
+            // See https://github.com/microsoft/vscode/issues/71943.
+            const registered = await this._waitForExtensionRegistration(hint.extensionId);
+            const message = registered
                 ? debuggerInstalledRestartAppHost(hint.debuggerName)
                 : debuggerExtensionDisabled(hint.debuggerName);
             await vscode.window.showInformationMessage(message);
         } catch (error) {
             await vscode.window.showErrorMessage(errorMessage(error));
         }
+    }
+
+    private async _waitForExtensionRegistration(extensionId: string): Promise<boolean> {
+        if (vscode.extensions.getExtension(extensionId)) {
+            return true;
+        }
+
+        return new Promise(resolve => {
+            let settled = false;
+            let timeout: NodeJS.Timeout | undefined;
+            let subscription: vscode.Disposable | undefined;
+            const finish = (registered: boolean) => {
+                if (settled) {
+                    return;
+                }
+
+                settled = true;
+                if (timeout) {
+                    clearTimeout(timeout);
+                }
+                subscription?.dispose();
+                resolve(registered);
+            };
+            subscription = vscode.extensions.onDidChange(() => {
+                if (vscode.extensions.getExtension(extensionId)) {
+                    finish(true);
+                }
+            });
+            timeout = setTimeout(
+                () => finish(false),
+                DebuggerInstallHintService._extensionRegistrationTimeoutMs);
+
+            // Close the gap between the initial check and registering the change listener.
+            if (vscode.extensions.getExtension(extensionId)) {
+                finish(true);
+            }
+        });
     }
 
     private async _showNotification(hint: DebuggerInstallHint): Promise<void> {
