@@ -110,8 +110,8 @@ The extension contributes two Language Model tools so chat agents can use VS Cod
 
 | Tool | Reference in chat | What it does |
 |------|-------------------|--------------|
-| `aspire_apphost_start` | `#aspireStartAppHost` | Starts an apphost Aspire already discovered in your workspace, in `run` (no debugger) or `debug` (debugger attached) mode |
-| `aspire_apphost_stop` | `#aspireStopAppHost` | Stops an apphost that this editor started |
+| `aspire_apphost_start` | `#aspireStartAppHost` | Starts an AppHost Aspire already discovered in your workspace, in `run` (no debugger) or `debug` (debugger attached) mode |
+| `aspire_apphost_stop` | `#aspireStopAppHost` | Stops an AppHost that this editor started |
 
 Both tools accept only AppHosts returned by Aspire discovery, ask for confirmation, and require a [trusted workspace](https://code.visualstudio.com/docs/editing/workspaces/workspace-trust). The stop tool only stops a matching Aspire debug session in the current VS Code window; an AppHost started elsewhere is reported but not terminated.
 
