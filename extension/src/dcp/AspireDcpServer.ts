@@ -45,6 +45,8 @@ export default class AspireDcpServer {
     private readonly app: express.Express;
     private server: https.Server;
     private wss: WebSocketServer;
+    // The DCP instance suffix changes on reconnect, so transport state is keyed by
+    // the stable debug-session prefix returned by getDcpIdPrefix.
     private wsBySession: Map<string, WebSocket> = new Map();
     private pendingNotificationQueueByDcpId: Map<string, RunSessionNotification[]> = new Map();
     private readonly _dashboardTelemetry: DashboardTelemetryPassthrough;
@@ -145,16 +147,17 @@ export default class AspireDcpServer {
         const pendingNotificationQueueByDcpId = new Map<string, RunSessionNotification[]>();
         const dashboardTelemetry = new DashboardTelemetryPassthrough();
         const deliver = (ownerDcpId: string, notification: RunSessionNotification): void => {
+            const routingDcpId = getDcpIdPrefix(ownerDcpId) ?? ownerDcpId;
             const routedNotification = {
                 ...notification,
-                dcp_id: ownerDcpId,
+                dcp_id: routingDcpId,
             };
-            const ws = wsBySession.get(ownerDcpId);
+            const ws = wsBySession.get(routingDcpId);
             if (!ws || ws.readyState !== WebSocket.OPEN) {
-                extensionLogOutputChannel.trace(`No WebSocket found for DCP ID: ${ownerDcpId} or WebSocket is not open (state: ${ws?.readyState})`);
+                extensionLogOutputChannel.trace(`No WebSocket found for DCP ID: ${routingDcpId} or WebSocket is not open (state: ${ws?.readyState})`);
                 pendingNotificationQueueByDcpId.set(
-                    ownerDcpId,
-                    [...(pendingNotificationQueueByDcpId.get(ownerDcpId) || []), routedNotification]);
+                    routingDcpId,
+                    [...(pendingNotificationQueueByDcpId.get(routingDcpId) || []), routedNotification]);
                 return;
             }
 
@@ -196,9 +199,12 @@ export default class AspireDcpServer {
                 return;
             }
             run.teardownStarted = true;
+            // A session that finishes starting after DELETE is stopped by the failed
+            // markRunning path. Snapshot here so both paths cannot stop that session.
+            const debugSessions = [...run.debugSessions];
 
             setImmediate(() => {
-                for (const debugSession of run.debugSessions) {
+                for (const debugSession of debugSessions) {
                     try {
                         void Promise.resolve(debugSession.stopSession()).catch(error => {
                             logTeardownFailure(run.runId, error);
@@ -488,7 +494,9 @@ export default class AspireDcpServer {
                 runSessions.register({
                     debugSessions: processes,
                     kind: supportedResourceType === 'browser' ? 'confirmedStop' : 'adapter',
-                    ownerDcpId: dcpId,
+                    // The instance suffix changes when DCP reconnects, but the owning
+                    // Aspire debug-session prefix remains stable.
+                    ownerDcpId: debugSessionId,
                     runId,
                 });
                 runTelemetryById.set(runId, {
@@ -513,9 +521,9 @@ export default class AspireDcpServer {
                         : await aspireDebugSession.startAndGetDebugSession(preparedSession.debugConfiguration);
 
                     if (!resourceDebugSession) {
-                        runSessions.remove(runId);
                         runTelemetryById.delete(runId);
                         emitRunSessionFailureEnd('debugger_did_not_start');
+                        runSessions.terminate(runId, -1);
 
                         // Clean up any processes associated with this run (registered by resource-type extensions)
                         cleanupRun(runId);
@@ -610,7 +618,7 @@ export default class AspireDcpServer {
                 }
 
                 const dcpId = req.header('microsoft-developer-dcp-instance-id') as string;
-                if (dcpId !== run.ownerDcpId) {
+                if (getDcpIdPrefix(dcpId) !== run.ownerDcpId) {
                     res.status(403).json({
                         error: {
                             code: 'RunSessionOwnerMismatch',
@@ -644,7 +652,11 @@ export default class AspireDcpServer {
 
                 // Adapter teardown can block indefinitely. Terminate DCP's wire stream first,
                 // then observe every stop attempt out of band while retention bounds run state.
-                runSessions.requestStop(runId);
+                if (!runSessions.requestStop(runId)) {
+                    res.status(200).end();
+                    return;
+                }
+
                 res.status(200).end();
                 scheduleDebuggerTeardown(run);
             });
@@ -668,10 +680,10 @@ export default class AspireDcpServer {
                     //     processes) and `sessionTerminated` notifications
                     //     by guessing or predicting a `dcpId`.
                     //   - Hijack notification delivery for an active debug
-                    //     session — `wsBySession.set(dcpId, ws)` below
-                    //     replaces any existing entry, so a second connection
-                    //     for the same `dcpId` silently steals all future
-                    //     notifications from the legitimate DCP client.
+                    //     session — the latest socket for a stable DCP prefix
+                    //     replaces the prior entry, so a second connection
+                    //     for the same debug session could receive all future
+                    //     notifications intended for the legitimate DCP client.
                     const authHeader = request.headers['authorization'] as string | undefined;
                     const dcpId = request.headers['microsoft-developer-dcp-instance-id'] as string | undefined;
                     if (!dcpId) {
@@ -687,20 +699,23 @@ export default class AspireDcpServer {
                     }
                     wss.handleUpgrade(request, socket, head, (ws) => {
                         extensionLogOutputChannel.info(`WebSocket connection established for DCP ID: ${dcpId}`);
-                        wsBySession.set(dcpId, ws);
+                        const routingDcpId = getDcpIdPrefix(dcpId) ?? dcpId;
+                        wsBySession.set(routingDcpId, ws);
 
-                        const pendingNotifications = pendingNotificationQueueByDcpId.get(dcpId);
+                        const pendingNotifications = pendingNotificationQueueByDcpId.get(routingDcpId);
                         if (pendingNotifications) {
                             for (const notification of pendingNotifications) {
                                 AspireDcpServer.sendNotificationCore(notification, ws);
                             }
 
-                            pendingNotificationQueueByDcpId.delete(dcpId);
+                            pendingNotificationQueueByDcpId.delete(routingDcpId);
                         }
 
                         ws.onclose = () => {
                             extensionLogOutputChannel.info(`WebSocket connection closed for DCP ID: ${dcpId}`);
-                            wsBySession.delete(dcpId);
+                            if (wsBySession.get(routingDcpId) === ws) {
+                                wsBySession.delete(routingDcpId);
+                            }
                         };
                     });
                 } else {
@@ -759,16 +774,17 @@ export default class AspireDcpServer {
             return;
         }
 
+        const routingDcpId = getDcpIdPrefix(ownerDcpId) ?? ownerDcpId;
         const routedNotification = {
             ...notification,
-            dcp_id: ownerDcpId,
+            dcp_id: routingDcpId,
         };
-        const ws = this.wsBySession.get(ownerDcpId);
+        const ws = this.wsBySession.get(routingDcpId);
         if (!ws || ws.readyState !== WebSocket.OPEN) {
-            extensionLogOutputChannel.trace(`No WebSocket found for DCP ID: ${ownerDcpId} or WebSocket is not open (state: ${ws?.readyState})`);
+            extensionLogOutputChannel.trace(`No WebSocket found for DCP ID: ${routingDcpId} or WebSocket is not open (state: ${ws?.readyState})`);
             this.pendingNotificationQueueByDcpId.set(
-                ownerDcpId,
-                [...(this.pendingNotificationQueueByDcpId.get(ownerDcpId) || []), routedNotification]);
+                routingDcpId,
+                [...(this.pendingNotificationQueueByDcpId.get(routingDcpId) || []), routedNotification]);
             return;
         }
 

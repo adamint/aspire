@@ -41,6 +41,7 @@ interface Harness {
     dcpServer: AspireDcpServer;
     queuedSessions: AspireResourceDebugSession[];
     sockets: WebSocket[];
+    startDebugSession: sinon.SinonStub;
 }
 
 interface HttpResponse {
@@ -186,6 +187,26 @@ suite('Aspire DCP run session lifecycle', () => {
         assert.strictEqual(harness.dcpServer.takeDebugSessionAggregateStats('aspire-extension-run-test')?.anyNonZeroExit, true);
     });
 
+    test('DELETE after a natural adapter exit does not repeat debugger teardown', async () => {
+        const stopSession = sinon.stub().resolves();
+        const client = await openNotificationClient(harness);
+        const runId = await createRun(harness, 'node', stopSession);
+        harness.dcpServer.sendNotification({
+            notification_type: 'sessionTerminated',
+            session_id: runId,
+            dcp_id: harness.dcpId,
+            exit_code: 0,
+        } as SessionTerminatedNotification);
+        const terminal = await client.waitForNotification();
+
+        const deleteResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+        await new Promise(resolve => setImmediate(resolve));
+
+        assert.strictEqual(deleteResponse.statusCode, 200);
+        assert.deepStrictEqual(client.notifications, [terminal]);
+        assert.strictEqual(stopSession.called, false);
+    });
+
     test('launch failure uses the terminal deduper', async () => {
         sinon.stub(debuggerExtensions, 'prepareDebugSession').throws(new Error('launch failed'));
         const client = await openNotificationClient(harness);
@@ -207,6 +228,37 @@ suite('Aspire DCP run session lifecycle', () => {
             session_id: runId,
             exit_code: -1,
         }]);
+    });
+
+    test('debugger did not start terminates exactly once', async () => {
+        harness.startDebugSession.resetBehavior();
+        harness.startDebugSession.resolves(undefined);
+        const client = await openNotificationClient(harness);
+
+        const createResponse = await createRunResponse(harness, 'node', sinon.stub().resolves());
+        await drainNotifications(client);
+
+        assert.strictEqual(createResponse.statusCode, 500);
+        assert.strictEqual(client.notifications.length, 1);
+        const terminal = client.notifications[0];
+        assert.deepStrictEqual(terminal, {
+            notification_type: 'sessionTerminated',
+            session_id: terminal.session_id,
+            exit_code: -1,
+        });
+
+        harness.dcpServer.sendNotification({
+            notification_type: 'sessionTerminated',
+            session_id: terminal.session_id,
+            dcp_id: harness.dcpId,
+            exit_code: 9,
+        } as SessionTerminatedNotification);
+        await drainNotifications(client);
+
+        assert.deepStrictEqual(client.notifications, [terminal]);
+        const endEvents = telemetryReporter.events.filter(event => event.name === 'aspire/vscode/debug/runsession/end');
+        assert.strictEqual(endEvents.length, 1);
+        assert.strictEqual(endEvents[0].properties?.end_reason, 'debugger_did_not_start');
     });
 
     test('process teardown observes synchronous throws and rejections from every debug session', async () => {
@@ -234,6 +286,34 @@ suite('Aspire DCP run session lifecycle', () => {
         } finally {
             process.off('unhandledRejection', onUnhandled);
         }
+    });
+
+    test('DELETE while debugger start is pending stops the late session exactly once', async () => {
+        const startCompleted = createDeferred<AspireResourceDebugSession>();
+        const stopSession = sinon.stub().resolves();
+        harness.startDebugSession.resetBehavior();
+        harness.startDebugSession.returns(startCompleted.promise);
+        const client = await openNotificationClient(harness);
+        const createPromise = createRunResponse(harness, 'node', stopSession);
+        await waitFor(() => getInternals(harness.dcpServer)._runTelemetryById.size === 1);
+        const runId = getInternals(harness.dcpServer)._runTelemetryById.keys().next().value;
+        assert.ok(runId);
+        const clock = sinon.useFakeTimers({ toFake: ['setImmediate', 'clearImmediate'] });
+
+        const deleteResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+        const terminal = await client.waitForNotification();
+        startCompleted.resolve(createResourceSession('late-node-session', stopSession));
+        const createResponse = await createPromise;
+        await clock.runAllAsync();
+        await drainNotifications(client);
+
+        assert.strictEqual(deleteResponse.statusCode, 200);
+        assert.strictEqual(createResponse.statusCode, 409);
+        assert.strictEqual(stopSession.calledOnce, true);
+        assert.deepStrictEqual(client.notifications, [terminal]);
+        assert.strictEqual(
+            telemetryReporter.events.filter(event => event.name === 'aspire/vscode/debug/runsession/end').length,
+            0);
     });
 
     test('browser DELETE waits for confirmed stop before terminating', async () => {
@@ -302,11 +382,26 @@ suite('Aspire DCP run session lifecycle', () => {
         assert.deepStrictEqual(client.notifications, [terminal]);
     });
 
+    test('DELETE accepts a reconnected DCP instance with the same stable prefix', async () => {
+        const originalClient = await openNotificationClient(harness);
+        const stopSession = sinon.stub().resolves();
+        const runId = await createRun(harness, 'node', stopSession);
+        const reconnectedDcpId = 'aspire-extension-run-test-reconnected';
+        const reconnectedClient = await openNotificationClient(harness, reconnectedDcpId);
+
+        const deleteResponse = await request(harness, 'DELETE', `/run_session/${runId}`, undefined, reconnectedDcpId);
+
+        assert.strictEqual(deleteResponse.statusCode, 200, deleteResponse.body);
+        const terminal = await reconnectedClient.waitForNotification();
+        await drainNotifications(originalClient);
+        assert.deepStrictEqual(reconnectedClient.notifications, [terminal]);
+        assert.deepStrictEqual(originalClient.notifications, []);
+        assert.strictEqual(stopSession.calledOnce, true);
+    });
+
     test('DELETE rejects a DCP instance that does not own the run', async () => {
         const ownerClient = await openNotificationClient(harness);
-        // Sharing the stable debug-session prefix is not ownership; the exact DCP instance
-        // that created the run is the only instance allowed to delete it.
-        const intruderDcpId = 'aspire-extension-run-test-intruder';
+        const intruderDcpId = 'aspire-extension-run-intruder-resource';
         const intruderClient = await openNotificationClient(harness, intruderDcpId);
         const stopSession = sinon.stub().resolves();
         const runId = await createRun(harness, 'node', stopSession);
@@ -348,9 +443,10 @@ async function startHarness(options?: DcpServerOptions): Promise<Harness> {
     const dcpSessionId = 'aspire-extension-run-test';
     const dcpId = `${dcpSessionId}-resource`;
     const queuedSessions: AspireResourceDebugSession[] = [];
+    const startDebugSession = sinon.stub().callsFake(async () => queuedSessions.shift());
     const debugSession = {
         configuration: {},
-        startAndGetDebugSession: sinon.stub().callsFake(async () => queuedSessions.shift()),
+        startAndGetDebugSession: startDebugSession,
     } as unknown as AspireDebugSession;
     const create = AspireDcpServer.create as unknown as (
         getDebugSession: (debugSessionId: string) => AspireDebugSession | null,
@@ -363,6 +459,7 @@ async function startHarness(options?: DcpServerOptions): Promise<Harness> {
         dcpServer,
         queuedSessions,
         sockets: [],
+        startDebugSession,
     };
 }
 
