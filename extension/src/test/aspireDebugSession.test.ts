@@ -970,9 +970,6 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             stopSession: resourceStop,
         };
         (aspireDebugSession as any)._resourceDebugSessions = [resourceDebugSession];
-        // Registered the way trackAlreadyStartedResourceSession registers it, which is the list
-        // dispose() used to fire unconditionally.
-        (aspireDebugSession as any)._ownedSessionStops.push({ dispose: resourceStop });
         (aspireDebugSession as any)._appHostDebugSession = {
             id: 'apphost-session',
             session: { id: 'apphost-session' } as unknown as vscode.DebugSession,
@@ -1115,10 +1112,9 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         clock.restore();
     });
 
-    // dispose() fires _ownedSessionStops in registration order, and the AppHost registers first
-    // because it is the first session an Aspire session starts. The DAP disconnect/terminate
-    // request is the dominant user Stop path - the toolbar's red square, "Stop All Sessions", and
-    // window close all arrive here - so it has to run the ordered shutdown rather than dispose().
+    // The DAP disconnect/terminate request is the dominant user Stop path - the toolbar's red
+    // square, "Stop All Sessions", and window close all arrive here - so it has to run the
+    // ordered shutdown without waiting to answer the request.
     test('a DAP disconnect request runs the ordered shutdown rather than disposing', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
@@ -1153,13 +1149,6 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
                 session: resourceDebugSession as unknown as vscode.DebugSession,
                 stopSession: () => vscode.debug.stopDebugging(resourceDebugSession as unknown as vscode.DebugSession),
             },
-        ];
-        // Registered AppHost-first, the way the real session registers them: the AppHost is the
-        // first debug session an Aspire session starts. dispose() fires these in registration
-        // order, so routing a user Stop through it stops the AppHost ahead of its own resources.
-        (aspireDebugSession as any)._ownedSessionStops = [
-            { name: 'AppHost', stop: () => vscode.debug.stopDebugging(appHostDebugSession as unknown as vscode.DebugSession) },
-            { name: 'Node.js: app.js', stop: () => vscode.debug.stopDebugging(resourceDebugSession as unknown as vscode.DebugSession) },
         ];
         const sentMessages: any[] = [];
         aspireDebugSession.onDidSendMessage(message => sentMessages.push(message));
@@ -1297,9 +1286,8 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(stopDebuggingStub.callCount, 1, 'Only the Aspire parent stop, and only once');
     });
 
-    // dispose() already asks every session it owns to stop, so a stopDebugging() that arrives after
-    // a plain disposal has nothing left to order. Re-running it would call stopSession() on
-    // sessions VS Code has already torn down.
+    // dispose() enters the same ordered shutdown, so a later stopDebugging() call joins the
+    // completed operation rather than stopping the same sessions again.
     test('stopDebugging after a plain disposal does not re-stop the disposed sessions', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
@@ -1323,10 +1311,9 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         (aspireDebugSession as any)._resourceDebugSessions = [
             { id: 'resource-session', session: { id: 'resource-session', name: 'Resource' } as unknown as vscode.DebugSession, stopSession },
         ];
-        (aspireDebugSession as any)._ownedSessionStops = [{ name: 'Resource', stop: stopSession }];
 
         aspireDebugSession.dispose();
-        await Promise.resolve();
+        await (aspireDebugSession as any)._stopPromise;
 
         const stopsAfterDisposal = stopSession.callCount;
         const parentStopsAfterDisposal = stopDebuggingStub.callCount;
@@ -1337,12 +1324,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(stopDebuggingStub.callCount, parentStopsAfterDisposal, 'The Aspire parent must not be stopped a second time');
     });
 
-    // dispose() is what stops the owned sessions whenever no ordered shutdown ran: VS Code reaping
-    // the adapter, a startup failure, extension deactivation. Those stops sit in _ownedSessionStops
-    // instead of _disposables purely so the dispose() that *ends* an ordered shutdown does not
-    // repeat them, which leaves the plain path resting on a split nothing asserts - moving them
-    // back into _disposables would stop every session twice here and keep the suite green.
-    test('a plain disposal stops every owned session exactly once', async () => {
+    test('a plain disposal stops resources before the AppHost exactly once', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
             type: 'aspire',
@@ -1360,14 +1342,18 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         };
         const terminalProvider = { isDebugConfigEnvironmentLoggingEnabled: () => false };
         const dcpServer = { sendNotification: sinon.stub() };
-        const stopDebuggingStub = sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const stopOrder: string[] = [];
+        const stopDebuggingStub = sinon.stub(vscode.debug, 'stopDebugging').callsFake(async session => {
+            assert.ok(session);
+            stopOrder.push(session.name);
+        });
         const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, dcpServer as any, terminalProvider as any, () => { });
 
-        // Registered through the real entry point so this covers how stops actually reach
-        // _ownedSessionStops, rather than a hand-built stand-in for that list.
         const ownedSessions = ['AppHost', 'Frontend', 'Cache'].map(name => {
-            const stopSession = sinon.stub().resolves();
-            aspireDebugSession.trackAlreadyStartedResourceSession(
+            const stopSession = sinon.stub().callsFake(async () => {
+                stopOrder.push(name);
+            });
+            const trackedSession = aspireDebugSession.trackAlreadyStartedResourceSession(
                 { runId: `run-${name}`, debugSessionId: `debug-${name}`, type: 'coreclr', name, request: 'launch' } as AspireResourceExtendedDebugConfiguration,
                 {
                     id: `run-${name}`,
@@ -1376,22 +1362,24 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
                     stopSession,
                     termination: new Promise<number>(() => { }),
                 });
-            return { name, stopSession };
+            return { name, stopSession, trackedSession };
         });
+        (aspireDebugSession as any)._appHostDebugSession = ownedSessions[0].trackedSession;
 
         aspireDebugSession.dispose();
-        await new Promise(resolve => setImmediate(resolve));
+        await (aspireDebugSession as any)._stopPromise;
 
         for (const { name, stopSession } of ownedSessions) {
             assert.strictEqual(stopSession.callCount, 1, `${name} must be stopped exactly once by a plain disposal`);
         }
 
+        assert.deepStrictEqual(stopOrder, ['Frontend', 'Cache', 'AppHost', 'Aspire']);
         assert.deepStrictEqual(stopDebuggingStub.args, [[parentDebugSession]], 'The Aspire parent is stopped exactly once');
 
         // dispose() is reachable more than once - VS Code disposes the adapter and the extension
         // disposes it again on deactivate - and the repeat must not re-stop anything.
         aspireDebugSession.dispose();
-        await new Promise(resolve => setImmediate(resolve));
+        await (aspireDebugSession as any)._stopPromise;
 
         assert.deepStrictEqual(
             ownedSessions.map(ownedSession => ownedSession.stopSession.callCount),

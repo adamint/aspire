@@ -21,6 +21,7 @@ export class AspireExtensionContext implements vscode.Disposable {
     private readonly _debugSessionOutputSubscriptions = new Map<string, vscode.Disposable>();
     private readonly _onDidChangeDebugSessions = new vscode.EventEmitter<void>();
     private readonly _onDidReceiveDebugConsoleOutput = new vscode.EventEmitter<AspireDebugConsoleOutputEvent>();
+    private _disposePromise: Promise<void> | undefined;
     readonly onDidChangeDebugSessions = this._onDidChangeDebugSessions.event;
     readonly onDidReceiveDebugConsoleOutput = this._onDidReceiveDebugConsoleOutput.event;
 
@@ -94,17 +95,37 @@ export class AspireExtensionContext implements vscode.Disposable {
         return this._debugConfigProvider;
     }
 
-    dispose() {
+    dispose(): Promise<void> {
+        this._disposePromise ??= this.disposeCore();
+        return this._disposePromise;
+    }
+
+    private async disposeCore(): Promise<void> {
+        const sessions = [...this._aspireDebugSessions];
+        const stopResults = await Promise.allSettled(
+            sessions.map(async session => session.stopDebugging()));
+
+        // Session shutdown uses the DCP/RPC servers and emits final state changes, so shared
+        // infrastructure must remain alive until every bounded stop attempt has settled.
         this._rpcServer?.dispose();
         this._dcpServer?.dispose();
         this._debugSessionStateSubscriptions.forEach(disposable => disposable.dispose());
         this._debugSessionStateSubscriptions.clear();
         this._debugSessionOutputSubscriptions.forEach(disposable => disposable.dispose());
         this._debugSessionOutputSubscriptions.clear();
-        this._aspireDebugSessions.forEach(session => session.dispose());
         this._terminalProvider?.dispose();
         this._editorCommandProvider?.dispose();
         this._onDidChangeDebugSessions.dispose();
         this._onDidReceiveDebugConsoleOutput.dispose();
+
+        const stopFailures = stopResults
+            .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+            .map(result => result.reason);
+        if (stopFailures.length === 1) {
+            throw stopFailures[0];
+        }
+        if (stopFailures.length > 1) {
+            throw new AggregateError(stopFailures);
+        }
     }
 }

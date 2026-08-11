@@ -86,6 +86,12 @@ export const browserDebuggerExtension: ResourceDebuggerExtension = {
         if (launchConfig.web_root?.trim()) {
             debugConfiguration.webRoot = launchConfig.web_root;
         }
+        else {
+            // The base configuration is copied before this callback runs, so omission alone can
+            // retain an unrelated inherited webRoot. A blank AppHost value explicitly requests
+            // js-debug's normal workspace default.
+            delete debugConfiguration.webRoot;
+        }
 
         debugConfiguration.sourceMaps = true;
         debugConfiguration.resolveSourceMapLocations = ['**', '!**/node_modules/**'];

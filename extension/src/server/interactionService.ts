@@ -649,11 +649,9 @@ export class InteractionService implements IInteractionService {
 
     async stopDebugging(): Promise<void> {
         this.clearProgressNotification();
-        // Go through AspireDebugSession.stopDebugging() rather than dispose(). dispose() only fires
-        // the registered disposables, which stops the resource sessions, the AppHost, and the Aspire
-        // parent concurrently and discards whatever they reject with. stopDebugging() performs the
-        // ordered shutdown, disposes the session afterwards, and rethrows the failures so the CLI
-        // (and the user, via the endpoint middleware) learns that the shutdown did not complete.
+        // Await the ordered shutdown so the CLI (and the user, via the endpoint middleware) learns
+        // if a resource, AppHost, or parent debug session did not stop. Disposable.dispose() starts
+        // the same bounded work in the background but cannot return its failures.
         await this._getAspireDebugSession()?.stopDebugging();
     }
 

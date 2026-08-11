@@ -8,8 +8,10 @@ suite('Browser Debugger Tests', () => {
     const fakeAspireDebugSession = {} as AspireDebugSession;
     const BROWSER_RESOURCE_URL = 'http://localhost:5173';
 
-    async function createConfiguration(launchConfig: BrowserLaunchConfiguration): Promise<AspireResourceExtendedDebugConfiguration> {
-        const debugConfig = createDebugConfig();
+    async function createConfiguration(
+        launchConfig: BrowserLaunchConfiguration,
+        inheritedConfiguration: Partial<AspireResourceExtendedDebugConfiguration> = {}): Promise<AspireResourceExtendedDebugConfiguration> {
+        const debugConfig = { ...createDebugConfig(), ...inheritedConfiguration };
         await browserDebuggerExtension.createDebugSessionConfigurationCallback!(launchConfig, ['--ignored'], [], { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession }, debugConfig);
 
         return debugConfig;
@@ -53,6 +55,14 @@ suite('Browser Debugger Tests', () => {
             assert.strictEqual(debugConfig.webRoot, undefined);
         });
     }
+
+    test('blank web roots remove an inherited web root', async () => {
+        const debugConfig = await createConfiguration(
+            { type: 'browser', url: 'http://localhost:5173', web_root: '' },
+            { webRoot: '/workspace/previous' });
+
+        assert.strictEqual('webRoot' in debugConfig, false);
+    });
 
     // Leading and trailing spaces are valid characters in a POSIX path, so a padded value is a
     // different directory rather than a sloppy spelling of the unpadded one. The trim decides only
