@@ -91,8 +91,10 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
             message => (message.ConsoleOverride ?? interactionService.Console) == ConsoleOutput.Standard);
     }
 
-    [Fact]
-    public async Task SdkExportRestoresNormalizedFourPartNuGetVersion()
+    [Theory]
+    [InlineData("1.2.3.4", "1.2.3.4")]
+    [InlineData("1.2.3.0", "1.2.3")]
+    public async Task SdkExportRestoresNormalizedFourPartNuGetVersion(string requestedVersion, string normalizedVersion)
     {
         var interactionService = new TestInteractionService();
         using var provider = CreateProvider(
@@ -104,15 +106,15 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
 
         var exitCode = await InvokeAsync(
             provider,
-            "sdk export --language typescript --package Contoso.Aspire.Widgets@1.2.3.4");
+            $"sdk export --language typescript --package Contoso.Aspire.Widgets@{requestedVersion}");
 
         Assert.Equal(CliExitCodes.Success, exitCode);
-        Assert.Equal(("TypeScript", "Contoso.Aspire.Widgets", "1.2.3.4"), rpcClient.LastExportRequest);
+        Assert.Equal(("TypeScript", "Contoso.Aspire.Widgets", normalizedVersion), rpcClient.LastExportRequest);
 
         var package = Assert.Single(
             project.Integrations,
             integration => integration.Name == "Contoso.Aspire.Widgets");
-        Assert.Equal("[1.2.3.4]", package.Version);
+        Assert.Equal($"[{normalizedVersion}]", package.Version);
     }
 
     [Fact]

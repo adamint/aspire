@@ -309,7 +309,9 @@ internal sealed class SdkExportCommand : BaseCommand
             return false;
         }
 
-        normalizedVersion = parsedVersion.ToString(4);
+        normalizedVersion = parsedVersion.Revision == 0
+            ? parsedVersion.ToString(3)
+            : parsedVersion.ToString(4);
         return true;
     }
 }
