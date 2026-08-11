@@ -185,11 +185,6 @@ export default class AspireDcpServer {
                 getOrCreateDebugSessionStats(entry.debugSessionId).anyNonZeroExit = true;
             }
         };
-        const runSessions = new RunSessionRegistry({
-            recordCompletion: recordRunSessionCompletion,
-            retentionMs: runRetentionMs,
-            send: deliver,
-        });
         const logTeardownFailure = (runId: string, error: unknown): void => {
             extensionLogOutputChannel.warn(
                 `Failed to stop debug session for run ID ${runId}: ${error instanceof Error ? error.message : String(error)}`);
@@ -224,6 +219,12 @@ export default class AspireDcpServer {
                 }
             });
         };
+        const runSessions = new RunSessionRegistry({
+            recordCompletion: recordRunSessionCompletion,
+            retentionMs: runRetentionMs,
+            scheduleTeardown: scheduleDebuggerTeardown,
+            send: deliver,
+        });
         const stopDebuggerForDelete = async (run: RunSessionRecord): Promise<void> => {
             if (!run.teardownPromise) {
                 run.teardownStarted = true;
@@ -546,6 +547,19 @@ export default class AspireDcpServer {
                         : await aspireDebugSession.startAndGetDebugSession(preparedSession.debugConfiguration);
 
                     if (!resourceDebugSession) {
+                        const pendingRun = runSessions.get(runId);
+                        if (!pendingRun || pendingRun.lifecycle !== 'starting') {
+                            cleanupRun(runId);
+                            res.status(409).json({
+                                error: {
+                                    code: 'RunSessionTerminated',
+                                    message: `Run session ${runId} terminated while its debug session was starting.`,
+                                    details: [],
+                                },
+                            }).end();
+                            return;
+                        }
+
                         runTelemetryById.delete(runId);
                         emitRunSessionFailureEnd('debugger_did_not_start');
                         runSessions.terminate(runId, -1);
@@ -589,7 +603,8 @@ export default class AspireDcpServer {
                     res.status(201).set('Location', `https://${req.get('host')}/run_session/${runId}`).end();
                     extensionLogOutputChannel.info(`New run session created with ID: ${runId}`);
                 } catch (err) {
-                    if (!runSessions.get(runId)) {
+                    const pendingRun = runSessions.get(runId);
+                    if (!pendingRun || pendingRun.lifecycle !== 'starting') {
                         cleanupRun(runId);
                         res.status(409).json({
                             error: {
@@ -671,11 +686,7 @@ export default class AspireDcpServer {
 
                 // Adapter teardown can block indefinitely. Terminate DCP's wire stream first,
                 // then observe every stop attempt out of band while retention bounds run state.
-                if (!runSessions.requestStop(runId)) {
-                    res.status(200).end();
-                    return;
-                }
-
+                runSessions.requestStop(runId);
                 res.status(200).end();
                 scheduleDebuggerTeardown(run);
             });

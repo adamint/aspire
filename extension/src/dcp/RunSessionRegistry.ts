@@ -26,6 +26,7 @@ export interface RunSessionRegistration {
 export interface RunSessionRegistryOptions {
     recordCompletion(runId: string, exitCode: number): void;
     retentionMs: number;
+    scheduleTeardown(record: RunSessionRecord): void;
     send(ownerDcpId: string, notification: RunSessionNotification): void;
 }
 
@@ -138,9 +139,16 @@ export class RunSessionRegistry {
         }
 
         const started = record.lifecycle !== 'starting';
+        const naturalCompletion = record.lifecycle === 'running';
         this._sendTerminal(record, exitCode);
         this._recordCompletion(record, exitCode);
         record.lifecycle = 'completed';
+
+        if (record.kind === 'adapter' && naturalCompletion) {
+            // A follow-up DELETE can arrive after retention evicts this record. Schedule
+            // teardown while the owned debug sessions are still reachable.
+            this._options.scheduleTeardown(record);
+        }
 
         if (record.kind === 'adapter' && started) {
             // Keep natural exits briefly so DCP's follow-up DELETE remains idempotent, and

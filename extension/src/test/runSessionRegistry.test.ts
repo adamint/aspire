@@ -110,6 +110,7 @@ function createRegistry(retentionMs: number): {
     const registry = new RunSessionRegistry({
         recordCompletion: (runId: string, exitCode: number) => completions.push({ runId, exitCode }),
         retentionMs,
+        scheduleTeardown: () => undefined,
         send: (ownerDcpId: string, notification: RunSessionNotification) => deliveries.push({ ownerDcpId, notification }),
     });
     return { completions, deliveries, registry };
