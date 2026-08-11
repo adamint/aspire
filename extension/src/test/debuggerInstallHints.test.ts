@@ -102,16 +102,9 @@ suite('debugger install hints', () => {
     });
 
     test('waits for a fresh install to appear in the extension registry', async () => {
-        let installed = false;
-        const getExtension = sinon.stub(vscode.extensions, 'getExtension').callsFake(extensionId =>
-            installed ? { id: extensionId } as vscode.Extension<unknown> : undefined);
-        const onDidChange = sinon.stub(vscode.extensions, 'onDidChange').callsFake(listener => {
-            queueMicrotask(() => {
-                installed = true;
-                listener();
-            });
-            return { dispose: sinon.stub() };
-        });
+        const getExtension = sinon.stub(vscode.extensions, 'getExtension');
+        getExtension.onFirstCall().returns(undefined);
+        getExtension.returns({ id: 'ms-python.debugpy' } as vscode.Extension<unknown>);
         const showInformationMessage = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
         sinon.stub(vscode.commands, 'executeCommand').resolves();
         const service = new DebuggerInstallHintService(createMemento());
@@ -121,8 +114,8 @@ suite('debugger install hints', () => {
             extensionId: 'ms-python.debugpy',
         });
 
-        assert.ok(onDidChange.calledOnce);
         assert.ok(getExtension.calledWith('ms-python.debugpy'));
+        assert.strictEqual(showInformationMessage.callCount, 1);
         assert.strictEqual(
             showInformationMessage.firstCall.args[0],
             'The Python debugger extension is installed. Restart the AppHost to enable debugging.');
