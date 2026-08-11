@@ -493,8 +493,7 @@ internal static class PackageJsonMerger
     }
 
     /// <summary>
-    /// An ordinary npm semver range that this merge cannot reduce to a single version is replaced by
-    /// the scaffold's when the compiler moves. Opaque package references remain project-owned.
+    /// Replaces a project linter range only when it cannot resolve to the scaffold floor or newer.
     /// </summary>
     /// <remarks>
     /// <see cref="NpmVersionHelper.ShouldUpgrade"/> compares lower bounds and fails closed on any
@@ -503,11 +502,12 @@ internal static class PackageJsonMerger
     /// A project on TypeScript 5.9.3 with <c>typescript-eslint: "&gt;=8.57.1 &lt;8.58.0"</c> loses
     /// the upgrade - the range is a comparator pair, so no lower bound comes out of it - and keeps a
     /// linter that resolves to 8.57.x, whose <c>typescript: &lt;6.0.0</c> peer the freshly upgraded
-    /// 6.0.3 compiler no longer satisfies. That is the ERESOLVE this merger exists to prevent.
+    /// 6.0.3 compiler no longer satisfies. Conversely, <c>&gt;=8.60.0 &lt;8.66.0</c> is already
+    /// entirely above the scaffold's 8.58.0 floor and must not be downgraded to it.
     ///
-    /// A spec that is not a valid npm semver range can instead be a workspace link, local package,
-    /// npm alias, fork, git URL, or tarball URL. Replacing one of those would discard the project's
-    /// package ownership rather than safely upgrading an ordinary version range.
+    /// Only stable comparator sets and wildcard ranges have their normalized bounds inspected.
+    /// Opaque references, malformed ranges, and unsupported range forms remain project-owned:
+    /// replacing one without proving it cannot reach the floor would be destructive.
     ///
     /// The removal pass is no help either: it only runs for a project that had no linter, so a
     /// brownfield project that did have one has nothing left to catch this.
@@ -521,14 +521,8 @@ internal static class PackageJsonMerger
             return;
         }
 
-        // A spec the floor merge could read was already upgraded, or was deliberately left alone
-        // because it is ahead of the scaffold. Only the ones it could not read are still stale.
-        if (NpmVersionHelper.TryParseNpmVersion(projectLinter, out _))
-        {
-            return;
-        }
-
-        if (!SemVersionRange.TryParseNpm(projectLinter, out _))
+        if (!NpmVersionHelper.TryParseNpmVersion(scaffoldLinter, out var scaffoldFloor) ||
+            CanRangeResolveAtOrAboveFloor(projectLinter, scaffoldFloor) is not false)
         {
             return;
         }
@@ -543,10 +537,121 @@ internal static class PackageJsonMerger
         rewrittenSpecs[TypeScriptEslintPackage] = scaffoldLinter;
 
         logger.LogWarning(
-            "Replaced the '{Package}' semver range '{ExistingVersion}' with '{DesiredVersion}' because this merge upgraded TypeScript and the existing range is not a form this tool can check against the new compiler.",
+            "Replaced the '{Package}' semver range '{ExistingVersion}' with '{DesiredVersion}' because this merge upgraded TypeScript and the existing range cannot resolve to the required package floor.",
             TypeScriptEslintPackage,
             projectLinter,
             scaffoldLinter);
+    }
+
+    /// <summary>
+    /// Determines whether a focused npm range can resolve to the floor or a newer version.
+    /// Returns <see langword="null"/> when the range form is unsupported or malformed.
+    /// </summary>
+    /// <remarks>
+    /// The focused forms are stable comparator sets such as <c>&gt;=8.60.0 &lt;8.66.0</c> and
+    /// simple x-ranges such as <c>8.57.x</c>. Other npm range forms fail safe because replacing a
+    /// project-owned spec requires proof that it cannot reach the floor.
+    /// See <see href="https://github.com/npm/node-semver#ranges"/>.
+    /// </remarks>
+    private static bool? CanRangeResolveAtOrAboveFloor(string versionRange, SemVersion floor)
+    {
+        var trimmed = versionRange.Trim();
+        if (!IsStableComparatorSet(trimmed) &&
+            !IsWildcardRange(trimmed))
+        {
+            return null;
+        }
+
+        if (!SemVersionRange.TryParseNpm(trimmed, out var parsedRange) ||
+            parsedRange is null)
+        {
+            return null;
+        }
+
+        // SemVersionRange normalizes each comparator set into a non-empty interval. Such an
+        // interval intersects [floor, infinity) exactly when it is unbounded above, ends above the
+        // floor, or includes the floor as its upper endpoint.
+        foreach (var range in parsedRange)
+        {
+            if (range.End is null)
+            {
+                return true;
+            }
+
+            var endComparedToFloor = SemVersion.ComparePrecedence(range.End, floor);
+            if (endComparedToFloor > 0 ||
+                (endComparedToFloor == 0 && range.EndInclusive))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Recognizes whitespace-separated comparator segments with stable, complete versions.
+    /// </summary>
+    private static bool IsStableComparatorSet(string versionRange)
+    {
+        var segments = versionRange.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (var segment in segments)
+        {
+            var literal = segment.AsSpan();
+            if (literal.StartsWith(">=", StringComparison.Ordinal) ||
+                literal.StartsWith("<=", StringComparison.Ordinal))
+            {
+                literal = literal[2..];
+            }
+            else if (literal is ['>' or '<' or '=', .. var remainder])
+            {
+                literal = remainder;
+            }
+
+            if (literal.IsEmpty ||
+                !SemVersion.TryParse(literal.ToString(), SemVersionStyles.Strict, out var version) ||
+                version is null ||
+                version.IsPrerelease)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Recognizes npm x-ranges such as <c>8.x</c> and <c>8.57.*</c>.
+    /// </summary>
+    private static bool IsWildcardRange(string versionRange)
+    {
+        var components = versionRange.Split('.');
+        if (components.Length is < 1 or > 3)
+        {
+            return false;
+        }
+
+        var foundWildcard = false;
+        foreach (var component in components)
+        {
+            if (component is "x" or "X" or "*")
+            {
+                foundWildcard = true;
+            }
+            else if (foundWildcard ||
+                component.Length == 0 ||
+                !component.All(char.IsAsciiDigit))
+            {
+                return false;
+            }
+        }
+
+        return foundWildcard;
     }
 
     /// <summary>

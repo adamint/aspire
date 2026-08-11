@@ -1880,23 +1880,53 @@ public class PackageJsonMergerTests
     }
 
     /// <summary>
-    /// Clearing <c>projectOwnedPackage</c> is not enough on its own to move a project's linter onto
-    /// the compiler this merge just upgraded. The version-floor merge fails closed on a spec it
-    /// cannot reduce to a single version, so a comparator pair survives untouched and keeps
-    /// resolving to a linter whose peer range excludes the new compiler.
+    /// A comparator range can be unreadable to the lower-bound merge while still being ahead of the
+    /// scaffold. Replacing it with the scaffold's exact pin would be a destructive downgrade.
     /// </summary>
-    /// <remarks>
-    /// `>=8.57.1 &lt;8.58.0` resolves to 8.57.x, which peers `typescript: &lt;6.0.0`, while the
-    /// merge moves the compiler from 5.9.3 to 6.0.3 - the ERESOLVE this merger exists to prevent.
-    /// The removal pass cannot catch it either: it only runs for a project that had no linter.
-    /// </remarks>
+    [Fact]
+    public void Merge_BrownfieldLinterComparatorRangeAboveScaffoldFloor_IsPreservedWhenTheMergeUpgradesTheCompiler()
+    {
+        const string ExistingLinter = ">=8.60.0 <8.66.0";
+        var existing = $$"""
+            {
+              "name": "brownfield",
+              "devDependencies": {
+                "typescript": "5.9.3",
+                "typescript-eslint": "{{ExistingLinter}}"
+              }
+            }
+            """;
+
+        var result = MergeJson(existing, ScaffoldWithLintToolchain);
+
+        Assert.Equal("6.0.3", GetDep(result, "devDependencies", "typescript"));
+        Assert.Equal(ExistingLinter, GetDep(result, "devDependencies", "typescript-eslint"));
+    }
+
+    /// <summary>
+    /// Comparator and wildcard ranges are replaced only when they cannot resolve to the scaffold
+    /// floor or anything newer. Inclusive bounds can admit the floor itself; exclusive bounds must
+    /// leave room for a later stable version.
+    /// </summary>
     [Theory]
-    // Both forms defeat NpmVersionHelper: a comparator pair leaves trailing text after the operator
-    // is stripped, and an x-range leaves a non-numeric component. `>=8.57.1` is deliberately absent
-    // because it reduces to 8.57.1 and the version-floor merge already upgrades it.
-    [InlineData(">=8.57.1 <8.58.0")]
-    [InlineData("8.57.x")]
-    public void Merge_BrownfieldLinterSpecIsUncheckable_ReplacesItWhenTheMergeUpgradesTheCompiler(string existingLinter)
+    [InlineData("<8.58.0", "8.58.0")]
+    [InlineData("<=8.58.0", "<=8.58.0")]
+    [InlineData(">8.58.0", ">8.58.0")]
+    [InlineData(">=8.58.0", ">=8.58.0")]
+    [InlineData(">=8.57.1 <8.58.0", "8.58.0")]
+    [InlineData(">8.57.1 <8.58.0", "8.58.0")]
+    [InlineData(">=8.58.0 <8.58.0", "8.58.0")]
+    [InlineData(">8.58.0 <=8.58.0", "8.58.0")]
+    [InlineData(">=8.57.1 <=8.58.0", ">=8.57.1 <=8.58.0")]
+    [InlineData(">=8.57.1 <8.58.1", ">=8.57.1 <8.58.1")]
+    [InlineData(">=8.58.0 <8.66.0", ">=8.58.0 <8.66.0")]
+    [InlineData(">8.58.0 <8.66.0", ">8.58.0 <8.66.0")]
+    [InlineData("8.57.x", "8.58.0")]
+    [InlineData("8.58.x", "8.58.x")]
+    [InlineData("8.x", "8.x")]
+    public void Merge_BrownfieldLinterRange_IsReplacedOnlyWhenItCannotReachTheScaffoldFloor(
+        string existingLinter,
+        string expectedLinter)
     {
         var existing = $$"""
             {
@@ -1911,7 +1941,34 @@ public class PackageJsonMergerTests
         var result = MergeJson(existing, ScaffoldWithLintToolchain);
 
         Assert.Equal("6.0.3", GetDep(result, "devDependencies", "typescript"));
-        Assert.Equal("8.58.0", GetDep(result, "devDependencies", "typescript-eslint"));
+        Assert.Equal(expectedLinter, GetDep(result, "devDependencies", "typescript-eslint"));
+    }
+
+    /// <summary>
+    /// Range forms outside the focused comparator and wildcard parser remain project-owned. An
+    /// unsupported or malformed form is not enough evidence to replace the project's dependency.
+    /// </summary>
+    [Theory]
+    [InlineData("^8.57.1 || >=8.60.0")]
+    [InlineData("8.57.1 - 8.57.9")]
+    [InlineData(">=8.60.0-alpha.1 <8.66.0")]
+    [InlineData(">=8.60.0 <")]
+    public void Merge_BrownfieldLinterRangeWithUnknownFloor_IsPreservedWhenTheMergeUpgradesTheCompiler(string existingLinter)
+    {
+        var existing = $$"""
+            {
+              "name": "brownfield",
+              "devDependencies": {
+                "typescript": "5.9.3",
+                "typescript-eslint": "{{existingLinter}}"
+              }
+            }
+            """;
+
+        var result = MergeJson(existing, ScaffoldWithLintToolchain);
+
+        Assert.Equal("6.0.3", GetDep(result, "devDependencies", "typescript"));
+        Assert.Equal(existingLinter, GetDep(result, "devDependencies", "typescript-eslint"));
     }
 
     /// <summary>
