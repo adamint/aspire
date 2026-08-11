@@ -1,4 +1,5 @@
 import * as assert from 'assert';
+import * as fs from 'fs';
 import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
@@ -39,7 +40,9 @@ class FakeTelemetryReporter {
 }
 
 suite('AppHostLaunchService', () => {
+    const fixtureRoot = path.resolve(__dirname, '..', '..', '.test-workspace', 'apphost-launch-service');
     let service: AppHostLaunchService;
+    let fixtureDirectories: string[];
     let startDebuggingStub: sinon.SinonStub;
     let classifyAppHostDirectoryStub: sinon.SinonStub;
     let resolveCliPathStub: sinon.SinonStub;
@@ -47,6 +50,8 @@ suite('AppHostLaunchService', () => {
     let onDidTerminateDebugSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
 
     setup(() => {
+        fixtureDirectories = [];
+        fs.mkdirSync(fixtureRoot, { recursive: true });
         onDidTerminateDebugSessionStub = sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(callback => {
             onDidTerminateDebugSessionCallback = callback;
             return new vscode.Disposable(() => { });
@@ -64,6 +69,9 @@ suite('AppHostLaunchService', () => {
         resolveCliPathStub.restore();
         onDidTerminateDebugSessionStub.restore();
         onDidTerminateDebugSessionCallback = undefined;
+        for (const directory of fixtureDirectories) {
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
     });
 
     test('isLaunching returns false before launch', () => {
@@ -166,6 +174,56 @@ suite('AppHostLaunchService', () => {
 
         await assert.rejects(launchPromise, vscode.CancellationError);
         assert.strictEqual(startDebuggingStub.called, false);
+    });
+
+    test('symlink and real-path callers atomically claim one launch', async () => {
+        const directory = createFixtureDirectory('identity');
+        const realAppHostDirectory = path.join(directory, 'RealAppHost');
+        const linkedAppHostDirectory = path.join(directory, 'LinkedAppHost');
+        const realAppHostPath = path.join(realAppHostDirectory, 'AppHost.csproj');
+        const linkedAppHostPath = path.join(linkedAppHostDirectory, 'AppHost.csproj');
+        const firstDebugStart = createDeferred<void>();
+        const releaseFirstDebugStart = createDeferred<void>();
+        fs.mkdirSync(realAppHostDirectory, { recursive: true });
+        fs.writeFileSync(realAppHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        createDirectoryLink(linkedAppHostDirectory, realAppHostDirectory);
+        startDebuggingStub.onFirstCall().callsFake(async () => {
+            firstDebugStart.resolve();
+            await releaseFirstDebugStart.promise;
+            return true;
+        });
+        startDebuggingStub.onSecondCall().resolves(true);
+
+        const linkedLaunch = service.launch(linkedAppHostPath, 'run', true);
+        await firstDebugStart.promise;
+        const realLaunchAccepted = await service.launch(realAppHostPath, 'run', true);
+        releaseFirstDebugStart.resolve();
+        const linkedLaunchAccepted = await linkedLaunch;
+
+        assert.strictEqual(startDebuggingStub.callCount, 1);
+        assert.strictEqual(linkedLaunchAccepted, true);
+        assert.strictEqual(realLaunchAccepted, false);
+    });
+
+    test('failed symlink launch releases the identity claim for a real-path retry', async () => {
+        const directory = createFixtureDirectory('retry');
+        const realAppHostDirectory = path.join(directory, 'RealAppHost');
+        const linkedAppHostDirectory = path.join(directory, 'LinkedAppHost');
+        const realAppHostPath = path.join(realAppHostDirectory, 'AppHost.csproj');
+        const linkedAppHostPath = path.join(linkedAppHostDirectory, 'AppHost.csproj');
+        fs.mkdirSync(realAppHostDirectory, { recursive: true });
+        fs.writeFileSync(realAppHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        createDirectoryLink(linkedAppHostDirectory, realAppHostDirectory);
+        startDebuggingStub.onFirstCall().resolves(false);
+        startDebuggingStub.onSecondCall().resolves(true);
+
+        await assert.rejects(
+            service.launch(linkedAppHostPath, 'run', true),
+            /did not start the Aspire run session/);
+        const retryAccepted = await service.launch(realAppHostPath, 'run', true);
+
+        assert.strictEqual(retryAccepted, true);
+        assert.strictEqual(startDebuggingStub.callCount, 2);
     });
 
     test('clearLaunching removes the path from launching state', async () => {
@@ -415,5 +473,15 @@ suite('AppHostLaunchService', () => {
             promise,
             resolve: value => resolvePromise(value as T),
         };
+    }
+
+    function createFixtureDirectory(prefix: string): string {
+        const directory = fs.mkdtempSync(path.join(fixtureRoot, `${prefix}-`));
+        fixtureDirectories.push(directory);
+        return directory;
+    }
+
+    function createDirectoryLink(linkPath: string, targetPath: string): void {
+        fs.symlinkSync(targetPath, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
     }
 });

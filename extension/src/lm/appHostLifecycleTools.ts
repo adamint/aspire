@@ -76,7 +76,7 @@ export interface AppHostLifecycleLaunchService {
         noDebug: boolean,
         doStep: undefined,
         token: vscode.CancellationToken,
-    ): Promise<void>;
+    ): Promise<boolean>;
 }
 
 export interface AppHostLifecycleDiscoveryService {
@@ -250,12 +250,16 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 return createResult(aspireAppHostStartToolName, 'cancelled', target.selector, 'none', input.mode);
             }
 
-            await this._dependencies.launchService.launch(
+            const launchAccepted = await this._dependencies.launchService.launch(
                 target.launchPath,
                 'run',
                 input.mode === 'run',
                 undefined,
                 launchCancellationSource.token);
+            if (!launchAccepted) {
+                return createResult(aspireAppHostStartToolName, 'alreadyStarting', target.selector, 'editor', input.mode);
+            }
+
             return createResult(aspireAppHostStartToolName, 'started', target.selector, 'editor', input.mode, input.mode);
         }
         catch (error) {
@@ -665,7 +669,7 @@ function isAbsolutePath(value: string): boolean {
 }
 
 function toVisibleDisplayText(value: string): string {
-    return value.replace(nonDisplayCharacters, character => {
+    return value.replace(/\\/g, '\\\\').replace(nonDisplayCharacters, character => {
         const codePoint = character.codePointAt(0)!;
         const hex = codePoint.toString(16).toUpperCase();
         return codePoint <= 0xFFFF ? `\\u${hex.padStart(4, '0')}` : `\\u{${hex}}`;

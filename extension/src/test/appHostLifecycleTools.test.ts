@@ -28,6 +28,7 @@ interface LaunchCall {
 class FakeLaunchService implements AppHostLifecycleLaunchService {
     readonly launchCalls: LaunchCall[] = [];
     readonly launchingPaths = new Set<string>();
+    launchAccepted = true;
     launchGate: Promise<void> | undefined;
     launchToken: vscode.CancellationToken | undefined;
     onLaunch: (() => void) | undefined;
@@ -38,7 +39,7 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
         noDebug: boolean,
         _doStep: undefined,
         token: vscode.CancellationToken,
-    ): Promise<void> {
+    ): Promise<boolean> {
         this.launchToken = token;
         this.launchCalls.push({ appHostPath, command, noDebug });
         this.onLaunch?.();
@@ -46,6 +47,8 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
         if (token.isCancellationRequested) {
             throw new vscode.CancellationError();
         }
+
+        return this.launchAccepted;
     }
 }
 
@@ -174,6 +177,16 @@ suite('AppHost lifecycle language model tools', () => {
 
         releaseLaunch.resolve();
         assert.strictEqual((await firstStart).outcome, 'started');
+    });
+
+    test('reports alreadyStarting when the shared launch service loses an atomic claim race', async () => {
+        launchService.launchAccepted = false;
+
+        const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, token);
+
+        assert.strictEqual(result.outcome, 'alreadyStarting');
+        assert.strictEqual(result.controller, 'editor');
+        assert.strictEqual(launchService.launchCalls.length, 1);
     });
 
     test('propagates cancellation through launch gating instead of reporting the AppHost started', async () => {
@@ -466,8 +479,8 @@ suite('AppHost lifecycle language model tools', () => {
     });
 
     test('escapes Markdown metacharacters in start invocation and confirmation text while resolving the raw selector', async () => {
-        const markdownAppHostPath = path.join(workspaceRoot, 'AppHost', '[prod]*AppHost*.csproj');
-        const selector = 'AppHost/[prod]*AppHost*.csproj';
+        const markdownAppHostPath = path.join(workspaceRoot, 'AppHost', '[prod]_AppHost_!.csproj');
+        const selector = 'AppHost/[prod]_AppHost_!.csproj';
         fs.writeFileSync(markdownAppHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
         discoveryService.candidatesByFolder.set(workspaceRoot, [createCandidate(markdownAppHostPath)]);
         const tool = new AppHostStartLanguageModelTool(service);
@@ -478,10 +491,10 @@ suite('AppHost lifecycle language model tools', () => {
 
         assert.strictEqual(
             getMarkdownValue(prepared.invocationMessage),
-            'Starting&nbsp;Aspire&nbsp;AppHost&nbsp;AppHost/\\[prod\\]\\*AppHost\\*.csproj...');
+            'Starting&nbsp;Aspire&nbsp;AppHost&nbsp;AppHost/\\[prod\\]\\_AppHost\\_\\!.csproj...');
         assert.strictEqual(
             getMarkdownValue(prepared.confirmationMessages?.message),
-            'Start&nbsp;the&nbsp;Aspire&nbsp;AppHost&nbsp;AppHost/\\[prod\\]\\*AppHost\\*.csproj&nbsp;in&nbsp;debug&nbsp;mode?');
+            'Start&nbsp;the&nbsp;Aspire&nbsp;AppHost&nbsp;AppHost/\\[prod\\]\\_AppHost\\_\\!.csproj&nbsp;in&nbsp;debug&nbsp;mode?');
 
         const result = await service.start({ appHostPath: selector, mode: 'debug' }, token);
 
@@ -513,6 +526,22 @@ suite('AppHost lifecycle language model tools', () => {
 
         assert.strictEqual(result.outcome, 'stopped');
         assert.deepStrictEqual(stoppedSessions, [session]);
+    });
+
+    test('distinguishes generated Unicode escapes from literal backslash sequences in invocation and confirmation text', async () => {
+        sandbox.stub(service, 'describeTarget').resolves(`AppHost/Actual\u2028Literal\\u2028.csproj`);
+        const tool = new AppHostStartLanguageModelTool(service);
+
+        const prepared = await tool.prepareInvocation({
+            input: { appHostPath: 'ignored', mode: 'run' },
+        }, token);
+
+        assert.strictEqual(
+            getMarkdownValue(prepared.invocationMessage),
+            'Starting&nbsp;Aspire&nbsp;AppHost&nbsp;AppHost/Actual\\\\u2028Literal\\\\\\\\u2028.csproj...');
+        assert.strictEqual(
+            getMarkdownValue(prepared.confirmationMessages?.message),
+            'Start&nbsp;the&nbsp;Aspire&nbsp;AppHost&nbsp;AppHost/Actual\\\\u2028Literal\\\\\\\\u2028.csproj&nbsp;in&nbsp;run&nbsp;mode?');
     });
 
     test('returns workspaceNotTrusted without running discovery', async () => {

@@ -3,14 +3,11 @@ import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { AspireCommandType, AspireExtendedDebugConfiguration } from '../dcp/types';
 import { startDebuggingDeclined } from '../loc/strings';
+import { canonicalizeAppHostPath, getAppHostPathComparisonKey, isSameAppHost } from '../utils/appHostIdentity';
 import { classifyAppHostDirectory, classifyAppHostPath } from '../utils/appHostLanguage';
 import { classifyError, isCommandCancellation, sendTelemetryEvent, type EventProperties } from '../utils/telemetry';
 import { bucketAspireCommand } from '../utils/telemetryBuckets';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
-
-function getComparisonKey(value: string): string {
-    return process.platform === 'win32' ? value.toLowerCase() : value;
-}
 
 function isAspireCommandType(value: unknown): value is AspireCommandType {
     return value === 'run' || value === 'deploy' || value === 'publish' || value === 'do';
@@ -68,10 +65,7 @@ export class AppHostLaunchService implements vscode.Disposable {
         this._debugSessionSubscription = vscode.debug.onDidTerminateDebugSession(session => {
             const appHostPath = session.configuration?.program;
             if (appHostPath && session.configuration?.type === 'aspire') {
-                const key = getComparisonKey(path.resolve(appHostPath));
-                if (this._launchingPaths.delete(key)) {
-                    this._onDidChangeLaunchingState.fire();
-                }
+                this.clearLaunching(appHostPath);
                 const command = getTerminationCommand(session.configuration);
                 this._onDidTerminateAppHostDebugSession.fire({
                     appHostPath,
@@ -97,7 +91,7 @@ export class AppHostLaunchService implements vscode.Disposable {
     }
 
     isLaunching(appHostPath: string): boolean {
-        return this._launchingPaths.has(getComparisonKey(path.resolve(appHostPath)));
+        return this.getMatchingLaunchingPaths(appHostPath).length > 0;
     }
 
     /**
@@ -105,27 +99,33 @@ export class AppHostLaunchService implements vscode.Disposable {
      * appears in the running AppHosts list).
      */
     clearLaunching(appHostPath: string): void {
-        const key = getComparisonKey(path.resolve(appHostPath));
-        if (this._launchingPaths.delete(key)) {
-            this._onDidChangeLaunchingState.fire();
-        }
+        this.clearLaunchClaims(this.getMatchingLaunchingPaths(appHostPath));
     }
 
     clearMatchingLaunching(appHostPath: string): void {
-        const resolvedAppHostPath = path.resolve(appHostPath);
-        const exactKey = getComparisonKey(path.normalize(resolvedAppHostPath));
-        if (this._launchingPaths.delete(exactKey)) {
+        const identityMatches = this.getMatchingLaunchingPaths(appHostPath);
+        if (identityMatches.length > 0) {
+            this.clearLaunchClaims(identityMatches);
+            return;
+        }
+
+        const resolvedPath = path.resolve(appHostPath);
+        const aliasMatches = Array.from(this._launchingPaths)
+            .filter(launchingPath => isProjectFileToSourceFileMatch(launchingPath, resolvedPath));
+        if (aliasMatches.length === 1) {
+            this.clearLaunchClaims(aliasMatches);
+        }
+    }
+
+    private clearLaunchClaims(matchingPaths: readonly string[]): void {
+        let changed = false;
+        for (const matchingPath of matchingPaths) {
+            changed = this._launchingPaths.delete(matchingPath) || changed;
+        }
+
+        if (changed) {
             this._onDidChangeLaunchingState.fire();
-            return;
         }
-
-        const matchingPaths = Array.from(this._launchingPaths).filter(launchingPath => isMatchingAppHostPath(launchingPath, resolvedAppHostPath));
-        if (matchingPaths.length !== 1) {
-            return;
-        }
-
-        this._launchingPaths.delete(matchingPaths[0]);
-        this._onDidChangeLaunchingState.fire();
     }
 
     /**
@@ -137,6 +137,7 @@ export class AppHostLaunchService implements vscode.Disposable {
      * @param noDebug When true, launches without the debugger attached.
      * @param doStep Optional step name for the 'do' command.
      * @param cancellationToken Optional cancellation for asynchronous pre-launch gates.
+     * @returns Whether this call claimed and started a new launch.
      */
     async launch(
         appHostPath: string,
@@ -144,51 +145,53 @@ export class AppHostLaunchService implements vscode.Disposable {
         noDebug: boolean,
         doStep?: string,
         cancellationToken?: vscode.CancellationToken,
-    ): Promise<void> {
+    ): Promise<boolean> {
         throwIfCancellationRequested(cancellationToken);
+        const claimedPath = this.tryClaimLaunch(appHostPath);
+        if (claimedPath === undefined) {
+            return false;
+        }
+
         const startTime = Date.now();
         const executionSuppressed = isE2eDebugLaunchSuppressed();
-        const telemetryProperties = await getLaunchTelemetryProperties(appHostPath, command, noDebug, executionSuppressed);
-        throwIfCancellationRequested(cancellationToken);
-
-        const config: AspireExtendedDebugConfiguration = {
-            type: 'aspire',
-            name: `Aspire ${command}: ${vscode.workspace.asRelativePath(appHostPath)}`,
-            request: 'launch',
-            program: appHostPath,
-            command,
-            noDebug
-        };
-
-        if (doStep) {
-            config.step = doStep;
-        }
-
-        this._onDidRequestLaunch.fire({
-            appHostPath,
-            command,
-            noDebug,
-            doStep,
-            executionSuppressed,
-        });
-        if (executionSuppressed) {
-            this.clearLaunching(appHostPath);
-            sendTelemetryEvent('aspire/vscode/apphost/launch/result', {
-                ...telemetryProperties,
-                outcome: 'suppressed',
-            }, {
-                duration_ms: Date.now() - startTime,
-            });
-            return;
-        }
+        let telemetryProperties: Awaited<ReturnType<typeof getLaunchTelemetryProperties>> | undefined;
+        let requestEmitted = false;
 
         try {
-            // Track launching state before awaiting the CLI/debug checks so the tree shows
-            // "Starting..." immediately after the user invokes the command. Every pre-start
-            // failure path below clears it because VS Code will not emit a terminate event.
-            // See https://code.visualstudio.com/api/references/vscode-api#debug.startDebugging
-            this._launchingPaths.add(getComparisonKey(path.resolve(appHostPath)));
-            this._onDidChangeLaunchingState.fire();
+            telemetryProperties = await getLaunchTelemetryProperties(appHostPath, command, noDebug, executionSuppressed);
+            throwIfCancellationRequested(cancellationToken);
+
+            const config: AspireExtendedDebugConfiguration = {
+                type: 'aspire',
+                name: `Aspire ${command}: ${vscode.workspace.asRelativePath(appHostPath)}`,
+                request: 'launch',
+                program: appHostPath,
+                command,
+                noDebug
+            };
+
+            if (doStep) {
+                config.step = doStep;
+            }
+
+            this._onDidRequestLaunch.fire({
+                appHostPath,
+                command,
+                noDebug,
+                doStep,
+                executionSuppressed,
+            });
+            requestEmitted = true;
+            if (executionSuppressed) {
+                this.releaseLaunchClaim(claimedPath);
+                sendTelemetryEvent('aspire/vscode/apphost/launch/result', {
+                    ...telemetryProperties,
+                    outcome: 'suppressed',
+                }, {
+                    duration_ms: Date.now() - startTime,
+                });
+                return true;
+            }
 
             const cliAvailability = await checkCliAvailableOrRedirect('debug_gate');
             throwIfCancellationRequested(cancellationToken);
@@ -214,21 +217,49 @@ export class AppHostLaunchService implements vscode.Disposable {
             }, {
                 duration_ms: Date.now() - startTime,
             });
+            return true;
         } catch (err) {
-            this.clearLaunching(appHostPath);
-            const canceled = isCommandCancellation(err);
-            const properties: EventProperties<'aspire/vscode/apphost/launch/result'> = {
-                ...telemetryProperties,
-                outcome: canceled ? 'canceled' : 'error',
-            };
-            if (!canceled) {
-                properties.error_kind = classifyError(err);
+            this.releaseLaunchClaim(claimedPath);
+            if (requestEmitted && telemetryProperties) {
+                const canceled = isCommandCancellation(err);
+                const properties: EventProperties<'aspire/vscode/apphost/launch/result'> = {
+                    ...telemetryProperties,
+                    outcome: canceled ? 'canceled' : 'error',
+                };
+                if (!canceled) {
+                    properties.error_kind = classifyError(err);
+                }
+                sendTelemetryEvent('aspire/vscode/apphost/launch/result', properties, {
+                    duration_ms: Date.now() - startTime,
+                });
             }
-            sendTelemetryEvent('aspire/vscode/apphost/launch/result', properties, {
-                duration_ms: Date.now() - startTime,
-            });
             throw err;
         }
+    }
+
+    private tryClaimLaunch(appHostPath: string): string | undefined {
+        const resolvedPath = path.resolve(appHostPath);
+        if (this.getMatchingLaunchingPaths(resolvedPath).length > 0 ||
+            Array.from(this._launchingPaths).some(launchingPath => isProjectFileToSourceFileMatch(launchingPath, resolvedPath))) {
+            return undefined;
+        }
+
+        // The check and add are synchronous so editor, tree, and language-model callers
+        // cannot interleave different lexical paths for the same physical AppHost.
+        this._launchingPaths.add(resolvedPath);
+        this._onDidChangeLaunchingState.fire();
+        return resolvedPath;
+    }
+
+    private releaseLaunchClaim(claimedPath: string): void {
+        if (this._launchingPaths.delete(claimedPath)) {
+            this._onDidChangeLaunchingState.fire();
+        }
+    }
+
+    private getMatchingLaunchingPaths(appHostPath: string): string[] {
+        const resolvedPath = path.resolve(appHostPath);
+        return Array.from(this._launchingPaths).filter(launchingPath => isSameLaunchingIdentity(launchingPath, resolvedPath));
     }
 }
 
@@ -264,23 +295,36 @@ function isE2eDebugLaunchSuppressed(): boolean {
         process.env.ASPIRE_EXTENSION_E2E_SUPPRESS_DEBUG_LAUNCH === 'true';
 }
 
-function isMatchingAppHostPath(left: string, right: string): boolean {
-    const normalizedLeft = path.normalize(left);
-    const normalizedRight = path.normalize(right);
-    if (getComparisonKey(normalizedLeft) === getComparisonKey(normalizedRight)) {
+function isSameLaunchingIdentity(left: string, right: string): boolean {
+    if (isSameAppHost(left, right)) {
         return true;
     }
 
-    return getComparisonKey(path.dirname(normalizedLeft)) === getComparisonKey(path.dirname(normalizedRight)) &&
-        isProjectFileToSourceFileMatch(normalizedLeft, normalizedRight);
+    const canonicalLeft = canonicalizeAppHostPath(left);
+    const canonicalRight = canonicalizeAppHostPath(right);
+    return getAppHostPathComparisonKey(path.dirname(canonicalLeft)) === getAppHostPathComparisonKey(path.dirname(canonicalRight)) &&
+        isProjectAndAppHostSourcePair(canonicalLeft, canonicalRight);
 }
 
 function isProjectFileToSourceFileMatch(left: string, right: string): boolean {
-    return (isProjectFile(left) && isSourceFile(right)) || (isSourceFile(left) && isProjectFile(right));
+    const canonicalLeft = canonicalizeAppHostPath(left);
+    const canonicalRight = canonicalizeAppHostPath(right);
+    return getAppHostPathComparisonKey(path.dirname(canonicalLeft)) === getAppHostPathComparisonKey(path.dirname(canonicalRight)) &&
+        ((isProjectFile(canonicalLeft) && isSourceFile(canonicalRight)) ||
+            (isSourceFile(canonicalLeft) && isProjectFile(canonicalRight)));
+}
+
+function isProjectAndAppHostSourcePair(left: string, right: string): boolean {
+    return (isProjectFile(left) && isAppHostSourceFile(right)) ||
+        (isAppHostSourceFile(left) && isProjectFile(right));
 }
 
 function isProjectFile(value: string): boolean {
     return path.extname(value).toLowerCase() === '.csproj';
+}
+
+function isAppHostSourceFile(value: string): boolean {
+    return path.basename(value).toLowerCase() === 'apphost.cs';
 }
 
 function isSourceFile(value: string): boolean {
