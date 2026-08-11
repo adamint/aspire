@@ -12,15 +12,17 @@ using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
 using Aspire.Cli.Utils;
 using Aspire.Cli.Utils.EnvironmentChecker;
+using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.AspNetCore.InternalTesting;
 using Spectre.Console;
 
 namespace Aspire.Cli.Tests.Commands;
 
 public class DoctorCommandTests(ITestOutputHelper outputHelper)
 {
+    private const string MicrosoftMarketplaceExtensionSource = "microsoft-marketplace";
+
     [Fact]
     public async Task DoctorCommand_Help_Works()
     {
@@ -32,7 +34,7 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
         var result = command.Parse("doctor --help");
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
-        
+
         // Help should return success
         Assert.Equal(CliExitCodes.Success, exitCode);
     }
@@ -106,6 +108,7 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
             configureServices: services => ConfigureVsCodeExtensionServices(
                 services,
                 "1.2.3",
+                MicrosoftMarketplaceExtensionSource,
                 new MockHttpMessageHandler(marketplaceResponse)));
 
         var extensionCheck = GetCheckByName(document, VsCodeExtensionCheck.CheckName);
@@ -119,6 +122,7 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal("1.2.3", metadata.GetProperty("extensionVersion").GetString());
         Assert.True(metadata.GetProperty("extensionVersionKnown").GetBoolean());
         Assert.Equal("stable", metadata.GetProperty("extensionChannel").GetString());
+        Assert.Equal(MicrosoftMarketplaceExtensionSource, metadata.GetProperty("extensionSource").GetString());
         Assert.Equal("1.3.0", metadata.GetProperty("latestVersion").GetString());
         Assert.True(metadata.GetProperty("latestVersionKnown").GetBoolean());
         Assert.Equal("stable", metadata.GetProperty("latestVersionChannel").GetString());
@@ -137,6 +141,7 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
             configureServices: services => ConfigureVsCodeExtensionServices(
                 services,
                 "1.2.3",
+                MicrosoftMarketplaceExtensionSource,
                 new MockHttpMessageHandler(new HttpRequestException(rawFailure))));
 
         var extensionCheck = GetCheckByName(document, VsCodeExtensionCheck.CheckName);
@@ -172,6 +177,7 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
         ConfigureVsCodeExtensionServices(
             services,
             "1.2.3",
+            MicrosoftMarketplaceExtensionSource,
             new MockHttpMessageHandler(new HttpRequestException(rawFailure)));
         services.RemoveAll<IAnsiConsole>();
         services.AddSingleton(console);
@@ -1168,6 +1174,7 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
     private static void ConfigureVsCodeExtensionServices(
         IServiceCollection services,
         string reportedExtensionVersion,
+        string reportedExtensionSource,
         HttpMessageHandler marketplaceHandler)
     {
         services.RemoveAll<IEnvironment>();
@@ -1175,7 +1182,8 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
         {
             ["TERM_PROGRAM"] = "vscode",
             [VsCodeExtensionCheck.ExtensionVersionEnvironmentVariable] = reportedExtensionVersion,
-            [VsCodeExtensionCheck.ExtensionChannelEnvironmentVariable] = "stable"
+            [VsCodeExtensionCheck.ExtensionChannelEnvironmentVariable] = "stable",
+            [VsCodeExtensionCheck.ExtensionSourceEnvironmentVariable] = reportedExtensionSource
         }));
         services.AddSingleton(new HttpClient(marketplaceHandler));
         services.AddSingleton<IVsCodeExtensionMarketplaceClient>(serviceProvider =>
