@@ -41,10 +41,10 @@ if (!extesterVersion) {
 // The feed preflight must not touch the shared cache: it runs before any download and only
 // verifies package availability, so resolving the cache root there would be wasted Git discovery.
 const downloadCacheRoot = verifyExtesterFeedOnly ? '' : resolveDownloadCacheRoot(repoRoot);
-// Keep this below VS Code 1.131.0 while ExTester is pinned to 8.23.0. VS Code 1.131.0 renamed the
-// macOS app executable from Contents/MacOS/Electron to Contents/MacOS/Code, and ExTester 8.23.0
-// only launches the old path. ExTester 8.24.0 adds the fallback, but its tarball is not anonymously
-// available from dotnet-public-npm yet.
+// Keep this below VS Code 1.131.0 while ExTester is pinned to 8.23.0. VS Code 1.130.0 contains
+// Contents/MacOS/Code plus an Electron -> Code compatibility symlink, but VS Code 1.131.0 removes
+// that legacy path and ExTester 8.23.0 only launches it. ExTester 8.24.0 adds the fallback, but its
+// tarball is not anonymously available from dotnet-public-npm yet.
 const vscodeVersion = resolveCachedVsCodeVersion(process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '1.130.0');
 assertVsCodeVersionCompatibleWithExtester(vscodeVersion, extesterVersion);
 if (!verifyExtesterFeedOnly) {

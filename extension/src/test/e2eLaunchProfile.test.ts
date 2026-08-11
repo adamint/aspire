@@ -268,7 +268,7 @@ suite('E2E launch profile', () => {
         assert.ok(!workflow.includes('registry=https://'));
     });
 
-    test('defaults to the newest VS Code before the macOS executable rename while the internal feed lacks newer ExTester', () => {
+    test('defaults to the newest VS Code with the legacy macOS executable path while the internal feed lacks newer ExTester', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
         const installedPackageJson = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'node_modules', 'vscode-extension-tester', 'package.json'), 'utf8'));
@@ -277,12 +277,12 @@ suite('E2E launch profile', () => {
         };
         const previousCodeVersion = process.env.CODE_VERSION;
         const defaultVsCodeVersion = '1.130.0';
-        const macOsExecutableRenameVersion = '1.131.0';
+        const macOsLegacyExecutableRemovalVersion = '1.131.0';
         const extesterMacOsExecutableFallbackVersion = '8.24.0';
 
         assert.ok(runner.includes(`process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '${defaultVsCodeVersion}'`));
         assert.strictEqual(installedPackageJson.version, '8.23.0');
-        assert.ok(compareVersionStrings(defaultVsCodeVersion, macOsExecutableRenameVersion) < 0);
+        assert.ok(compareVersionStrings(defaultVsCodeVersion, macOsLegacyExecutableRemovalVersion) < 0);
         assert.ok(compareVersionStrings(installedPackageJson.version, extesterMacOsExecutableFallbackVersion) < 0);
 
         try {
