@@ -139,7 +139,7 @@ internal sealed class LayoutProcessRunner(IProcessExecutionFactory executionFact
 
     private static string BuildTimeoutMessage(string toolPath, IReadOnlyList<string> arguments, DirectoryInfo workingDirectory, TimeSpan timeout)
     {
-        var timeoutText = timeout.ToString("g", CultureInfo.InvariantCulture);
+        var timeoutText = FormatTimeout(timeout);
         if (arguments is ["nuget", "search", ..])
         {
             var query = TryGetArgumentValue(arguments, "--query");
@@ -168,5 +168,33 @@ internal sealed class LayoutProcessRunner(IProcessExecutionFactory executionFact
         }
 
         return null;
+    }
+
+    private static string FormatTimeout(TimeSpan timeout)
+    {
+        if (timeout.TotalHours >= 1 && timeout.TotalMinutes % 60 == 0)
+        {
+            return FormatTimeoutUnit(timeout.TotalHours, "0", "hour", "hours");
+        }
+
+        if (timeout.TotalMinutes >= 1 && timeout.TotalSeconds % 60 == 0)
+        {
+            return FormatTimeoutUnit(timeout.TotalMinutes, "0", "minute", "minutes");
+        }
+
+        if (timeout.TotalSeconds >= 1)
+        {
+            return FormatTimeoutUnit(timeout.TotalSeconds, "0.###", "second", "seconds");
+        }
+
+        return FormatTimeoutUnit(timeout.TotalMilliseconds, "0.###", "millisecond", "milliseconds");
+    }
+
+    private static string FormatTimeoutUnit(double value, string format, string singularUnit, string pluralUnit)
+    {
+        var formattedValue = value.ToString(format, CultureInfo.InvariantCulture);
+        var unit = string.Equals(formattedValue, "1", StringComparison.Ordinal) ? singularUnit : pluralUnit;
+
+        return $"{formattedValue} {unit}";
     }
 }
