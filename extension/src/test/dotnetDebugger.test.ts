@@ -56,6 +56,7 @@ class TestDotNetService {
 
 suite('Dotnet Debugger Extension Tests', () => {
     let getHotReloadDiagnostics: sinon.SinonStub;
+    let logHotReloadDiagnostics: sinon.SinonStub;
     let showHotReloadDisabledAdvisory: sinon.SinonStub;
 
     setup(() => {
@@ -66,7 +67,7 @@ suite('Dotnet Debugger Extension Tests', () => {
             settingEnabled: false,
             reloadOnSaveEnabled: true
         });
-        sinon.stub(hotReload, 'logHotReloadDiagnostics');
+        logHotReloadDiagnostics = sinon.stub(hotReload, 'logHotReloadDiagnostics');
         showHotReloadDisabledAdvisory = sinon.stub(hotReload, 'showHotReloadDisabledAdvisoryIfNeeded').resolves();
     });
 
@@ -356,7 +357,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.deepStrictEqual(withDevKit, withoutDevKit);
     });
 
-    test('ordinary project debug launch offers the Hot Reload advisory with current diagnostics', async () => {
+    test('ordinary project debug launch logs and offers the Hot Reload advisory with current diagnostics', async () => {
         const diagnostics = {
             devKitInstalled: true,
             workspaceTrusted: true,
@@ -366,9 +367,10 @@ suite('Dotnet Debugger Extension Tests', () => {
         };
         getHotReloadDiagnostics.returns(diagnostics);
 
-        await createProjectDebugConfiguration();
+        await createProjectDebugConfiguration({ runId: 'resource-42' });
 
         assert.strictEqual(getHotReloadDiagnostics.calledOnce, true);
+        assert.strictEqual(logHotReloadDiagnostics.calledOnceWithExactly('C:\\temp\\TestProject.csproj (run resource-42)', diagnostics), true);
         assert.strictEqual(showHotReloadDisabledAdvisory.calledOnceWithExactly(diagnostics), true);
     });
 
