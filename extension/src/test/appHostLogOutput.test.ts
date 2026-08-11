@@ -67,6 +67,35 @@ suite('AppHost log output coordinator', () => {
         assert.strictEqual(debugLoggerFirst.handleBackchannelEntry(entry), undefined);
     });
 
+    test('escapes category control characters consistently across log sources', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const category = 'Unsafe\x1b[31m\tCategory\u0085';
+        const escapedCategory = 'Unsafe\\u001b[31m\\u0009Category\\u0085';
+
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ categoryName: category })),
+            {
+                output: `${escapedCategory}: Information: Repeated message.\n`,
+                category: 'stdout'
+            });
+        assert.deepStrictEqual(
+            renderConsole(coordinator, `info: ${category}[7]\n      Repeated message.\n`, 'stdout'),
+            []);
+        assert.deepStrictEqual(
+            renderConsole(coordinator, `${category}: Information: Repeated message.\n`, 'console'),
+            []);
+
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({
+                sequenceNumber: 2,
+                categoryName: 'Forged\r\nline\x7f'
+            })),
+            {
+                output: 'Forged\\u000d\\u000aline\\u007f: Information: Repeated message.\n',
+                category: 'stdout'
+            });
+    });
+
     test('keeps low-level adapter traffic from evicting pending Information records', () => {
         const coordinator = new AppHostLogOutputCoordinator();
         assert.ok(coordinator.handleBackchannelEntry(createEntry({ message: 'Still pending.' })));
@@ -250,6 +279,30 @@ suite('AppHost log output coordinator', () => {
                     category: 'stderr'
                 }
             ]);
+        }
+        finally {
+            coordinator.reset();
+            clock.restore();
+        }
+    });
+
+    test('continuous partial chunks do not postpone the original idle flush deadline', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const emitted: AppHostParentOutput[] = [];
+        const coordinator = new AppHostLogOutputCoordinator(output => emitted.push(output));
+
+        try {
+            assert.deepStrictEqual(coordinator.handleDebugAdapterOutput('continuous ', 'stderr'), []);
+            await clock.tickAsync(100);
+            assert.deepStrictEqual(coordinator.handleDebugAdapterOutput('partial ', 'stderr'), []);
+            await clock.tickAsync(100);
+            assert.deepStrictEqual(coordinator.handleDebugAdapterOutput('output', 'stderr'), []);
+            await clock.tickAsync(50);
+
+            assert.deepStrictEqual(emitted, [{
+                output: 'continuous partial output',
+                category: 'stderr'
+            }]);
         }
         finally {
             coordinator.reset();

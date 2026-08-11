@@ -95,7 +95,6 @@ export class AppHostLogOutputCoordinator {
     handleDebugAdapterOutput(output: string, category: string | undefined): AppHostParentOutput[] {
         const normalizedCategory = category ?? 'console';
         const outputs: AppHostParentOutput[] = [];
-        this.clearIdleFlushTimer(normalizedCategory);
 
         const buffered = `${this._partialLines.get(normalizedCategory) ?? ''}${output}`;
         const lastBreak = findLastCompletedLineBreak(buffered);
@@ -346,6 +345,13 @@ export class AppHostLogOutputCoordinator {
         const pending = this._pendingRecords.get(category);
         const hasPendingDebugRecord = this._pendingDebugRecords.has(category);
         if (!this._onIdleFlush || (!pending?.hasBodyLine && !hasPendingDebugRecord && !this._partialLines.has(category))) {
+            this.clearIdleFlushTimer(category);
+            return;
+        }
+
+        // Keep the deadline established by the first pending chunk. Restarting the timer
+        // for every chunk can hide a continuously written partial line and grow it forever.
+        if (this._idleFlushTimers.has(category)) {
             return;
         }
 
@@ -464,7 +470,7 @@ export class AppHostParentOutputFilter {
 
 function createBackchannelRecord(entry: AppHostLogEntry): LogRecord {
     return {
-        categoryName: entry.categoryName,
+        categoryName: escapeCategoryControlCharacters(entry.categoryName),
         logLevel: entry.logLevel,
         eventId: entry.eventId,
         body: normalizeRecordText(entry.exception
@@ -503,7 +509,7 @@ function parseMultilineConsoleLoggerHeader(line: string): Omit<LogRecord, 'body'
     }
 
     return {
-        categoryName: match[2],
+        categoryName: escapeCategoryControlCharacters(match[2]),
         logLevel: getFullLoggerLevel(match[1]),
         eventId: Number(match[3])
     };
@@ -518,7 +524,7 @@ function parseSingleLineConsoleLoggerRecord(line: string): LogRecord | undefined
     }
 
     return {
-        categoryName: match[2],
+        categoryName: escapeCategoryControlCharacters(match[2]),
         logLevel: getFullLoggerLevel(match[1]),
         eventId: Number(match[3]),
         body: normalizeRecordText(match[4]),
@@ -541,7 +547,7 @@ function parseDebugLoggerRecord(output: string): LogRecord | undefined {
 
     const { message, exception } = splitMessageAndException(match[4]);
     return {
-        categoryName: match[1],
+        categoryName: escapeCategoryControlCharacters(match[1]),
         logLevel: match[3] as AppHostLogLevel,
         eventId: match[2] === undefined ? undefined : Number(match[2]),
         body: normalizeRecordText(exception ? `${message}\n${exception}` : message)
@@ -638,6 +644,11 @@ function formatRecord(raw: string, logLevel: AppHostLogLevel, category: 'stdout'
 
 function normalizeRecordText(value: string): string {
     return value.replace(/\r\n|\r/g, '\n').replace(/[ \t\n]+$/, '');
+}
+
+function escapeCategoryControlCharacters(value: string): string {
+    return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, character =>
+        `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
 }
 
 function getFullLoggerLevel(shortLevel: string): AppHostLogLevel {
