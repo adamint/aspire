@@ -102,10 +102,16 @@ internal sealed partial class WslEnvironmentCheck : IEnvironmentCheck
         // which legitimately contains these markers on machines that are not WSL:
         //   Linux version 6.8.0-64-generic (Microsoft@builder) (x86_64-linux-gnu-gcc-13 ...) #67 SMP ...
         // Scanning the whole banner reported that kernel as WSL and warned a user who has no WSL at all.
+        // Likewise, only the complete observed Microsoft release shapes identify WSL here:
+        //   4.4.0-19041-Microsoft
+        //   4.19.121-microsoft-WSL2-standard
+        //   4.19.84-microsoft-standard
+        //   5.15.90.1-microsoft-standard-WSL2
+        // Custom releases such as "6.1.0-custom-WSL2", "6.1.0-microsoft-standard-custom",
+        // "6.1.0-custom-microsoft-standard", or "6.1.0-custom-microsoft-standard-WSL2" are not
+        // official kernels and must fall back to the distro-name check instead of being treated as WSL.
         var kernelRelease = GetKernelRelease(procVersion);
-        if (kernelRelease is not null &&
-            (kernelRelease.Contains("microsoft", StringComparison.OrdinalIgnoreCase) ||
-             kernelRelease.Contains("WSL", StringComparison.OrdinalIgnoreCase)))
+        if (kernelRelease is not null && IsOfficialWslKernelRelease(kernelRelease))
         {
             return true;
         }
@@ -125,13 +131,6 @@ internal sealed partial class WslEnvironmentCheck : IEnvironmentCheck
             return WslVersion.Unknown;
         }
 
-        // WSL 2 runs a genuine Microsoft-built kernel. Newer releases carry a "WSL2" marker:
-        //   Linux version 5.15.90.1-microsoft-standard-WSL2 (oe-user@oe-host) (...) #1 SMP ...
-        if (kernelRelease.Contains("WSL2", StringComparison.OrdinalIgnoreCase))
-        {
-            return WslVersion.Wsl2;
-        }
-
         // WSL 1 has no real kernel. It reports a fixed 4.4.0 compatibility banner with a "-Microsoft"
         // suffix, kept only so tools that parse a kernel version keep working:
         //   Linux version 4.4.0-19041-Microsoft (Microsoft@Microsoft.com) (gcc version 5.4.0 (GCC) ) ...
@@ -149,12 +148,18 @@ internal sealed partial class WslEnvironmentCheck : IEnvironmentCheck
             return WslVersion.Wsl1;
         }
 
-        // Early WSL 2 kernels predate the literal WSL2 suffix but still use the Microsoft-built
-        // kernel release line:
+        // Official WSL 2 kernels identify themselves only by these complete release shapes:
+        //   Linux version 4.19.121-microsoft-WSL2-standard (oe-user@oe-host) (...) #1 SMP ...
         //   Linux version 4.19.84-microsoft-standard (oe-user@oe-host) (...) #1 SMP ...
-        // Check this after the WSL 1 compatibility banner so the fixed 4.4.0-Microsoft string
-        // continues to report WSL 1. See https://learn.microsoft.com/windows/wsl/kernel-release-notes
-        if (kernelRelease.Contains("microsoft-standard", StringComparison.OrdinalIgnoreCase))
+        //   Linux version 5.15.90.1-microsoft-standard-WSL2 (oe-user@oe-host) (...) #1 SMP ...
+        // Match the complete release case-insensitively and culture-invariantly so custom releases such as
+        //   Linux version 6.1.0-custom-WSL2 (builder@host) ...
+        //   Linux version 6.1.0-microsoft-standard-custom (builder@host) ...
+        //   Linux version 6.1.0-custom-microsoft-standard (builder@host) ...
+        //   Linux version 6.1.0-custom-microsoft-standard-WSL2 (builder@host) ...
+        // fall through to Unknown instead of being reported as supported WSL 2 kernels.
+        // See https://learn.microsoft.com/windows/wsl/kernel-release-notes
+        if (Wsl2KernelRelease().IsMatch(kernelRelease))
         {
             return WslVersion.Wsl2;
         }
@@ -201,11 +206,25 @@ internal sealed partial class WslEnvironmentCheck : IEnvironmentCheck
         }
     }
 
+    private static bool IsOfficialWslKernelRelease(string kernelRelease) =>
+        Wsl1KernelRelease().IsMatch(kernelRelease) || Wsl2KernelRelease().IsMatch(kernelRelease);
+
     // Matches the complete WSL 1 compatibility release, "4.4.0-<build>-Microsoft". The build number is
     // the Windows build the distribution runs on (for example 19041). Anchored so that a real kernel
     // whose release merely starts with 4.4.0 is not mistaken for the compatibility banner.
-    [GeneratedRegex(@"^4\.4\.0-\d+-Microsoft$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^4\.4\.0-\d+-Microsoft$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex Wsl1KernelRelease();
+
+    // Matches the complete official WSL 2 release line. Older Microsoft-shipped 4.19 kernels used
+    // "<numeric release>-microsoft-WSL2-standard" before the current
+    // "<numeric release>-microsoft-standard[-WSL2]" naming. See:
+    // - https://github.com/microsoft/WSL/issues/5437
+    // - https://github.com/microsoft/WSL/issues/5439
+    // - https://github.com/microsoft/WSL/issues/5476
+    // Anchored so custom names that only start or end with the same tokens are not mistaken for
+    // Microsoft-built kernels.
+    [GeneratedRegex(@"^\d+(?:\.\d+)+-(?:microsoft-standard(?:-WSL2)?|microsoft-WSL2-standard)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex Wsl2KernelRelease();
 
     // The kernel release is the first whitespace-delimited token after "Linux version".
     [GeneratedRegex(@"Linux\s+version\s+(?<release>\S+)", RegexOptions.IgnoreCase)]

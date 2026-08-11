@@ -1,8 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using Aspire.Cli.Utils.EnvironmentChecker;
 using Aspire.Cli.Tests.Utils;
+using Aspire.Cli.Utils.EnvironmentChecker;
 
 namespace Aspire.Cli.Tests.Commands;
 
@@ -20,8 +20,31 @@ public class WslEnvironmentCheckTests
     private const string EarlyWsl2Banner =
         "Linux version 4.19.84-microsoft-standard (oe-user@oe-host) (gcc version 8.3.0 (GCC)) #1 SMP Wed Nov 13 11:44:37 UTC 2019";
 
+    // Some Microsoft-shipped 4.19 WSL 2 kernels used the legacy "...-microsoft-WSL2-standard"
+    // release shape before Microsoft standardized on "...-microsoft-standard[-WSL2]".
+    private const string LegacyWsl2Banner =
+        "Linux version 4.19.121-microsoft-WSL2-standard (oe-user@oe-host) (gcc version 8.3.0 (GCC)) #1 SMP Fri Jul 10 23:59:06 UTC 2020";
+
     private const string NewerWsl2Banner =
         "Linux version 6.6.87.2-microsoft-standard-WSL2 (root@builder) (gcc (GCC) 11.2.0) #1 SMP PREEMPT_DYNAMIC Thu Jun 5 18:30:46 UTC 2025";
+
+    private const string MixedCaseWsl2Banner =
+        "Linux version 5.15.90.1-MICROSOFT-STANDARD-wsl2 (oe-user@oe-host) (x86_64-msft-linux-gcc (GCC) 9.3.0) #1 SMP Fri Jan 27 02:56:13 UTC 2023";
+
+    private const string MixedCaseEarlyWsl2Banner =
+        "Linux version 4.19.84-Microsoft-Standard (oe-user@oe-host) (gcc version 8.3.0 (GCC)) #1 SMP Wed Nov 13 11:44:37 UTC 2019";
+
+    private const string CustomWsl2LookingBanner =
+        "Linux version 6.1.0-custom-WSL2 (builder@host) (gcc version 11.2.0) #1 SMP Tue Jan 2 00:00:00 UTC 2024";
+
+    private const string CustomMicrosoftStandardLookingBanner =
+        "Linux version 6.1.0-microsoft-standard-custom (builder@host) (gcc version 11.2.0) #1 SMP Tue Jan 2 00:00:00 UTC 2024";
+
+    private const string CustomPrefixWsl2LookingBanner =
+        "Linux version 6.1.0-custom-microsoft-standard-WSL2 (builder@host) (gcc version 11.2.0) #1 SMP Tue Jan 2 00:00:00 UTC 2024";
+
+    private const string CustomPrefixMicrosoftStandardLookingBanner =
+        "Linux version 6.1.0-custom-microsoft-standard (builder@host) (gcc version 11.2.0) #1 SMP Tue Jan 2 00:00:00 UTC 2024";
 
     private const string NativeLinuxBanner =
         "Linux version 6.8.0-64-generic (buildd@lcy02-amd64-029) (x86_64-linux-gnu-gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0) #67-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 15 20:23:31 UTC 2025";
@@ -64,9 +87,24 @@ public class WslEnvironmentCheckTests
     }
 
     [Fact]
+    public void DetermineWslVersion_ReportsWsl2_ForLegacyMicrosoftWsl2StandardKernel()
+    {
+        Assert.Equal(WslVersion.Wsl2, WslEnvironmentCheck.DetermineWslVersion(LegacyWsl2Banner));
+    }
+
+    [Fact]
     public void DetermineWslVersion_ReportsWsl2_ForNewerWsl2Kernel()
     {
         Assert.Equal(WslVersion.Wsl2, WslEnvironmentCheck.DetermineWslVersion(NewerWsl2Banner));
+    }
+
+    [Theory]
+    // Official suffix matching is case-insensitive because the kernel release casing is not stable.
+    [InlineData(MixedCaseEarlyWsl2Banner)]
+    [InlineData(MixedCaseWsl2Banner)]
+    public void DetermineWslVersion_ReportsWsl2_ForOfficialKernelReleaseSuffixes_WithDifferentCasing(string procVersion)
+    {
+        Assert.Equal(WslVersion.Wsl2, WslEnvironmentCheck.DetermineWslVersion(procVersion));
     }
 
     [Fact]
@@ -130,6 +168,26 @@ public class WslEnvironmentCheckTests
     // Same for the early WSL 2 marker: "microsoft-standard" in the build identity is not a kernel release.
     [InlineData("Linux version 6.1.0-custom (microsoft-standard@builder) (gcc version 11.2.0) #1 SMP Tue Jan 2 00:00:00 UTC 2024")]
     public void DetermineWslVersion_ReportsUnknown_WhenMarkersAppearOnlyInBuildMetadata(string procVersion)
+    {
+        Assert.Equal(WslVersion.Unknown, WslEnvironmentCheck.DetermineWslVersion(procVersion));
+    }
+
+    [Theory]
+    // These releases only borrow official WSL 2 tokens as substrings. Matching them with Contains(...)
+    // reported them as real WSL 2 kernels and suppressed the unknown-version warning.
+    [InlineData(CustomWsl2LookingBanner)]
+    [InlineData(CustomMicrosoftStandardLookingBanner)]
+    public void DetermineWslVersion_ReportsUnknown_ForUnofficialKernelReleaseSuffixes(string procVersion)
+    {
+        Assert.Equal(WslVersion.Unknown, WslEnvironmentCheck.DetermineWslVersion(procVersion));
+    }
+
+    [Theory]
+    // These kernels end with the official tokens but insert extra release segments before them.
+    // Accepting them would treat a custom kernel name as if it were an observed Microsoft release.
+    [InlineData(CustomPrefixWsl2LookingBanner)]
+    [InlineData(CustomPrefixMicrosoftStandardLookingBanner)]
+    public void DetermineWslVersion_ReportsUnknown_ForUnofficialKernelReleasePrefixes(string procVersion)
     {
         Assert.Equal(WslVersion.Unknown, WslEnvironmentCheck.DetermineWslVersion(procVersion));
     }
@@ -205,6 +263,26 @@ public class WslEnvironmentCheckTests
     }
 
     [Theory]
+    [InlineData(CustomWsl2LookingBanner)]
+    [InlineData(CustomMicrosoftStandardLookingBanner)]
+    public async Task CheckAsync_ReportsNothing_ForUnofficialKernelReleaseSuffixes_WhenWslDistroNameIsNotSet(string procVersion)
+    {
+        var check = new WslEnvironmentCheck(TestEnvironment.CreateLinux(), () => procVersion);
+
+        Assert.Empty(await check.CheckAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData(CustomPrefixWsl2LookingBanner)]
+    [InlineData(CustomPrefixMicrosoftStandardLookingBanner)]
+    public async Task CheckAsync_ReportsNothing_ForUnofficialKernelReleasePrefixes_WhenWslDistroNameIsNotSet(string procVersion)
+    {
+        var check = new WslEnvironmentCheck(TestEnvironment.CreateLinux(), () => procVersion);
+
+        Assert.Empty(await check.CheckAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
     [MemberData(nameof(WslDetectionCases))]
     public async Task CheckAsync_DetectsWslOnlyFromKernelBannerOrNonBlankDistroName(
         string? distroName,
@@ -241,6 +319,44 @@ public class WslEnvironmentCheckTests
         Assert.Equal("WSL1 detected - limited container support", result.Message);
     }
 
+    [Theory]
+    [InlineData(CustomWsl2LookingBanner)]
+    [InlineData(CustomMicrosoftStandardLookingBanner)]
+    public async Task CheckAsync_ReportsUnknownWarning_ForUnofficialKernelReleaseSuffixes_WhenWslDistroNameIsSet(string procVersion)
+    {
+        var check = new WslEnvironmentCheck(
+            TestEnvironment.CreateLinux(new Dictionary<string, string?> { ["WSL_DISTRO_NAME"] = "Ubuntu-22.04" }),
+            () => procVersion);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
+        Assert.Equal("WSL detected but the version could not be determined", result.Message);
+        Assert.Equal(
+            "Run 'wsl --list --verbose' from Windows to check the version. If it reports 1, upgrade with: wsl --set-version <distro> 2",
+            result.Fix);
+        Assert.Equal(WslVersion.Unknown, WslEnvironmentCheck.DetermineWslVersion(procVersion));
+    }
+
+    [Theory]
+    [InlineData(CustomPrefixWsl2LookingBanner)]
+    [InlineData(CustomPrefixMicrosoftStandardLookingBanner)]
+    public async Task CheckAsync_ReportsUnknownWarning_ForUnofficialKernelReleasePrefixes_WhenWslDistroNameIsSet(string procVersion)
+    {
+        var check = new WslEnvironmentCheck(
+            TestEnvironment.CreateLinux(new Dictionary<string, string?> { ["WSL_DISTRO_NAME"] = "Ubuntu-22.04" }),
+            () => procVersion);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
+        Assert.Equal("WSL detected but the version could not be determined", result.Message);
+        Assert.Equal(
+            "Run 'wsl --list --verbose' from Windows to check the version. If it reports 1, upgrade with: wsl --set-version <distro> 2",
+            result.Fix);
+        Assert.Equal(WslVersion.Unknown, WslEnvironmentCheck.DetermineWslVersion(procVersion));
+    }
+
     [Fact]
     public async Task CheckAsync_ReportsWarning_WhenBannerIsUnreadableButDistroNameIsSet()
     {
@@ -260,6 +376,22 @@ public class WslEnvironmentCheckTests
     public async Task CheckAsync_ReportsPass_ForWsl2()
     {
         var check = new WslEnvironmentCheck(TestEnvironment.CreateLinux(), () => Wsl2Banner);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal("WSL2 environment detected", result.Message);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("Ubuntu-22.04")]
+    public async Task CheckAsync_ReportsPass_ForLegacyMicrosoftWsl2StandardKernel(string? distroName)
+    {
+        var environment = distroName is null
+            ? TestEnvironment.CreateLinux()
+            : TestEnvironment.CreateLinux(new Dictionary<string, string?> { ["WSL_DISTRO_NAME"] = distroName });
+        var check = new WslEnvironmentCheck(environment, () => LegacyWsl2Banner);
 
         var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
 
