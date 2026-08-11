@@ -50,9 +50,9 @@ public sealed class SupportsDebuggingAnnotation : IResourceAnnotation
     // Takes the internal DCP Executable object, so it stays internal even though the annotation is public.
     internal Func<Executable, LaunchConfigurationCallbackContext, Task> LaunchConfigurationAnnotator { get; }
 
-    // The producer callback passed to WithDebugSupport, with the launch configuration boxed as object.
-    // Internal because it hands out an untyped object; DebugSupportExtensions.CreateLaunchConfigurationAsync is
-    // the supported way to reach it.
+    // The producer callback supplied to WithDebugSupport, with the launch configuration boxed as object.
+    // Internal because only Aspire constructs LaunchConfigurationCallbackContext values and because the
+    // untyped object is consumed by internal launch-configuration plumbing.
     internal Func<LaunchConfigurationCallbackContext, Task<object>> LaunchConfigurationProducer { get; }
 
     /// <summary>

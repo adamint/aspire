@@ -4917,8 +4917,13 @@ public static class ResourceBuilderExtensions
             {
                 // Make sure that we do not call the callback if we aren't the active (last) SupportsDebuggingAnnotation,
                 // because the callback may be specific to the launch configuration type.
+                //
+                // Project launch-args overrides force DCP to start the resource as a Process even when a supported
+                // non-project launch configuration producer still runs later to populate execution metadata. In that
+                // mode, debug arg rewriting would strip required process args such as MAUI target-framework switches.
                 if (resourceWithArgs.Resource.SupportsDebugging(builder.ApplicationBuilder.Configuration, out var activeAnnotation)
-                    && ReferenceEquals(activeAnnotation, supportsDebuggingAnnotation))
+                    && ReferenceEquals(activeAnnotation, supportsDebuggingAnnotation)
+                    && !resourceWithArgs.Resource.TryGetLastAnnotation<ProjectLaunchArgsOverrideAnnotation>(out _))
                 {
                     argsCallback(ctx);
                 }

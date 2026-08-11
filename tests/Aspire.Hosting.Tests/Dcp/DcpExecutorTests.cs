@@ -3581,6 +3581,7 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
     {
         var builder = DistributedApplication.CreateBuilder();
         LaunchConfigurationCallbackContext? launchContext = null;
+        var environmentCallbackInvocationCount = 0;
         var debugSessionInfo = JsonSerializer.Serialize(new RunSessionInfo
         {
             ProtocolsSupported = ["test"],
@@ -3593,7 +3594,11 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
         var resource = new TestExecutableResource("test-working-directory");
         builder.AddResource(resource)
             .WithArgs("app-arg")
-            .WithEnvironment("DEBUG_VALUE", "resolved")
+            .WithEnvironment(context =>
+            {
+                var currentInvocation = Interlocked.Increment(ref environmentCallbackInvocationCount);
+                context.EnvironmentVariables["DEBUG_VALUE"] = $"resolved-{currentInvocation}";
+            })
             .WithDebugSupport(
                 context =>
                 {
@@ -3630,9 +3635,12 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
         Assert.Equal(ExecutableLaunchMode.Debug, launchContext.Mode);
         Assert.Same(resource, launchContext.Resource);
         Assert.Equal(cts.Token, launchContext.CancellationToken);
-        Assert.Equal("resolved", launchContext.EnvironmentVariables["DEBUG_VALUE"]);
 
         var executable = GetCreatedExecutableForResource(kubernetesService, resource.Name);
+        var debugValue = Assert.Single(executable.Spec.Env!, variable => variable.Name == "DEBUG_VALUE").Value;
+        Assert.Equal(1, Volatile.Read(ref environmentCallbackInvocationCount));
+        Assert.Equal("resolved-1", debugValue);
+        Assert.Equal(debugValue, launchContext.EnvironmentVariables["DEBUG_VALUE"]);
         Assert.Equal(["app-arg", "debug-arg"], executable.Spec.Args);
     }
 
@@ -5039,6 +5047,7 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
 #pragma warning restore ASPIREPROJECTS001
 
         var producerInvocationCount = 0;
+        var debugArgsCallbackInvocationCount = 0;
         LaunchConfigurationCallbackContext? launchContext = null;
 
         if (useContextOverload)
@@ -5050,7 +5059,13 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
                     launchContext = context;
                     return Task.FromResult(CreateMauiLaunchConfiguration(context.Mode));
                 },
-                "maui");
+                "maui",
+                argsCallback: context =>
+                {
+                    Interlocked.Increment(ref debugArgsCallbackInvocationCount);
+                    context.Args.Clear();
+                    context.Args.Add("debug-only-arg");
+                });
         }
         else
         {
@@ -5060,20 +5075,31 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
                     Interlocked.Increment(ref producerInvocationCount);
                     return CreateMauiLaunchConfiguration(mode);
                 },
-                "maui");
+                "maui",
+                argsCallback: context =>
+                {
+                    Interlocked.Increment(ref debugArgsCallbackInvocationCount);
+                    context.Args.Clear();
+                    context.Args.Add("debug-only-arg");
+                });
         }
 
         projectBuilder.WithArgs("run", "-f", "net10.0-android");
+
+        var debugSessionInfo = JsonSerializer.Serialize(new RunSessionInfo
+        {
+            ProtocolsSupported = ["coreclr"],
+            SupportedLaunchConfigurations = ["maui"]
+        });
+        builder.Configuration[DcpExecutor.DebugSessionPortVar] = "12345";
+        builder.Configuration[KnownConfigNames.DebugSessionInfo] = debugSessionInfo;
+        builder.Configuration[KnownConfigNames.DebugSessionRunMode] = ExecutableLaunchMode.Debug;
 
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 [DcpExecutor.DebugSessionPortVar] = "12345",
-                [KnownConfigNames.DebugSessionInfo] = JsonSerializer.Serialize(new RunSessionInfo
-                {
-                    ProtocolsSupported = ["coreclr"],
-                    SupportedLaunchConfigurations = ["maui"]
-                }),
+                [KnownConfigNames.DebugSessionInfo] = debugSessionInfo,
                 [KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234",
                 [KnownConfigNames.DebugSessionRunMode] = ExecutableLaunchMode.Debug
             })
@@ -5081,16 +5107,34 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
 
         var kubernetesService = new TestKubernetesService();
         using var app = builder.Build();
+        var distributedApplicationOptions = new DistributedApplicationOptions { AssemblyName = typeof(DcpExecutorTests).Assembly.FullName };
+        var expectedConfiguration = System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyConfigurationAttribute>(typeof(DcpExecutorTests).Assembly)?.Configuration;
         var appExecutor = CreateAppExecutor(
             app.Services.GetRequiredService<DistributedApplicationModel>(),
             kubernetesService: kubernetesService,
-            configuration: configuration);
+            configuration: configuration,
+            distributedApplicationOptions: distributedApplicationOptions);
 
         await appExecutor.RunApplicationAsync();
 
         var executable = GetCreatedExecutableForResource(kubernetesService, "proj");
         Assert.Equal(ExecutionType.Process, executable.Spec.ExecutionType);
         Assert.Equal(1, Volatile.Read(ref producerInvocationCount));
+        Assert.Equal(0, Volatile.Read(ref debugArgsCallbackInvocationCount));
+        var expectedArgs = new List<string>
+        {
+            "build",
+            "--no-restore",
+            "/t:Run",
+            "-p:NoBuild=true",
+            "TestProject"
+        };
+        if (!string.IsNullOrEmpty(expectedConfiguration))
+        {
+            expectedArgs.AddRange(["--configuration", expectedConfiguration]);
+        }
+        expectedArgs.AddRange(["-f", "net10.0-android"]);
+        Assert.Equal(expectedArgs, executable.Spec.Args);
         Assert.True(executable.TryGetAnnotationAsObjectList<TestMauiLaunchConfiguration>(
             Executable.LaunchConfigurationsAnnotation,
             out var launchConfigurations));
