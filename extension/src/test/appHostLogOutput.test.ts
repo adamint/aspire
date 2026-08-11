@@ -1,17 +1,22 @@
 import * as assert from 'assert';
 import * as sinon from 'sinon';
-import { AppHostLogEntry, AppHostLogOutputCoordinator, AppHostParentOutput } from '../debugger/appHostLogOutput';
+import {
+    AppHostLogEntry,
+    AppHostLogOutputCoordinator,
+    AppHostParentOutput,
+    AppHostParentOutputFilter
+} from '../debugger/appHostLogOutput';
 
 suite('AppHost log output coordinator', () => {
     test('deduplicates correlated records without dropping repeated messages', () => {
         const coordinator = new AppHostLogOutputCoordinator();
 
         assert.deepStrictEqual(coordinator.handleBackchannelEntry(createEntry({ sequenceNumber: 1 })), {
-            output: 'info: Example.Category[7]\n      Repeated message.\n',
+            output: 'Example.Category: Information: Repeated message.\n',
             category: 'stdout'
         });
         assert.deepStrictEqual(coordinator.handleBackchannelEntry(createEntry({ sequenceNumber: 2 })), {
-            output: 'info: Example.Category[7]\n      Repeated message.\n',
+            output: 'Example.Category: Information: Repeated message.\n',
             category: 'stdout'
         });
 
@@ -23,19 +28,74 @@ suite('AppHost log output coordinator', () => {
             []);
     });
 
+    test('deduplicates the backchannel, ConsoleLogger, and DebugLogger copies', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ logLevel: 'Warning', message: 'Port is busy.' })),
+            {
+                output: '\x1b[33mExample.Category: Warning: Port is busy.\x1b[0m\n',
+                category: 'stdout'
+            });
+        assert.deepStrictEqual(
+            renderConsole(coordinator, 'warn: Example.Category[7]\n      Port is busy.\n', 'stdout'),
+            []);
+        assert.deepStrictEqual(
+            renderConsole(coordinator, 'Example.Category: Warning: Port is busy.\n', 'console'),
+            []);
+    });
+
+    test('renders parsed records consistently regardless of which source arrives first', () => {
+        const entry = createEntry({ logLevel: 'Warning', message: 'Port is busy.' });
+        const expected = {
+            output: '\x1b[33mExample.Category: Warning: Port is busy.\x1b[0m\n',
+            category: 'stdout'
+        };
+
+        const backchannelFirst = new AppHostLogOutputCoordinator();
+        assert.deepStrictEqual(backchannelFirst.handleBackchannelEntry(entry), expected);
+
+        const consoleFirst = new AppHostLogOutputCoordinator();
+        assert.deepStrictEqual(
+            renderConsole(consoleFirst, '2026-08-10 17:40:09 warn: Example.Category[7]\n      Port is busy.\n', 'stdout'),
+            [expected]);
+
+        const debugLoggerFirst = new AppHostLogOutputCoordinator();
+        assert.deepStrictEqual(
+            renderConsole(debugLoggerFirst, 'Example.Category: Warning: Port is busy.\n', 'console'),
+            [expected]);
+        assert.strictEqual(debugLoggerFirst.handleBackchannelEntry(entry), undefined);
+    });
+
+    test('keeps low-level adapter traffic from evicting pending Information records', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        assert.ok(coordinator.handleBackchannelEntry(createEntry({ message: 'Still pending.' })));
+
+        const lowLevelOutput = Array.from(
+            { length: 1025 },
+            (_, index) => `Low.Level.Category: Debug: Detail ${index}.\n`).join('');
+        assert.strictEqual(
+            [...coordinator.handleDebugAdapterOutput(lowLevelOutput, 'console'), ...coordinator.flush()].length,
+            1025);
+
+        assert.deepStrictEqual(
+            renderConsole(coordinator, 'info: Example.Category[7]\n      Still pending.\n', 'stdout'),
+            []);
+    });
+
     test('colors warnings and preserves error stream identity', () => {
         const coordinator = new AppHostLogOutputCoordinator();
 
         assert.deepStrictEqual(
             coordinator.handleBackchannelEntry(createEntry({ logLevel: 'Warning', message: 'Careful.' })),
             {
-                output: '\x1b[33mwarn: Example.Category[7]\n      Careful.\x1b[0m\n',
+                output: '\x1b[33mExample.Category: Warning: Careful.\x1b[0m\n',
                 category: 'stdout'
             });
         assert.deepStrictEqual(
             coordinator.handleBackchannelEntry(createEntry({ sequenceNumber: 2, logLevel: 'Error', message: 'Failed.' })),
             {
-                output: 'fail: Example.Category[7]\n      Failed.\n',
+                output: 'Example.Category: Error: Failed.\n',
                 category: 'stderr'
             });
     });
@@ -70,7 +130,9 @@ suite('AppHost log output coordinator', () => {
 
         assert.deepStrictEqual(coordinator.handleDebugAdapterOutput(raw, 'stdout'), []);
         assert.deepStrictEqual(coordinator.handleBackchannelEntry(entry), {
-            output: raw,
+            output: 'Example.Category: Error: Request failed.\n'
+                + 'System.InvalidOperationException: boom\n'
+                + '   at Example.Run()\n',
             category: 'stderr'
         });
         assert.deepStrictEqual(coordinator.flush(), []);
@@ -88,7 +150,7 @@ suite('AppHost log output coordinator', () => {
         assert.deepStrictEqual(
             coordinator.handleBackchannelEntry(createEntry({ logLevel: 'Warning', message: 'Scoped warning.' })),
             {
-                output: `\x1b[33m${raw.trimEnd()}\x1b[0m\n`,
+                output: '\x1b[33mExample.Category: Warning: Scoped warning.\x1b[0m\n',
                 category: 'stdout'
             });
         assert.deepStrictEqual(coordinator.flush(), []);
@@ -100,21 +162,55 @@ suite('AppHost log output coordinator', () => {
 
         assert.deepStrictEqual(coordinator.handleDebugAdapterOutput(raw, 'stdout'), []);
         assert.deepStrictEqual(coordinator.handleBackchannelEntry(createEntry({ message: '' })), {
-            output: raw,
+            output: 'Example.Category: Information: \n',
             category: 'stdout'
         });
         assert.deepStrictEqual(coordinator.flush(), []);
     });
 
-    test('preserves fallback filtering for non-default logger output', () => {
+    test('correlates DebugLogger output and preserves fallback filtering elsewhere', () => {
         const coordinator = new AppHostLogOutputCoordinator();
 
         assert.deepStrictEqual(
             coordinator.handleDebugAdapterOutput('Example.Category[7]: Debug: Hidden detail.\n', 'stdout'),
             []);
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput('Example.Category[7]: Error: Failed.\n', 'console'),
-            [{ output: 'Example.Category[7]: Error: Failed.\n', category: 'stderr' }]);
+            renderConsole(coordinator, 'Example.Category[7]: Error: Failed.\n', 'console'),
+            [{ output: 'Example.Category: Error: Failed.\n', category: 'stderr' }]);
+    });
+
+    test('does not parse arbitrary text before a ConsoleLogger level token', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(coordinator, 'status warn: Example.Category[7] Still working.\n', 'stdout'),
+            [{ output: 'status warn: Example.Category[7] Still working.\n', category: 'stdout' }]);
+    });
+
+    test('waits for the complete ConsoleLogger record before correlating it', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        assert.ok(coordinator.handleBackchannelEntry(createEntry({ message: 'First line.' })));
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('info: Example.Category[7]\n      First line.\n', 'stdout'),
+            []);
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('      \n', 'stdout'),
+            []);
+        assert.deepStrictEqual(coordinator.flush(), []);
+    });
+
+    test('keeps blank lines inside console-category error blocks', () => {
+        const filter = new AppHostParentOutputFilter();
+
+        assert.deepStrictEqual(
+            filter.filter(
+                'Unhandled exception. System.InvalidOperationException: boom\n\n   at Example.Run()\n',
+                'console'),
+            {
+                output: 'Unhandled exception. System.InvalidOperationException: boom\n\n   at Example.Run()\n',
+                category: 'stderr'
+            });
     });
 
     test('suppresses replayed sequences and accepts the same sequence after reset', () => {
@@ -146,7 +242,7 @@ suite('AppHost log output coordinator', () => {
 
             assert.deepStrictEqual(emitted, [
                 {
-                    output: '\x1b[2mdbug: Example.Category[7]\n      Last detail.\x1b[0m\n',
+                    output: '\x1b[2mExample.Category: Debug: Last detail.\x1b[0m\n',
                     category: 'stdout'
                 },
                 {
@@ -168,7 +264,7 @@ suite('AppHost log output coordinator', () => {
             coordinator.handleDebugAdapterOutput('crit: Example.Category[7]\n      Fatal', 'stderr'),
             []);
         assert.deepStrictEqual(coordinator.flush(), [{
-            output: 'crit: Example.Category[7]\n      Fatal\n',
+            output: 'Example.Category: Critical: Fatal\n',
             category: 'stderr'
         }]);
         assert.deepStrictEqual(coordinator.flush(), []);

@@ -1,5 +1,9 @@
-import { AnsiColors } from '../utils/AspireTerminalProvider';
 import { applyTextStyle } from '../utils/strings';
+
+const enum AnsiColors {
+    Dim = '\x1b[2m',
+    Yellow = '\x1b[33m',
+}
 
 export type AppHostLogLevel = 'Trace' | 'Debug' | 'Information' | 'Warning' | 'Error' | 'Critical';
 
@@ -17,19 +21,19 @@ export interface AppHostParentOutput {
     category: 'stdout' | 'stderr';
 }
 
-type LogSource = 'backchannel' | 'console';
+type LogSource = 'backchannel' | 'consoleLogger' | 'debugLogger';
 
 interface LogRecord {
     categoryName: string;
     logLevel: AppHostLogLevel;
-    eventId: number;
+    eventId?: number;
     body: string;
     singleLine?: boolean;
 }
 
 interface CorrelatedRecord {
     record: LogRecord;
-    source: LogSource;
+    sources: Set<LogSource>;
 }
 
 interface PendingConsoleRecord {
@@ -41,16 +45,25 @@ interface PendingConsoleRecord {
     hasBodyLine: boolean;
 }
 
+interface PendingDebugRecord {
+    raw: string;
+    category: string;
+}
+
 export class AppHostLogOutputCoordinator {
     private static readonly _maxCorrelatedRecords = 1024;
+    private static readonly _maxLowLevelCorrelatedRecords = 128;
+    private static readonly _allSources: readonly LogSource[] = ['backchannel', 'consoleLogger', 'debugLogger'];
     private static readonly _maxRememberedBackchannelSequences = 1024;
     private static readonly _idleFlushDelayMs = 250;
 
     private readonly _correlatedRecords: CorrelatedRecord[] = [];
+    private readonly _lowLevelCorrelatedRecords: CorrelatedRecord[] = [];
     private readonly _backchannelSequences = new Set<number>();
     private readonly _backchannelSequenceOrder: number[] = [];
     private readonly _partialLines = new Map<string, string>();
     private readonly _pendingRecords = new Map<string, PendingConsoleRecord>();
+    private readonly _pendingDebugRecords = new Map<string, PendingDebugRecord>();
     private readonly _fallbackFilters = new Map<string, AppHostParentOutputFilter>();
     private readonly _idleFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -76,15 +89,7 @@ export class AppHostLogOutputCoordinator {
 
         const record = createBackchannelRecord(entry);
 
-        for (const [category, pending] of this._pendingRecords) {
-            const pendingRecord = createPendingRecord(pending);
-            if (pendingRecord && recordsMatch(pendingRecord, record)) {
-                this.deletePendingRecord(category);
-                return formatConsoleRecord(record, pending.raw, pending.category);
-            }
-        }
-
-        return this.correlate(record, 'backchannel', formatBackchannelRecord(record));
+        return this.correlate(record, 'backchannel');
     }
 
     handleDebugAdapterOutput(output: string, category: string | undefined): AppHostParentOutput[] {
@@ -127,20 +132,30 @@ export class AppHostLogOutputCoordinator {
             this.flushPendingRecord(category, outputs);
         }
 
+        for (const category of [...this._pendingDebugRecords.keys()]) {
+            this.flushPendingDebugRecord(category, outputs);
+        }
+
         return outputs;
     }
 
     reset(): void {
         this.clearIdleFlushTimers();
         this._correlatedRecords.length = 0;
+        this._lowLevelCorrelatedRecords.length = 0;
         this._backchannelSequences.clear();
         this._backchannelSequenceOrder.length = 0;
         this._partialLines.clear();
         this._pendingRecords.clear();
+        this._pendingDebugRecords.clear();
         this._fallbackFilters.clear();
     }
 
     private consumeLine(line: string, category: string, outputs: AppHostParentOutput[]): void {
+        if (category === 'console' && this.consumeDebugLoggerLine(line, category, outputs)) {
+            return;
+        }
+
         const pending = this._pendingRecords.get(category);
         if (pending) {
             if (pending.allowsContinuation && isConsoleLoggerContinuation(line)) {
@@ -153,11 +168,6 @@ export class AppHostLogOutputCoordinator {
                     pending.body += bodyLine;
                 }
                 pending.hasBodyLine = true;
-
-                const record = createPendingRecord(pending);
-                if (record && this.consumeCorrelatedRecord(record, 'console')) {
-                    this.deletePendingRecord(category);
-                }
                 return;
             }
 
@@ -192,10 +202,6 @@ export class AppHostLogOutputCoordinator {
                 allowsContinuation: false,
                 hasBodyLine: true
             });
-
-            if (this.consumeCorrelatedRecord(singleLineRecord, 'console')) {
-                this.deletePendingRecord(category);
-            }
             return;
         }
 
@@ -216,34 +222,107 @@ export class AppHostLogOutputCoordinator {
             return;
         }
 
-        const output = this.correlate(record, 'console', formatConsoleRecord(record, pending.raw, pending.category));
+        const output = this.correlate(record, 'consoleLogger');
         if (output) {
             outputs.push(output);
         }
     }
 
-    private correlate(record: LogRecord, source: LogSource, output: AppHostParentOutput): AppHostParentOutput | undefined {
-        if (this.consumeCorrelatedRecord(record, source)) {
-            return undefined;
+    private consumeDebugLoggerLine(
+        line: string,
+        category: string,
+        outputs: AppHostParentOutput[]): boolean {
+        const pending = this._pendingDebugRecords.get(category);
+        if (pending) {
+            if (isDebugLoggerHeader(line)) {
+                if (this.continuesPendingDebugRecord(pending, line)) {
+                    pending.raw += line;
+                    return true;
+                }
+
+                this.flushPendingDebugRecord(category, outputs);
+                this._pendingDebugRecords.set(category, { raw: line, category });
+                return true;
+            }
+
+            const record = parseDebugLoggerRecord(pending.raw);
+            if (startsUnrelatedDebuggerOutput(line) || record && this.hasCorrelatedTwin(record, 'debugLogger')) {
+                this.flushPendingDebugRecord(category, outputs);
+                return false;
+            }
+
+            pending.raw += line;
+            return true;
         }
 
-        this._correlatedRecords.push({ record, source });
-        if (this._correlatedRecords.length > AppHostLogOutputCoordinator._maxCorrelatedRecords) {
-            this._correlatedRecords.shift();
-        }
-
-        return output;
-    }
-
-    private consumeCorrelatedRecord(record: LogRecord, source: LogSource): boolean {
-        const index = this._correlatedRecords.findIndex(candidate =>
-            candidate.source !== source && recordsMatch(candidate.record, record));
-        if (index < 0) {
+        if (!isDebugLoggerHeader(line)) {
             return false;
         }
 
-        this._correlatedRecords.splice(index, 1);
+        this._pendingDebugRecords.set(category, { raw: line, category });
         return true;
+    }
+
+    private continuesPendingDebugRecord(pending: PendingDebugRecord, line: string): boolean {
+        const merged = parseDebugLoggerRecord(`${pending.raw}${line}`);
+        return !!merged && this.hasCorrelatedTwin(merged, 'debugLogger');
+    }
+
+    private flushPendingDebugRecord(category: string, outputs: AppHostParentOutput[]): void {
+        const pending = this._pendingDebugRecords.get(category);
+        if (!pending) {
+            return;
+        }
+
+        this._pendingDebugRecords.delete(category);
+
+        const record = parseDebugLoggerRecord(pending.raw);
+        if (!record) {
+            this.emitFallback(pending.raw, pending.category, outputs);
+            return;
+        }
+
+        const output = this.correlate(record, 'debugLogger');
+        if (output) {
+            outputs.push(output);
+        }
+    }
+
+    private correlate(record: LogRecord, source: LogSource): AppHostParentOutput | undefined {
+        const records = this.correlatedRecordsFor(record);
+        const index = records.findIndex(candidate =>
+            !candidate.sources.has(source) && recordsMatch(candidate.record, record));
+        if (index < 0) {
+            records.push({ record, sources: new Set([source]) });
+            const limit = isLowLevel(record)
+                ? AppHostLogOutputCoordinator._maxLowLevelCorrelatedRecords
+                : AppHostLogOutputCoordinator._maxCorrelatedRecords;
+            if (records.length > limit) {
+                records.shift();
+            }
+
+            return formatLogRecord(record);
+        }
+
+        const existing = records[index];
+        existing.sources.add(source);
+        if (existing.sources.size === AppHostLogOutputCoordinator._allSources.length) {
+            records.splice(index, 1);
+        }
+
+        return undefined;
+    }
+
+    private hasCorrelatedTwin(record: LogRecord, source: LogSource): boolean {
+        return this.correlatedRecordsFor(record).some(candidate =>
+            !candidate.sources.has(source) && recordsMatch(candidate.record, record));
+    }
+
+    private correlatedRecordsFor(record: LogRecord): CorrelatedRecord[] {
+        // Trace and Debug are not sent over the structured CLI backchannel. Keep their
+        // adapter-only correlation history separate so a noisy low-level stream cannot
+        // evict Information+ records that are still waiting for another provider copy.
+        return isLowLevel(record) ? this._lowLevelCorrelatedRecords : this._correlatedRecords;
     }
 
     private emitFallback(output: string, category: string, outputs: AppHostParentOutput[]): void {
@@ -265,7 +344,8 @@ export class AppHostLogOutputCoordinator {
 
     private scheduleIdleFlush(category: string): void {
         const pending = this._pendingRecords.get(category);
-        if (!this._onIdleFlush || (!pending?.hasBodyLine && !this._partialLines.has(category))) {
+        const hasPendingDebugRecord = this._pendingDebugRecords.has(category);
+        if (!this._onIdleFlush || (!pending?.hasBodyLine && !hasPendingDebugRecord && !this._partialLines.has(category))) {
             return;
         }
 
@@ -280,15 +360,11 @@ export class AppHostLogOutputCoordinator {
             }
 
             this.flushPendingRecord(category, outputs);
+            this.flushPendingDebugRecord(category, outputs);
             outputs.forEach(output => this._onIdleFlush?.(output));
         }, this._idleFlushDelayMs);
 
         this._idleFlushTimers.set(category, timer);
-    }
-
-    private deletePendingRecord(category: string): void {
-        this._pendingRecords.delete(category);
-        this.clearIdleFlushTimer(category);
     }
 
     private clearIdleFlushTimer(category: string): void {
@@ -310,13 +386,20 @@ export class AppHostLogOutputCoordinator {
 export class AppHostParentOutputFilter {
     private _continuingDroppedLog = false;
     private _continuingErrorBlock = false;
+    private _lastCategory: string | undefined;
 
     filter(output: string, category: string | undefined): AppHostParentOutput | undefined {
         const normalizedCategory = category ?? 'console';
         if (normalizedCategory === 'debug') {
             this.reset();
+            this._lastCategory = normalizedCategory;
             return undefined;
         }
+
+        if (normalizedCategory !== this._lastCategory) {
+            this.reset();
+        }
+        this._lastCategory = normalizedCategory;
 
         const segments = output.match(/[^\r\n]*(?:\r\n|\r|\n|$)/g)?.filter(segment => segment) ?? [];
         let filteredOutput = '';
@@ -340,7 +423,7 @@ export class AppHostParentOutputFilter {
         const trimmedLine = line.trim();
 
         if (!trimmedLine) {
-            return !this._continuingDroppedLog && category !== 'console'
+            return !this._continuingDroppedLog && (category !== 'console' || this._continuingErrorBlock)
                 ? this.getCurrentCategory(category)
                 : undefined;
         }
@@ -401,12 +484,20 @@ function createPendingRecord(pending: PendingConsoleRecord): LogRecord | undefin
     };
 }
 
+const consoleLoggerTimestampPrefix =
+    String.raw`(?:(?:\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:\s?(?:Z|[+-]\d{2}:?\d{2}))?|\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)\s+)?`;
+const multilineConsoleLoggerHeaderRegex = new RegExp(
+    String.raw`^${consoleLoggerTimestampPrefix}(trce|dbug|info|warn|fail|crit): (.*)\[(-?\d+)\](?:\r\n|\r|\n)$`);
+const singleLineConsoleLoggerRecordRegex = new RegExp(
+    String.raw`^${consoleLoggerTimestampPrefix}(trce|dbug|info|warn|fail|crit): (.*)\[(-?\d+)\] (.*?)(?:\r\n|\r|\n)?$`);
+
 function parseMultilineConsoleLoggerHeader(line: string): Omit<LogRecord, 'body'> | undefined {
     // SimpleConsoleFormatter's default multiline record begins as:
     //   warn: Example.Category[7]
     //         First message line.
-    // The category may be empty, and DAP chunks can split anywhere within either line.
-    const match = /^(?:.*\s)?(trce|dbug|info|warn|fail|crit): (.*)\[(-?\d+)\](?:\r\n|\r|\n)$/.exec(line);
+    // Common date/time prefixes are accepted, but arbitrary text before "warn:" is not:
+    // otherwise a user line such as "status warn: ..." becomes a false log record.
+    const match = multilineConsoleLoggerHeaderRegex.exec(line);
     if (!match) {
         return undefined;
     }
@@ -421,7 +512,7 @@ function parseMultilineConsoleLoggerHeader(line: string): Omit<LogRecord, 'body'
 function parseSingleLineConsoleLoggerRecord(line: string): LogRecord | undefined {
     // With SimpleConsoleFormatterOptions.SingleLine, the same record is:
     //   warn: Example.Category[7] First message line.
-    const match = /^(?:.*\s)?(trce|dbug|info|warn|fail|crit): (.*)\[(-?\d+)\] (.*?)(?:\r\n|\r|\n)?$/.exec(line);
+    const match = singleLineConsoleLoggerRecordRegex.exec(line);
     if (!match) {
         return undefined;
     }
@@ -432,6 +523,62 @@ function parseSingleLineConsoleLoggerRecord(line: string): LogRecord | undefined
         eventId: Number(match[3]),
         body: normalizeRecordText(match[4]),
         singleLine: true
+    };
+}
+
+function parseDebugLoggerRecord(output: string): LogRecord | undefined {
+    // DebugLogger writes:
+    //   Example.Category: Warning: Deployment failed.
+    //
+    //   System.InvalidOperationException: boom
+    // It doesn't include the event ID, so correlation treats a missing ID as a wildcard
+    // while still requiring category, level, and the complete normalized body to match.
+    const normalized = normalizeRecordText(output.replace(/(?:\r\n|\r|\n)$/, ''));
+    const match = /^(.+?)(?:\[(-?\d+)\])?: (Trace|Debug|Information|Warning|Error|Critical): ([\s\S]*)$/.exec(normalized);
+    if (!match) {
+        return undefined;
+    }
+
+    const { message, exception } = splitMessageAndException(match[4]);
+    return {
+        categoryName: match[1],
+        logLevel: match[3] as AppHostLogLevel,
+        eventId: match[2] === undefined ? undefined : Number(match[2]),
+        body: normalizeRecordText(exception ? `${message}\n${exception}` : message)
+    };
+}
+
+function isDebugLoggerHeader(line: string): boolean {
+    return /^.+?(?:\[-?\d+\])?: (Trace|Debug|Information|Warning|Error|Critical): .*(?:\r\n|\r|\n)?$/.test(line);
+}
+
+function startsUnrelatedDebuggerOutput(line: string): boolean {
+    // DebugLogger continuation lines have no prefix, so only break on conservative,
+    // debugger-owned shapes. Absorbing these lines would alter correlation identity and
+    // could hide a fatal runtime line behind the preceding log record.
+    const trimmedLine = line.trim();
+    return /^Unhandled exception\./.test(trimmedLine)
+        || /^(?:'[^']*' \([^)]*\): |\S+ \(\d+\): )?Loaded '[^']*'\./.test(trimmedLine)
+        || /^Exception thrown: '/.test(trimmedLine)
+        || /^-{5,}$/.test(trimmedLine);
+}
+
+function splitMessageAndException(value: string): { message: string; exception?: string } {
+    const lines = value.replace(/\r\n|\r/g, '\n').split('\n');
+    const exceptionIndex = lines.findIndex(line =>
+        /^(?:[A-Za-z_][\w`]*(?:\.[A-Za-z_][\w`]*)*(?:Exception|Error)(?: \([^)]*\))?:|Unhandled exception\.)/.test(line));
+    if (exceptionIndex < 0) {
+        return { message: value };
+    }
+
+    const messageLines = lines.slice(0, exceptionIndex);
+    if (messageLines.at(-1) === '') {
+        messageLines.pop();
+    }
+
+    return {
+        message: messageLines.join('\n'),
+        exception: lines.slice(exceptionIndex).join('\n')
     };
 }
 
@@ -454,28 +601,26 @@ function findLastCompletedLineBreak(text: string): number {
 function recordsMatch(left: LogRecord, right: LogRecord): boolean {
     return left.categoryName === right.categoryName
         && left.logLevel === right.logLevel
-        && left.eventId === right.eventId
+        && (left.eventId === undefined || right.eventId === undefined || left.eventId === right.eventId)
         && (left.body === right.body
             || !!(left.singleLine || right.singleLine)
                 && toSingleLineRecordText(left.body) === toSingleLineRecordText(right.body));
+}
+
+function isLowLevel(record: LogRecord): boolean {
+    return record.logLevel === 'Trace' || record.logLevel === 'Debug';
 }
 
 function toSingleLineRecordText(value: string): string {
     return value.replace(/\r\n|\r|\n/g, ' ');
 }
 
-function formatBackchannelRecord(record: LogRecord): AppHostParentOutput {
-    const token = getShortLoggerLevel(record.logLevel);
-    const lines = record.body.split('\n').map(line => `      ${line}`).join('\n');
-    const raw = `${token}: ${record.categoryName}[${record.eventId}]\n${lines}`;
+function formatLogRecord(record: LogRecord): AppHostParentOutput {
+    const prefix = record.categoryName
+        ? `${record.categoryName}: ${record.logLevel}`
+        : record.logLevel;
+    const raw = `${prefix}: ${record.body}`;
     return formatRecord(raw, record.logLevel, record.logLevel === 'Error' || record.logLevel === 'Critical' ? 'stderr' : 'stdout');
-}
-
-function formatConsoleRecord(record: LogRecord, raw: string, category: string): AppHostParentOutput {
-    const outputCategory = category === 'stderr' || record.logLevel === 'Error' || record.logLevel === 'Critical'
-        ? 'stderr'
-        : 'stdout';
-    return formatRecord(raw.replace(/(?:\r\n|\r|\n)$/, ''), record.logLevel, outputCategory);
 }
 
 function formatRecord(raw: string, logLevel: AppHostLogLevel, category: 'stdout' | 'stderr'): AppHostParentOutput {
@@ -504,17 +649,6 @@ function getFullLoggerLevel(shortLevel: string): AppHostLogLevel {
         case 'fail': return 'Error';
         case 'crit': return 'Critical';
         default: throw new Error(`Unknown logger level: ${shortLevel}`);
-    }
-}
-
-function getShortLoggerLevel(logLevel: AppHostLogLevel): string {
-    switch (logLevel) {
-        case 'Trace': return 'trce';
-        case 'Debug': return 'dbug';
-        case 'Information': return 'info';
-        case 'Warning': return 'warn';
-        case 'Error': return 'fail';
-        case 'Critical': return 'crit';
     }
 }
 
