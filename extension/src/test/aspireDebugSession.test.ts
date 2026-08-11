@@ -842,7 +842,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
     // stopAllSessions() snapshots the resource list before its awaits, so a resource that starts
     // mid-shutdown must not be registered as an ordinary session: it would miss the snapshot and be
     // stopped only by dispose(), after the AppHost and Aspire parent had already been stopped.
-    test('stopDebugging immediately stops a resource session that starts mid-shutdown', async () => {
+    test('stopDebugging awaits and reports a resource session that starts mid-shutdown', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
             type: 'aspire',
@@ -898,8 +898,11 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         // The snapshot resource stop is still in flight, so the snapshot has already been taken and
         // the AppHost stop has not started.
-        const lateStopSession = sinon.stub().callsFake(async () => {
-            stopOrder.push('late-resource-session');
+        let rejectLateResourceStop: ((reason: Error) => void) | undefined;
+        const lateResourceStopGate = new Promise<void>((_, reject) => { rejectLateResourceStop = reject; });
+        const lateStopSession = sinon.stub().callsFake(() => {
+            stopOrder.push('late-resource-stop-started');
+            return lateResourceStopGate;
         });
         const lateSession = {
             id: 'late-resource-session',
@@ -920,12 +923,17 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             'A session started during shutdown must not be registered behind the snapshot');
 
         releaseSnapshotResourceStop!();
-        await stopPromise;
+        await new Promise(resolve => setImmediate(resolve));
+        const appHostStartedBeforeLateStopSettled = stopOrder.includes('apphost-session');
+        rejectLateResourceStop!(new Error('late resource stop failed'));
+        await assert.rejects(stopPromise, /late resource stop failed/);
 
-        // The late resource is stopped where it was handed over - before the AppHost - rather than
-        // behind the snapshot, where only the disposal at the end of the shutdown would reach it.
+        assert.strictEqual(
+            appHostStartedBeforeLateStopSettled,
+            false,
+            'The AppHost must not stop while a late resource stop is still pending');
         assert.deepStrictEqual(stopOrder, [
-            'late-resource-session',
+            'late-resource-stop-started',
             'snapshot-resource-session',
             'apphost-session',
             'aspire-session',
