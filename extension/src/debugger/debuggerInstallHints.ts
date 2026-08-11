@@ -1,14 +1,12 @@
 import * as vscode from 'vscode';
 import { ResourceState } from '../editor/resourceConstants';
 import {
-    bunDebuggerName,
     debuggerInstallAction,
     debuggerInstallNotification,
+    debuggerExtensionDisabled,
     debuggerInstalledRestartAppHost,
     dontShowAgainLabel,
     errorMessage,
-    goDebuggerName,
-    pythonDebuggerName,
 } from '../loc/strings';
 import { bunDebuggerExtension } from './languages/bun';
 import { goDebuggerExtension } from './languages/go';
@@ -27,9 +25,9 @@ interface DebuggableResourceSnapshot {
 }
 
 const debuggerInstallHints = new Map<string, DebuggerInstallHint>([
-    ['python', { debuggerName: pythonDebuggerName, extensionId: pythonDebuggerExtension.extensionId! }],
-    ['go', { debuggerName: goDebuggerName, extensionId: goDebuggerExtension.extensionId! }],
-    ['bun', { debuggerName: bunDebuggerName, extensionId: bunDebuggerExtension.extensionId! }],
+    ['python', { debuggerName: 'Python', extensionId: pythonDebuggerExtension.extensionId! }],
+    ['go', { debuggerName: 'Go', extensionId: goDebuggerExtension.extensionId! }],
+    ['bun', { debuggerName: 'Bun', extensionId: bunDebuggerExtension.extensionId! }],
 ]);
 
 const notificationSuppressedKeyPrefix = 'aspire.debuggerInstallHint.suppressed.';
@@ -65,7 +63,13 @@ export class DebuggerInstallHintService {
     async installDebuggerExtension(hint: DebuggerInstallHint): Promise<void> {
         try {
             await vscode.commands.executeCommand('workbench.extensions.installExtension', hint.extensionId);
-            await vscode.window.showInformationMessage(debuggerInstalledRestartAppHost(hint.debuggerName));
+
+            // Installing an already-installed but disabled extension is a no-op, and disabled
+            // extensions remain absent from this registry. Re-check before reporting success.
+            const message = vscode.extensions.getExtension(hint.extensionId)
+                ? debuggerInstalledRestartAppHost(hint.debuggerName)
+                : debuggerExtensionDisabled(hint.debuggerName);
+            await vscode.window.showInformationMessage(message);
         } catch (error) {
             await vscode.window.showErrorMessage(errorMessage(error));
         }
