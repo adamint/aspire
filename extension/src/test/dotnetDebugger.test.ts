@@ -353,6 +353,21 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.deepStrictEqual(withDevKit, withoutDevKit);
     });
 
+    test('ordinary project debug launch offers the Hot Reload advisory with current diagnostics', async () => {
+        const diagnostics = {
+            devKitInstalled: true,
+            workspaceTrusted: true,
+            settingEnabled: false,
+            reloadOnSaveEnabled: true
+        };
+        getHotReloadDiagnostics.returns(diagnostics);
+
+        await createProjectDebugConfiguration();
+
+        assert.strictEqual(getHotReloadDiagnostics.calledOnce, true);
+        assert.strictEqual(showHotReloadDisabledAdvisory.calledOnceWithExactly(diagnostics), true);
+    });
+
     async function createProjectDebugConfiguration(options: { debug?: boolean; runId?: string; debugSessionId?: string; debugSession?: AspireDebugSession; isApphost?: boolean } = {}): Promise<AspireResourceExtendedDebugConfiguration> {
         const outputPath = 'C:\\temp\\bin\\Debug\\net7.0\\TestProject.dll';
         const { extension, doesFileExistStub } = createDebuggerExtension(outputPath, null, true, true);
