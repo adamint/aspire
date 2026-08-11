@@ -62,8 +62,15 @@ suite('E2E shard matrix', () => {
 
     function optionalString(row: Record<string, unknown>, key: string, index: number): string | undefined {
         const value = row[key];
-        if (value === undefined || value === null) {
+        if (value === undefined) {
             return undefined;
+        }
+
+        // js-yaml parses a present-but-empty scalar such as `disabledIssue:` as null.
+        // Keep that distinct from an absent field so downstream validation can reject
+        // empty workflow values instead of silently treating them as omitted.
+        if (value === null) {
+            return '';
         }
 
         assert.strictEqual(typeof value, 'string', `Expected extension_e2e matrix row ${index + 1} field '${key}' to be a string.`);
@@ -228,6 +235,16 @@ suite('E2E shard matrix', () => {
         const malformed = workflow.replaceAll(issue, 'not-an-issue-url');
         assert.throws(
             () => assertDisabledRowsAreTracked(malformed, new Map()),
+            /must use a microsoft\/aspire issue URL/);
+    });
+
+    test('rejects a disabled row when disabledIssue is present but empty', () => {
+        const spec = 'out/test-e2e/test-e2e/azureFunctions.e2e.test.js';
+        const workflow = workflowWithRows(
+            `- name: Linux\n  shardName: azure-functions\n  spec: ${spec}\n  disabledIssue:`);
+
+        assert.throws(
+            () => assertDisabledRowsAreTracked(workflow, new Map()),
             /must use a microsoft\/aspire issue URL/);
     });
 });
