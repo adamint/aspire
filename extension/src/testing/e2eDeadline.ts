@@ -1,3 +1,12 @@
+export function getRemainingE2eDeadlineMs(description: string, deadlineMs: number, phaseCeilingMs: number, nowMs = Date.now()): number {
+    const timeoutMs = Math.min(phaseCeilingMs, deadlineMs - nowMs);
+    if (timeoutMs <= 0) {
+        throw new Error(`Timed out waiting for ${description}; the E2E deadline has already passed.`);
+    }
+
+    return timeoutMs;
+}
+
 export async function runWithE2eDeadline<T>(description: string, deadlineMs: number, operation: (() => Thenable<T> | Promise<T>) | Thenable<T> | Promise<T>): Promise<T> {
     const timeoutMs = deadlineMs - Date.now();
     if (timeoutMs <= 0) {

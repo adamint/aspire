@@ -1,9 +1,20 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import { runWithE2eDeadline } from '../testing/e2eDeadline';
+import { getRemainingE2eDeadlineMs, runWithE2eDeadline } from '../testing/e2eDeadline';
 
 suite('E2E deadline helper', () => {
+    test('caps a phase timeout to the remaining shared deadline', () => {
+        assert.strictEqual(getRemainingE2eDeadlineMs('resource debugger proof', 1000, 600, 500), 500);
+        assert.strictEqual(getRemainingE2eDeadlineMs('resource debugger proof', 1000, 300, 500), 300);
+    });
+
+    test('rejects a phase after the shared deadline expires', () => {
+        assert.throws(
+            () => getRemainingE2eDeadlineMs('resource debugger proof', 1000, 600, 1000),
+            /the E2E deadline has already passed/);
+    });
+
     test('rejects an external await that outlives the remaining deadline', async () => {
         await assert.rejects(
             runWithE2eDeadline('hung debugger request', Date.now() + 25, new Promise(() => undefined)),

@@ -3,6 +3,7 @@ import { isSamePath, waitForNoDebugSessions, waitForNoRunningAppHost, waitForRep
 import { clearBreakpoints, executeE2eControlCommand, getAppHostPidFromState, getNodeAppBreakpointLine, isProcessRunning, runE2eTeardown, stopPrimaryAppHostIfRunning, waitForProcessExit } from './helpers/fixtures';
 import { getNodeAppScriptPath, getPrimaryAppHostProjectPath } from './helpers/paths';
 import { openAspireView } from './helpers/vscode';
+import { getRemainingE2eDeadlineMs, runWithE2eDeadline } from '../testing/e2eDeadline';
 import { readReportedPidFromDebugOutput } from '../testing/resourceDebugOutput';
 
 interface ResourceDebugSessionSnapshot {
@@ -39,23 +40,66 @@ interface ResourceDebugProof {
 }
 
 const nodeResourceName = 'e2e-node';
-const proofTimeoutMs = 300000;
+const resourceDebuggerDeadlineTimeoutMs = 900000;
+const mochaTeardownSlackMs = 30000;
+const resourceDebuggerProofControlSlackMs = 60000;
+const resourceDebuggerPhaseTimeoutMs = {
+    openAspireView: 60000,
+    repositoryIdle: 120000,
+    workspaceAppHost: 120000,
+    proof: 300000,
+    proofControl: 360000,
+    stopDebuggingControl: 180000,
+    processExit: 120000,
+    debugSessions: 90000,
+    appHostStop: 120000,
+    appHostExit: 120000,
+} as const;
+
+let resourceDebuggerDeadline = 0;
 
 suite('Aspire resource debugger E2E', function () {
-    this.timeout(600000);
+    // Every phase shares one deadline so adding another setup or teardown wait cannot silently
+    // extend the test. Mocha gets only enough extra time to report the deadline failure and run
+    // the teardown hook rather than an independent sum of every phase's maximum.
+    this.timeout(resourceDebuggerDeadlineTimeoutMs + mochaTeardownSlackMs);
+
+    setup(() => {
+        resourceDebuggerDeadline = Date.now() + resourceDebuggerDeadlineTimeoutMs;
+    });
 
     teardown(async () => {
         await runE2eTeardown([
-            () => executeE2eControlCommand({ name: 'stopDebugging' }),
-            () => clearBreakpoints(),
-            () => stopPrimaryAppHostIfRunning(),
-            () => waitForNoDebugSessions().catch(() => undefined),
-            () => waitForNoRunningAppHost().catch(() => undefined),
+            () => runResourceDebuggerPhase(
+                'resource debugger teardown stop control',
+                resourceDebuggerDeadline,
+                resourceDebuggerPhaseTimeoutMs.stopDebuggingControl,
+                timeoutMs => executeE2eControlCommand({ name: 'stopDebugging' }, { timeoutMs })),
+            () => runResourceDebuggerPhase(
+                'resource debugger teardown breakpoint cleanup',
+                resourceDebuggerDeadline,
+                resourceDebuggerPhaseTimeoutMs.debugSessions,
+                () => clearBreakpoints()),
+            () => runResourceDebuggerPhase(
+                'resource debugger teardown AppHost stop',
+                resourceDebuggerDeadline,
+                resourceDebuggerPhaseTimeoutMs.appHostStop,
+                () => stopPrimaryAppHostIfRunning()),
+            () => runResourceDebuggerPhase(
+                'resource debugger teardown debug sessions',
+                resourceDebuggerDeadline,
+                resourceDebuggerPhaseTimeoutMs.debugSessions,
+                timeoutMs => waitForNoDebugSessions(timeoutMs).catch(() => undefined)),
+            () => runResourceDebuggerPhase(
+                'resource debugger teardown AppHost state',
+                resourceDebuggerDeadline,
+                resourceDebuggerPhaseTimeoutMs.appHostExit,
+                timeoutMs => waitForNoRunningAppHost(timeoutMs).catch(() => undefined)),
         ], 'Resource debugger E2E teardown failed.');
     });
 
     test('stops on a breakpoint inside the Node resource and reports a matching stack frame', async () => {
-        const proof = await getSharedResourceDebugProof();
+        const proof = await getSharedResourceDebugProof(resourceDebuggerDeadline);
         const scriptPath = getNodeAppScriptPath();
 
         assert.strictEqual(proof.proof, 'aspire-resource-debug-breakpoint-hit');
@@ -70,7 +114,7 @@ suite('Aspire resource debugger E2E', function () {
     });
 
     test('debugs the Node resource in a session distinct from the AppHost or Aspire session', async () => {
-        const proof = await getSharedResourceDebugProof();
+        const proof = await getSharedResourceDebugProof(resourceDebuggerDeadline);
 
         const appHostSession = proof.appHostDebugSession;
         const resourceSession = proof.resourceDebugSession;
@@ -114,7 +158,7 @@ suite('Aspire resource debugger E2E', function () {
         // https://github.com/microsoft/aspire/pull/19145, which this PR declares as a prerequisite:
         // stopping while a resource is suspended on a breakpoint has to stop the resource session
         // before the AppHost or the debuggee and its children are left running.
-        const proof = await runResourceDebugProof({ stopDebuggingOnCompletion: false });
+        const proof = await runResourceDebugProof({ stopDebuggingOnCompletion: false }, resourceDebuggerDeadline);
 
         assert.ok(proof.resourceDebugSession, `Expected the stopped resource debug session: ${JSON.stringify(proof.debugSessions.map(toSessionSummary))}`);
         assert.deepStrictEqual(
@@ -137,33 +181,58 @@ suite('Aspire resource debugger E2E', function () {
         // real process rather than the extension's view of it.
         const appHostPid = getAppHostPidFromState(proof.appHostPath);
         assert.ok(appHostPid !== undefined, 'Expected the extension state to report an AppHost pid while the AppHost is running.');
+        assert.ok(isProcessRunning(appHostPid), `Expected the AppHost process ${appHostPid} to still be running before debugging stops.`);
 
         // Only the start of the stop is awaited here. This test is about the debuggee's process tree,
         // and waiting for the whole Aspire stop to settle would fold AppHost shutdown timing into the
         // assertion. The suite teardown still performs and awaits the full stop.
         // Cleanup for a failure before this point is handled by that teardown; a local finally here
         // would replace the assertion error with the teardown error and hide why the test failed.
-        await executeE2eControlCommand({ name: 'stopDebugging' }, { waitFor: 'started' });
+        await runResourceDebuggerPhase(
+            'resource debugger stop control',
+            resourceDebuggerDeadline,
+            resourceDebuggerPhaseTimeoutMs.stopDebuggingControl,
+            timeoutMs => executeE2eControlCommand({ name: 'stopDebugging' }, { waitFor: 'started', timeoutMs }));
 
         await Promise.all([
-            waitForProcessExit(debuggeePid, 'the debugged Node resource process', 120000),
-            waitForProcessExit(childPid, 'the Node resource child process', 120000),
+            runResourceDebuggerPhase(
+                'debugged Node resource process exit',
+                resourceDebuggerDeadline,
+                resourceDebuggerPhaseTimeoutMs.processExit,
+                timeoutMs => waitForProcessExit(debuggeePid, 'the debugged Node resource process', timeoutMs)),
+            runResourceDebuggerPhase(
+                'Node resource child process exit',
+                resourceDebuggerDeadline,
+                resourceDebuggerPhaseTimeoutMs.processExit,
+                timeoutMs => waitForProcessExit(childPid, 'the Node resource child process', timeoutMs)),
         ]);
 
-        await waitForNoDebugSessions();
+        await runResourceDebuggerPhase(
+            'resource debugger sessions to stop',
+            resourceDebuggerDeadline,
+            resourceDebuggerPhaseTimeoutMs.debugSessions,
+            timeoutMs => waitForNoDebugSessions(timeoutMs));
 
         // The stop is still in flight in the extension host: the AppHost's own graceful shutdown after
         // an IDE debug session can outlast the extension's internal wait, and the E2E control channel
         // applies one command at a time, so the teardown's commands would queue behind it. Stopping the
         // AppHost through the CLI does not use the control channel, so it lets that wait settle.
-        await stopPrimaryAppHostIfRunning();
+        await runResourceDebuggerPhase(
+            'resource debugger AppHost stop',
+            resourceDebuggerDeadline,
+            resourceDebuggerPhaseTimeoutMs.appHostStop,
+            () => stopPrimaryAppHostIfRunning());
 
         // Assert on the AppHost process rather than on `waitForNoRunningAppHost`. The state file's
         // AppHost list is a mirror that lags a stop and can still name a dead pid long afterwards
         // (documented in `waitForNoRunningAppHostPathOrStopKnownProcess`, and why the teardown above
         // tolerates that wait failing). Process liveness is the stronger claim and the one this test
         // is actually making: stopping the debugger must leave no part of the tree running.
-        await waitForProcessExit(appHostPid, 'the AppHost process', 120000);
+        await runResourceDebuggerPhase(
+            'resource debugger AppHost process exit',
+            resourceDebuggerDeadline,
+            resourceDebuggerPhaseTimeoutMs.appHostExit,
+            timeoutMs => waitForProcessExit(appHostPid, 'the AppHost process', timeoutMs));
     });
 });
 
@@ -176,33 +245,64 @@ let sharedResourceDebugProof: Promise<ResourceDebugProof> | undefined;
  * assertion would double the shard's runtime and its exposure to startup flakiness for no extra
  * coverage. The teardown between tests does not invalidate the captured payload.
  */
-async function getSharedResourceDebugProof(): Promise<ResourceDebugProof> {
-    sharedResourceDebugProof ??= runResourceDebugProof({ stopDebuggingOnCompletion: true });
+async function getSharedResourceDebugProof(deadline: number): Promise<ResourceDebugProof> {
+    sharedResourceDebugProof ??= runResourceDebugProof({ stopDebuggingOnCompletion: true }, deadline);
 
     return await sharedResourceDebugProof;
 }
 
-async function runResourceDebugProof(options: { stopDebuggingOnCompletion: boolean }): Promise<ResourceDebugProof> {
-    await openAspireView();
-    await waitForRepositoryIdle();
-    const discovered = await waitForWorkspaceAppHost();
+async function runResourceDebugProof(options: { stopDebuggingOnCompletion: boolean }, deadline: number): Promise<ResourceDebugProof> {
+    await runResourceDebuggerPhase(
+        'Aspire view setup',
+        deadline,
+        resourceDebuggerPhaseTimeoutMs.openAspireView,
+        () => openAspireView());
+    await runResourceDebuggerPhase('repository idle setup', deadline, resourceDebuggerPhaseTimeoutMs.repositoryIdle, timeoutMs => waitForRepositoryIdle(timeoutMs));
+    const discovered = await runResourceDebuggerPhase(
+        'workspace AppHost setup',
+        deadline,
+        resourceDebuggerPhaseTimeoutMs.workspaceAppHost,
+        timeoutMs => waitForWorkspaceAppHost(timeoutMs));
     const appHostPath = discovered.state.workspaceAppHostPath ?? getPrimaryAppHostProjectPath();
 
-    const status = await executeE2eControlCommand({
-        name: 'proveResourceDebugging',
-        appHostPath,
-        resourceName: nodeResourceName,
-        sourcePath: getNodeAppScriptPath(),
-        breakpointLine: getNodeAppBreakpointLine(),
-        timeoutMs: proofTimeoutMs,
-        expectedResourceDebugSessionType: 'pwa-node',
-        stopDebuggingOnCompletion: options.stopDebuggingOnCompletion,
-    }, { timeoutMs: proofTimeoutMs + 60000 });
+    const status = await runResourceDebuggerPhase(
+        'resource debugger proof control',
+        deadline,
+        resourceDebuggerPhaseTimeoutMs.proofControl,
+        timeoutMs => {
+            // Leave the control channel time to observe and publish the proof result after the
+            // extension-host command reaches its own deadline.
+            const proofTimeoutMs = Math.min(
+                resourceDebuggerPhaseTimeoutMs.proof,
+                Math.max(1, timeoutMs - resourceDebuggerProofControlSlackMs));
+            return executeE2eControlCommand({
+                name: 'proveResourceDebugging',
+                appHostPath,
+                resourceName: nodeResourceName,
+                sourcePath: getNodeAppScriptPath(),
+                breakpointLine: getNodeAppBreakpointLine(),
+                timeoutMs: proofTimeoutMs,
+                expectedResourceDebugSessionType: 'pwa-node',
+                stopDebuggingOnCompletion: options.stopDebuggingOnCompletion,
+            }, { timeoutMs });
+        });
 
     const proof = status.result as ResourceDebugProof | undefined;
     assert.ok(proof, `The resource debug proof returned no result: ${JSON.stringify(status)}`);
 
     return proof;
+}
+
+async function runResourceDebuggerPhase<T>(
+    description: string,
+    deadline: number,
+    phaseCeilingMs: number,
+    operation: (timeoutMs: number) => PromiseLike<T>,
+): Promise<T> {
+    const timeoutMs = getRemainingE2eDeadlineMs(description, deadline, phaseCeilingMs);
+    const phaseDeadline = Math.min(deadline, Date.now() + timeoutMs);
+
+    return await runWithE2eDeadline(description, phaseDeadline, () => operation(timeoutMs));
 }
 
 function toSessionSummary(session: ResourceDebugSessionSnapshot): { id: string; type: string; name: string } {
