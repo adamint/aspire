@@ -57,12 +57,12 @@ suite('TestRunSessionManager', () => {
         assert.strictEqual(stopDebuggingStub.calledOnce, true);
     });
 
-    test('parent debug session termination releases the matching lease', async () => {
+    test('parent debug session termination records the parent stopped before releasing the lease', async () => {
         const debugSessionEvents = stubDebugSessionEvents();
         const manager = new TestRunSessionManager(connectionInfo);
         const addedSessions: AspireDebugSession[] = [];
         const removedSessions: AspireDebugSession[] = [];
-        const stopDebuggingStub = sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const stopDebuggingStub = sinon.stub(vscode.debug, 'stopDebugging').rejects(new Error('Debug session already terminated'));
         const lease = manager.acquireTestRunSession({ debug: false });
         const debugSession = createDebugSession(lease.sessionId);
 
@@ -80,7 +80,7 @@ suite('TestRunSessionManager', () => {
         await manager.releaseTestRunSession(lease.id);
 
         assert.deepStrictEqual(removedSessions, addedSessions);
-        assert.strictEqual(stopDebuggingStub.calledOnce, true);
+        assert.strictEqual(stopDebuggingStub.notCalled, true);
     });
 });
 

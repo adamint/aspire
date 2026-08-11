@@ -159,6 +159,14 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   }
 
   /**
+   * Records a parent termination observed by an external owner before it requests ordered cleanup.
+   * The parent is already gone, so cleanup must stop only the remaining owned sessions.
+   */
+  recordParentDebugSessionTermination(): void {
+    this._parentStopped = true;
+  }
+
+  /**
    * Performs the ordered shutdown of this Aspire session: resource sessions, then the AppHost,
    * then the synthetic Aspire parent, then disposal. Every caller that wants a session stopped -
    * the CLI's `stopDebugging` RPC endpoint on `InteractionService` and the E2E state-file bridge -
@@ -947,13 +955,47 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
           let stopSessionPromise: Promise<void> | undefined;
           let runCleanedUp = false;
+          let terminated = false;
+          let resolveTermination: () => void;
+          const termination = new Promise<void>(resolve => {
+            resolveTermination = resolve;
+          });
+          const cleanupResource = () => {
+            // Run any cleanup registered by resource-type extensions (e.g. func host for Azure Functions)
+            if (!runCleanedUp) {
+              cleanupRun(debugConfig.runId);
+              runCleanedUp = true;
+            }
+          };
+          const terminationDisposable = vscode.debug.onDidTerminateDebugSession(terminatedSession => {
+            if (terminatedSession.id !== session.id) {
+              return;
+            }
+
+            // A resource can exit after a failed ordered stop but before its retry. Remove it
+            // synchronously so the retry does not stop a gone session, and resolve any in-flight
+            // stop that is still waiting for VS Code to confirm the same termination.
+            terminated = true;
+            this._resourceDebugSessions = this._resourceDebugSessions.filter(resourceSession => resourceSession.id !== session.id);
+            cleanupResource();
+            resolveTermination();
+            terminationDisposable.dispose();
+          });
+          this._disposables.push(terminationDisposable);
           const disposalFunction = () => {
+            if (terminated) {
+              return Promise.resolve();
+            }
+
             if (stopSessionPromise) {
               return stopSessionPromise;
             }
 
             extensionLogOutputChannel.info(`Stopping debug session: ${session.name} (run id: ${session.configuration.runId})`);
-            const stop = Promise.resolve(vscode.debug.stopDebugging(session));
+            const stop = Promise.race([
+              Promise.resolve(vscode.debug.stopDebugging(session)),
+              termination,
+            ]);
             stopSessionPromise = stop;
 
             // A rejected adapter stop leaves the resource running. Forget only that failed attempt
@@ -964,11 +1006,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
               }
             });
 
-            // Run any cleanup registered by resource-type extensions (e.g. func host for Azure Functions)
-            if (!runCleanedUp) {
-              cleanupRun(debugConfig.runId);
-              runCleanedUp = true;
-            }
+            cleanupResource();
 
             return stop;
           };

@@ -1423,6 +1423,103 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(cleanupCalls, 1, 'Run cleanup must not repeat when the stop request is retried');
     });
 
+    test('a naturally terminated resource is removed before a failed shutdown retry', async () => {
+        let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        const terminateSessionCallbacks: ((session: vscode.DebugSession) => unknown)[] = [];
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = {
+            isDebugConfigEnvironmentLoggingEnabled: () => false,
+        };
+        const debugConfig = {
+            runId: 'naturally-terminated-run',
+            debugSessionId: 'debug-1',
+            type: 'coreclr',
+            name: 'API',
+            request: 'launch',
+            program: '/workspace/Api/Api.dll',
+            cwd: '/workspace/Api',
+        } as AspireResourceExtendedDebugConfiguration;
+        const resourceDebugSession = {
+            id: 'resource-session',
+            type: 'coreclr',
+            name: 'API',
+            configuration: debugConfig as vscode.DebugConfiguration,
+        } as vscode.DebugSession;
+        sinon.stub(vscode.workspace, 'getWorkspaceFolder').returns(undefined);
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            startSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(callback => {
+            terminateSessionCallbacks.push(callback);
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.debug, 'startDebugging').callsFake(async () => {
+            startSessionCallback?.(resourceDebugSession);
+            return true;
+        });
+        const resourceStopFailure = new Error('Resource stop failed');
+        const alreadyTerminatedFailure = new Error('Resource debug session already terminated');
+        let resourceStopAttempts = 0;
+        const stopDebuggingStub = sinon.stub(vscode.debug, 'stopDebugging').callsFake(async session => {
+            if (session === resourceDebugSession) {
+                resourceStopAttempts++;
+                throw resourceStopAttempts === 1 ? resourceStopFailure : alreadyTerminatedFailure;
+            }
+        });
+        let removalCalls = 0;
+        const aspireDebugSession = new AspireDebugSession(
+            parentDebugSession as unknown as vscode.DebugSession,
+            {} as any,
+            {} as any,
+            terminalProvider as any,
+            () => {
+                removalCalls++;
+            });
+
+        const trackedSession = await aspireDebugSession.startAndGetDebugSession(debugConfig);
+
+        assert.strictEqual(trackedSession?.id, resourceDebugSession.id);
+        await assert.rejects(
+            () => aspireDebugSession.stopDebugging(),
+            (error: unknown) => {
+                assert.strictEqual(error, resourceStopFailure);
+                return true;
+            });
+
+        for (const terminateSessionCallback of terminateSessionCallbacks) {
+            terminateSessionCallback(resourceDebugSession);
+        }
+        await Promise.resolve();
+
+        await aspireDebugSession.stopDebugging();
+
+        assert.deepStrictEqual(
+            stopDebuggingStub.getCalls().map(call => call.args[0]),
+            [
+                resourceDebugSession,
+                parentDebugSession as unknown as vscode.DebugSession,
+            ]);
+        assert.strictEqual(resourceStopAttempts, 1, 'A naturally terminated resource must not be stopped again');
+        assert.strictEqual((aspireDebugSession as any)._resourceDebugSessions.length, 0);
+        assert.strictEqual((aspireDebugSession as any)._disposed, true);
+        assert.strictEqual(removalCalls, 1);
+    });
+
     // Once a shutdown has succeeded there is nothing left to order, so repeat callers - the CLI RPC
     // endpoint and the DAP disconnect that VS Code sends after the parent stops - must be no-ops
     // rather than re-stopping sessions that are already gone.

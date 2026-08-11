@@ -38,7 +38,7 @@ export class TestRunSessionManager {
     private readonly leases = new Map<string, TestRunSessionLease>();
     private connectionInfo?: DcpServerConnectionInfo;
     private debugSessionSubscription?: vscode.Disposable;
-    private readonly leasedDebugSessionStops = new Map<string, () => Promise<void>>();
+    private readonly leasedDebugSessions = new Map<string, AspireDebugSession>();
     // VS Code's termination event can race the test API's explicit release. Both callers must join
     // the same ordered stop so the API does not report completion while session removal is pending.
     private readonly leaseReleasePromises = new Map<string, Promise<TestRunSessionLease | undefined>>();
@@ -70,12 +70,13 @@ export class TestRunSessionManager {
                 lease.sessionId);
 
             options.addAspireDebugSession(aspireDebugSession);
-            this.leasedDebugSessionStops.set(lease.id, () => aspireDebugSession.stopDebugging());
+            this.leasedDebugSessions.set(lease.id, aspireDebugSession);
             extensionLogOutputChannel.info(`Registered leased Aspire debug session ${lease.sessionId} for VS Code debug session ${session.id}.`);
         });
         const terminateSubscription = vscode.debug.onDidTerminateDebugSession(session => {
             const lease = this.tryGetLeaseForDebugSession(session);
             if (lease) {
+                this.leasedDebugSessions.get(lease.id)?.recordParentDebugSessionTermination();
                 void this.releaseLease(lease.id).catch(error => {
                     extensionLogOutputChannel.warn(`Failed to stop leased Aspire debug session ${lease.sessionId}: ${String(error)}`);
                 });
@@ -154,9 +155,9 @@ export class TestRunSessionManager {
     }
 
     private async stopLeasedDebugSession(id: string): Promise<void> {
-        const stop = this.leasedDebugSessionStops.get(id);
-        await stop?.();
-        this.leasedDebugSessionStops.delete(id);
+        const debugSession = this.leasedDebugSessions.get(id);
+        await debugSession?.stopDebugging();
+        this.leasedDebugSessions.delete(id);
     }
 
     private tryGetLeaseForSessionId(sessionId: string): TestRunSessionLease | undefined {
