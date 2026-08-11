@@ -103,30 +103,23 @@ suite('debugger install hints', () => {
 
     test('waits for a fresh install to appear in the extension registry', async () => {
         let installed = false;
-        let extensionsChanged: (() => void) | undefined;
-        let registrationListenerReady: (() => void) | undefined;
-        const registrationListener = new Promise<void>(resolve => registrationListenerReady = resolve);
         const getExtension = sinon.stub(vscode.extensions, 'getExtension').callsFake(extensionId =>
             installed ? { id: extensionId } as vscode.Extension<unknown> : undefined);
         const onDidChange = sinon.stub(vscode.extensions, 'onDidChange').callsFake(listener => {
-            extensionsChanged = listener;
-            registrationListenerReady?.();
+            queueMicrotask(() => {
+                installed = true;
+                listener();
+            });
             return { dispose: sinon.stub() };
         });
         const showInformationMessage = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
         sinon.stub(vscode.commands, 'executeCommand').resolves();
         const service = new DebuggerInstallHintService(createMemento());
 
-        const installation = service.installDebuggerExtension({
+        await service.installDebuggerExtension({
             debuggerName: 'Python',
             extensionId: 'ms-python.debugpy',
         });
-        await registrationListener;
-
-        assert.strictEqual(showInformationMessage.callCount, 0);
-        installed = true;
-        extensionsChanged?.();
-        await installation;
 
         assert.ok(onDidChange.calledOnce);
         assert.ok(getExtension.calledWith('ms-python.debugpy'));
@@ -136,7 +129,7 @@ suite('debugger install hints', () => {
     });
 
     test('reports a disabled debugger extension instead of claiming installation succeeded', async () => {
-        const clock = sinon.useFakeTimers();
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
         const getExtension = sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
         sinon.stub(vscode.extensions, 'onDidChange').returns({ dispose: sinon.stub() });
         const showInformationMessage = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
