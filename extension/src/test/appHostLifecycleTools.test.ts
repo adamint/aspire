@@ -7,6 +7,7 @@ import * as vscode from 'vscode';
 import {
     AppHostLifecycleToolService,
     AppHostStartLanguageModelTool,
+    AppHostStopLanguageModelTool,
     aspireAppHostStartToolName,
     aspireAppHostStopToolName,
     registerAppHostLifecycleTools,
@@ -28,17 +29,23 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
     readonly launchCalls: LaunchCall[] = [];
     readonly launchingPaths = new Set<string>();
     launchGate: Promise<void> | undefined;
+    launchToken: vscode.CancellationToken | undefined;
     onLaunch: (() => void) | undefined;
 
-    isLaunching(appHostPath: string): boolean {
-        const normalizedPath = path.resolve(appHostPath);
-        return this.launchingPaths.has(process.platform === 'win32' ? normalizedPath.toLowerCase() : normalizedPath);
-    }
-
-    async launch(appHostPath: string, command: 'run', noDebug: boolean): Promise<void> {
+    async launch(
+        appHostPath: string,
+        command: 'run',
+        noDebug: boolean,
+        _doStep: undefined,
+        token: vscode.CancellationToken,
+    ): Promise<void> {
+        this.launchToken = token;
         this.launchCalls.push({ appHostPath, command, noDebug });
         this.onLaunch?.();
         await this.launchGate;
+        if (token.isCancellationRequested) {
+            throw new vscode.CancellationError();
+        }
     }
 }
 
@@ -76,6 +83,7 @@ suite('AppHost lifecycle language model tools', () => {
     let stoppedSessions: AppHostLifecycleEditorSession[];
     let runningAppHostPaths: string[];
     let runningAppHostError: Error | undefined;
+    let runningAppHostsGate: Promise<void> | undefined;
     let onRunningAppHostsRequested: (() => void) | undefined;
     let service: AppHostLifecycleToolService;
     let workspaceFoldersStub: sinon.SinonStub;
@@ -100,6 +108,7 @@ suite('AppHost lifecycle language model tools', () => {
         stoppedSessions = [];
         runningAppHostPaths = [];
         runningAppHostError = undefined;
+        runningAppHostsGate = undefined;
         onRunningAppHostsRequested = undefined;
         service = new AppHostLifecycleToolService({
             launchService,
@@ -107,6 +116,7 @@ suite('AppHost lifecycle language model tools', () => {
             getEditorSessions: () => debugSessions,
             getRunningAppHosts: async () => {
                 onRunningAppHostsRequested?.();
+                await runningAppHostsGate;
                 if (runningAppHostError) {
                     throw runningAppHostError;
                 }
@@ -166,6 +176,45 @@ suite('AppHost lifecycle language model tools', () => {
         assert.strictEqual((await firstStart).outcome, 'started');
     });
 
+    test('propagates cancellation through launch gating instead of reporting the AppHost started', async () => {
+        const launchStarted = createDeferred<void>();
+        const releaseLaunch = createDeferred<void>();
+        const cancellationSource = new vscode.CancellationTokenSource();
+        launchService.onLaunch = () => launchStarted.resolve();
+        launchService.launchGate = releaseLaunch.promise;
+
+        const startPromise = service.start(
+            { appHostPath: 'AppHost/AppHost.csproj', mode: 'run' },
+            cancellationSource.token);
+        await launchStarted.promise;
+        cancellationSource.cancel();
+        releaseLaunch.resolve();
+
+        const result = await startPromise;
+
+        assert.strictEqual(launchService.launchToken?.isCancellationRequested, true);
+        assert.strictEqual(result.outcome, 'cancelled');
+    });
+
+    test('propagates disposal through launch gating instead of reporting the AppHost started', async () => {
+        const launchStarted = createDeferred<void>();
+        const releaseLaunch = createDeferred<void>();
+        launchService.onLaunch = () => launchStarted.resolve();
+        launchService.launchGate = releaseLaunch.promise;
+
+        const startPromise = service.start(
+            { appHostPath: 'AppHost/AppHost.csproj', mode: 'run' },
+            token);
+        await launchStarted.promise;
+        service.dispose();
+        releaseLaunch.resolve();
+
+        const result = await startPromise;
+
+        assert.strictEqual(launchService.launchToken?.isCancellationRequested, true);
+        assert.strictEqual(result.outcome, 'cancelled');
+    });
+
     test('uses the lexical discovery path when the AppHost is already launching through a symlinked directory', async () => {
         const realAppHostDirectory = path.join(workspaceRoot, 'RealAppHost');
         const linkedAppHostDirectory = path.join(workspaceRoot, 'LinkedAppHost');
@@ -177,6 +226,24 @@ suite('AppHost lifecycle language model tools', () => {
 
         discoveryService.candidatesByFolder.set(workspaceRoot, [createCandidate(linkedAppHostPath)]);
         launchService.launchingPaths.add(normalizeLexicalPath(linkedAppHostPath));
+
+        const result = await service.start({ appHostPath: 'RealAppHost/AppHost.csproj', mode: 'run' }, token);
+
+        assert.strictEqual(result.outcome, 'alreadyStarting');
+        assert.strictEqual(launchService.launchCalls.length, 0);
+    });
+
+    test('matches an already-launching real path to an AppHost discovered through a symlinked directory', async () => {
+        const realAppHostDirectory = path.join(workspaceRoot, 'RealAppHost');
+        const linkedAppHostDirectory = path.join(workspaceRoot, 'LinkedAppHost');
+        const linkedAppHostPath = path.join(linkedAppHostDirectory, 'AppHost.csproj');
+        const realAppHostPath = path.join(realAppHostDirectory, 'AppHost.csproj');
+        fs.mkdirSync(realAppHostDirectory, { recursive: true });
+        fs.writeFileSync(realAppHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        createDirectoryLink(linkedAppHostDirectory, realAppHostDirectory);
+
+        discoveryService.candidatesByFolder.set(workspaceRoot, [createCandidate(linkedAppHostPath)]);
+        launchService.launchingPaths.add(normalizeLexicalPath(realAppHostPath));
 
         const result = await service.start({ appHostPath: 'RealAppHost/AppHost.csproj', mode: 'run' }, token);
 
@@ -287,6 +354,25 @@ suite('AppHost lifecycle language model tools', () => {
         assert.strictEqual(result.controller, 'none');
     });
 
+    test('stops an editor session that appears while the running AppHost probe is in flight', async () => {
+        const probeStarted = createDeferred<void>();
+        const releaseProbe = createDeferred<void>();
+        const session = createDebugSession(appHostPath, true, stoppedSession => stoppedSessions.push(stoppedSession));
+        onRunningAppHostsRequested = () => probeStarted.resolve();
+        runningAppHostsGate = releaseProbe.promise;
+
+        const stopPromise = service.stop({ appHostPath: 'AppHost/AppHost.csproj' }, token);
+        await probeStarted.promise;
+        debugSessions.push(session);
+        releaseProbe.resolve();
+
+        const result = await stopPromise;
+
+        assert.strictEqual(result.outcome, 'stopped');
+        assert.strictEqual(result.controller, 'editor');
+        assert.deepStrictEqual(stoppedSessions, [session]);
+    });
+
     test('refuses an ambiguous Program.cs alias when sibling C# projects exist', async () => {
         const directory = path.dirname(appHostPath);
         fs.writeFileSync(path.join(directory, 'Second.csproj'), '<Project Sdk="Microsoft.NET.Sdk" />');
@@ -374,7 +460,59 @@ suite('AppHost lifecycle language model tools', () => {
         }, token);
 
         assert.strictEqual(prepared.confirmationMessages?.title, 'Start Aspire AppHost');
-        assert.strictEqual(prepared.confirmationMessages?.message, 'Start the Aspire AppHost an unresolved path in run mode?');
+        assert.strictEqual(
+            getMarkdownValue(prepared.confirmationMessages?.message),
+            'Start&nbsp;the&nbsp;Aspire&nbsp;AppHost&nbsp;an&nbsp;unresolved&nbsp;path&nbsp;in&nbsp;run&nbsp;mode?');
+    });
+
+    test('escapes Markdown metacharacters in start invocation and confirmation text while resolving the raw selector', async () => {
+        const markdownAppHostPath = path.join(workspaceRoot, 'AppHost', '[prod]*AppHost*.csproj');
+        const selector = 'AppHost/[prod]*AppHost*.csproj';
+        fs.writeFileSync(markdownAppHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        discoveryService.candidatesByFolder.set(workspaceRoot, [createCandidate(markdownAppHostPath)]);
+        const tool = new AppHostStartLanguageModelTool(service);
+
+        const prepared = await tool.prepareInvocation({
+            input: { appHostPath: selector, mode: 'debug' },
+        }, token);
+
+        assert.strictEqual(
+            getMarkdownValue(prepared.invocationMessage),
+            'Starting&nbsp;Aspire&nbsp;AppHost&nbsp;AppHost/\\[prod\\]\\*AppHost\\*.csproj...');
+        assert.strictEqual(
+            getMarkdownValue(prepared.confirmationMessages?.message),
+            'Start&nbsp;the&nbsp;Aspire&nbsp;AppHost&nbsp;AppHost/\\[prod\\]\\*AppHost\\*.csproj&nbsp;in&nbsp;debug&nbsp;mode?');
+
+        const result = await service.start({ appHostPath: selector, mode: 'debug' }, token);
+
+        assert.strictEqual(result.outcome, 'started');
+        assert.strictEqual(launchService.launchCalls[0].appHostPath, path.resolve(markdownAppHostPath));
+    });
+
+    test('renders Unicode line separators visibly in stop invocation and confirmation text while resolving the raw selector', async () => {
+        const controlAppHostPath = path.join(workspaceRoot, 'AppHost', `Line\u2028Break.csproj`);
+        const selector = `AppHost/Line\u2028Break.csproj`;
+        fs.writeFileSync(controlAppHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        discoveryService.candidatesByFolder.set(workspaceRoot, [createCandidate(controlAppHostPath)]);
+        const session = createDebugSession(controlAppHostPath, false, stoppedSession => stoppedSessions.push(stoppedSession));
+        debugSessions.push(session);
+        const tool = new AppHostStopLanguageModelTool(service);
+
+        const prepared = await tool.prepareInvocation({
+            input: { appHostPath: selector },
+        }, token);
+
+        assert.strictEqual(
+            getMarkdownValue(prepared.invocationMessage),
+            'Stopping&nbsp;Aspire&nbsp;AppHost&nbsp;AppHost/Line\\\\u2028Break.csproj...');
+        assert.strictEqual(
+            getMarkdownValue(prepared.confirmationMessages?.message),
+            'Stop&nbsp;the&nbsp;Aspire&nbsp;AppHost&nbsp;AppHost/Line\\\\u2028Break.csproj?');
+
+        const result = await service.stop({ appHostPath: selector }, token);
+
+        assert.strictEqual(result.outcome, 'stopped');
+        assert.deepStrictEqual(stoppedSessions, [session]);
     });
 
     test('returns workspaceNotTrusted without running discovery', async () => {
@@ -479,6 +617,11 @@ function createDirectoryLink(linkPath: string, targetPath: string): void {
 function normalizeLexicalPath(value: string): string {
     const normalizedPath = path.resolve(value);
     return process.platform === 'win32' ? normalizedPath.toLowerCase() : normalizedPath;
+}
+
+function getMarkdownValue(value: string | vscode.MarkdownString | undefined): string {
+    assert.ok(value instanceof vscode.MarkdownString);
+    return value.value;
 }
 
 function createCandidate(candidatePath: string): CandidateAppHostDisplayInfo {

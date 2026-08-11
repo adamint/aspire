@@ -1,8 +1,10 @@
 import * as assert from 'assert';
+import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { AspireExtendedDebugConfiguration } from '../dcp/types';
 import { AppHostLaunchService } from '../services/AppHostLaunchService';
+import * as appHostLanguageModule from '../utils/appHostLanguage';
 import * as cliPathModule from '../utils/cliPath';
 import { __resetCommonPropertiesForTests, __setReporterForTests } from '../utils/telemetry';
 
@@ -39,6 +41,7 @@ class FakeTelemetryReporter {
 suite('AppHostLaunchService', () => {
     let service: AppHostLaunchService;
     let startDebuggingStub: sinon.SinonStub;
+    let classifyAppHostDirectoryStub: sinon.SinonStub;
     let resolveCliPathStub: sinon.SinonStub;
     let onDidTerminateDebugSessionStub: sinon.SinonStub;
     let onDidTerminateDebugSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
@@ -50,12 +53,14 @@ suite('AppHostLaunchService', () => {
         });
         service = new AppHostLaunchService();
         startDebuggingStub = sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+        classifyAppHostDirectoryStub = sinon.stub(appHostLanguageModule, 'classifyAppHostDirectory').resolves('csharp');
         resolveCliPathStub = sinon.stub(cliPathModule, 'resolveCliPath').resolves({ cliPath: 'aspire', available: true, source: 'path' });
     });
 
     teardown(() => {
         service.dispose();
         startDebuggingStub.restore();
+        classifyAppHostDirectoryStub.restore();
         resolveCliPathStub.restore();
         onDidTerminateDebugSessionStub.restore();
         onDidTerminateDebugSessionCallback = undefined;
@@ -115,6 +120,52 @@ suite('AppHostLaunchService', () => {
         finally {
             showErrorMessageStub.restore();
         }
+    });
+
+    test('launch cancellation during telemetry classification does not start debugging', async () => {
+        const telemetryStarted = createDeferred<void>();
+        const releaseTelemetry = createDeferred<'csharp'>();
+        const cancellationSource = new vscode.CancellationTokenSource();
+        classifyAppHostDirectoryStub.callsFake(async () => {
+            telemetryStarted.resolve();
+            return releaseTelemetry.promise;
+        });
+
+        const launchPromise = service.launch(
+            path.resolve(__dirname, '..'),
+            'run',
+            true,
+            undefined,
+            cancellationSource.token);
+        await telemetryStarted.promise;
+        cancellationSource.cancel();
+        releaseTelemetry.resolve('csharp');
+
+        await assert.rejects(launchPromise, vscode.CancellationError);
+        assert.strictEqual(startDebuggingStub.called, false);
+    });
+
+    test('launch cancellation during the CLI gate does not start debugging', async () => {
+        const cliProbeStarted = createDeferred<void>();
+        const releaseCliProbe = createDeferred<{ cliPath: string; available: true; source: 'path' }>();
+        const cancellationSource = new vscode.CancellationTokenSource();
+        resolveCliPathStub.callsFake(async () => {
+            cliProbeStarted.resolve();
+            return releaseCliProbe.promise;
+        });
+
+        const launchPromise = service.launch(
+            '/repo/AppHost.csproj',
+            'run',
+            true,
+            undefined,
+            cancellationSource.token);
+        await cliProbeStarted.promise;
+        cancellationSource.cancel();
+        releaseCliProbe.resolve({ cliPath: 'aspire', available: true, source: 'path' });
+
+        await assert.rejects(launchPromise, vscode.CancellationError);
+        assert.strictEqual(startDebuggingStub.called, false);
     });
 
     test('clearLaunching removes the path from launching state', async () => {
@@ -351,4 +402,18 @@ suite('AppHostLaunchService', () => {
             shouldRequestStopRefresh: false,
         });
     });
+
+    function createDeferred<T>(): {
+        readonly promise: Promise<T>;
+        readonly resolve: (value?: T) => void;
+    } {
+        let resolvePromise: (value: T) => void = () => { };
+        const promise = new Promise<T>(resolve => {
+            resolvePromise = resolve;
+        });
+        return {
+            promise,
+            resolve: value => resolvePromise(value as T),
+        };
+    }
 });

@@ -29,6 +29,7 @@ const maxAppHostSelectorLength = 4096;
 const maxConfirmationPathLength = 512;
 const maxReportedKnownAppHosts = 32;
 const identityChangingCharacters = /[\u0000-\u001F\u007F-\u009F]|\p{Cf}/u;
+const nonDisplayCharacters = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu;
 
 export type AppHostLifecycleMode = 'run' | 'debug';
 export type AppHostLifecycleController = 'editor' | 'external' | 'none' | 'unknown';
@@ -68,8 +69,14 @@ export interface AppHostLifecycleToolResult {
 }
 
 export interface AppHostLifecycleLaunchService {
-    isLaunching(appHostPath: string): boolean;
-    launch(appHostPath: string, command: 'run', noDebug: boolean): Promise<void>;
+    readonly launchingPaths: Iterable<string>;
+    launch(
+        appHostPath: string,
+        command: 'run',
+        noDebug: boolean,
+        doStep: undefined,
+        token: vscode.CancellationToken,
+    ): Promise<void>;
 }
 
 export interface AppHostLifecycleDiscoveryService {
@@ -131,6 +138,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
     private readonly _pendingStarts = new Set<string>();
     private readonly _pendingStops = new Set<string>();
     private readonly _workspaceFolderIds = new Map<string, number>();
+    private readonly _disposalCancellationSource = new vscode.CancellationTokenSource();
     private _nextWorkspaceFolderId = 1;
     private _disposed = false;
 
@@ -138,7 +146,13 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
     }
 
     dispose(): void {
+        if (this._disposed) {
+            return;
+        }
+
         this._disposed = true;
+        this._disposalCancellationSource.cancel();
+        this._disposalCancellationSource.dispose();
         this._pendingStarts.clear();
         this._pendingStops.clear();
     }
@@ -186,7 +200,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 getSessionMode(editorSessions.sessions[0]));
         }
 
-        if (this._pendingStarts.has(identityKey) || this._dependencies.launchService.isLaunching(target.launchPath)) {
+        if (this._pendingStarts.has(identityKey) || this.isLaunching(target)) {
             return createResult(aspireAppHostStartToolName, 'alreadyStarting', target.selector, 'editor', input.mode);
         }
 
@@ -195,6 +209,14 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         }
 
         this._pendingStarts.add(identityKey);
+        const launchCancellationSource = new vscode.CancellationTokenSource();
+        const cancellationRegistration = vscode.Disposable.from(
+            token.onCancellationRequested(() => launchCancellationSource.cancel()),
+            this._disposalCancellationSource.token.onCancellationRequested(() => launchCancellationSource.cancel()));
+        if (token.isCancellationRequested || this._disposed) {
+            launchCancellationSource.cancel();
+        }
+
         try {
             const externalState = await this.getExternalRunState(target, token);
             const sessionsAfterProbe = this.getEditorRunSessions(target);
@@ -212,7 +234,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                     getSessionMode(sessionsAfterProbe.sessions[0]));
             }
 
-            if (this._dependencies.launchService.isLaunching(target.launchPath)) {
+            if (this.isLaunching(target)) {
                 return createResult(aspireAppHostStartToolName, 'alreadyStarting', target.selector, 'editor', input.mode);
             }
 
@@ -228,13 +250,20 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 return createResult(aspireAppHostStartToolName, 'cancelled', target.selector, 'none', input.mode);
             }
 
-            await this._dependencies.launchService.launch(target.launchPath, 'run', input.mode === 'run');
+            await this._dependencies.launchService.launch(
+                target.launchPath,
+                'run',
+                input.mode === 'run',
+                undefined,
+                launchCancellationSource.token);
             return createResult(aspireAppHostStartToolName, 'started', target.selector, 'editor', input.mode, input.mode);
         }
         catch (error) {
             return this.createErrorResult(aspireAppHostStartToolName, error, target.selector, input.mode);
         }
         finally {
+            cancellationRegistration.dispose();
+            launchCancellationSource.dispose();
             this._pendingStarts.delete(identityKey);
         }
     }
@@ -276,27 +305,32 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         }
 
         if (editorSessions.sessions.length === 1) {
-            const session = editorSessions.sessions[0];
-            const effectiveMode = getSessionMode(session);
-            this._pendingStops.add(identityKey);
-            try {
-                await session.stopDebugging();
-                return createResult(aspireAppHostStopToolName, 'stopped', target.selector, 'editor', undefined, effectiveMode);
-            }
-            catch (error) {
-                return this.createErrorResult(aspireAppHostStopToolName, error, target.selector, undefined, effectiveMode);
-            }
-            finally {
-                this._pendingStops.delete(identityKey);
-            }
+            return this.stopEditorSession(target, identityKey, editorSessions.sessions[0]);
         }
 
-        if (this._pendingStarts.has(identityKey) || this._dependencies.launchService.isLaunching(target.launchPath)) {
+        if (this._pendingStarts.has(identityKey) || this.isLaunching(target)) {
             return createResult(aspireAppHostStopToolName, 'alreadyStarting', target.selector, 'editor');
         }
 
         try {
             const externalState = await this.getExternalRunState(target, token);
+            if (this._disposed || token.isCancellationRequested) {
+                return createResult(aspireAppHostStopToolName, 'cancelled', target.selector, 'none');
+            }
+
+            if (this._pendingStops.has(identityKey)) {
+                return createResult(aspireAppHostStopToolName, 'alreadyStopping', target.selector, 'editor');
+            }
+
+            const sessionsAfterProbe = this.getEditorRunSessions(target);
+            if (sessionsAfterProbe.ambiguous || sessionsAfterProbe.sessions.length > 1) {
+                return createResult(aspireAppHostStopToolName, 'ambiguousSession', target.selector, 'unknown');
+            }
+
+            if (sessionsAfterProbe.sessions.length === 1) {
+                return this.stopEditorSession(target, identityKey, sessionsAfterProbe.sessions[0]);
+            }
+
             if (externalState === 'running') {
                 return createResult(aspireAppHostStopToolName, 'notEditorOwned', target.selector, 'external');
             }
@@ -450,6 +484,35 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         return { sessions, ambiguous };
     }
 
+    private isLaunching(target: ResolvedAppHostTarget): boolean {
+        for (const launchingPath of this._dependencies.launchService.launchingPaths) {
+            if (compareAppHostIdentity(launchingPath, target.absolutePath) === 'same') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async stopEditorSession(
+        target: ResolvedAppHostTarget,
+        identityKey: string,
+        session: AppHostLifecycleEditorSession,
+    ): Promise<AppHostLifecycleToolResult> {
+        const effectiveMode = getSessionMode(session);
+        this._pendingStops.add(identityKey);
+        try {
+            await session.stopDebugging();
+            return createResult(aspireAppHostStopToolName, 'stopped', target.selector, 'editor', undefined, effectiveMode);
+        }
+        catch (error) {
+            return this.createErrorResult(aspireAppHostStopToolName, error, target.selector, undefined, effectiveMode);
+        }
+        finally {
+            this._pendingStops.delete(identityKey);
+        }
+    }
+
     private async getExternalRunState(target: ResolvedAppHostTarget, token: vscode.CancellationToken): Promise<ExternalRunState> {
         try {
             const runningAppHosts = await this._dependencies.getRunningAppHosts(token);
@@ -499,13 +562,13 @@ export class AppHostStartLanguageModelTool implements vscode.LanguageModelTool<A
         options: vscode.LanguageModelToolInvocationPrepareOptions<AppHostStartToolInput>,
         token: vscode.CancellationToken,
     ): Promise<vscode.PreparedToolInvocation> {
-        const appHostPath = await this._service.describeTarget(options.input?.appHostPath, token);
+        const appHostPath = toVisibleDisplayText(await this._service.describeTarget(options.input?.appHostPath, token));
         const mode = isLifecycleMode(options.input?.mode) ? options.input.mode : appHostLifecycleUnspecifiedMode;
         return {
-            invocationMessage: appHostLifecycleStartInvocationMessage(appHostPath),
+            invocationMessage: toPlainTextMarkdown(appHostLifecycleStartInvocationMessage(appHostPath)),
             confirmationMessages: {
                 title: appHostLifecycleStartConfirmationTitle,
-                message: appHostLifecycleStartConfirmationMessage(appHostPath, mode),
+                message: toPlainTextMarkdown(appHostLifecycleStartConfirmationMessage(appHostPath, mode)),
             },
         };
     }
@@ -526,12 +589,12 @@ export class AppHostStopLanguageModelTool implements vscode.LanguageModelTool<Ap
         options: vscode.LanguageModelToolInvocationPrepareOptions<AppHostStopToolInput>,
         token: vscode.CancellationToken,
     ): Promise<vscode.PreparedToolInvocation> {
-        const appHostPath = await this._service.describeTarget(options.input?.appHostPath, token);
+        const appHostPath = toVisibleDisplayText(await this._service.describeTarget(options.input?.appHostPath, token));
         return {
-            invocationMessage: appHostLifecycleStopInvocationMessage(appHostPath),
+            invocationMessage: toPlainTextMarkdown(appHostLifecycleStopInvocationMessage(appHostPath)),
             confirmationMessages: {
                 title: appHostLifecycleStopConfirmationTitle,
-                message: appHostLifecycleStopConfirmationMessage(appHostPath),
+                message: toPlainTextMarkdown(appHostLifecycleStopConfirmationMessage(appHostPath)),
             },
         };
     }
@@ -599,6 +662,18 @@ function isLifecycleMode(value: unknown): value is AppHostLifecycleMode {
 
 function isAbsolutePath(value: string): boolean {
     return path.isAbsolute(value) || path.posix.isAbsolute(value) || path.win32.isAbsolute(value);
+}
+
+function toVisibleDisplayText(value: string): string {
+    return value.replace(nonDisplayCharacters, character => {
+        const codePoint = character.codePointAt(0)!;
+        const hex = codePoint.toString(16).toUpperCase();
+        return codePoint <= 0xFFFF ? `\\u${hex.padStart(4, '0')}` : `\\u{${hex}}`;
+    });
+}
+
+function toPlainTextMarkdown(value: string): vscode.MarkdownString {
+    return new vscode.MarkdownString().appendText(value);
 }
 
 function toSelectorKey(value: string): string {

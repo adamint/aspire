@@ -11,6 +11,27 @@ interface PackageJson {
     icon?: string;
     activationEvents?: string[];
     contributes?: {
+        languageModelTools?: Array<{
+            name?: string;
+            toolReferenceName?: string;
+            displayName?: string;
+            modelDescription?: string;
+            userDescription?: string;
+            icon?: string;
+            canBeReferencedInPrompt?: boolean;
+            when?: string;
+            tags?: string[];
+            inputSchema?: {
+                type?: string;
+                properties?: Record<string, {
+                    type?: string;
+                    description?: string;
+                    enum?: string[];
+                }>;
+                required?: string[];
+                additionalProperties?: boolean;
+            };
+        }>;
         commands?: Array<{ command: string; title: string }>;
         menus?: Record<string, Array<{ command?: string; when?: string; group?: string }>>;
         configuration?: { properties?: Record<string, unknown> };
@@ -62,6 +83,8 @@ suite('Aspire package contribution surface E2E', function () {
         const sourceCommandIds = getPackageCommandIds(sourcePackage);
         const installedCommandIds = getPackageCommandIds(installedPackage);
         assert.deepStrictEqual(sourcePackage.activationEvents, expectedActivationEvents);
+        assert.deepStrictEqual(getLanguageModelTools(sourcePackage), expectedSourceLanguageModelTools);
+        assert.deepStrictEqual(getLanguageModelTools(installedPackage), expectedInstalledLanguageModelTools);
         assert.deepStrictEqual(getConfigurationKeys(sourcePackage), expectedConfigurationKeys);
         assert.deepStrictEqual(sourceCommandIds, expectedCommandIds);
         assert.deepStrictEqual(installedCommandIds, sourceCommandIds);
@@ -357,6 +380,10 @@ function getConfigurationKeys(packageJson: PackageJson): string[] {
     return Object.keys(packageJson.contributes?.configuration?.properties ?? {}).sort();
 }
 
+function getLanguageModelTools(packageJson: PackageJson): NonNullable<NonNullable<PackageJson['contributes']>['languageModelTools']> {
+    return packageJson.contributes?.languageModelTools ?? [];
+}
+
 function getFileMatches(fileMatch: string | string[] | undefined): string[] {
     return typeof fileMatch === 'string' ? [fileMatch] : fileMatch ?? [];
 }
@@ -443,6 +470,105 @@ const expectedActivationEvents = [
     'onLanguageModelTool:aspire_apphost_start',
     'onLanguageModelTool:aspire_apphost_stop',
 ];
+
+const expectedSourceLanguageModelTools = createExpectedLanguageModelTools({
+    startDisplayName: '%languageModelTool.aspireAppHostStart.displayName%',
+    startModelDescription: '%languageModelTool.aspireAppHostStart.modelDescription%',
+    startUserDescription: '%languageModelTool.aspireAppHostStart.userDescription%',
+    startModeDescription: '%languageModelTool.aspireAppHostStart.mode.description%',
+    stopDisplayName: '%languageModelTool.aspireAppHostStop.displayName%',
+    stopModelDescription: '%languageModelTool.aspireAppHostStop.modelDescription%',
+    stopUserDescription: '%languageModelTool.aspireAppHostStop.userDescription%',
+    appHostPathDescription: '%languageModelTool.aspireAppHost.appHostPath.description%',
+});
+
+const expectedInstalledLanguageModelTools = createExpectedLanguageModelTools({
+    startDisplayName: 'Start Aspire AppHost',
+    startModelDescription: 'Prefer this tool over running Aspire AppHost lifecycle commands in a terminal when VS Code is active. Starts an AppHost Aspire discovered in this workspace through VS Code\'s run/debug lifecycle. Pass an exact selector previously returned by this tool; unknown selectors return the available AppHosts.',
+    startUserDescription: 'Start an Aspire AppHost from this workspace in run or debug mode.',
+    startModeDescription: 'How to start the AppHost: \'run\' starts it without attaching the debugger, \'debug\' starts it with the debugger attached.',
+    stopDisplayName: 'Stop Aspire AppHost',
+    stopModelDescription: 'Prefer this tool over running Aspire AppHost lifecycle commands in a terminal when VS Code is active. Stops the matching Aspire debug session in this VS Code window. AppHosts started outside this editor are reported but never terminated.',
+    stopUserDescription: 'Stop an Aspire AppHost that this editor started.',
+    appHostPathDescription: 'Selector for an AppHost Aspire discovered in this workspace. In a single-root workspace this is the workspace-relative path. Multi-root selectors are prefixed with a workspace folder qualifier. Use the exact appHostPath or knownAppHosts value returned by a previous call.',
+});
+
+function createExpectedLanguageModelTools(strings: {
+    startDisplayName: string;
+    startModelDescription: string;
+    startUserDescription: string;
+    startModeDescription: string;
+    stopDisplayName: string;
+    stopModelDescription: string;
+    stopUserDescription: string;
+    appHostPathDescription: string;
+}) {
+    return [
+        {
+            name: 'aspire_apphost_start',
+            toolReferenceName: 'aspireStartAppHost',
+            displayName: strings.startDisplayName,
+            modelDescription: strings.startModelDescription,
+            userDescription: strings.startUserDescription,
+            icon: '$(debug-start)',
+            canBeReferencedInPrompt: true,
+            when: 'isWorkspaceTrusted',
+            tags: [
+                'aspire',
+                'apphost',
+            ],
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    appHostPath: {
+                        type: 'string',
+                        description: strings.appHostPathDescription,
+                    },
+                    mode: {
+                        type: 'string',
+                        enum: [
+                            'run',
+                            'debug',
+                        ],
+                        description: strings.startModeDescription,
+                    },
+                },
+                required: [
+                    'appHostPath',
+                    'mode',
+                ],
+                additionalProperties: false,
+            },
+        },
+        {
+            name: 'aspire_apphost_stop',
+            toolReferenceName: 'aspireStopAppHost',
+            displayName: strings.stopDisplayName,
+            modelDescription: strings.stopModelDescription,
+            userDescription: strings.stopUserDescription,
+            icon: '$(debug-stop)',
+            canBeReferencedInPrompt: true,
+            when: 'isWorkspaceTrusted',
+            tags: [
+                'aspire',
+                'apphost',
+            ],
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    appHostPath: {
+                        type: 'string',
+                        description: strings.appHostPathDescription,
+                    },
+                },
+                required: [
+                    'appHostPath',
+                ],
+                additionalProperties: false,
+            },
+        },
+    ];
+}
 
 const expectedCommandIds = [
     'aspire-vscode.add',

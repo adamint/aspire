@@ -136,11 +136,20 @@ export class AppHostLaunchService implements vscode.Disposable {
      * @param command The Aspire CLI command to execute (run, deploy, publish, do).
      * @param noDebug When true, launches without the debugger attached.
      * @param doStep Optional step name for the 'do' command.
+     * @param cancellationToken Optional cancellation for asynchronous pre-launch gates.
      */
-    async launch(appHostPath: string, command: AspireCommandType, noDebug: boolean, doStep?: string): Promise<void> {
+    async launch(
+        appHostPath: string,
+        command: AspireCommandType,
+        noDebug: boolean,
+        doStep?: string,
+        cancellationToken?: vscode.CancellationToken,
+    ): Promise<void> {
+        throwIfCancellationRequested(cancellationToken);
         const startTime = Date.now();
         const executionSuppressed = isE2eDebugLaunchSuppressed();
         const telemetryProperties = await getLaunchTelemetryProperties(appHostPath, command, noDebug, executionSuppressed);
+        throwIfCancellationRequested(cancellationToken);
 
         const config: AspireExtendedDebugConfiguration = {
             type: 'aspire',
@@ -182,6 +191,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             this._onDidChangeLaunchingState.fire();
 
             const cliAvailability = await checkCliAvailableOrRedirect('debug_gate');
+            throwIfCancellationRequested(cancellationToken);
             if (!cliAvailability.available) {
                 throw new vscode.CancellationError();
             }
@@ -219,6 +229,12 @@ export class AppHostLaunchService implements vscode.Disposable {
             });
             throw err;
         }
+    }
+}
+
+function throwIfCancellationRequested(token: vscode.CancellationToken | undefined): void {
+    if (token?.isCancellationRequested) {
+        throw new vscode.CancellationError();
     }
 }
 
