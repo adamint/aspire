@@ -136,7 +136,7 @@ suite('AppHost lifecycle language model tools', () => {
             effectiveMode: 'debug',
         });
         assert.deepStrictEqual(launchService.launchCalls, [{
-            appHostPath: fs.realpathSync.native(appHostPath),
+            appHostPath: path.resolve(appHostPath),
             command: 'run',
             noDebug: false,
         }]);
