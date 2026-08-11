@@ -194,6 +194,15 @@ export default class AspireDcpServer {
             extensionLogOutputChannel.warn(
                 `Failed to stop debug session for run ID ${runId}: ${error instanceof Error ? error.message : String(error)}`);
         };
+        const stopLateDebugSession = (runId: string, debugSession: AspireResourceDebugSession): void => {
+            try {
+                void Promise.resolve(debugSession.stopSession()).catch(error => {
+                    logTeardownFailure(runId, error);
+                });
+            } catch (error) {
+                logTeardownFailure(runId, error);
+            }
+        };
         const scheduleDebuggerTeardown = (run: RunSessionRecord): void => {
             if (run.teardownStarted) {
                 return;
@@ -516,6 +525,22 @@ export default class AspireDcpServer {
                         foundDebuggerExtension
                     );
 
+                    const preparedRun = runSessions.get(runId);
+                    if (!preparedRun || preparedRun.lifecycle !== 'starting') {
+                        if (preparedSession.alreadyStartedSession) {
+                            stopLateDebugSession(runId, preparedSession.alreadyStartedSession);
+                        }
+                        cleanupRun(runId);
+                        res.status(409).json({
+                            error: {
+                                code: 'RunSessionTerminated',
+                                message: `Run session ${runId} terminated while its debug session was starting.`,
+                                details: [],
+                            },
+                        }).end();
+                        return;
+                    }
+
                     const resourceDebugSession = preparedSession.alreadyStartedSession
                         ? aspireDebugSession.trackAlreadyStartedResourceSession(preparedSession.debugConfiguration, preparedSession.alreadyStartedSession)
                         : await aspireDebugSession.startAndGetDebugSession(preparedSession.debugConfiguration);
@@ -542,13 +567,7 @@ export default class AspireDcpServer {
 
                     processes.push(resourceDebugSession);
                     if (!runSessions.markRunning(runId)) {
-                        try {
-                            void Promise.resolve(resourceDebugSession.stopSession()).catch(error => {
-                                logTeardownFailure(runId, error);
-                            });
-                        } catch (error) {
-                            logTeardownFailure(runId, error);
-                        }
+                        stopLateDebugSession(runId, resourceDebugSession);
                         cleanupRun(runId);
                         res.status(409).json({
                             error: {

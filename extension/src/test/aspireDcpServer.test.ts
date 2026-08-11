@@ -42,6 +42,7 @@ interface Harness {
     queuedSessions: AspireResourceDebugSession[];
     sockets: WebSocket[];
     startDebugSession: sinon.SinonStub;
+    trackAlreadyStartedSession: sinon.SinonStub;
 }
 
 interface HttpResponse {
@@ -316,6 +317,39 @@ suite('Aspire DCP run session lifecycle', () => {
             0);
     });
 
+    test('DELETE while debugger preparation is pending does not launch and stops a callback-created session', async () => {
+        const preparationCompleted = createDeferred<debuggerExtensions.PreparedDebugSession>();
+        sinon.stub(debuggerExtensions, 'prepareDebugSession').returns(preparationCompleted.promise);
+        const stopSession = sinon.stub().resolves();
+        const createPromise = createRunResponse(harness, 'node', stopSession);
+        await waitFor(() => getInternals(harness.dcpServer)._runTelemetryById.size === 1);
+        const runId = getInternals(harness.dcpServer)._runTelemetryById.keys().next().value;
+        assert.ok(runId);
+
+        const deleteResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+        preparationCompleted.resolve({
+            debugConfiguration: {
+                debugSessionId: harness.dcpId,
+                name: 'prepared node session',
+                request: 'launch',
+                runId,
+                type: 'node',
+            },
+            alreadyStartedSession: {
+                ...createResourceSession('prepared-node-session', stopSession),
+                processId: 1234,
+                termination: new Promise<number>(() => { }),
+            },
+        });
+        const createResponse = await createPromise;
+
+        assert.strictEqual(deleteResponse.statusCode, 200);
+        assert.strictEqual(createResponse.statusCode, 409);
+        assert.strictEqual(harness.startDebugSession.notCalled, true);
+        assert.strictEqual(harness.trackAlreadyStartedSession.notCalled, true);
+        assert.strictEqual(stopSession.calledOnce, true);
+    });
+
     test('browser DELETE waits for confirmed stop before terminating', async () => {
         const stopCompleted = createDeferred<void>();
         const stopSession = sinon.stub().returns(stopCompleted.promise);
@@ -444,9 +478,12 @@ async function startHarness(options?: DcpServerOptions): Promise<Harness> {
     const dcpId = `${dcpSessionId}-resource`;
     const queuedSessions: AspireResourceDebugSession[] = [];
     const startDebugSession = sinon.stub().callsFake(async () => queuedSessions.shift());
+    const trackAlreadyStartedSession = sinon.stub().callsFake(
+        (_configuration: unknown, session: AspireResourceDebugSession) => session);
     const debugSession = {
         configuration: {},
         startAndGetDebugSession: startDebugSession,
+        trackAlreadyStartedResourceSession: trackAlreadyStartedSession,
     } as unknown as AspireDebugSession;
     const create = AspireDcpServer.create as unknown as (
         getDebugSession: (debugSessionId: string) => AspireDebugSession | null,
@@ -460,6 +497,7 @@ async function startHarness(options?: DcpServerOptions): Promise<Harness> {
         queuedSessions,
         sockets: [],
         startDebugSession,
+        trackAlreadyStartedSession,
     };
 }
 
