@@ -4779,9 +4779,11 @@ public static class ResourceBuilderExtensions
     /// <remarks>
     /// Registering debug support is synchronous. Aspire invokes <paramref name="launchConfigurationProducer"/>
     /// later only for executable creations where this debug-support annotation is active for the current debug
-    /// session, including restarts and replicas. This is not a general resource lifecycle callback: it does not
-    /// run for process launches, unsupported debug sessions, publish mode, or inactive annotations superseded by
-    /// a later <see cref="SupportsDebuggingAnnotation"/>.
+    /// session, including restarts and replicas. This is not a general resource lifecycle callback. Process
+    /// execution does not generally require a producer, but Aspire can still invoke a configured, supported
+    /// non-<c>project</c> producer while creating execution configuration for a process executable. The callback
+    /// does not run for unsupported debug sessions, publish mode, or inactive annotations superseded by a later
+    /// <see cref="SupportsDebuggingAnnotation"/>.
     /// </remarks>
     [OverloadResolutionPriority(-1)]
     [Experimental("ASPIREEXTENSION001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
@@ -4858,8 +4860,10 @@ public static class ResourceBuilderExtensions
     /// Registering debug support is synchronous. Aspire invokes <paramref name="launchConfigurationProducer"/>
     /// later only for executable creations where this debug-support annotation is active for the current debug
     /// session, including restarts and replicas. A producer that completes synchronously should return its result
-    /// with <see cref="Task.FromResult{TResult}(TResult)"/>. This is not a general resource lifecycle callback:
-    /// it does not run for process launches, unsupported debug sessions, publish mode, or inactive annotations
+    /// with <see cref="Task.FromResult{TResult}(TResult)"/>. This is not a general resource lifecycle callback.
+    /// Process execution does not generally require a producer, but Aspire can still invoke a configured,
+    /// supported non-<c>project</c> producer while creating execution configuration for a process executable.
+    /// The callback does not run for unsupported debug sessions, publish mode, or inactive annotations
     /// superseded by a later <see cref="SupportsDebuggingAnnotation"/>.
     /// </remarks>
     /// <example>

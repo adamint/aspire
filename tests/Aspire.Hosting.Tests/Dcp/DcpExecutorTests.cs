@@ -257,7 +257,7 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
         var exe = Assert.Single(executables);
 
         string[] dotnetToolExecArgs = ["tool", "exec", "package", "--yes", "--"];
-        string[] callArgs = [..dotnetToolExecArgs, ..toolArgs];
+        string[] callArgs = [.. dotnetToolExecArgs, .. toolArgs];
 
         Assert.Equal(callArgs, exe.Spec.Args);
 
@@ -5017,11 +5017,14 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
         Assert.Equal("-e", launchConfig.MsBuildProperties!["AdbTarget"]);
     }
 
-    [Fact]
-    public async Task MauiProjectWithLaunchArgsOverrideAndSupportedLaunchConfiguration_StillAppliesMauiLaunchConfiguration()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MauiProjectWithLaunchArgsOverrideAndSupportedLaunchConfiguration_StillAppliesMauiLaunchConfiguration(bool useContextOverload)
     {
         var builder = DistributedApplication.CreateBuilder();
         var projectBuilder = builder.AddProject<TestProject>("proj", launchProfileName: null);
+        var projectResource = projectBuilder.Resource;
         var defaultDebugSupport = projectBuilder.Resource.Annotations.OfType<SupportsDebuggingAnnotation>().FirstOrDefault();
         if (defaultDebugSupport is not null)
         {
@@ -5035,18 +5038,32 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
                 leadingResourceArgumentToRemove: "run"));
 #pragma warning restore ASPIREPROJECTS001
 
-        projectBuilder
-            .WithDebugSupport(
-                context => Task.FromResult(new TestMauiLaunchConfiguration
+        var producerInvocationCount = 0;
+        LaunchConfigurationCallbackContext? launchContext = null;
+
+        if (useContextOverload)
+        {
+            projectBuilder.WithDebugSupport(
+                context =>
                 {
-                    Mode = context.Mode,
-                    ProjectPath = "/mauiapp/MauiApp.csproj",
-                    TargetFramework = "net10.0-android",
-                    Platform = "android",
-                    TargetKind = "emulator"
-                }),
-                "maui")
-            .WithArgs("run", "-f", "net10.0-android");
+                    Interlocked.Increment(ref producerInvocationCount);
+                    launchContext = context;
+                    return Task.FromResult(CreateMauiLaunchConfiguration(context.Mode));
+                },
+                "maui");
+        }
+        else
+        {
+            projectBuilder.WithDebugSupport(
+                mode =>
+                {
+                    Interlocked.Increment(ref producerInvocationCount);
+                    return CreateMauiLaunchConfiguration(mode);
+                },
+                "maui");
+        }
+
+        projectBuilder.WithArgs("run", "-f", "net10.0-android");
 
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -5073,10 +5090,29 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
 
         var executable = GetCreatedExecutableForResource(kubernetesService, "proj");
         Assert.Equal(ExecutionType.Process, executable.Spec.ExecutionType);
+        Assert.Equal(1, Volatile.Read(ref producerInvocationCount));
         Assert.True(executable.TryGetAnnotationAsObjectList<TestMauiLaunchConfiguration>(
             Executable.LaunchConfigurationsAnnotation,
             out var launchConfigurations));
-        Assert.Equal("/mauiapp/MauiApp.csproj", Assert.Single(launchConfigurations).ProjectPath);
+        var launchConfiguration = Assert.Single(launchConfigurations);
+        Assert.Equal(ExecutableLaunchMode.Debug, launchConfiguration.Mode);
+        Assert.Equal("/mauiapp/MauiApp.csproj", launchConfiguration.ProjectPath);
+
+        if (useContextOverload)
+        {
+            Assert.NotNull(launchContext);
+            Assert.Equal(ExecutableLaunchMode.Debug, launchContext.Mode);
+            Assert.Same(projectResource, launchContext.Resource);
+        }
+
+        static TestMauiLaunchConfiguration CreateMauiLaunchConfiguration(string mode) => new()
+        {
+            Mode = mode,
+            ProjectPath = "/mauiapp/MauiApp.csproj",
+            TargetFramework = "net10.0-android",
+            Platform = "android",
+            TargetKind = "emulator"
+        };
     }
 
     [Fact]
@@ -7449,13 +7485,13 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
 
         var nameGenerator = new DcpNameGenerator(configuration, Options.Create(dcpOptions));
         var executionContext = new DistributedApplicationExecutionContext(new DistributedApplicationExecutionContextOptions(DistributedApplicationOperation.Run)
-            {
-                Services = new TestServiceProvider(configuration)
-                    .AddService<IDeveloperCertificateService>(developerCertificateService)
-                    .AddService(distributedAppModel)
-                    .AddService(Options.Create(dcpOptions))
-                    .AddService(resourceLoggerService)
-            });
+        {
+            Services = new TestServiceProvider(configuration)
+                .AddService<IDeveloperCertificateService>(developerCertificateService)
+                .AddService(distributedAppModel)
+                .AddService(Options.Create(dcpOptions))
+                .AddService(resourceLoggerService)
+        });
         var ks = kubernetesService ?? new TestKubernetesService();
         var dcpEvts = events ?? new DcpExecutorEvents();
         var fileSystemService = new FileSystemService(configuration);
