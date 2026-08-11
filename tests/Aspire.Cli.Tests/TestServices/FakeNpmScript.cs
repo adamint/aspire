@@ -11,6 +11,7 @@ internal sealed class FakeNpmScript : IDisposable
     private const int DefaultMaxPolls = 50;
     private static readonly TimeSpan s_holderStartupWaitBound = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan s_holderShutdownWaitBound = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan s_holderObservationPollInterval = TimeSpan.FromMilliseconds(10);
     private static readonly string[] s_expectedHolderProcessNames = OperatingSystem.IsWindows()
         ? ["powershell", "pwsh"]
         : ["sh", "bash", "dash"];
@@ -19,6 +20,7 @@ internal sealed class FakeNpmScript : IDisposable
     private readonly string _output;
     private readonly bool _delayParentExitUntilReleased;
     private readonly bool _ignoreReleaseFile;
+    private readonly bool _ignoreForceExitFile;
     private readonly bool _publishMutablePidOnRelease;
     private Process? _holderProcess;
     private bool _released;
@@ -30,6 +32,7 @@ internal sealed class FakeNpmScript : IDisposable
         string output,
         bool delayParentExitUntilReleased,
         bool ignoreReleaseFile,
+        bool ignoreForceExitFile,
         bool publishMutablePidOnRelease)
     {
         _outputHelper = outputHelper;
@@ -37,6 +40,7 @@ internal sealed class FakeNpmScript : IDisposable
         _output = output;
         _delayParentExitUntilReleased = delayParentExitUntilReleased;
         _ignoreReleaseFile = ignoreReleaseFile;
+        _ignoreForceExitFile = ignoreForceExitFile;
         _publishMutablePidOnRelease = publishMutablePidOnRelease;
 
         ParentReadyFile = Path.Combine(Workspace.WorkspaceRoot.FullName, "npm-parent-ready");
@@ -112,22 +116,27 @@ internal sealed class FakeNpmScript : IDisposable
 
     public static FakeNpmScript BuildExitThenHoldOutputOpen(ITestOutputHelper outputHelper, string output)
     {
-        return Build(outputHelper, output, delayParentExitUntilReleased: false, ignoreReleaseFile: false, publishMutablePidOnRelease: false);
+        return Build(outputHelper, output, delayParentExitUntilReleased: false, ignoreReleaseFile: false, ignoreForceExitFile: false, publishMutablePidOnRelease: false);
     }
 
     public static FakeNpmScript BuildWaitForParentReleaseThenHoldOutputOpen(ITestOutputHelper outputHelper, string output)
     {
-        return Build(outputHelper, output, delayParentExitUntilReleased: true, ignoreReleaseFile: false, publishMutablePidOnRelease: false);
+        return Build(outputHelper, output, delayParentExitUntilReleased: true, ignoreReleaseFile: false, ignoreForceExitFile: false, publishMutablePidOnRelease: false);
     }
 
     public static FakeNpmScript BuildExitThenIgnoreRelease(ITestOutputHelper outputHelper, string output)
     {
-        return Build(outputHelper, output, delayParentExitUntilReleased: false, ignoreReleaseFile: true, publishMutablePidOnRelease: false);
+        return Build(outputHelper, output, delayParentExitUntilReleased: false, ignoreReleaseFile: true, ignoreForceExitFile: false, publishMutablePidOnRelease: false);
+    }
+
+    public static FakeNpmScript BuildExitThenIgnoreReleaseAndForceExit(ITestOutputHelper outputHelper, string output)
+    {
+        return Build(outputHelper, output, delayParentExitUntilReleased: false, ignoreReleaseFile: true, ignoreForceExitFile: true, publishMutablePidOnRelease: false);
     }
 
     public static FakeNpmScript BuildExitThenPublishMutablePidOnRelease(ITestOutputHelper outputHelper, string output)
     {
-        return Build(outputHelper, output, delayParentExitUntilReleased: false, ignoreReleaseFile: false, publishMutablePidOnRelease: true);
+        return Build(outputHelper, output, delayParentExitUntilReleased: false, ignoreReleaseFile: false, ignoreForceExitFile: false, publishMutablePidOnRelease: true);
     }
 
     private static FakeNpmScript Build(
@@ -135,10 +144,11 @@ internal sealed class FakeNpmScript : IDisposable
         string output,
         bool delayParentExitUntilReleased,
         bool ignoreReleaseFile,
+        bool ignoreForceExitFile,
         bool publishMutablePidOnRelease)
     {
         var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var script = new FakeNpmScript(outputHelper, workspace, output, delayParentExitUntilReleased, ignoreReleaseFile, publishMutablePidOnRelease);
+        var script = new FakeNpmScript(outputHelper, workspace, output, delayParentExitUntilReleased, ignoreReleaseFile, ignoreForceExitFile, publishMutablePidOnRelease);
         script.WriteScripts();
         return script;
     }
@@ -180,9 +190,14 @@ internal sealed class FakeNpmScript : IDisposable
         return WaitForFileAsync(ParentReadyFile, cancellationToken);
     }
 
-    public Task WaitForParentExitAsync(CancellationToken cancellationToken = default)
+    public async Task WaitForParentExitAsync(CancellationToken cancellationToken = default)
     {
-        return WaitForFileAsync(ParentExitedFile, cancellationToken);
+        await WaitForFileAsync(ParentExitedFile, cancellationToken).ConfigureAwait(false);
+
+        // Capture the holder immediately after the parent exits and before callers can mutate the
+        // identity file. This pins the exact helper instance without starting an observation timeout
+        // before the fake npm process has even launched.
+        _ = await TryGetVerifiedHolderProcessAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task ReleaseParentExitAsync(CancellationToken cancellationToken = default)
@@ -271,9 +286,21 @@ internal sealed class FakeNpmScript : IDisposable
 
     private async Task EnsureHolderStoppedOnWindowsAsync(Process? holderProcess, CancellationToken cancellationToken)
     {
+        if (await TryWaitForFileAsync(HolderExitedFile, s_holderShutdownWaitBound, cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        File.WriteAllText(ForceExitFile, string.Empty);
+
+        if (await TryWaitForFileAsync(HolderExitedFile, s_holderShutdownWaitBound, cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
+
         if (holderProcess is null)
         {
-            await WaitForHolderExitSignalAsync(cancellationToken).ConfigureAwait(false);
+            _outputHelper.WriteLine("[FakeNpmScript] Holder exit signal did not arrive within the cleanup bound.");
             return;
         }
 
@@ -282,22 +309,23 @@ internal sealed class FakeNpmScript : IDisposable
             return;
         }
 
-        using var waitForReleaseCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        waitForReleaseCts.CancelAfter(s_holderShutdownWaitBound);
+        // Windows PID reuse can hand a later lookup a different pwsh/powershell process with the same PID.
+        // Only fall back to Kill after the holder ignored both cooperative signals and only against the
+        // exact Process handle we observed before release while the real holder was still alive.
+        _outputHelper.WriteLine(
+            $"[FakeNpmScript] Holder process {holderProcess.Id} ignored release and force-exit signals. Killing the exact observed process before workspace cleanup.");
+        TryKillExactProcess(holderProcess);
+
+        using var waitForKillCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        waitForKillCts.CancelAfter(s_holderShutdownWaitBound);
 
         try
         {
-            await holderProcess.WaitForExitAsync(waitForReleaseCts.Token).ConfigureAwait(false);
+            await holderProcess.WaitForExitAsync(waitForKillCts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            _outputHelper.WriteLine(
-                $"[FakeNpmScript] Holder process {holderProcess.Id} ignored the release signal. Killing it before workspace cleanup.");
-            TryKillExactProcess(holderProcess);
-
-            using var waitForKillCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            waitForKillCts.CancelAfter(s_holderShutdownWaitBound);
-            await holderProcess.WaitForExitAsync(waitForKillCts.Token).ConfigureAwait(false);
+            _outputHelper.WriteLine($"[FakeNpmScript] Holder process {holderProcess.Id} did not exit after an exact-process kill.");
         }
     }
 
@@ -308,30 +336,82 @@ internal sealed class FakeNpmScript : IDisposable
             return _holderProcess;
         }
 
-        if (!File.Exists(HolderIdentityFile))
-        {
-            if (!File.Exists(ParentReadyFile) && !File.Exists(ParentExitedFile))
-            {
-                return null;
-            }
+        return await ObserveHolderProcessAsync(cancellationToken).ConfigureAwait(false);
+    }
 
-            using var waitForPidCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            waitForPidCts.CancelAfter(s_holderStartupWaitBound);
+    private async Task<Process?> ObserveHolderProcessAsync(CancellationToken cancellationToken)
+    {
+        if (_holderProcess is not null)
+        {
+            return _holderProcess;
+        }
+
+        var observationStopwatch = Stopwatch.StartNew();
+        if (!await TryWaitForFileAsync(HolderIdentityFile, s_holderStartupWaitBound, cancellationToken).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        var remainingObservationTime = s_holderStartupWaitBound - observationStopwatch.Elapsed;
+        if (remainingObservationTime <= TimeSpan.Zero)
+        {
+            return await TryCreateVerifiedHolderProcessAsync(CancellationToken.None, logFailure: true).ConfigureAwait(false);
+        }
+
+        using var observationTimeoutCts = new CancellationTokenSource(remainingObservationTime);
+        using var combinedObservationCts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            observationTimeoutCts.Token);
+
+        // FileSystemWatcher can report the identity file as soon as it is created, before the shell
+        // has finished writing the PID into it. Keep waiting for the actual condition we need — a
+        // readable, validated holder process — instead of caching a permanent null from an empty read.
+        while (!combinedObservationCts.IsCancellationRequested)
+        {
+            var holderProcess = await TryCreateVerifiedHolderProcessAsync(
+                combinedObservationCts.Token,
+                logFailure: false).ConfigureAwait(false);
+            if (holderProcess is not null)
+            {
+                return holderProcess;
+            }
 
             try
             {
-                await WaitForFileAsync(HolderIdentityFile, waitForPidCts.Token).ConfigureAwait(false);
+                await Task.Delay(s_holderObservationPollInterval, combinedObservationCts.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                return null;
+                break;
             }
         }
 
-        var holderPidText = (await File.ReadAllTextAsync(HolderIdentityFile, cancellationToken).ConfigureAwait(false)).Trim();
+        return await TryCreateVerifiedHolderProcessAsync(CancellationToken.None, logFailure: true).ConfigureAwait(false);
+    }
+
+    private async Task<Process?> TryCreateVerifiedHolderProcessAsync(CancellationToken cancellationToken, bool logFailure = true)
+    {
+        string holderPidText;
+        try
+        {
+            holderPidText = (await File.ReadAllTextAsync(HolderIdentityFile, cancellationToken).ConfigureAwait(false)).Trim();
+        }
+        catch (IOException ex)
+        {
+            if (logFailure)
+            {
+                _outputHelper.WriteLine($"[FakeNpmScript] Could not read holder identity file: {ex.Message}");
+            }
+
+            return null;
+        }
+
         if (!int.TryParse(holderPidText, NumberStyles.None, CultureInfo.InvariantCulture, out var holderPid))
         {
-            _outputHelper.WriteLine($"[FakeNpmScript] Holder identity '{holderPidText}' is not a valid PID. Cleanup will not kill by PID.");
+            if (logFailure)
+            {
+                _outputHelper.WriteLine($"[FakeNpmScript] Holder identity '{holderPidText}' is not a valid PID. Cleanup will not kill by PID.");
+            }
             return null;
         }
 
@@ -342,7 +422,10 @@ internal sealed class FakeNpmScript : IDisposable
         }
         catch (ArgumentException ex)
         {
-            _outputHelper.WriteLine($"[FakeNpmScript] Holder process {holderPid} exited before it could be observed: {ex.Message}");
+            if (logFailure)
+            {
+                _outputHelper.WriteLine($"[FakeNpmScript] Holder process {holderPid} exited before it could be observed: {ex.Message}");
+            }
             return null;
         }
 
@@ -352,37 +435,28 @@ internal sealed class FakeNpmScript : IDisposable
             var processName = holderProcess.ProcessName;
             if (!IsExpectedHolderProcessName(processName, HolderScriptPath))
             {
-                _outputHelper.WriteLine(
-                    $"[FakeNpmScript] Holder PID {holderPid} resolved to unexpected process '{processName}'. Cleanup will not kill by PID.");
+                if (logFailure)
+                {
+                    _outputHelper.WriteLine(
+                        $"[FakeNpmScript] Holder PID {holderPid} resolved to unexpected process '{processName}'. Cleanup will not kill by PID.");
+                }
                 holderProcess.Dispose();
                 return null;
             }
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
         {
-            _outputHelper.WriteLine(
-                $"[FakeNpmScript] Could not validate holder process {holderPid}: {ex.Message}. Cleanup will not kill by PID.");
+            if (logFailure)
+            {
+                _outputHelper.WriteLine(
+                    $"[FakeNpmScript] Could not validate holder process {holderPid}: {ex.Message}. Cleanup will not kill by PID.");
+            }
             holderProcess.Dispose();
             return null;
         }
 
         _holderProcess = holderProcess;
         return _holderProcess;
-    }
-
-    private async Task WaitForHolderExitSignalAsync(CancellationToken cancellationToken)
-    {
-        using var waitForExitCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        waitForExitCts.CancelAfter(s_holderShutdownWaitBound);
-
-        try
-        {
-            await WaitForFileAsync(HolderExitedFile, waitForExitCts.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            _outputHelper.WriteLine("[FakeNpmScript] Holder exit signal did not arrive within the cleanup bound.");
-        }
     }
 
     private IReadOnlyDictionary<string, string> BuildProcessEnvironment()
@@ -411,6 +485,11 @@ internal sealed class FakeNpmScript : IDisposable
         if (_ignoreReleaseFile)
         {
             environment["NPM_IGNORE_RELEASE_FILE"] = "1";
+        }
+
+        if (_ignoreForceExitFile)
+        {
+            environment["NPM_IGNORE_FORCE_EXIT_FILE"] = "1";
         }
 
         if (_publishMutablePidOnRelease)
@@ -508,7 +587,7 @@ internal sealed class FakeNpmScript : IDisposable
                    : > "$NPM_HOLDER_EXITED_FILE"
                    exit 0
                  fi
-                 if [ -f "$NPM_FORCE_EXIT_FILE" ]; then
+                 if [ "$NPM_IGNORE_FORCE_EXIT_FILE" != "1" ] && [ -f "$NPM_FORCE_EXIT_FILE" ]; then
                    : > "$NPM_HOLDER_FORCE_EXIT_ACK_FILE"
                    : > "$NPM_HOLDER_EXITED_FILE"
                    exit 0
@@ -594,7 +673,7 @@ internal sealed class FakeNpmScript : IDisposable
                        exit 0
                    }
 
-                   if (Test-Path $env:NPM_FORCE_EXIT_FILE)
+                   if ($env:NPM_IGNORE_FORCE_EXIT_FILE -ne '1' -and (Test-Path $env:NPM_FORCE_EXIT_FILE))
                    {
                        [void](New-Item -ItemType File -Path $env:NPM_HOLDER_FORCE_EXIT_ACK_FILE -Force)
                        [void](New-Item -ItemType File -Path $env:NPM_HOLDER_EXITED_FILE -Force)
