@@ -136,6 +136,7 @@ public static class ManifestCommand
             {
                 managedAssemblies.Add(new IntegrationPackageManagedAssembly
                 {
+                    PackageId = asset.PackageId,
                     Name = Path.GetFileNameWithoutExtension(asset.RelativePath),
                     Culture = asset.Culture,
                     Path = asset.SourcePath
