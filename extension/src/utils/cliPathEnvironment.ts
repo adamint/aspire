@@ -51,9 +51,7 @@ export interface ForwardableCliPathDependencies {
 
 interface ExtensionPackageJson {
     version?: unknown;
-    __metadata?: {
-        isPreReleaseVersion?: unknown;
-    };
+    preRelease?: unknown;
 }
 
 /**
@@ -242,7 +240,7 @@ export function syncAspireExtensionEnvironment(
     collection.replace(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR, trimmedVersion);
     collection.replace(
         ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR,
-        packageJson?.__metadata?.isPreReleaseVersion === true ? 'prerelease' : 'stable');
+        packageJson?.preRelease === true ? 'prerelease' : 'stable');
 }
 
 /**

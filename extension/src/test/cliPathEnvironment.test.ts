@@ -57,9 +57,7 @@ suite('cliPathEnvironment.syncAspireExtensionEnvironment tests', () => {
 
         syncAspireExtensionEnvironment(collection, {
             version: '1.17.0',
-            __metadata: {
-                isPreReleaseVersion: true,
-            },
+            preRelease: true,
         });
 
         assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), '1.17.0');

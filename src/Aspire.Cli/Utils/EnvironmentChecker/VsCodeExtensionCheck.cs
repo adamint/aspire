@@ -95,6 +95,15 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         metadata["extensionVersionKnown"] = true;
         metadata["latestVersionKnown"] = false;
 
+        // Disk discovery can identify an installed extension but not whether VS Code selected the
+        // stable or prerelease Marketplace channel. No Marketplace result is actionable without
+        // that channel, so avoid adding network latency or replacing this known limitation with a
+        // misleading connectivity error.
+        if (detection.ReleaseChannel == VsCodeExtensionReleaseChannel.Unknown)
+        {
+            return [CreateLatestVersionNotFoundResult(metadata)];
+        }
+
         try
         {
             var versions = await _marketplaceClient.GetLatestVersionsAsync(cancellationToken);

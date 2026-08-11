@@ -361,10 +361,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         var check = new VsCodeExtensionCheck(
             environment,
             executionContext,
-            new TestMarketplaceClient(
-                new VsCodeExtensionMarketplaceVersions(
-                    SemVersion.Parse("1.2.3", SemVersionStyles.Strict),
-                    SemVersion.Parse("1.3.0", SemVersionStyles.Strict))),
+            new TestMarketplaceClient(new InvalidOperationException("Marketplace must not be queried.")),
             NullLogger<VsCodeExtensionCheck>.Instance,
             _ => null);
 
