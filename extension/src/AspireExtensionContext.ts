@@ -21,7 +21,9 @@ export class AspireExtensionContext implements vscode.Disposable {
     private readonly _debugSessionOutputSubscriptions = new Map<string, vscode.Disposable>();
     private readonly _onDidChangeDebugSessions = new vscode.EventEmitter<void>();
     private readonly _onDidReceiveDebugConsoleOutput = new vscode.EventEmitter<AspireDebugConsoleOutputEvent>();
+    private readonly _lateDebugSessionStops: Promise<void>[] = [];
     private _disposePromise: Promise<void> | undefined;
+    private _disposing = false;
     readonly onDidChangeDebugSessions = this._onDidChangeDebugSessions.event;
     readonly onDidReceiveDebugConsoleOutput = this._onDidReceiveDebugConsoleOutput.event;
 
@@ -68,6 +70,19 @@ export class AspireExtensionContext implements vscode.Disposable {
     }
 
     addAspireDebugSession(debugSession: AspireDebugSession) {
+        // disposeCore() snapshots the live sessions before its first await. Refuse ownership after
+        // disposal starts so a re-entrant add cannot land behind that snapshot and outlive the
+        // shared RPC/DCP infrastructure.
+        if (this._disposing) {
+            const stop = (async () => debugSession.stopDebugging())();
+            // disposeCore() drains this promise before tearing down shared infrastructure. Observe
+            // it immediately as well because the drain may still be waiting on the original
+            // session snapshot when this stop rejects.
+            void stop.catch(() => { });
+            this._lateDebugSessionStops.push(stop);
+            return;
+        }
+
         if (this._aspireDebugSessions.find(session => session.debugSessionId === debugSession.debugSessionId)) {
             throw new Error(debugSessionAlreadyExists(debugSession.debugSessionId));
         }
@@ -96,14 +111,24 @@ export class AspireExtensionContext implements vscode.Disposable {
     }
 
     dispose(): Promise<void> {
-        this._disposePromise ??= this.disposeCore();
+        if (!this._disposePromise) {
+            // Set the gate before invoking disposeCore(): an owned session can synchronously cause
+            // another Aspire session to be created from inside its first stop request.
+            this._disposing = true;
+            this._disposePromise = this.disposeCore();
+        }
+
         return this._disposePromise;
     }
 
     private async disposeCore(): Promise<void> {
         const sessions = [...this._aspireDebugSessions];
-        const stopResults = await Promise.allSettled(
+        const stopResults: PromiseSettledResult<void>[] = await Promise.allSettled(
             sessions.map(async session => session.stopDebugging()));
+        while (this._lateDebugSessionStops.length > 0) {
+            const lateStops = this._lateDebugSessionStops.splice(0);
+            stopResults.push(...await Promise.allSettled(lateStops));
+        }
 
         // Session shutdown uses the DCP/RPC servers and emits final state changes, so shared
         // infrastructure must remain alive until every bounded stop attempt has settled.
