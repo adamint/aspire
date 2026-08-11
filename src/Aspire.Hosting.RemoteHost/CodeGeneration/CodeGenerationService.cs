@@ -382,7 +382,8 @@ internal sealed class CodeGenerationService
         if (_assemblyLoader.TryGetPackageAssemblyNamesFromProbePaths(
             packageName,
             packageVersion,
-            out var manifestAssemblyNames))
+            out var manifestAssemblyNames,
+            out var manifestPackageName))
         {
             var exportingAssemblyNames = new List<string>(manifestAssemblyNames.Count);
             foreach (var assemblyName in manifestAssemblyNames)
@@ -400,7 +401,7 @@ internal sealed class CodeGenerationService
                     "but none of its assemblies reached the scanned API surface.");
             }
 
-            canonicalPackageName = packageName;
+            canonicalPackageName = manifestPackageName;
             return exportingAssemblyNames;
         }
 

@@ -121,12 +121,14 @@ public class ApiReferenceExportTests
                 new
                 {
                     Name = "Aspire.Hosting",
-                    Path = hostingAssemblyPath
+                    Path = hostingAssemblyPath,
+                    PackageId = "Contoso.Aspire.MetaPackage"
                 },
                 new
                 {
                     Name = "Aspire.Hosting.Yarp",
-                    Path = yarpAssemblyPath
+                    Path = yarpAssemblyPath,
+                    PackageId = "Contoso.Aspire.MetaPackage"
                 }
             ]);
         var service = CreateCodeGenerationService(new Dictionary<string, string?>
@@ -138,7 +140,7 @@ public class ApiReferenceExportTests
             () => service.ExportApi("TypeScript", "Contoso.Aspire.MetaPackage", "9.9.9", CancellationToken.None));
         Assert.Contains("9.9.9", versionMismatch.Message, StringComparison.Ordinal);
 
-        var export = service.ExportApi("TypeScript", "Contoso.Aspire.MetaPackage", "1.2.3", CancellationToken.None);
+        var export = service.ExportApi("TypeScript", "contoso.aspire.metapackage", "1.2.3", CancellationToken.None);
 
         Assert.Equal("Contoso.Aspire.MetaPackage", export.GetProperty("package").GetProperty("name").GetString());
 

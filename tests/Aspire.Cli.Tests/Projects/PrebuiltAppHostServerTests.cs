@@ -2057,6 +2057,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
             Assert.Contains(
                 managedAssemblies,
                 assembly => assembly.GetProperty("name").GetString() == "Aspire.Hosting.Redis" &&
+                    assembly.GetProperty("packageId").GetString() == "Aspire.Hosting.Redis" &&
                     assembly.GetProperty("path").GetString() == Path.Combine(workingDirectory, "integration-restore", "closure-sources", "Aspire.Hosting.Redis.dll"));
             Assert.Equal(0, probeManifest.RootElement.GetProperty("nativeLibraries").GetArrayLength());
         }

@@ -73,12 +73,14 @@ internal sealed class AssemblyLoader
     public bool TryGetPackageAssemblyNamesFromProbePaths(
         string packageId,
         string packageVersion,
-        out IReadOnlyList<string> assemblyNames)
+        out IReadOnlyList<string> assemblyNames,
+        [NotNullWhen(true)] out string? canonicalPackageId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(packageId);
         ArgumentException.ThrowIfNullOrWhiteSpace(packageVersion);
 
         var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        canonicalPackageId = null;
 
         foreach (var assembly in _packageProbeManifest.ManagedAssemblies)
         {
@@ -90,11 +92,23 @@ internal sealed class AssemblyLoader
                 continue;
             }
 
+            if (assembly.PackageId is not null &&
+                string.Equals(assembly.PackageId, packageId, StringComparison.OrdinalIgnoreCase))
+            {
+                canonicalPackageId ??= assembly.PackageId;
+            }
+
             names.Add(assembly.Name);
         }
 
         assemblyNames = names.ToList();
-        return assemblyNames.Count > 0;
+        if (assemblyNames.Count == 0)
+        {
+            return false;
+        }
+
+        canonicalPackageId ??= packageId;
+        return true;
     }
 
     /// <summary>
