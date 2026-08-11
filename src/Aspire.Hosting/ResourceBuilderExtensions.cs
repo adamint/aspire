@@ -4801,8 +4801,8 @@ public static class ResourceBuilderExtensions
         if (typeof(Task).IsAssignableFrom(typeof(TLaunchConfiguration)) || IsValueTask(typeof(TLaunchConfiguration)))
         {
             throw new ArgumentException(
-                $"The launch configuration producer returns '{typeof(TLaunchConfiguration)}'. An asynchronous producer must take a {nameof(CancellationToken)} " +
-                $"parameter so that it binds to the asynchronous {nameof(WithDebugSupport)} overload; otherwise the task itself is used as the launch configuration.",
+                $"The launch configuration producer returns '{typeof(TLaunchConfiguration)}'. An asynchronous producer must bind to an asynchronous {nameof(WithDebugSupport)} overload " +
+                $"either by accepting the launch mode and a {nameof(CancellationToken)} or by accepting a {nameof(LaunchConfigurationCallbackContext)}; otherwise the task itself is used as the launch configuration.",
                 nameof(launchConfigurationProducer));
         }
 

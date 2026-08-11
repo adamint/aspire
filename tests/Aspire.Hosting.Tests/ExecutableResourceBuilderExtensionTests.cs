@@ -159,7 +159,7 @@ public class ExecutableResourceBuilderExtensionTests
             () => executable.WithDebugSupport(mode => Task.FromResult(new ExecutableLaunchConfiguration("go") { Mode = mode }), "go"));
 
         Assert.Equal("launchConfigurationProducer", exception.ParamName);
-        Assert.Contains(nameof(CancellationToken), exception.Message);
+        Assert.Equal(CreateAsyncProducerGuardMessage(typeof(Task<ExecutableLaunchConfiguration>), "launchConfigurationProducer"), exception.Message);
     }
 
     [Fact]
@@ -172,6 +172,7 @@ public class ExecutableResourceBuilderExtensionTests
             () => executable.WithDebugSupport(mode => ValueTask.FromResult(new ExecutableLaunchConfiguration("go") { Mode = mode }), "go"));
 
         Assert.Equal("launchConfigurationProducer", exception.ParamName);
+        Assert.Equal(CreateAsyncProducerGuardMessage(typeof(ValueTask<ExecutableLaunchConfiguration>), "launchConfigurationProducer"), exception.Message);
     }
 
     [Fact]
@@ -257,6 +258,13 @@ public class ExecutableResourceBuilderExtensionTests
 
         var annotation = resource.Resource.Annotations.OfType<SupportsDebuggingAnnotation>().Single();
         Assert.False(annotation.RewritesArgumentsForDebugging);
+    }
+
+    private static string CreateAsyncProducerGuardMessage(Type producerReturnType, string parameterName)
+    {
+        var guidance = $"The launch configuration producer returns '{producerReturnType}'. An asynchronous producer must bind to an asynchronous {nameof(ResourceBuilderExtensions.WithDebugSupport)} overload either by accepting the launch mode and a {nameof(CancellationToken)} or by accepting a {nameof(LaunchConfigurationCallbackContext)}; otherwise the task itself is used as the launch configuration.";
+
+        return new ArgumentException(guidance, parameterName).Message;
     }
 
     [Fact]
