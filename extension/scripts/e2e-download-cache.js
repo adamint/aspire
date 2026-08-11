@@ -1185,8 +1185,9 @@ function getVsCodeExecutableRelativePaths(platform, architecture) {
 
   switch (platform) {
     case 'darwin':
-      // VS Code 1.131 renamed the macOS executable from Electron to Code. ExTester 8.24 supports
-      // both names so `max` can advance while explicit older supported versions remain cacheable.
+      // VS Code 1.131 renamed the macOS executable from Electron to Code. The Darwin runner rejects
+      // that layout while ExTester 8.23 is pinned; keeping discovery aware of both names lets a
+      // future ExTester 8.24 bump use Code-only entries without invalidating older cache entries.
       return [
         path.join(vscodeDirectory, 'Contents', 'MacOS', 'Code'),
         path.join(vscodeDirectory, 'Contents', 'MacOS', 'Electron'),

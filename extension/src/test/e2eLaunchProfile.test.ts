@@ -33,6 +33,16 @@ function compareVersionStrings(left: string, right: string): number {
     return 0;
 }
 
+function runE2eRunnerAsPlatform(extensionRoot: string, platform: 'darwin' | 'linux' | 'win32', environment: NodeJS.ProcessEnv) {
+    const runnerPath = path.join(extensionRoot, 'scripts', 'run-e2e.js');
+    const bootstrap = `Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} }); require(${JSON.stringify(runnerPath)});`;
+    return spawnSync(process.execPath, ['-e', bootstrap], {
+        encoding: 'utf8',
+        timeout: 120000,
+        env: environment,
+    });
+}
+
 suite('E2E launch profile', () => {
     test('creates nothing in the per-run root that a later module-scope throw could strand', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
@@ -84,6 +94,56 @@ suite('E2E launch profile', () => {
         }
         finally {
             fs.rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    test('rejects VS Code overrides whose macOS executable the pinned ExTester cannot launch', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const testArtifactsRoot = path.join(extensionRoot, '.test-artifacts', 'unit');
+        fs.mkdirSync(testArtifactsRoot, { recursive: true });
+        const tempRoot = fs.mkdtempSync(path.join(testArtifactsRoot, 'aev-version-guard-'));
+        try {
+            const result = runE2eRunnerAsPlatform(extensionRoot, 'darwin', {
+                ...process.env,
+                ASPIRE_EXTENSION_E2E_CLI_PATH: path.join(tempRoot, 'missing-aspire'),
+                ASPIRE_EXTENSION_E2E_SPEC: 'out/test/e2eLaunchProfile.test.js',
+                ASPIRE_EXTENSION_E2E_TEMP_ROOT: tempRoot,
+                ASPIRE_EXTENSION_E2E_VSCODE_VERSION: '1.131.0',
+            });
+
+            assert.notStrictEqual(result.status, 0);
+            assert.match(result.stderr, /VS Code 1\.131\.0.*ExTester 8\.23\.0 on macOS.*Contents\/MacOS\/Electron/);
+            assert.deepStrictEqual(fs.readdirSync(tempRoot), []);
+        }
+        finally {
+            fs.rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    test('allows VS Code 1.131 overrides where ExTester uses the current executable path', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const testArtifactsRoot = path.join(extensionRoot, '.test-artifacts', 'unit');
+        fs.mkdirSync(testArtifactsRoot, { recursive: true });
+
+        for (const platform of ['linux', 'win32'] as const) {
+            const tempRoot = fs.mkdtempSync(path.join(testArtifactsRoot, `aev-version-${platform}-`));
+            try {
+                const missingCliPath = path.join(tempRoot, 'missing-aspire');
+                const result = runE2eRunnerAsPlatform(extensionRoot, platform, {
+                    ...process.env,
+                    ASPIRE_EXTENSION_E2E_CLI_PATH: missingCliPath,
+                    ASPIRE_EXTENSION_E2E_SPEC: 'out/test/e2eLaunchProfile.test.js',
+                    ASPIRE_EXTENSION_E2E_TEMP_ROOT: tempRoot,
+                    ASPIRE_EXTENSION_E2E_VSCODE_VERSION: '1.131.0',
+                });
+
+                assert.notStrictEqual(result.status, 0);
+                assert.ok(result.stderr.includes(`ASPIRE_EXTENSION_E2E_CLI_PATH points to a missing file: ${missingCliPath}`), result.stderr);
+                assert.deepStrictEqual(fs.readdirSync(tempRoot), []);
+            }
+            finally {
+                fs.rmSync(tempRoot, { recursive: true, force: true });
+            }
         }
     });
 

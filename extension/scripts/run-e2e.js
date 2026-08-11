@@ -43,9 +43,10 @@ if (!extesterVersion) {
 const downloadCacheRoot = verifyExtesterFeedOnly ? '' : resolveDownloadCacheRoot(repoRoot);
 // Keep this below VS Code 1.131.0 while ExTester is pinned to 8.23.0. VS Code 1.131.0 renamed the
 // macOS app executable from Contents/MacOS/Electron to Contents/MacOS/Code, and ExTester 8.23.0
-// only launches the old path. ExTester 8.24.0 adds the fallback, but it is not mirrored in
-// dotnet-public-npm yet.
+// only launches the old path. ExTester 8.24.0 adds the fallback, but its tarball is not anonymously
+// available from dotnet-public-npm yet.
 const vscodeVersion = resolveCachedVsCodeVersion(process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '1.130.0');
+assertVsCodeVersionCompatibleWithExtester(vscodeVersion, extesterVersion);
 if (!verifyExtesterFeedOnly) {
   fs.mkdirSync(requestedTempRoot, { recursive: true });
 }
@@ -1268,6 +1269,33 @@ function resolveCachedVsCodeVersion(requestedVersion) {
   }
 
   throw new Error(`ASPIRE_EXTENSION_E2E_VSCODE_VERSION must be a concrete version such as '1.130.0', or 'min'/'max', but was '${requestedVersion}'. Moving aliases cannot be cached because the cache key would never change when the alias does.`);
+}
+
+function assertVsCodeVersionCompatibleWithExtester(vscodeVersion, extesterVersion) {
+  if (vscodeVersion === 'min' || vscodeVersion === 'max') {
+    return;
+  }
+
+  // On macOS, ExTester 8.23 always launches Contents/MacOS/Electron, which VS Code removed in
+  // 1.131. Reject the pair before creating a run root or publishing a cache entry. Linux and
+  // Windows use different executable paths and remain compatible with the same concrete override.
+  if (process.platform === 'darwin' && compareConcreteVersions(vscodeVersion, '1.131.0') >= 0 && compareConcreteVersions(extesterVersion, '8.24.0') < 0) {
+    throw new Error(`VS Code ${vscodeVersion} cannot be used with ExTester ${extesterVersion} on macOS: this ExTester version launches only Contents/MacOS/Electron, which VS Code 1.131.0 and newer no longer provide.`);
+  }
+}
+
+function compareConcreteVersions(left, right) {
+  const leftParts = left.split('.').map(Number);
+  const rightParts = right.split('.').map(Number);
+
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index++) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+
+  return 0;
 }
 
 function getAspireCliEnvironment(extraEnv = {}) {

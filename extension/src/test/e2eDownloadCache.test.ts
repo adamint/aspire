@@ -2130,29 +2130,36 @@ suite('E2E download cache', () => {
         assert.strictEqual(fs.readFileSync(projectedDriver, 'utf8'), 'run-local driver');
     });
 
-    test('accepts the Code executable in VS Code 1.131 macOS bundles without an Electron compatibility link', () => {
+    test('accepts the Code executable in VS Code 1.131 macOS bundles when ExTester supports it', () => {
         const root = createTestRoot('darwin-code-executable');
         const bundle = 'Visual Studio Code.app';
+        const extesterVersion = '8.24.0';
 
-        const result = cache.ensureDownloadCache(getDefaultCacheOptions(path.join(root, 'cache'), {
-            platform: 'darwin',
-            architecture: 'arm64',
-            populate(stagingDirectory) {
-                writeFile(path.join(stagingDirectory, bundle, 'Contents', 'MacOS', 'Code'), 'vscode 1.131 binary');
-                writeFile(path.join(stagingDirectory, 'chromedriver-darwin-arm64', 'chromedriver'), 'driver');
-            },
-        }));
+        const result = cache.ensureDownloadCache({
+            ...getDefaultCacheOptions(path.join(root, 'cache'), {
+                platform: 'darwin',
+                architecture: 'arm64',
+                populate(stagingDirectory) {
+                    writeFile(path.join(stagingDirectory, bundle, 'Contents', 'MacOS', 'Code'), 'vscode 1.131 binary');
+                    writeFile(path.join(stagingDirectory, 'chromedriver-darwin-arm64', 'chromedriver'), 'driver');
+                },
+            }),
+            extesterVersion,
+        });
 
         assert.strictEqual(result.cacheHit, false);
         assert.strictEqual(result.manifest.vscodeDirectory, bundle);
 
-        const reused = cache.ensureDownloadCache(getDefaultCacheOptions(path.join(root, 'cache'), {
-            platform: 'darwin',
-            architecture: 'arm64',
-            populate() {
-                throw new Error('populate must not run when the cached bundle is valid.');
-            },
-        }));
+        const reused = cache.ensureDownloadCache({
+            ...getDefaultCacheOptions(path.join(root, 'cache'), {
+                platform: 'darwin',
+                architecture: 'arm64',
+                populate() {
+                    throw new Error('populate must not run when the cached bundle is valid.');
+                },
+            }),
+            extesterVersion,
+        });
 
         assert.strictEqual(reused.cacheHit, true);
     });
