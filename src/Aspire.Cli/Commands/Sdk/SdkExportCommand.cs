@@ -267,20 +267,49 @@ internal sealed class SdkExportCommand : BaseCommand
             return false;
         }
 
-        if (requestedVersion.Any(char.IsWhiteSpace) ||
-            !SemVersion.TryParse(requestedVersion, SemVersionStyles.Any, out var parsedVersion))
+        if (requestedVersion.Any(char.IsWhiteSpace))
         {
             errorMessage = $"Invalid version '{requestedVersion}'. Expected an exact NuGet version.";
             return false;
         }
 
-        packageVersion = parsedVersion.ToString();
+        if (SemVersion.TryParse(requestedVersion, SemVersionStyles.Any, out var parsedVersion))
+        {
+            packageVersion = parsedVersion.ToString();
+        }
+        else if (!TryNormalizeFourPartVersion(requestedVersion, out packageVersion))
+        {
+            errorMessage = $"Invalid version '{requestedVersion}'. Expected an exact NuGet version.";
+            return false;
+        }
+
         var buildMetadataIndex = packageVersion.IndexOf('+', StringComparison.Ordinal);
         if (buildMetadataIndex >= 0)
         {
             packageVersion = packageVersion[..buildMetadataIndex];
         }
 
+        return true;
+    }
+
+    private static bool TryNormalizeFourPartVersion(string version, out string normalizedVersion)
+    {
+        normalizedVersion = string.Empty;
+
+        // NuGet accepts a four-component numeric version that SemVer does not:
+        //   1.2.3.4
+        // Keep SemVersion as the primary parser so ordinary versions and prerelease labels retain
+        // their existing normalization, then narrowly fall back to System.Version for this shape.
+        var components = version.Split('.');
+        if (components.Length != 4 ||
+            components.Any(static component =>
+                component.Length == 0 || component.Any(static character => !char.IsAsciiDigit(character))) ||
+            !Version.TryParse(version, out var parsedVersion))
+        {
+            return false;
+        }
+
+        normalizedVersion = parsedVersion.ToString(4);
         return true;
     }
 }

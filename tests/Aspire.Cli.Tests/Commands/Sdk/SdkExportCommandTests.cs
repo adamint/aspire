@@ -92,6 +92,30 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task SdkExportRestoresNormalizedFourPartNuGetVersion()
+    {
+        var interactionService = new TestInteractionService();
+        using var provider = CreateProvider(
+            interactionService,
+            out var workspace,
+            out var rpcClient,
+            out var project);
+        using var workspaceLease = workspace;
+
+        var exitCode = await InvokeAsync(
+            provider,
+            "sdk export --language typescript --package Contoso.Aspire.Widgets@1.2.3.4");
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Equal(("TypeScript", "Contoso.Aspire.Widgets", "1.2.3.4"), rpcClient.LastExportRequest);
+
+        var package = Assert.Single(
+            project.Integrations,
+            integration => integration.Name == "Contoso.Aspire.Widgets");
+        Assert.Equal("[1.2.3.4]", package.Version);
+    }
+
+    [Fact]
     public async Task SdkExportDoesNotAddTheRequestedGeneratorPackageTwice()
     {
         var interactionService = new TestInteractionService();
