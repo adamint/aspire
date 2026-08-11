@@ -102,17 +102,34 @@ suite('debugger install hints', () => {
     });
 
     test('waits for a fresh install to appear in the extension registry', async () => {
-        const getExtension = sinon.stub(vscode.extensions, 'getExtension');
-        getExtension.onFirstCall().returns(undefined);
-        getExtension.returns({ id: 'ms-python.debugpy' } as vscode.Extension<unknown>);
+        let installed = false;
+        let extensionChangeListener: (() => unknown) | undefined;
+        let subscriptionRegisteredResolve!: () => void;
+        const subscriptionRegistered = new Promise<void>(resolve => subscriptionRegisteredResolve = resolve);
+        const getExtension = sinon.stub(vscode.extensions, 'getExtension').callsFake(extensionId =>
+            installed ? { id: extensionId } as vscode.Extension<unknown> : undefined);
+        const onDidChange: vscode.Event<void> = listener => {
+            extensionChangeListener = listener;
+            subscriptionRegisteredResolve();
+            return { dispose: sinon.stub() };
+        };
+        sinon.stub(vscode.extensions, 'onDidChange').get(() => onDidChange);
         const showInformationMessage = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
         sinon.stub(vscode.commands, 'executeCommand').resolves();
         const service = new DebuggerInstallHintService(createMemento());
 
-        await service.installDebuggerExtension({
+        const installation = service.installDebuggerExtension({
             debuggerName: 'Python',
             extensionId: 'ms-python.debugpy',
         });
+        await subscriptionRegistered;
+
+        assert.strictEqual(showInformationMessage.callCount, 0);
+
+        installed = true;
+        assert.ok(extensionChangeListener);
+        extensionChangeListener();
+        await installation;
 
         assert.ok(getExtension.calledWith('ms-python.debugpy'));
         assert.strictEqual(showInformationMessage.callCount, 1);
