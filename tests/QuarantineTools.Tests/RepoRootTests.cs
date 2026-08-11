@@ -205,6 +205,38 @@ public class RepoRootTests : IDisposable
     }
 
     [Fact]
+    public async Task Tool_FromNestedLinkedWorktree_IgnoresOuterRepositoryEnvironment()
+    {
+        Assert.SkipUnless(await IsGitAvailableAsync(), "git is not available on PATH");
+
+        var (outer, nested) = await CreateOuterRepoWithNestedWorktreeAsync();
+        var outerSample = Path.Combine(outer, "tests", "Sample", "SampleTests.cs");
+        var nestedSample = Path.Combine(nested, "tests", "Sample", "SampleTests.cs");
+        var traceFile = Path.Combine(_scratch.FullName, "worktree-environment-git-trace");
+        var outerBefore = await File.ReadAllTextAsync(outerSample, TestContext.Current.CancellationToken);
+        var nestedBefore = await File.ReadAllTextAsync(nestedSample, TestContext.Current.CancellationToken);
+
+        var result = await RunToolAsync(nested, new Dictionary<string, string>
+        {
+            ["GIT_DIR"] = Path.Combine(outer, ".git"),
+            ["GIT_WORK_TREE"] = outer,
+            ["GIT_TRACE2"] = traceFile,
+            ["GIT_TRACE2_ENV_VARS"] = "GIT_DIR,GIT_WORK_TREE",
+        });
+
+        Assert.Equal(0, result.ExitCode);
+        var leakedRepositoryOverrides = (await File.ReadAllLinesAsync(traceFile, TestContext.Current.CancellationToken))
+            .Where(line => line.Contains(" GIT_DIR=", StringComparison.Ordinal)
+                || line.Contains(" GIT_WORK_TREE=", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Empty(leakedRepositoryOverrides);
+        Assert.Equal(outerBefore, await File.ReadAllTextAsync(outerSample, TestContext.Current.CancellationToken));
+        var nestedAfter = await File.ReadAllTextAsync(nestedSample, TestContext.Current.CancellationToken);
+        Assert.NotEqual(nestedBefore, nestedAfter);
+        Assert.Contains("QuarantinedTest", nestedAfter, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Tool_RefusesGitRootOutsideCurrentTree_WithExitCode4()
     {
         Assert.SkipUnless(await IsGitAvailableAsync(), "git is not available on PATH");
