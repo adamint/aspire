@@ -39,11 +39,12 @@ inputs:
 #   - extraTestArgs: Additional test arguments (e.g., '--filter-trait "Partition=P1"')
 #   - collection: (collection type only) Collection/partition name
 #   - classname: (class type only) Fully qualified test class name
-#   - allowZeroTests: (class type only) True. Class shards are generated mechanically from the
-#       discovered class names, so a class that is real on one OS can be legitimately empty on
-#       another once CI applies its environment trait filters (for example a class whose tests all
-#       require containers, filtered out on Windows). Discovering zero tests is therefore not a
-#       failure for these entries, unlike regular and collection shards.
+#   - allowZeroTests: (class type only) True for mechanically generated class shards because a class
+#       can be legitimately empty on a non-discovery OS after CI applies its environment trait
+#       filters (for example, tests that all require containers are filtered out on Windows). The
+#       Linux discovery row is the exception: `expand-test-matrix-github.ps1` forces that row back to
+#       false so the zero-test guard stays active on the OS that discovers the class list, where a
+#       zero-test result would mean discovery or filtering broke.
 outputs:
   all_tests:
     description: Combined matrix of all test entries
