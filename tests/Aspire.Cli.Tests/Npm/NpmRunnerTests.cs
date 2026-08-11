@@ -7,13 +7,15 @@ using Aspire.Cli.Telemetry;
 using Aspire.Cli.Tests.Acquisition;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
+using Aspire.Cli.Utils;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.AspNetCore.InternalTesting;
 
 namespace Aspire.Cli.Tests.Npm;
 
 [Collection(EnvVarMutatingTestCollection.Name)]
-public class NpmRunnerTests
+public class NpmRunnerTests(ITestOutputHelper outputHelper)
 {
     [Fact]
     public void PackageRegistry_UsesCanonicalInternalFeed()
@@ -229,6 +231,42 @@ public class NpmRunnerTests
         {
             tempDirectory.Delete(recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task GetLatestVersionAsync_CallerCancellationAfterProcessExitWhileOutputDrains_ThrowsOperationCanceledException()
+    {
+        using var fakeNpm = FakeNpmScript.BuildExitThenHoldOutputOpen(outputHelper, "13.4.6");
+        using var environmentScope = fakeNpm.UseEnvironment();
+        using var profilingTelemetry = new ProfilingTelemetry(new ConfigurationBuilder().Build());
+        var runner = new NpmRunner(new TestEnvironment(), NullLogger<NpmRunner>.Instance, profilingTelemetry);
+        using var cancellation = new CancellationTokenSource();
+
+        var getVersionTask = runner.GetLatestVersionAsync("@microsoft/aspire-cli", cancellation.Token);
+
+        await fakeNpm.WaitForParentExitAsync().DefaultTimeout();
+        await cancellation.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => getVersionTask).DefaultTimeout();
+    }
+
+    [Fact]
+    public void ResolveLatestVersionLookupResult_TimedOutResultBeatsCallerCancellation()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var exception = Assert.Throws<TimeoutException>(() => NpmRunner.ResolveLatestVersionLookupResult(
+            "@microsoft/aspire-cli@latest",
+            new ProcessCaptureResult<string>(
+                ExitCode: -1,
+                Capture: string.Empty,
+                FailureKind: ProcessCaptureFailureKind.TimedOut,
+                FailureMessage: "Process timed out after 0.1s.",
+                Cancelled: false),
+            cancellation.Token));
+
+        Assert.Contains("Timed out after", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

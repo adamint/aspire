@@ -4,6 +4,8 @@
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Npm;
 using Aspire.Cli.NuGet;
+using Aspire.Cli.Telemetry;
+using Aspire.Cli.Tests.Acquisition;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Utils;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,6 +16,7 @@ using Microsoft.AspNetCore.InternalTesting;
 
 namespace Aspire.Cli.Tests.Utils;
 
+[Collection(EnvVarMutatingTestCollection.Name)]
 public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
 {
     [Fact]
@@ -462,6 +465,37 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
         // callers treat cancellation as "no answer yet" instead of "the registry said no".
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => notifier.GetVersionStatusAsync(workspace.WorkspaceRoot, cancellation.Token)).DefaultTimeout();
+    }
+
+    [Fact]
+    public async Task GetVersionStatusAsync_CallerCancellationAfterNpmProcessExitWhileOutputDrains_Propagates()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        using var npmScope = NpmInstallDetection.UseEnvironmentForTesting(CreateNpmInstallEnvironment());
+        using var fakeNpm = FakeNpmScript.BuildExitThenHoldOutputOpen(outputHelper, "9.5.0");
+        using var environmentScope = fakeNpm.UseEnvironment();
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, configure =>
+        {
+            configure.NpmRunnerFactory = sp => new NpmRunner(
+                new TestEnvironment(),
+                sp.GetRequiredService<ILogger<NpmRunner>>(),
+                sp.GetRequiredService<ProfilingTelemetry>());
+            configure.CliUpdateNotifierFactory = sp => CreateCliUpdateNotifier(sp, "9.4.0");
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var notifier = provider.GetRequiredService<ICliUpdateNotifier>();
+        using var cancellation = new CancellationTokenSource();
+
+        var statusTask = notifier.GetVersionStatusAsync(workspace.WorkspaceRoot, cancellation.Token);
+
+        await fakeNpm.WaitForParentExitAsync().DefaultTimeout();
+        await cancellation.CancelAsync();
+
+        // Cancellation must still bubble out after npm has already exited. Returning a warning here
+        // would turn Ctrl+C into a misleading "invalid version" doctor result instead of stopping.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => statusTask).DefaultTimeout();
     }
 
     [Fact]

@@ -85,48 +85,76 @@ internal sealed class NpmRunner(IEnvironment environment, ILogger<NpmRunner> log
                 logger,
                 cancellationToken);
 
-            if (result.Cancelled)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                throw new OperationCanceledException(cancellationToken);
-            }
-
             if (result.FailureKind is ProcessCaptureFailureKind.TimedOut)
             {
                 activity.SetError($"npm timed out after {s_metadataLookupTimeout.TotalSeconds:g} seconds.");
-                throw new TimeoutException(
-                    $"Timed out after {s_metadataLookupTimeout.TotalSeconds:g} seconds while resolving {packageSpecifier} through npm.");
             }
-
-            if (result.FailureKind is not null)
+            else if (result.FailureKind is not null)
             {
                 activity.SetError(result.FailureMessage ?? "npm could not be started.");
-                throw new InvalidOperationException(
-                    $"Could not run npm while resolving {packageSpecifier}: {result.FailureMessage}");
             }
 
-            activity.SetProcessExitCode(result.ExitCode);
-
-            if (result.ExitCode != 0)
+            if (!result.Cancelled && result.FailureKind is null)
             {
-                activity.SetError($"npm exited with code {result.ExitCode}.");
-                throw new InvalidOperationException(
-                    $"npm exited with code {result.ExitCode} while resolving {packageSpecifier}.");
+                activity.SetProcessExitCode(result.ExitCode);
+
+                if (result.ExitCode != 0)
+                {
+                    activity.SetError($"npm exited with code {result.ExitCode}.");
+                }
             }
 
-            if (!TryExtractLastVersion(result.Capture, out var versionString) ||
-                !SemVersion.TryParse(versionString, SemVersionStyles.Strict, out var version))
-            {
-                throw new InvalidDataException(
-                    $"npm returned an invalid version while resolving {packageSpecifier}.");
-            }
-
-            return version;
+            return ResolveLatestVersionLookupResult(packageSpecifier, result, cancellationToken);
         }
         finally
         {
             CleanupTempDirectory(tempDir);
         }
+    }
+
+    internal static SemVersion ResolveLatestVersionLookupResult(
+        string packageSpecifier,
+        ProcessCaptureResult<string> result,
+        CancellationToken cancellationToken)
+    {
+        if (result.FailureKind is ProcessCaptureFailureKind.TimedOut)
+        {
+            throw new TimeoutException(
+                $"Timed out after {s_metadataLookupTimeout.TotalSeconds:g} seconds while resolving {packageSpecifier} through npm.");
+        }
+
+        if (result.FailureKind is not null)
+        {
+            throw new InvalidOperationException(
+                $"Could not run npm while resolving {packageSpecifier}: {result.FailureMessage}");
+        }
+
+        if (result.Cancelled)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new OperationCanceledException(cancellationToken);
+        }
+
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"npm exited with code {result.ExitCode} while resolving {packageSpecifier}.");
+        }
+
+        // ProcessCaptureRunner bounds post-exit stream draining and can therefore turn a
+        // caller cancellation that lands during that drain into an empty capture result.
+        // Re-check the original token only after timeout/start/capture failures and non-zero
+        // exits have already been classified so Ctrl+C does not mask the true outcome.
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!TryExtractLastVersion(result.Capture, out var versionString) ||
+            !SemVersion.TryParse(versionString, SemVersionStyles.Strict, out var version))
+        {
+            throw new InvalidDataException(
+                $"npm returned an invalid version while resolving {packageSpecifier}.");
+        }
+
+        return version;
     }
 
     /// <inheritdoc />
