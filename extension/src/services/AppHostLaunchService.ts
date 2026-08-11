@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as fs from 'fs';
+import { randomUUID } from 'crypto';
 import * as vscode from 'vscode';
 import { AspireCommandType, AspireExtendedDebugConfiguration } from '../dcp/types';
 import { startDebuggingDeclined } from '../loc/strings';
@@ -8,6 +9,22 @@ import { classifyAppHostDirectory, classifyAppHostPath } from '../utils/appHostL
 import { classifyError, isCommandCancellation, sendTelemetryEvent, type EventProperties } from '../utils/telemetry';
 import { bucketAspireCommand } from '../utils/telemetryBuckets';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
+
+const appHostLaunchClaimIdConfigKey = '__aspireAppHostLaunchClaimId';
+
+interface AppHostLaunchClaim {
+    readonly id: string;
+    readonly path: string;
+}
+
+interface RunningAppHost {
+    readonly appHostPath: string;
+    readonly appHostPid: number;
+}
+
+type ClaimedAspireDebugConfiguration = AspireExtendedDebugConfiguration & {
+    [appHostLaunchClaimIdConfigKey]: string;
+};
 
 function isAspireCommandType(value: unknown): value is AspireCommandType {
     return value === 'run' || value === 'deploy' || value === 'publish' || value === 'do';
@@ -46,7 +63,8 @@ export interface AppHostDebugSessionTerminatedEvent {
  * running list or the debug session terminating).
  */
 export class AppHostLaunchService implements vscode.Disposable {
-    private readonly _launchingPaths = new Set<string>();
+    private readonly _launchClaims = new Map<string, AppHostLaunchClaim>();
+    private readonly _runningAppHostPids = new Set<number>();
 
     private readonly _onDidChangeLaunchingState = new vscode.EventEmitter<void>();
     readonly onDidChangeLaunchingState = this._onDidChangeLaunchingState.event;
@@ -65,7 +83,10 @@ export class AppHostLaunchService implements vscode.Disposable {
         this._debugSessionSubscription = vscode.debug.onDidTerminateDebugSession(session => {
             const appHostPath = session.configuration?.program;
             if (appHostPath && session.configuration?.type === 'aspire') {
-                this.clearLaunching(appHostPath);
+                const launchClaimId = session.configuration[appHostLaunchClaimIdConfigKey];
+                if (typeof launchClaimId === 'string') {
+                    this.clearOwnedLaunchClaim(appHostPath, launchClaimId);
+                }
                 const command = getTerminationCommand(session.configuration);
                 this._onDidTerminateAppHostDebugSession.fire({
                     appHostPath,
@@ -87,40 +108,63 @@ export class AppHostLaunchService implements vscode.Disposable {
      * Returns whether the given AppHost path is currently in a launching state.
      */
     get launchingPaths(): readonly string[] {
-        return Array.from(this._launchingPaths);
+        return Array.from(this._launchClaims.keys());
     }
 
     isLaunching(appHostPath: string): boolean {
-        return this.getMatchingLaunchingPaths(appHostPath).length > 0;
+        return this.getMatchingLaunchClaims(appHostPath).length > 0;
     }
 
-    /**
-     * Clears launching state for the given AppHost path (e.g., when it
-     * appears in the running AppHosts list).
-     */
-    clearLaunching(appHostPath: string): void {
-        this.clearLaunchClaims(this.getMatchingLaunchingPaths(appHostPath));
+    initializeRunningAppHosts(appHosts: readonly RunningAppHost[]): void {
+        // The repository reports full snapshots, not edge-triggered start events. Treat the
+        // current PIDs as a baseline so a later refresh for an older same-path process cannot
+        // clear a launch claim that was created after that process was already running.
+        this.replaceRunningAppHostPids(appHosts);
     }
 
-    clearMatchingLaunching(appHostPath: string): void {
-        const identityMatches = this.getMatchingLaunchingPaths(appHostPath);
+    updateRunningAppHosts(appHosts: readonly RunningAppHost[]): void {
+        const newRunningAppHosts = appHosts.filter(appHost => !this._runningAppHostPids.has(appHost.appHostPid));
+        this.replaceRunningAppHostPids(appHosts);
+
+        for (const appHost of newRunningAppHosts) {
+            this.clearMatchingLaunchClaims(appHost.appHostPath);
+        }
+    }
+
+    private replaceRunningAppHostPids(appHosts: readonly RunningAppHost[]): void {
+        this._runningAppHostPids.clear();
+        for (const appHost of appHosts) {
+            this._runningAppHostPids.add(appHost.appHostPid);
+        }
+    }
+
+    private clearOwnedLaunchClaim(appHostPath: string, claimId: string): void {
+        this.clearLaunchClaims(this.getMatchingLaunchClaims(appHostPath).filter(claim => claim.id === claimId));
+    }
+
+    private clearMatchingLaunchClaims(appHostPath: string): void {
+        const identityMatches = this.getMatchingLaunchClaims(appHostPath);
         if (identityMatches.length > 0) {
             this.clearLaunchClaims(identityMatches);
             return;
         }
 
         const resolvedPath = path.resolve(appHostPath);
-        const aliasMatches = Array.from(this._launchingPaths)
-            .filter(launchingPath => isProjectFileToSourceFileMatch(launchingPath, resolvedPath));
+        const aliasMatches = Array.from(this._launchClaims.values())
+            .filter(claim => isProjectFileToSourceFileMatch(claim.path, resolvedPath));
         if (aliasMatches.length === 1) {
             this.clearLaunchClaims(aliasMatches);
         }
     }
 
-    private clearLaunchClaims(matchingPaths: readonly string[]): void {
+    private clearLaunchClaims(claims: readonly AppHostLaunchClaim[]): void {
         let changed = false;
-        for (const matchingPath of matchingPaths) {
-            changed = this._launchingPaths.delete(matchingPath) || changed;
+        for (const claim of claims) {
+            // An earlier launch can finish unwinding after its claim was cleared and the same
+            // path was reclaimed. Only that exact generation is allowed to release the entry.
+            if (this._launchClaims.get(claim.path)?.id === claim.id) {
+                changed = this._launchClaims.delete(claim.path) || changed;
+            }
         }
 
         if (changed) {
@@ -147,8 +191,8 @@ export class AppHostLaunchService implements vscode.Disposable {
         cancellationToken?: vscode.CancellationToken,
     ): Promise<boolean> {
         throwIfCancellationRequested(cancellationToken);
-        const claimedPath = this.tryClaimLaunch(appHostPath);
-        if (claimedPath === undefined) {
+        const claim = this.tryClaimLaunch(appHostPath);
+        if (claim === undefined) {
             return false;
         }
 
@@ -161,13 +205,16 @@ export class AppHostLaunchService implements vscode.Disposable {
             telemetryProperties = await getLaunchTelemetryProperties(appHostPath, command, noDebug, executionSuppressed);
             throwIfCancellationRequested(cancellationToken);
 
-            const config: AspireExtendedDebugConfiguration = {
+            // VS Code preserves custom configuration properties on the DebugSession. Carry the
+            // opaque claim ID through so a terminating older session cannot clear a newer claim.
+            const config: ClaimedAspireDebugConfiguration = {
                 type: 'aspire',
                 name: `Aspire ${command}: ${vscode.workspace.asRelativePath(appHostPath)}`,
                 request: 'launch',
                 program: appHostPath,
                 command,
-                noDebug
+                noDebug,
+                [appHostLaunchClaimIdConfigKey]: claim.id,
             };
 
             if (doStep) {
@@ -183,7 +230,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             });
             requestEmitted = true;
             if (executionSuppressed) {
-                this.releaseLaunchClaim(claimedPath);
+                this.releaseLaunchClaim(claim);
                 sendTelemetryEvent('aspire/vscode/apphost/launch/result', {
                     ...telemetryProperties,
                     outcome: 'suppressed',
@@ -219,7 +266,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             });
             return true;
         } catch (err) {
-            this.releaseLaunchClaim(claimedPath);
+            this.releaseLaunchClaim(claim);
             if (requestEmitted && telemetryProperties) {
                 const canceled = isCommandCancellation(err);
                 const properties: EventProperties<'aspire/vscode/apphost/launch/result'> = {
@@ -237,29 +284,31 @@ export class AppHostLaunchService implements vscode.Disposable {
         }
     }
 
-    private tryClaimLaunch(appHostPath: string): string | undefined {
+    private tryClaimLaunch(appHostPath: string): AppHostLaunchClaim | undefined {
         const resolvedPath = path.resolve(appHostPath);
-        if (this.getMatchingLaunchingPaths(resolvedPath).length > 0 ||
-            Array.from(this._launchingPaths).some(launchingPath => isProjectFileToSourceFileMatch(launchingPath, resolvedPath))) {
+        if (this.getMatchingLaunchClaims(resolvedPath).length > 0 ||
+            Array.from(this._launchClaims.values()).some(claim => isProjectFileToSourceFileMatch(claim.path, resolvedPath))) {
             return undefined;
         }
 
         // The check and add are synchronous so editor, tree, and language-model callers
         // cannot interleave different lexical paths for the same physical AppHost.
-        this._launchingPaths.add(resolvedPath);
+        const claim: AppHostLaunchClaim = {
+            id: randomUUID(),
+            path: resolvedPath,
+        };
+        this._launchClaims.set(resolvedPath, claim);
         this._onDidChangeLaunchingState.fire();
-        return resolvedPath;
+        return claim;
     }
 
-    private releaseLaunchClaim(claimedPath: string): void {
-        if (this._launchingPaths.delete(claimedPath)) {
-            this._onDidChangeLaunchingState.fire();
-        }
+    private releaseLaunchClaim(claim: AppHostLaunchClaim): void {
+        this.clearLaunchClaims([claim]);
     }
 
-    private getMatchingLaunchingPaths(appHostPath: string): string[] {
+    private getMatchingLaunchClaims(appHostPath: string): AppHostLaunchClaim[] {
         const resolvedPath = path.resolve(appHostPath);
-        return Array.from(this._launchingPaths).filter(launchingPath => isSameLaunchingIdentity(launchingPath, resolvedPath));
+        return Array.from(this._launchClaims.values()).filter(claim => isSameLaunchingIdentity(claim.path, resolvedPath));
     }
 }
 

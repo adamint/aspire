@@ -877,6 +877,8 @@ suite('AspireAppHostTreeProvider', () => {
             isLaunching: () => false,
             launchingPaths: [],
             onDidChangeLaunchingState: () => ({ dispose: () => { } }),
+            initializeRunningAppHosts: () => { },
+            updateRunningAppHosts: () => { },
         } as unknown as AppHostLaunchService;
         const showErrorStub = sandbox.stub(vscode.window, 'showErrorMessage').resolves(undefined);
         const provider = makeTreeProviderWithLaunchService([
@@ -894,6 +896,8 @@ suite('AspireAppHostTreeProvider', () => {
             isLaunching: () => false,
             launchingPaths: [],
             onDidChangeLaunchingState: () => ({ dispose: () => { } }),
+            initializeRunningAppHosts: () => { },
+            updateRunningAppHosts: () => { },
         } as unknown as AppHostLaunchService;
         const showErrorStub = sandbox.stub(vscode.window, 'showErrorMessage').resolves(undefined);
         const provider = makeTreeProviderWithLaunchService([
@@ -2231,6 +2235,47 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         assert.strictEqual(item.contextValue, 'workspaceAppHostLaunching');
         assert.deepStrictEqual((item.iconPath as vscode.ThemeIcon).id, 'loading~spin');
         provider.dispose();
+    });
+
+    test('running AppHost updates clear a claim only for a new process instance', async () => {
+        const appHostPath = '/repo/AppHost/AppHost.csproj';
+        const dataChanged = new vscode.EventEmitter<void>();
+        let appHosts = [makeAppHost({ appHostPath, appHostPid: 1234 })];
+        const repository = {
+            viewMode: 'workspace' as ViewMode,
+            get appHosts() {
+                return appHosts;
+            },
+            workspaceResources: [],
+            workspaceAppHostPath: appHostPath,
+            workspaceAppHostCandidatePaths: [appHostPath],
+            workspaceAppHostName: undefined,
+            onDidChangeData: dataChanged.event,
+        } as unknown as AppHostDataRepository;
+        const launchService = makeLaunchService();
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), launchService);
+        const resolveCliPathStub = sinon.stub(cliPathModule, 'resolveCliPath').resolves({ cliPath: 'aspire', available: true, source: 'path' });
+        const startDebuggingStub = sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+
+        try {
+            await launchService.launch(appHostPath, 'run', true);
+
+            dataChanged.fire();
+
+            assert.strictEqual(launchService.isLaunching(appHostPath), true);
+
+            appHosts = [makeAppHost({ appHostPath, appHostPid: 5678 })];
+            dataChanged.fire();
+
+            assert.strictEqual(launchService.isLaunching(appHostPath), false);
+        }
+        finally {
+            provider.dispose();
+            launchService.dispose();
+            dataChanged.dispose();
+            startDebuggingStub.restore();
+            resolveCliPathStub.restore();
+        }
     });
 
     test('workspace mode groups both running and idle AppHosts under their group nodes when each has two or more', () => {

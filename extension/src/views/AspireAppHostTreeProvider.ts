@@ -638,6 +638,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         private readonly _secretWarningState?: vscode.Memento,
         private readonly _clipboard: Clipboard = vscode.env.clipboard,
     ) {
+        this._launchService.initializeRunningAppHosts(this._repository.appHosts);
         this._dataSubscription = this._repository.onDidChangeData(() => {
             this._clearLaunchingPathsForRunningAppHosts();
             this._clearStoppingPathsForStoppedAppHosts();
@@ -711,9 +712,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
 
     // When a launching AppHost appears in the running list, clear it from the launch service.
     private _clearLaunchingPathsForRunningAppHosts(): void {
-        for (const appHost of this._repository.appHosts) {
-            this._launchService.clearMatchingLaunching(appHost.appHostPath);
-        }
+        this._launchService.updateRunningAppHosts(this._repository.appHosts);
     }
 
     private _trackStoppingAppHost(appHostPath: string): void {

@@ -226,47 +226,112 @@ suite('AppHostLaunchService', () => {
         assert.strictEqual(startDebuggingStub.callCount, 2);
     });
 
-    test('clearLaunching removes the path from launching state', async () => {
+    test('termination from an older same-path session does not clear a newer claim', async () => {
+        const appHostPath = '/repo/AppHost.csproj';
+        const secondDebugStart = createDeferred<void>();
+        const releaseSecondDebugStart = createDeferred<boolean>();
+        startDebuggingStub.onFirstCall().resolves(true);
+        startDebuggingStub.onSecondCall().callsFake(async () => {
+            secondDebugStart.resolve();
+            return releaseSecondDebugStart.promise;
+        });
+
+        await service.launch(appHostPath, 'run', true);
+        const firstConfiguration = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
+        service.updateRunningAppHosts([{ appHostPath, appHostPid: 1 }]);
+
+        const secondLaunch = service.launch(appHostPath, 'run', true);
+        await secondDebugStart.promise;
+        assert.ok(onDidTerminateDebugSessionCallback);
+        onDidTerminateDebugSessionCallback({
+            configuration: firstConfiguration,
+        } as unknown as vscode.DebugSession);
+
+        const remainedLaunching = service.isLaunching(appHostPath);
+        const thirdLaunchAccepted = await service.launch(appHostPath, 'run', true);
+        releaseSecondDebugStart.resolve(true);
+        await secondLaunch;
+
+        assert.strictEqual(remainedLaunching, true);
+        assert.strictEqual(thirdLaunchAccepted, false);
+        assert.strictEqual(startDebuggingStub.callCount, 2);
+    });
+
+    test('release from an older same-path launch does not clear a newer claim', async () => {
+        const appHostPath = '/repo/AppHost.csproj';
+        const firstDebugStart = createDeferred<void>();
+        const releaseFirstDebugStart = createDeferred<boolean>();
+        const secondDebugStart = createDeferred<void>();
+        const releaseSecondDebugStart = createDeferred<boolean>();
+        startDebuggingStub.onFirstCall().callsFake(async () => {
+            firstDebugStart.resolve();
+            return releaseFirstDebugStart.promise;
+        });
+        startDebuggingStub.onSecondCall().callsFake(async () => {
+            secondDebugStart.resolve();
+            return releaseSecondDebugStart.promise;
+        });
+
+        const firstLaunch = service.launch(appHostPath, 'run', true);
+        await firstDebugStart.promise;
+        service.updateRunningAppHosts([{ appHostPath, appHostPid: 1 }]);
+
+        const secondLaunch = service.launch(appHostPath, 'run', true);
+        await secondDebugStart.promise;
+        releaseFirstDebugStart.resolve(false);
+        await assert.rejects(firstLaunch, /did not start the Aspire run session/);
+
+        const remainedLaunching = service.isLaunching(appHostPath);
+        const thirdLaunchAccepted = await service.launch(appHostPath, 'run', true);
+        releaseSecondDebugStart.resolve(true);
+        await secondLaunch;
+
+        assert.strictEqual(remainedLaunching, true);
+        assert.strictEqual(thirdLaunchAccepted, false);
+        assert.strictEqual(startDebuggingStub.callCount, 2);
+    });
+
+    test('a new running AppHost removes the path from launching state', async () => {
         await service.launch('/repo/AppHost.csproj', 'run', true);
         assert.strictEqual(service.isLaunching('/repo/AppHost.csproj'), true);
 
-        service.clearLaunching('/repo/AppHost.csproj');
+        service.updateRunningAppHosts([{ appHostPath: '/repo/AppHost.csproj', appHostPid: 1 }]);
 
         assert.strictEqual(service.isLaunching('/repo/AppHost.csproj'), false);
     });
 
-    test('clearLaunching fires onDidChangeLaunchingState event', async () => {
+    test('a new running AppHost fires onDidChangeLaunchingState event', async () => {
         await service.launch('/repo/AppHost.csproj', 'run', true);
 
         let fired = false;
         service.onDidChangeLaunchingState(() => { fired = true; });
-        service.clearLaunching('/repo/AppHost.csproj');
+        service.updateRunningAppHosts([{ appHostPath: '/repo/AppHost.csproj', appHostPid: 1 }]);
 
         assert.strictEqual(fired, true);
     });
 
-    test('clearLaunching does not fire event when path was not launching', () => {
+    test('a new running AppHost does not fire event when path was not launching', () => {
         let fired = false;
         service.onDidChangeLaunchingState(() => { fired = true; });
 
-        service.clearLaunching('/repo/nonexistent.csproj');
+        service.updateRunningAppHosts([{ appHostPath: '/repo/nonexistent.csproj', appHostPid: 1 }]);
 
         assert.strictEqual(fired, false);
     });
 
-    test('clearMatchingLaunching matches project paths to AppHost source files in the same directory', async () => {
+    test('a new running AppHost matches project paths to source files in the same directory', async () => {
         await service.launch('/repo/AppHost/AppHost.csproj', 'run', true);
 
-        service.clearMatchingLaunching('/repo/AppHost/Program.cs');
+        service.updateRunningAppHosts([{ appHostPath: '/repo/AppHost/Program.cs', appHostPid: 1 }]);
 
         assert.strictEqual(service.isLaunching('/repo/AppHost/AppHost.csproj'), false);
     });
 
-    test('clearMatchingLaunching does not clear unrelated paths in the same directory', async () => {
+    test('a new running AppHost does not clear unrelated paths in the same directory', async () => {
         await service.launch('/repo/AppHost/First.csproj', 'run', true);
         await service.launch('/repo/AppHost/Second.csproj', 'run', true);
 
-        service.clearMatchingLaunching('/repo/AppHost/Program.cs');
+        service.updateRunningAppHosts([{ appHostPath: '/repo/AppHost/Program.cs', appHostPid: 1 }]);
 
         assert.strictEqual(service.isLaunching('/repo/AppHost/First.csproj'), true);
         assert.strictEqual(service.isLaunching('/repo/AppHost/Second.csproj'), true);
@@ -279,7 +344,7 @@ suite('AppHostLaunchService', () => {
         assert.strictEqual(service.isLaunching('/repo/AppHost1.csproj'), true);
         assert.strictEqual(service.isLaunching('/repo/AppHost2.csproj'), true);
 
-        service.clearLaunching('/repo/AppHost1.csproj');
+        service.updateRunningAppHosts([{ appHostPath: '/repo/AppHost1.csproj', appHostPid: 1 }]);
 
         assert.strictEqual(service.isLaunching('/repo/AppHost1.csproj'), false);
         assert.strictEqual(service.isLaunching('/repo/AppHost2.csproj'), true);
@@ -374,21 +439,20 @@ suite('AppHostLaunchService', () => {
         }
     });
 
-    test('terminated run sessions include appHostPath and stop refresh semantics', () => {
+    test('terminated owning run session clears its claim and includes stop refresh semantics', async () => {
         let terminationEvent: { appHostPath: string; command?: string; shouldRequestStopRefresh: boolean } | undefined;
         service.onDidTerminateAppHostDebugSession(event => {
             terminationEvent = event;
         });
 
+        await service.launch('/repo/AppHost.csproj', 'run', true);
+        const configuration = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
         assert.ok(onDidTerminateDebugSessionCallback);
         onDidTerminateDebugSessionCallback({
-            configuration: {
-                type: 'aspire',
-                program: '/repo/AppHost.csproj',
-                command: 'run',
-            },
+            configuration,
         } as unknown as vscode.DebugSession);
 
+        assert.strictEqual(service.isLaunching('/repo/AppHost.csproj'), false);
         assert.deepStrictEqual(terminationEvent, {
             appHostPath: '/repo/AppHost.csproj',
             command: 'run',
