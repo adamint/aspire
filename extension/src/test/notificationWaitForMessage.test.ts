@@ -22,8 +22,9 @@ interface VscodeHelpersModule {
 
 const extensionRoot = path.resolve(__dirname, '..', '..');
 const extesterStubModulePath = path.join(extensionRoot, 'out', 'test', 'fixtures', 'e2e-notification-extester-stub.js');
-const compiledExtesterModulePath = path.join(extensionRoot, 'out', 'test-e2e', 'helpers', 'extester.js');
-const compiledVscodeHelpersModulePath = path.join(extensionRoot, 'out', 'test-e2e', 'helpers', 'vscode.js');
+const compiledE2eHelpersPath = path.join(extensionRoot, 'out', 'test-e2e', 'test-e2e', 'helpers');
+const compiledExtesterModulePath = path.join(compiledE2eHelpersPath, 'extester.js');
+const compiledVscodeHelpersModulePath = path.join(compiledE2eHelpersPath, 'vscode.js');
 
 suite('waitForNotificationMessage', () => {
     const originalExtesterModule = process.env.ASPIRE_EXTENSION_E2E_EXTESTER_MODULE;
