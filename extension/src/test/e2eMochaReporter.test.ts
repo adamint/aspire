@@ -165,6 +165,103 @@ suite('E2E Mocha reporter', () => {
     });
 });
 
+suite('E2E process runner', () => {
+    test('child error becomes a structured spawn failure with visible diagnostics', async () => {
+        const child = new FakeChildProcess();
+        const cause = new Error('spawn ENOENT');
+        const runPromise = runWithFakeChild(child);
+        const rejection = assert.rejects(runPromise, (error: ProcessRunnerError) => {
+            assert.strictEqual(error.reason, 'spawn');
+            assert.strictEqual(error.cause, cause);
+            assert.strictEqual(error.diagnosticsSuffix, diagnosticsSuffix);
+            assert.strictEqual(error.message, `Failed to start node run-tests: spawn ENOENT.${diagnosticsSuffix}`);
+            return true;
+        });
+
+        child.emit('error', cause);
+
+        await rejection;
+    });
+
+    test('child close with a non-zero numeric code becomes an exit-code failure', async () => {
+        const child = new FakeChildProcess();
+        const runPromise = runWithFakeChild(child);
+        const rejection = assert.rejects(runPromise, (error: ProcessRunnerError) => {
+            assert.strictEqual(error.reason, 'exit-code');
+            assert.strictEqual(error.exitCode, 17);
+            return true;
+        });
+
+        child.emit('close', 17, null);
+
+        await rejection;
+    });
+
+    test('child close with a null code and signal becomes a signal failure', async () => {
+        const child = new FakeChildProcess();
+        const runPromise = runWithFakeChild(child);
+        const rejection = assert.rejects(runPromise, (error: ProcessRunnerError) => {
+            assert.strictEqual(error.reason, 'signal');
+            assert.strictEqual(error.signal, 'SIGTERM');
+            return true;
+        });
+
+        child.emit('close', null, 'SIGTERM');
+
+        await rejection;
+    });
+
+    test('timeout followed by close becomes a timeout failure with duration', async () => {
+        const child = new FakeChildProcess();
+        const terminations: Array<{ pid: number; signal: string }> = [];
+        const runPromise = runWithFakeChild(child, {
+            timeout: 5,
+            forceTimeout: 50,
+            terminateProcessTree: (pid, signal) => {
+                terminations.push({ pid, signal });
+                setImmediate(() => child.emit('close', null, signal));
+            },
+        });
+
+        await assert.rejects(runPromise, (error: ProcessRunnerError) => {
+            assert.strictEqual(error.reason, 'timeout');
+            assert.strictEqual(error.timeout, 5);
+            assert.strictEqual(error.didNotExit, false);
+            return true;
+        });
+        assert.deepStrictEqual(terminations, [{ pid: child.pid, signal: 'SIGTERM' }]);
+    });
+
+    test('timeout without close force terminates and reports didNotExit', async () => {
+        const child = new FakeChildProcess();
+        const terminations: Array<{ pid: number; signal: string }> = [];
+
+        await assert.rejects(runWithFakeChild(child, {
+            timeout: 5,
+            forceTimeout: 5,
+            terminateProcessTree: (pid, signal) => terminations.push({ pid, signal }),
+        }), (error: ProcessRunnerError) => {
+            assert.strictEqual(error.reason, 'timeout');
+            assert.strictEqual(error.timeout, 5);
+            assert.strictEqual(error.didNotExit, true);
+            return true;
+        });
+
+        assert.deepStrictEqual(terminations, [
+            { pid: child.pid, signal: 'SIGTERM' },
+            { pid: child.pid, signal: 'SIGKILL' },
+        ]);
+        assert.strictEqual(child.removeAllListenersCalled, true);
+        assert.strictEqual(child.unrefCalled, true);
+    });
+
+    test('production force termination grace remains 15 seconds', () => {
+        const { DEFAULT_FORCE_TIMEOUT } = require(getProcessRunnerModulePath());
+
+        assert.strictEqual(DEFAULT_FORCE_TIMEOUT, 15000);
+    });
+});
+
 const diagnosticsSuffix = ' Diagnostics are under out/test-e2e-results and out/test-e2e-storage-diagnostics.';
 
 function createReporterTest(title: string) {
@@ -183,10 +280,60 @@ function getProcessFailureModulePath() {
     return path.join(__dirname, '..', '..', 'scripts', 'e2e-process-failure.cjs');
 }
 
+function getProcessRunnerModulePath() {
+    return path.join(__dirname, '..', '..', 'scripts', 'e2e-process-runner.cjs');
+}
+
 function createCompletedMochaResults() {
     const failedTest = { fullTitle: 'Aspire E2E starts an AppHost' };
     return {
         tests: [failedTest],
         failures: [failedTest],
     };
+}
+
+function runWithFakeChild(
+    child: FakeChildProcess,
+    options: {
+        timeout?: number;
+        forceTimeout?: number;
+        terminateProcessTree?: (pid: number, signal: string) => void;
+    } = {},
+): Promise<void> {
+    const { runWithProcessTreeTimeout } = require(getProcessRunnerModulePath());
+
+    return runWithProcessTreeTimeout('node', ['run-tests'], {
+        diagnosticsSuffix,
+        forceTimeout: options.forceTimeout ?? 50,
+        spawn: () => child,
+        spawnOptions: {},
+        terminateProcessTree: options.terminateProcessTree ?? (() => undefined),
+        timeout: options.timeout ?? 1000,
+    });
+}
+
+type ProcessRunnerError = Error & {
+    reason: string;
+    cause?: unknown;
+    diagnosticsSuffix: string;
+    exitCode: number | null;
+    signal: string | null;
+    timeout: number | null;
+    didNotExit: boolean;
+};
+
+class FakeChildProcess extends EventEmitter {
+    readonly pid = 2468;
+    removeAllListenersCalled = false;
+    unrefCalled = false;
+
+    override removeAllListeners(eventName?: string | symbol): this {
+        this.removeAllListenersCalled = true;
+        return super.removeAllListeners(eventName);
+    }
+
+    unref(): this {
+        this.unrefCalled = true;
+        return this;
+    }
 }

@@ -212,15 +212,12 @@ suite('E2E launch profile', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
 
+        assert.ok(runner.includes("const { runWithProcessTreeTimeout } = require('./e2e-process-runner.cjs');"));
         assert.ok(runner.includes('ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS'));
         assert.ok(runner.includes('await runWithProcessTreeTimeout(process.execPath'));
         assert.ok(runner.includes('getRunTestsTimeoutMs()'));
         assert.ok(runner.includes('2400000'));
-        assert.ok(runner.includes('did not exit after process-tree termination'));
-        assert.ok(runner.includes('child.unref()'));
         assert.ok(runner.includes("spawnSync('taskkill'"));
-        assert.ok(runner.includes("terminateProcessTree(child.pid, 'SIGTERM')"));
-        assert.ok(runner.includes("terminateProcessTree(child.pid, 'SIGKILL')"));
         assert.ok(runner.includes('process.kill(-pid, signal)'));
     });
 
@@ -361,15 +358,10 @@ suite('E2E launch profile', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
 
-        assert.ok(runner.includes("const { E2eProcessError, shouldAllowAdvisoryTestFailure } = require('./e2e-process-failure.cjs');"));
+        assert.ok(runner.includes("const { shouldAllowAdvisoryTestFailure } = require('./e2e-process-failure.cjs');"));
         assert.ok(runner.includes("const advisoryIssue = process.env.ASPIRE_EXTENSION_E2E_ADVISORY_ISSUE || '';"));
         assert.ok(runner.includes('let cleanupFailed = false;'));
         assert.ok(runner.includes('cleanupFailed = true;'));
-        assert.ok(runner.includes("new E2eProcessError('spawn', command, args, { cause: error, diagnosticsSuffix })"));
-        assert.ok(runner.includes("new E2eProcessError('timeout', command, args, { timeout, didNotExit: true, diagnosticsSuffix })"));
-        assert.ok(runner.includes("new E2eProcessError('timeout', command, args, { timeout, diagnosticsSuffix })"));
-        assert.ok(runner.includes("new E2eProcessError('signal', command, args, { signal, diagnosticsSuffix })"));
-        assert.ok(runner.includes("new E2eProcessError('exit-code', command, args, { exitCode, diagnosticsSuffix })"));
         assert.ok(runner.includes('shouldAllowAdvisoryTestFailure(testFailure, readMochaResults(), cleanupFailed)'));
         assert.ok(runner.includes('completed test failures tracked by ${advisoryIssue}. Diagnostics were uploaded for investigation.'));
         assert.strictEqual(runner.includes('ASPIRE_EXTENSION_E2E_ALLOW_TEST_FAILURE'), false);

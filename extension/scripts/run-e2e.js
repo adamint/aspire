@@ -16,7 +16,8 @@ const {
   runWithRetries,
   terminateOrphanedDescendants,
 } = require('./e2e-download-retry');
-const { E2eProcessError, shouldAllowAdvisoryTestFailure } = require('./e2e-process-failure.cjs');
+const { shouldAllowAdvisoryTestFailure } = require('./e2e-process-failure.cjs');
+const { runWithProcessTreeTimeout } = require('./e2e-process-runner.cjs');
 
 const extensionRoot = path.resolve(__dirname, '..');
 const extensionPackageJson = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.json'), 'utf8'));
@@ -114,88 +115,6 @@ function prepareRunDirectories() {
   for (const directory of [artifactsDir, resultsDir, diagnosticsStorageRoot, isolatedAspireHome, storageDir, extensionsDir]) {
     fs.mkdirSync(directory, { recursive: true });
   }
-}
-
-function runWithProcessTreeTimeout(command, args, extraEnv, timeout) {
-  return new Promise((resolve, reject) => {
-    const diagnosticsSuffix = ` Diagnostics are under ${path.relative(extensionRoot, resultsDir)} and ${path.relative(extensionRoot, storageDiagnosticsDir)}.`;
-    const useShell = shouldUseShellForCommand(command);
-    const child = useShell
-      ? spawn([command, ...args].map(quoteWindowsShellArgument).join(' '), [], {
-        cwd: extensionRoot,
-        env: { ...process.env, ...extraEnv },
-        shell: true,
-        stdio: 'inherit',
-        detached: process.platform !== 'win32',
-      })
-      : spawn(command, args, {
-        cwd: extensionRoot,
-        env: { ...process.env, ...extraEnv },
-        shell: false,
-        stdio: 'inherit',
-        detached: process.platform !== 'win32',
-      });
-
-    let timedOut = false;
-    let settled = false;
-    let forceTimeout;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      terminateProcessTree(child.pid, 'SIGTERM');
-      forceTimeout = setTimeout(() => {
-        if (settled) {
-          return;
-        }
-
-        terminateProcessTree(child.pid, 'SIGKILL');
-        child.removeAllListeners();
-        child.unref();
-        settle();
-        reject(new E2eProcessError('timeout', command, args, { timeout, didNotExit: true, diagnosticsSuffix }));
-      }, 15000);
-    }, timeout);
-
-    child.on('error', error => {
-      if (settled) {
-        return;
-      }
-
-      settle();
-      reject(new E2eProcessError('spawn', command, args, { cause: error, diagnosticsSuffix }));
-    });
-
-    child.on('close', (exitCode, signal) => {
-      if (settled) {
-        return;
-      }
-
-      settle();
-      if (timedOut) {
-        reject(new E2eProcessError('timeout', command, args, { timeout, diagnosticsSuffix }));
-        return;
-      }
-
-      if (typeof exitCode !== 'number') {
-        reject(new E2eProcessError('signal', command, args, { signal, diagnosticsSuffix }));
-        return;
-      }
-
-      if (exitCode !== 0) {
-        reject(new E2eProcessError('exit-code', command, args, { exitCode, diagnosticsSuffix }));
-        return;
-      }
-
-      resolve();
-    });
-
-    function settle() {
-      settled = true;
-      clearTimeout(timer);
-      if (forceTimeout) {
-        clearTimeout(forceTimeout);
-      }
-    }
-  });
 }
 
 function getRunTestsTimeoutMs() {
@@ -711,7 +630,21 @@ async function main() {
     recording = startRecording();
     try {
       logStep('Running VS Code extension E2E tests');
-      await runWithProcessTreeTimeout(process.execPath, [extesterCli, 'run-tests', testSpec, '--storage', storageDir, '--extensions_dir', extensionsDir, '--code_version', vscodeVersion, '--code_settings', path.join(extensionRoot, 'test-e2e', 'settings.json'), '--mocha_config', path.join(extensionRoot, '.mocharc.e2e.js'), '--offline'], extestEnv, getRunTestsTimeoutMs());
+      const runTestsArgs = [extesterCli, 'run-tests', testSpec, '--storage', storageDir, '--extensions_dir', extensionsDir, '--code_version', vscodeVersion, '--code_settings', path.join(extensionRoot, 'test-e2e', 'settings.json'), '--mocha_config', path.join(extensionRoot, '.mocharc.e2e.js'), '--offline'];
+      await runWithProcessTreeTimeout(process.execPath, runTestsArgs, {
+        diagnosticsSuffix: ` Diagnostics are under ${path.relative(extensionRoot, resultsDir)} and ${path.relative(extensionRoot, storageDiagnosticsDir)}.`,
+        quoteShellArgument: quoteWindowsShellArgument,
+        spawn,
+        spawnOptions: {
+          cwd: extensionRoot,
+          env: { ...process.env, ...extestEnv },
+          stdio: 'inherit',
+          detached: process.platform !== 'win32',
+        },
+        terminateProcessTree,
+        timeout: getRunTestsTimeoutMs(),
+        useShell: shouldUseShellForCommand(process.execPath),
+      });
     }
     catch (error) {
       testFailure = error;
