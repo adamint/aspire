@@ -1,22 +1,36 @@
-const state = {
+interface NotificationLike {
+    getMessage(): Promise<string>;
+    dismiss(): Promise<void>;
+}
+
+const state: {
+    notificationPolls: Array<NotificationLike[] | Error>;
+    pollResults: Array<NotificationLike | false>;
+    waitMessages: string[];
+    notificationPollCount: number;
+} = {
     notificationPolls: [],
     pollResults: [],
     waitMessages: [],
     notificationPollCount: 0,
 };
 
-function setNotificationPolls(notificationPolls) {
+export function setNotificationPolls(notificationPolls: Array<NotificationLike[] | Error>): void {
     state.notificationPolls = [...notificationPolls];
     state.pollResults = [];
     state.waitMessages = [];
     state.notificationPollCount = 0;
 }
 
-function resetNotificationWaitState() {
+export function resetNotificationWaitState(): void {
     setNotificationPolls([]);
 }
 
-function getNotificationWaitState() {
+export function getNotificationWaitState(): {
+    notificationPollCount: number;
+    pollResults: Array<NotificationLike | false>;
+    waitMessages: string[];
+} {
     return {
         notificationPollCount: state.notificationPollCount,
         pollResults: [...state.pollResults],
@@ -24,8 +38,8 @@ function getNotificationWaitState() {
     };
 }
 
-class Workbench {
-    async getNotifications() {
+export class Workbench {
+    async getNotifications(): Promise<NotificationLike[]> {
         state.notificationPollCount++;
 
         if (state.notificationPolls.length === 0) {
@@ -33,6 +47,10 @@ class Workbench {
         }
 
         const nextPoll = state.notificationPolls.shift();
+        if (nextPoll === undefined) {
+            return [];
+        }
+
         if (nextPoll instanceof Error) {
             throw nextPoll;
         }
@@ -41,11 +59,11 @@ class Workbench {
     }
 }
 
-const VSBrowser = {
+export const VSBrowser = {
     instance: {
         driver: {
-            wait: async (condition, _timeout, message) => {
-                state.waitMessages.push(message);
+            wait: async (condition: () => Promise<NotificationLike | false>, _timeout: number | undefined, message?: string): Promise<NotificationLike | false> => {
+                state.waitMessages.push(message ?? '');
                 const maxAttempts = Math.max(state.notificationPolls.length, 1) + 1;
 
                 for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -59,50 +77,36 @@ const VSBrowser = {
 
                 throw new Error(message ?? 'Timed out waiting for notification.');
             },
-            executeScript: async () => '',
+            executeScript: async (): Promise<string> => '',
             actions: () => ({
                 sendKeys: () => ({
-                    perform: async () => { },
+                    perform: async (): Promise<void> => { },
                 }),
             }),
         },
-        waitForWorkbench: async () => { },
-        takeScreenshot: async () => { },
+        waitForWorkbench: async (): Promise<void> => { },
+        takeScreenshot: async (): Promise<void> => { },
     },
 };
 
-class BottomBarPanel {
+export class BottomBarPanel {
 }
 
-class SideBarView {
+export class SideBarView {
 }
 
-class EditorView {
+export class EditorView {
 }
 
-class InputBox {
-    static async create() {
+export class InputBox {
+    static async create(): Promise<never> {
         throw new Error('InputBox.create is not implemented in the notification stub.');
     }
 }
 
-class WebView {
+export class WebView {
 }
 
-const By = {
-    css: selector => selector,
-};
-
-module.exports = {
-    BottomBarPanel,
-    By,
-    EditorView,
-    InputBox,
-    SideBarView,
-    VSBrowser,
-    WebView,
-    Workbench,
-    getNotificationWaitState,
-    resetNotificationWaitState,
-    setNotificationPolls,
+export const By = {
+    css: (selector: string): string => selector,
 };
