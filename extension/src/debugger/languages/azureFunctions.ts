@@ -448,6 +448,10 @@ function ensureFlagEnabled(args: string[], flag: string): void {
     for (let i = args.length - 1; i >= 0; i--) {
         const argument = args[i];
         if (argument === flag || argument.startsWith(`${flag}=`)) {
+            const value = args[i + 1]?.toLowerCase();
+            if (argument === flag && (value === 'true' || value === 'false')) {
+                args.splice(i + 1, 1);
+            }
             firstMatch = i;
             args.splice(i, 1);
         }

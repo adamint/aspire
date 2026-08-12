@@ -978,7 +978,7 @@ suite('Azure Functions Debugger Extension Tests', () => {
     test('enables required Core Tools flags when explicitly disabled', async () => {
         const projectPath = path.join('/workspace', 'FunctionsApp', 'FunctionsApp.csproj');
         const targetPath = path.join('/workspace', 'FunctionsApp', 'bin', 'Debug', 'net10.0', 'FunctionsApp.dll');
-        const args = ['--dotnet-isolated-debug=false', '--enable-json-output=false'];
+        const args = ['--dotnet-isolated-debug=false', '--enable-json-output', 'false'];
         sinon.stub(DotNetService.prototype, 'getDotNetTargetPath').resolves(targetPath);
         sinon.stub(DotNetService.prototype, 'buildDotNetProject').resolves();
 
