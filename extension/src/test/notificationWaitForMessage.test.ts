@@ -93,16 +93,32 @@ suite('waitForNotificationMessage', () => {
         );
     });
 
-    test('propagates session failures from retrying waits', async () => {
-        const sessionError = new webDriverError.NoSuchSessionError('session closed');
+    test('propagates browser lifecycle failures from retrying waits', async () => {
         const { stub, vscode } = loadNotificationWaitModules();
 
-        stub.setTerminalPolls([sessionError]);
+        for (const lifecycleError of [
+            new webDriverError.NoSuchSessionError('session closed'),
+            new webDriverError.NoSuchWindowError('window closed'),
+            new webDriverError.WebDriverError('unknown error: disconnected: not connected to DevTools'),
+        ]) {
+            stub.setTerminalPolls([lifecycleError]);
 
-        await assert.rejects(
-            vscode.waitForTerminalChannel('Now listening', 5000),
-            error => error === sessionError,
-        );
+            await assert.rejects(
+                vscode.waitForTerminalChannel('Now listening', 5000),
+                error => error === lifecycleError,
+            );
+        }
+    });
+
+    test('retries transient generic WebDriver failures', async () => {
+        const transientError = new webDriverError.WebDriverError('unknown error: element is not clickable at point');
+        const { stub, vscode } = loadNotificationWaitModules();
+
+        stub.setTerminalPolls([transientError, 'Now listening on: http://localhost']);
+
+        const terminalText = await vscode.waitForTerminalChannel('Now listening', 5000);
+
+        assert.strictEqual(terminalText, 'Now listening on: http://localhost');
     });
 
     test('preserves session failure classification when adding wait diagnostics', async () => {

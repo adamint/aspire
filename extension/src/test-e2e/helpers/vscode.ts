@@ -3,6 +3,17 @@ import { error as webDriverError } from 'selenium-webdriver';
 
 const escapeKey = '\uE00C';
 const aspireAppHostsSectionTitle = 'AppHosts';
+const blockingWebDriverLifecycleErrorNames = new Set([
+    'InvalidSessionIdError',
+    'NoSuchSessionError',
+    'NoSuchWindowError',
+    'SessionNotCreatedError',
+]);
+const blockingWebDriverLifecycleMessageFragments = [
+    'session deleted because of page crash',
+    'disconnected: not connected to devtools',
+    'chrome not reachable',
+];
 
 export async function openAspireView(): Promise<TreeSection> {
     let lastSectionTitles: string[] = [];
@@ -410,8 +421,21 @@ function withWaitDiagnostics(error: unknown, diagnostics: string[]): Error {
 }
 
 function throwIfWebDriverSessionFailure(error: unknown): void {
-    if (error instanceof webDriverError.NoSuchSessionError ||
-        error instanceof webDriverError.SessionNotCreatedError) {
+    if (!(error instanceof Error)) {
+        return;
+    }
+
+    if (blockingWebDriverLifecycleErrorNames.has(error.name)) {
+        throw error;
+    }
+
+    // Selenium uses WebDriverError for both transient failures and browser lifecycle failures:
+    //   unknown error: session deleted because of page crash
+    //   unknown error: disconnected: not connected to DevTools
+    //   unknown error: chrome not reachable
+    const message = error.message.toLowerCase();
+    if (error.name === 'WebDriverError' &&
+        blockingWebDriverLifecycleMessageFragments.some(fragment => message.includes(fragment))) {
         throw error;
     }
 }
