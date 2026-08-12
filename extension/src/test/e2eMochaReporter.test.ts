@@ -76,6 +76,28 @@ suite('E2E Mocha reporter', () => {
         }), false);
     });
 
+    test('keeps WebDriver session failures blocking', () => {
+        const { E2eProcessError, shouldAllowAdvisoryTestFailure } = require(getProcessFailureModulePath());
+        const exitCodeError = new E2eProcessError('exit-code', 'node', ['run-tests'], {
+            exitCode: 1,
+            diagnosticsSuffix,
+        });
+
+        for (const errorName of ['InvalidSessionIdError', 'NoSuchSessionError', 'SessionNotCreatedError']) {
+            assert.strictEqual(shouldAllowAdvisoryTestFailure(
+                exitCodeError,
+                createCompletedMochaResults(errorName),
+                false,
+            ), false);
+        }
+
+        assert.strictEqual(shouldAllowAdvisoryTestFailure(
+            exitCodeError,
+            createCompletedMochaResults('TimeoutError'),
+            false,
+        ), true);
+    });
+
     test('process failure: exit code includes visible diagnostics', () => {
         const { E2eProcessError } = require(getProcessFailureModulePath());
         const exitCodeError = new E2eProcessError('exit-code', 'node', ['run-tests'], {
@@ -316,11 +338,14 @@ function getProcessRunnerModulePath() {
     return path.join(__dirname, '..', '..', 'scripts', 'e2e-process-runner.cjs');
 }
 
-function createCompletedMochaResults() {
+function createCompletedMochaResults(errorName?: string) {
     const failedTest = { fullTitle: 'Aspire E2E starts an AppHost' };
     return {
         tests: [failedTest],
-        failures: [failedTest],
+        failures: [{
+            ...failedTest,
+            ...(errorName ? { err: { name: errorName } } : {}),
+        }],
     };
 }
 
