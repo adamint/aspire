@@ -75,6 +75,62 @@ suite('E2E Mocha reporter', () => {
             ],
         }), false);
     });
+
+    test('only allows ordinary exit-code failures with completed Mocha failures and no cleanup failure', () => {
+        const { E2eProcessError, shouldAllowAdvisoryTestFailure } = require(getProcessFailureModulePath());
+        const results = {
+            tests: [{ fullTitle: 'Aspire E2E starts an AppHost' }],
+            failures: [{ fullTitle: 'Aspire E2E starts an AppHost' }],
+        };
+
+        assert.strictEqual(shouldAllowAdvisoryTestFailure(
+            new E2eProcessError('exit-code', 'node', ['run-tests'], { exitCode: 1 }),
+            results,
+            false),
+        true);
+        assert.strictEqual(shouldAllowAdvisoryTestFailure(
+            new E2eProcessError('exit-code', 'node', ['run-tests'], { exitCode: 1 }),
+            results,
+            true),
+        false);
+        assert.strictEqual(shouldAllowAdvisoryTestFailure(
+            new E2eProcessError('exit-code', 'node', ['run-tests'], { exitCode: 1 }),
+            {
+                tests: [],
+                failures: [{ fullTitle: 'Aspire E2E "before all" hook' }],
+            },
+            false),
+        false);
+    });
+
+    test('does not allow timeout, signal, or spawn failures and retains diagnostics details', () => {
+        const { E2eProcessError, shouldAllowAdvisoryTestFailure } = require(getProcessFailureModulePath());
+        const results = {
+            tests: [{ fullTitle: 'Aspire E2E starts an AppHost' }],
+            failures: [{ fullTitle: 'Aspire E2E starts an AppHost' }],
+        };
+        const timeoutError = new E2eProcessError('timeout', 'node', ['run-tests']);
+        const signalError = new E2eProcessError('signal', 'node', ['run-tests'], { signal: 'SIGTERM' });
+        const spawnCause = new Error('spawn EPERM');
+        const spawnError = new E2eProcessError('spawn', 'node', ['run-tests'], { cause: spawnCause });
+
+        assert.strictEqual(shouldAllowAdvisoryTestFailure(timeoutError, results, false), false);
+        assert.strictEqual(shouldAllowAdvisoryTestFailure(signalError, results, false), false);
+        assert.strictEqual(shouldAllowAdvisoryTestFailure(spawnError, results, false), false);
+
+        const exitCodeError = new E2eProcessError('exit-code', 'node', ['run-tests'], { exitCode: 1 });
+        assert.strictEqual(exitCodeError.reason, 'exit-code');
+        assert.strictEqual(exitCodeError.exitCode, 1);
+        assert.match(exitCodeError.message, /node run-tests exited with code 1/);
+        assert.strictEqual(timeoutError.reason, 'timeout');
+        assert.match(timeoutError.message, /node run-tests timed out/);
+        assert.strictEqual(signalError.reason, 'signal');
+        assert.strictEqual(signalError.signal, 'SIGTERM');
+        assert.match(signalError.message, /node run-tests exited due to signal SIGTERM/);
+        assert.strictEqual(spawnError.reason, 'spawn');
+        assert.strictEqual(spawnError.cause, spawnCause);
+        assert.match(spawnError.message, /Failed to start node run-tests/);
+    });
 });
 
 function createReporterTest(title: string) {
@@ -87,4 +143,8 @@ function createReporterTest(title: string) {
         currentRetry: () => 0,
         titlePath: () => ['Aspire E2E', title],
     };
+}
+
+function getProcessFailureModulePath() {
+    return path.join(__dirname, '..', '..', 'scripts', 'e2e-process-failure.cjs');
 }
