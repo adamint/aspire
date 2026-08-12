@@ -14,11 +14,15 @@ interface NotificationExtesterStubModule {
         waitMessages: string[];
     };
     resetNotificationWaitState(): void;
+    setEditorPolls(editorPolls: Array<string[] | Error>): void;
     setNotificationPolls(notificationPolls: Array<NotificationLike[] | Error>): void;
+    setTerminalPolls(terminalPolls: Array<string | Error>): void;
 }
 
 interface VscodeHelpersModule {
+    waitForEditorTitle(expectedText: string, timeoutMs?: number): Promise<string>;
     waitForNotificationMessage(expectedText: string, timeoutMs?: number): Promise<NotificationLike>;
+    waitForTerminalChannel(expectedText: string, timeoutMs?: number): Promise<string>;
 }
 
 const extensionRoot = path.resolve(__dirname, '..', '..');
@@ -86,6 +90,32 @@ suite('waitForNotificationMessage', () => {
         await assert.rejects(
             vscode.waitForNotificationMessage('Dashboard ready', 5000),
             error => error === sessionError,
+        );
+    });
+
+    test('propagates session failures from retrying waits', async () => {
+        const sessionError = new webDriverError.NoSuchSessionError('session closed');
+        const { stub, vscode } = loadNotificationWaitModules();
+
+        stub.setTerminalPolls([sessionError]);
+
+        await assert.rejects(
+            vscode.waitForTerminalChannel('Now listening', 5000),
+            error => error === sessionError,
+        );
+    });
+
+    test('preserves session failure classification when adding wait diagnostics', async () => {
+        const sessionError = new webDriverError.NoSuchSessionError('session closed');
+        const { stub, vscode } = loadNotificationWaitModules();
+
+        stub.setEditorPolls([sessionError]);
+
+        await assert.rejects(
+            vscode.waitForEditorTitle('Dashboard', 5000),
+            error => error instanceof Error &&
+                error.name === 'NoSuchSessionError' &&
+                error.message.includes('Open editor titles:'),
         );
     });
 });

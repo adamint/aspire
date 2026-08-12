@@ -4,12 +4,16 @@ interface NotificationLike {
 }
 
 const state: {
+    editorPolls: Array<string[] | Error>;
     notificationPolls: Array<NotificationLike[] | Error>;
+    terminalPolls: Array<string | Error>;
     pollResults: Array<NotificationLike | false>;
     waitMessages: string[];
     notificationPollCount: number;
 } = {
+    editorPolls: [],
     notificationPolls: [],
+    terminalPolls: [],
     pollResults: [],
     waitMessages: [],
     notificationPollCount: 0,
@@ -22,8 +26,22 @@ export function setNotificationPolls(notificationPolls: Array<NotificationLike[]
     state.notificationPollCount = 0;
 }
 
+export function setTerminalPolls(terminalPolls: Array<string | Error>): void {
+    state.terminalPolls = [...terminalPolls];
+    state.pollResults = [];
+    state.waitMessages = [];
+}
+
+export function setEditorPolls(editorPolls: Array<string[] | Error>): void {
+    state.editorPolls = [...editorPolls];
+    state.pollResults = [];
+    state.waitMessages = [];
+}
+
 export function resetNotificationWaitState(): void {
+    setEditorPolls([]);
     setNotificationPolls([]);
+    setTerminalPolls([]);
 }
 
 export function getNotificationWaitState(): {
@@ -64,7 +82,7 @@ export const VSBrowser = {
         driver: {
             wait: async (condition: () => Promise<NotificationLike | false>, _timeout: number | undefined, message?: string): Promise<NotificationLike | false> => {
                 state.waitMessages.push(message ?? '');
-                const maxAttempts = Math.max(state.notificationPolls.length, 1) + 1;
+                const maxAttempts = Math.max(state.editorPolls.length, state.notificationPolls.length, state.terminalPolls.length, 1) + 1;
 
                 for (let attempt = 0; attempt < maxAttempts; attempt++) {
                     const result = await condition();
@@ -90,12 +108,32 @@ export const VSBrowser = {
 };
 
 export class BottomBarPanel {
+    async openTerminalView(): Promise<{ getCurrentChannel(): Promise<string> }> {
+        return {
+            getCurrentChannel: async () => {
+                const nextPoll = state.terminalPolls.shift() ?? '';
+                if (nextPoll instanceof Error) {
+                    throw nextPoll;
+                }
+
+                return nextPoll;
+            },
+        };
+    }
 }
 
 export class SideBarView {
 }
 
 export class EditorView {
+    async getOpenEditorTitles(): Promise<string[]> {
+        const nextPoll = state.editorPolls.shift() ?? [];
+        if (nextPoll instanceof Error) {
+            throw nextPoll;
+        }
+
+        return nextPoll;
+    }
 }
 
 export class InputBox {
