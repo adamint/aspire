@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import { findRunningAppHost, getCommandInvocationCount, getResources, getTerminalCommandCount, getTreeAppHostLabel, isSamePath, waitForCommandOutcome, waitForDashboardUrl, waitForExtensionState, waitForNoDebugSessions, waitForNoRunningAppHost, waitForRepositoryIdle, waitForResource, waitForRunningAppHost, waitForTerminalCommand, waitForWorkspaceAppHost } from './helpers/assertions';
 import { assertClipboardMatchesLastExpectationForE2E, captureWorkspaceAppHostPathClipboardExpectationForE2E, executeE2eControlCommand, getCliWrapperInvocationCount, getCliWrapperInvocations, restoreClipboardSnapshotForE2E, restoreE2eCliPathForE2E, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, setE2eCliPathForE2E, setTerminalCommandExecutionSuppressedForE2E, snapshotClipboardForE2E, stopAppHostIfRunning, stopPrimaryAppHostIfRunning, touchPrimaryAppHostProject, writeDelayedPsCliWrapper, writeGatedStreamingDiscoveryCliWrapper, writeStreamingDiscoveryCliWrapper, writeTrackedDelayedPsCliWrapper, writeTrackedStreamingDiscoveryCliWrapper } from './helpers/fixtures';
 import { getPrimaryAppHostProjectPath } from './helpers/paths';
-import { cancelActiveInput, clickTreeItem, executeCommandFromPalette, getNotificationMessages, openAspireView, waitForChildTreeItem, waitForNotificationMessage, waitForTreeItem, waitForWorkbenchText } from './helpers/vscode';
+import { cancelActiveInput, clickTreeItem, executeCommandFromPalette, getNotificationMessages, openAspireView, startAppHostsSectionTextTransition, waitForAppHostsSectionTextAfterTransition, waitForChildTreeItem, waitForNotificationMessage, waitForTreeItem, waitForWorkbenchText } from './helpers/vscode';
 
 suite('Aspire AppHost tree E2E', function () {
     this.timeout(240000);
@@ -186,7 +186,7 @@ suite('Aspire AppHost tree E2E', function () {
         await waitForRepositoryIdle();
         const discovered = await waitForWorkspaceAppHost();
         const appHostLabel = getTreeAppHostLabel(discovered.state);
-        let section = await openAspireView();
+        const section = await openAspireView();
 
         const idleItem = await waitForTreeItem(section, appHostLabel);
         await idleItem.expand();
@@ -200,23 +200,25 @@ suite('Aspire AppHost tree E2E', function () {
         await setE2eCliPathForE2E(discoveryGate.cliPath);
         const invocationCountBefore = getCommandInvocationCount('aspire-vscode.refreshAppHosts');
         try {
+            await startAppHostsSectionTextTransition([appHostLabel], /\(\d+ resources\)/);
             await executeE2eControlCommand({ name: 'refreshAppHosts' }, { waitFor: 'started' });
 
             await discoveryGate.waitForPsSnapshotRequest();
             await discoveryGate.waitForLsCandidateRequest();
+            discoveryGate.releasePsSnapshot();
             const runningBeforeDiscovery = await waitForExtensionState(
                 file => file.state.isWorkspaceAppHostDiscoveryComplete === false
+                    && file.state.isRepositoryLoading === false
                     && file.state.workspaceAppHostCandidatePaths.length === 0
                     && findRunningAppHost(file.state) !== undefined,
-                'running AppHost before workspace discovery produces a candidate',
+                'fresh running AppHost snapshot before workspace discovery produces a candidate',
                 30000);
             assert.ok(findRunningAppHost(runningBeforeDiscovery.state));
 
-            section = await openAspireView();
-            const runningItem = await waitForTreeItem(section, appHostLabel);
-            assert.strictEqual(await runningItem.getLabel(), appHostLabel);
+            // The idle row already contains the AppHost label. Requiring its resource-count
+            // description proves VS Code rendered the fresh snapshot before discovery is released.
+            await waitForAppHostsSectionTextAfterTransition([appHostLabel], /\(\d+ resources\)/);
 
-            discoveryGate.releasePsSnapshot();
             discoveryGate.releaseLsCandidate();
             const candidateAfterRunning = await waitForExtensionState(
                 file => file.state.isWorkspaceAppHostDiscoveryComplete === false
