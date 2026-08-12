@@ -227,7 +227,10 @@ function startExternalAppHost(appHostPath: string): ExternalAppHostRun {
         cwd: getWorkspaceRoot(),
         env: process.env,
         shell: false,
-        detached: process.platform !== 'win32',
+        // `aspire stop` can signal the AppHost's Windows console process group. Keep the
+        // test-owned AppHost in its own group so stopping it cannot terminate VS Code or
+        // the E2E runner that launched it.
+        detached: true,
         windowsVerbatimArguments: spawnCommand.windowsVerbatimArguments,
     });
     let stdout = '';
