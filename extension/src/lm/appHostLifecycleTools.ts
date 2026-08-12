@@ -28,6 +28,8 @@ export const aspireAppHostStopToolName = 'aspire_apphost_stop';
 const maxAppHostSelectorLength = 4096;
 const maxConfirmationPathLength = 512;
 const maxReportedKnownAppHosts = 32;
+const maxPreparedInvocationRecords = 64;
+const preparedInvocationRecordLifetimeMs = 5 * 60 * 1000;
 const identityChangingCharacters = /[\u0000-\u001F\u007F-\u009F]|\p{Cf}/u;
 const nonDisplayCharacters = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu;
 
@@ -117,6 +119,7 @@ interface ResolvedAppHostTarget {
 interface DiscoveredTargets {
     readonly targets: readonly ResolvedAppHostTarget[];
     readonly hadFailures: boolean;
+    readonly hadSuppressedCandidates: boolean;
 }
 
 type TargetResolution =
@@ -133,6 +136,99 @@ interface EditorSessionMatches {
 }
 
 type ExternalRunState = 'running' | 'notRunning' | 'unknown';
+
+interface PreparedInvocationRecord<T> {
+    readonly key: string;
+    readonly value: T;
+    readonly expiresAt: number;
+}
+
+class PreparedInvocationQueue<T> {
+    private readonly _records: PreparedInvocationRecord<T>[] = [];
+    private readonly _quarantinedKeys = new Set<string>();
+    private _disabled = false;
+
+    enqueue(key: string, value: T): boolean {
+        this.pruneExpired();
+        if (this._disabled || this._quarantinedKeys.has(key)) {
+            return false;
+        }
+
+        const existingIndex = this._records.findIndex(record => record.key === key);
+        if (existingIndex !== -1) {
+            this._records.splice(existingIndex, 1);
+            this.addQuarantinedKey(key);
+            return false;
+        }
+
+        if (this._records.length === maxPreparedInvocationRecords) {
+            const evictedRecord = this._records.shift()!;
+            this.addQuarantinedKey(evictedRecord.key);
+            if (this._disabled) {
+                return false;
+            }
+        }
+
+        this._records.push({
+            key,
+            value,
+            expiresAt: Date.now() + preparedInvocationRecordLifetimeMs,
+        });
+        return true;
+    }
+
+    take(key: string): T | undefined {
+        this.pruneExpired();
+        if (this._disabled || this._quarantinedKeys.has(key)) {
+            return undefined;
+        }
+
+        const index = this._records.findIndex(record => record.key === key);
+        if (index === -1) {
+            return undefined;
+        }
+
+        return this._records.splice(index, 1)[0].value;
+    }
+
+    private pruneExpired(): void {
+        const now = Date.now();
+        const expiredKeys = this._records
+            .filter(record => record.expiresAt <= now)
+            .map(record => record.key);
+        if (expiredKeys.length === 0) {
+            return;
+        }
+
+        const unexpiredRecords = this._records.filter(record => record.expiresAt > now);
+        this._records.splice(0, this._records.length, ...unexpiredRecords);
+        for (const key of expiredKeys) {
+            this.addQuarantinedKey(key);
+            if (this._disabled) {
+                return;
+            }
+        }
+    }
+
+    private addQuarantinedKey(key: string): void {
+        if (this._quarantinedKeys.has(key)) {
+            return;
+        }
+
+        if (this._quarantinedKeys.size === maxPreparedInvocationRecords) {
+            this.disable();
+            return;
+        }
+
+        this._quarantinedKeys.add(key);
+    }
+
+    private disable(): void {
+        this._records.length = 0;
+        this._quarantinedKeys.clear();
+        this._disabled = true;
+    }
+}
 
 export class AppHostLifecycleToolService implements vscode.Disposable {
     private readonly _pendingStarts = new Set<string>();
@@ -157,12 +253,24 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         this._pendingStops.clear();
     }
 
-    async describeTarget(rawAppHostPath: unknown, token: vscode.CancellationToken): Promise<string> {
-        const resolution = await this.resolveTarget(rawAppHostPath, token);
-        return resolution.resolved ? resolution.target.selector : appHostLifecycleUnresolvedPath;
+    async prepareResolution(rawAppHostPath: unknown, token: vscode.CancellationToken): Promise<TargetResolution> {
+        return this.resolveTarget(rawAppHostPath, token, true);
     }
 
-    async start(input: unknown, token: vscode.CancellationToken): Promise<AppHostLifecycleToolResult> {
+    async prepareTarget(rawAppHostPath: unknown, token: vscode.CancellationToken): Promise<ResolvedAppHostTarget | undefined> {
+        const resolution = await this.prepareResolution(rawAppHostPath, token);
+        return resolution.resolved ? resolution.target : undefined;
+    }
+
+    async describeTarget(rawAppHostPath: unknown, token: vscode.CancellationToken): Promise<string | undefined> {
+        return (await this.prepareTarget(rawAppHostPath, token))?.selector;
+    }
+
+    async start(
+        input: unknown,
+        token: vscode.CancellationToken,
+        preparedTarget?: ResolvedAppHostTarget,
+    ): Promise<AppHostLifecycleToolResult> {
         if (this._disposed) {
             return createResult(aspireAppHostStartToolName, 'cancelled', '', 'none');
         }
@@ -171,7 +279,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             return createResult(aspireAppHostStartToolName, 'invalidInput', '', 'none');
         }
 
-        const resolution = await this.resolveTarget(input.appHostPath, token);
+        const resolution = await this.resolveTarget(preparedTarget?.selector ?? input.appHostPath, token);
         if (!resolution.resolved) {
             return createResult(
                 aspireAppHostStartToolName,
@@ -181,6 +289,18 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 input.mode,
                 undefined,
                 resolution.knownAppHosts);
+        }
+
+        if (preparedTarget &&
+            getAppHostPathComparisonKey(resolution.target.absolutePath) !== getAppHostPathComparisonKey(preparedTarget.absolutePath)) {
+            return createResult(
+                aspireAppHostStartToolName,
+                'unknownAppHost',
+                '',
+                'none',
+                input.mode,
+                undefined,
+                [resolution.target.selector]);
         }
 
         const target = resolution.target;
@@ -272,7 +392,11 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         }
     }
 
-    async stop(input: unknown, token: vscode.CancellationToken): Promise<AppHostLifecycleToolResult> {
+    async stop(
+        input: unknown,
+        token: vscode.CancellationToken,
+        preparedTarget?: ResolvedAppHostTarget,
+    ): Promise<AppHostLifecycleToolResult> {
         if (this._disposed) {
             return createResult(aspireAppHostStopToolName, 'cancelled', '', 'none');
         }
@@ -281,7 +405,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             return createResult(aspireAppHostStopToolName, 'invalidInput', '', 'none');
         }
 
-        const resolution = await this.resolveTarget(input.appHostPath, token);
+        const resolution = await this.resolveTarget(preparedTarget?.selector ?? input.appHostPath, token);
         if (!resolution.resolved) {
             return createResult(
                 aspireAppHostStopToolName,
@@ -291,6 +415,18 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 undefined,
                 undefined,
                 resolution.knownAppHosts);
+        }
+
+        if (preparedTarget &&
+            getAppHostPathComparisonKey(resolution.target.absolutePath) !== getAppHostPathComparisonKey(preparedTarget.absolutePath)) {
+            return createResult(
+                aspireAppHostStopToolName,
+                'unknownAppHost',
+                '',
+                'none',
+                undefined,
+                undefined,
+                [resolution.target.selector]);
         }
 
         const target = resolution.target;
@@ -350,7 +486,11 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         return createResult(aspireAppHostStopToolName, 'notRunning', target.selector, 'none');
     }
 
-    private async resolveTarget(rawAppHostPath: unknown, token: vscode.CancellationToken): Promise<TargetResolution> {
+    private async resolveTarget(
+        rawAppHostPath: unknown,
+        token: vscode.CancellationToken,
+        allowSingleTargetFallback = false,
+    ): Promise<TargetResolution> {
         if (!vscode.workspace.isTrusted) {
             return { resolved: false, outcome: 'workspaceNotTrusted' };
         }
@@ -358,7 +498,8 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         if (typeof rawAppHostPath !== 'string' ||
             rawAppHostPath.length === 0 ||
             rawAppHostPath.length > maxAppHostSelectorLength ||
-            isAbsolutePath(rawAppHostPath)) {
+            isAbsolutePath(rawAppHostPath) ||
+            identityChangingCharacters.test(rawAppHostPath)) {
             return { resolved: false, outcome: 'invalidInput' };
         }
 
@@ -368,6 +509,13 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             const matches = discoveredTargets.targets.filter(target => toSelectorKey(target.selector) === selectorKey);
             if (matches.length === 1) {
                 return { resolved: true, target: matches[0] };
+            }
+
+            if (allowSingleTargetFallback &&
+                !discoveredTargets.hadFailures &&
+                !discoveredTargets.hadSuppressedCandidates &&
+                discoveredTargets.targets.length === 1) {
+                return { resolved: true, target: discoveredTargets.targets[0] };
             }
 
             if (discoveredTargets.hadFailures) {
@@ -417,18 +565,26 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         }));
         const folderQualifiers = workspaceFolders.map(folder => this.getWorkspaceFolderQualifier(folder));
         const targets = new Map<string, ResolvedAppHostTarget>();
+        const ambiguousSelectorKeys = new Set<string>();
         let hadFailures = false;
+        let hadSuppressedCandidates = false;
 
         for (const [index, { folder, candidates, failed }] of discoveredByFolder.entries()) {
             hadFailures ||= failed;
             for (const candidate of candidates) {
-                if (candidate.status !== 'buildable' || !path.isAbsolute(candidate.path) || !fs.existsSync(candidate.path)) {
+                if (candidate.status !== 'buildable') {
+                    continue;
+                }
+
+                if (!path.isAbsolute(candidate.path) || !fs.existsSync(candidate.path)) {
+                    hadSuppressedCandidates = true;
                     continue;
                 }
 
                 const relativePath = toContainedRelativePath(folder.uri.fsPath, candidate.path);
                 if (!relativePath ||
                     identityChangingCharacters.test(relativePath)) {
+                    hadSuppressedCandidates = true;
                     continue;
                 }
 
@@ -438,13 +594,26 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                     ? `${folderQualifiers[index]}/${relativePath}`
                     : relativePath;
                 if (selector.length > maxConfirmationPathLength || identityChangingCharacters.test(selector)) {
+                    hadSuppressedCandidates = true;
                     continue;
                 }
 
                 const selectorKey = toSelectorKey(selector);
+                if (ambiguousSelectorKeys.has(selectorKey)) {
+                    hadSuppressedCandidates = true;
+                    continue;
+                }
+
                 const existing = targets.get(selectorKey);
-                if (!existing || getAppHostPathComparisonKey(existing.absolutePath) === getAppHostPathComparisonKey(absolutePath)) {
+                if (!existing) {
                     targets.set(selectorKey, { launchPath, absolutePath, selector });
+                    continue;
+                }
+
+                if (getAppHostPathComparisonKey(existing.absolutePath) !== getAppHostPathComparisonKey(absolutePath)) {
+                    targets.delete(selectorKey);
+                    ambiguousSelectorKeys.add(selectorKey);
+                    hadSuppressedCandidates = true;
                 }
             }
         }
@@ -452,6 +621,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         return {
             targets: [...targets.values()].sort((left, right) => left.selector.localeCompare(right.selector)),
             hadFailures,
+            hadSuppressedCandidates,
         };
     }
 
@@ -559,6 +729,8 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
 }
 
 export class AppHostStartLanguageModelTool implements vscode.LanguageModelTool<AppHostStartToolInput> {
+    private readonly _preparedInvocations = new PreparedInvocationQueue<TargetResolution>();
+
     constructor(private readonly _service: AppHostLifecycleToolService) {
     }
 
@@ -566,26 +738,61 @@ export class AppHostStartLanguageModelTool implements vscode.LanguageModelTool<A
         options: vscode.LanguageModelToolInvocationPrepareOptions<AppHostStartToolInput>,
         token: vscode.CancellationToken,
     ): Promise<vscode.PreparedToolInvocation> {
-        const appHostPath = toVisibleDisplayText(await this._service.describeTarget(options.input?.appHostPath, token));
+        const preparation = await this._service.prepareResolution(options.input?.appHostPath, token);
+        const accepted = this._preparedInvocations.enqueue(createStartPreparationKey(options.input), preparation);
+
+        const preparedTarget = accepted && preparation.resolved ? preparation.target : undefined;
+        const appHostPath = toVisibleDisplayText(preparedTarget?.selector ?? appHostLifecycleUnresolvedPath);
         const mode = isLifecycleMode(options.input?.mode) ? options.input.mode : appHostLifecycleUnspecifiedMode;
-        return {
+        const preparedInvocation: vscode.PreparedToolInvocation = {
             invocationMessage: toPlainTextMarkdown(appHostLifecycleStartInvocationMessage(appHostPath)),
-            confirmationMessages: {
+        };
+        if (preparedTarget) {
+            preparedInvocation.confirmationMessages = {
                 title: appHostLifecycleStartConfirmationTitle,
                 message: toPlainTextMarkdown(appHostLifecycleStartConfirmationMessage(appHostPath, mode)),
-            },
-        };
+            };
+        }
+
+        return preparedInvocation;
     }
 
     async invoke(
         options: vscode.LanguageModelToolInvocationOptions<AppHostStartToolInput>,
         token: vscode.CancellationToken,
     ): Promise<vscode.LanguageModelToolResult> {
-        return createToolResult(await this._service.start(options.input, token));
+        if (!isStartInput(options.input)) {
+            return createToolResult(createResult(aspireAppHostStartToolName, 'invalidInput', '', 'none'));
+        }
+
+        const preparation = this._preparedInvocations.take(createStartPreparationKey(options.input));
+        if (!preparation) {
+            return createToolResult(createResult(
+                aspireAppHostStartToolName,
+                'failed',
+                '',
+                'none',
+                options.input.mode));
+        }
+
+        if (!preparation.resolved) {
+            return createToolResult(createResult(
+                aspireAppHostStartToolName,
+                preparation.outcome,
+                '',
+                'none',
+                options.input.mode,
+                undefined,
+                preparation.knownAppHosts));
+        }
+
+        return createToolResult(await this._service.start(options.input, token, preparation.target));
     }
 }
 
 export class AppHostStopLanguageModelTool implements vscode.LanguageModelTool<AppHostStopToolInput> {
+    private readonly _preparedInvocations = new PreparedInvocationQueue<TargetResolution>();
+
     constructor(private readonly _service: AppHostLifecycleToolService) {
     }
 
@@ -593,21 +800,49 @@ export class AppHostStopLanguageModelTool implements vscode.LanguageModelTool<Ap
         options: vscode.LanguageModelToolInvocationPrepareOptions<AppHostStopToolInput>,
         token: vscode.CancellationToken,
     ): Promise<vscode.PreparedToolInvocation> {
-        const appHostPath = toVisibleDisplayText(await this._service.describeTarget(options.input?.appHostPath, token));
-        return {
+        const preparation = await this._service.prepareResolution(options.input?.appHostPath, token);
+        const accepted = this._preparedInvocations.enqueue(createStopPreparationKey(options.input), preparation);
+
+        const preparedTarget = accepted && preparation.resolved ? preparation.target : undefined;
+        const appHostPath = toVisibleDisplayText(preparedTarget?.selector ?? appHostLifecycleUnresolvedPath);
+        const preparedInvocation: vscode.PreparedToolInvocation = {
             invocationMessage: toPlainTextMarkdown(appHostLifecycleStopInvocationMessage(appHostPath)),
-            confirmationMessages: {
+        };
+        if (preparedTarget) {
+            preparedInvocation.confirmationMessages = {
                 title: appHostLifecycleStopConfirmationTitle,
                 message: toPlainTextMarkdown(appHostLifecycleStopConfirmationMessage(appHostPath)),
-            },
-        };
+            };
+        }
+
+        return preparedInvocation;
     }
 
     async invoke(
         options: vscode.LanguageModelToolInvocationOptions<AppHostStopToolInput>,
         token: vscode.CancellationToken,
     ): Promise<vscode.LanguageModelToolResult> {
-        return createToolResult(await this._service.stop(options.input, token));
+        if (!isStopInput(options.input)) {
+            return createToolResult(createResult(aspireAppHostStopToolName, 'invalidInput', '', 'none'));
+        }
+
+        const preparation = this._preparedInvocations.take(createStopPreparationKey(options.input));
+        if (!preparation) {
+            return createToolResult(createResult(aspireAppHostStopToolName, 'failed', '', 'none'));
+        }
+
+        if (!preparation.resolved) {
+            return createToolResult(createResult(
+                aspireAppHostStopToolName,
+                preparation.outcome,
+                '',
+                'none',
+                undefined,
+                undefined,
+                preparation.knownAppHosts));
+        }
+
+        return createToolResult(await this._service.stop(options.input, token, preparation.target));
     }
 }
 
@@ -662,6 +897,29 @@ function isStopInput(value: unknown): value is AppHostStopToolInput {
 
 function isLifecycleMode(value: unknown): value is AppHostLifecycleMode {
     return value === 'run' || value === 'debug';
+}
+
+function createStartPreparationKey(input: unknown): string {
+    const appHostPath = typeof input === 'object' && input !== null
+        ? (input as Partial<AppHostStartToolInput>).appHostPath
+        : undefined;
+    const mode = typeof input === 'object' && input !== null
+        ? (input as Partial<AppHostStartToolInput>).mode
+        : undefined;
+    return createPreparationKey(appHostPath, mode);
+}
+
+function createStopPreparationKey(input: unknown): string {
+    const appHostPath = typeof input === 'object' && input !== null
+        ? (input as Partial<AppHostStopToolInput>).appHostPath
+        : undefined;
+    return createPreparationKey(appHostPath);
+}
+
+function createPreparationKey(...values: readonly unknown[]): string {
+    return values.map(value => typeof value === 'string'
+        ? `string:${value.length}:${value}`
+        : `${typeof value}:`).join('|');
 }
 
 function isAbsolutePath(value: string): boolean {

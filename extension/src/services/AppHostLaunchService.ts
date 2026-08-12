@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import { randomUUID } from 'crypto';
 import * as vscode from 'vscode';
 import { AspireCommandType, AspireExtendedDebugConfiguration } from '../dcp/types';
+import { appHostSelectionOriginConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
 import { startDebuggingDeclined } from '../loc/strings';
 import { canonicalizeAppHostPath, getAppHostPathComparisonKey, isSameAppHost } from '../utils/appHostIdentity';
 import { classifyAppHostDirectory, classifyAppHostPath } from '../utils/appHostLanguage';
@@ -215,6 +216,7 @@ export class AppHostLaunchService implements vscode.Disposable {
                 command,
                 noDebug,
                 [appHostLaunchClaimIdConfigKey]: claim.id,
+                [appHostSelectionOriginConfigKey]: 'user-selection',
             };
 
             if (doStep) {

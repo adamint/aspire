@@ -33,6 +33,7 @@ interface AppHostLifecycleToolServiceTestAccess {
             readonly selector: string;
         }[];
         readonly hadFailures: boolean;
+        readonly hadSuppressedCandidates: boolean;
     }>;
 }
 
@@ -410,14 +411,405 @@ suite('AppHost lifecycle language model tools', () => {
         assert.strictEqual(stoppedSessions.length, 0);
     });
 
-    test('rejects absolute and unknown selectors without reading them as filesystem targets', async () => {
+    test('rejects absolute selectors without reading them as filesystem targets', async () => {
         const absoluteResult = await service.start({ appHostPath, mode: 'run' }, token);
-        const unknownResult = await service.start({ appHostPath: 'Other/AppHost.csproj', mode: 'run' }, token);
 
         assert.strictEqual(absoluteResult.outcome, 'invalidInput');
-        assert.strictEqual(unknownResult.outcome, 'unknownAppHost');
-        assert.deepStrictEqual(unknownResult.knownAppHosts, ['AppHost/AppHost.csproj']);
         assert.strictEqual(launchService.launchCalls.length, 0);
+    });
+
+    test('auto-selects the only discovered AppHost before requesting start confirmation', async () => {
+        const tool = new AppHostStartLanguageModelTool(service);
+        const prepareInput = { appHostPath: 'the discovered AppHost', mode: 'run' as const };
+
+        const prepared = await tool.prepareInvocation({ input: prepareInput }, token);
+        const result = getToolResult(await tool.invoke({
+            input: { ...prepareInput },
+            toolInvocationToken: undefined,
+        }, token));
+
+        assert.strictEqual(
+            getMarkdownValue(prepared.confirmationMessages?.message),
+            'Start&nbsp;the&nbsp;Aspire&nbsp;AppHost&nbsp;AppHost/AppHost.csproj&nbsp;in&nbsp;run&nbsp;mode?');
+        assert.strictEqual(result.outcome, 'started');
+        assert.strictEqual(result.appHostPath, 'AppHost/AppHost.csproj');
+        assert.deepStrictEqual(launchService.launchCalls.map(call => call.appHostPath), [path.resolve(appHostPath)]);
+    });
+
+    test('does not auto-select a sole safe AppHost for an identity-changing selector', async () => {
+        const tool = new AppHostStartLanguageModelTool(service);
+        const input = { appHostPath: `AppHost/Bad\u202E.csproj`, mode: 'run' as const };
+
+        const prepared = await tool.prepareInvocation({ input }, token);
+        const result = getToolResult(await tool.invoke({
+            input,
+            toolInvocationToken: undefined,
+        }, token));
+
+        assert.strictEqual(prepared.confirmationMessages, undefined);
+        assert.strictEqual(result.outcome, 'invalidInput');
+        assert.strictEqual(launchService.launchCalls.length, 0);
+    });
+
+    test('does not auto-select when another discovered candidate is unsafe to expose', async () => {
+        const unsafeAppHostPath = path.join(workspaceRoot, 'Unsafe', `Bad\u202E.csproj`);
+        fs.mkdirSync(path.dirname(unsafeAppHostPath), { recursive: true });
+        fs.writeFileSync(unsafeAppHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        discoveryService.candidatesByFolder.set(workspaceRoot, [
+            createCandidate(appHostPath),
+            createCandidate(unsafeAppHostPath),
+        ]);
+        const tool = new AppHostStartLanguageModelTool(service);
+        const input = { appHostPath: 'the discovered AppHost', mode: 'run' as const };
+
+        const prepared = await tool.prepareInvocation({ input }, token);
+        const result = getToolResult(await tool.invoke({
+            input,
+            toolInvocationToken: undefined,
+        }, token));
+
+        assert.strictEqual(prepared.confirmationMessages, undefined);
+        assert.strictEqual(result.outcome, 'unknownAppHost');
+        assert.deepStrictEqual(result.knownAppHosts, ['AppHost/AppHost.csproj']);
+        assert.strictEqual(launchService.launchCalls.length, 0);
+    });
+
+    test('does not start a different sole AppHost when discovery changes after confirmation', async () => {
+        const tool = new AppHostStartLanguageModelTool(service);
+        const input = { appHostPath: 'the discovered AppHost', mode: 'run' as const };
+        const prepared = await tool.prepareInvocation({ input }, token);
+        const secondAppHostPath = path.join(workspaceRoot, 'SecondAppHost', 'SecondAppHost.csproj');
+        fs.mkdirSync(path.dirname(secondAppHostPath), { recursive: true });
+        fs.writeFileSync(secondAppHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        discoveryService.candidatesByFolder.set(workspaceRoot, [createCandidate(secondAppHostPath)]);
+
+        const result = getToolResult(await tool.invoke({
+            input,
+            toolInvocationToken: undefined,
+        }, token));
+
+        assert.ok(prepared.confirmationMessages);
+        assert.strictEqual(result.outcome, 'unknownAppHost');
+        assert.deepStrictEqual(result.knownAppHosts, ['SecondAppHost/SecondAppHost.csproj']);
+        assert.strictEqual(launchService.launchCalls.length, 0);
+    });
+
+    test('does not stop a different sole AppHost when discovery changes after confirmation', async () => {
+        const tool = new AppHostStopLanguageModelTool(service);
+        const input = { appHostPath: 'the discovered AppHost' };
+        const prepared = await tool.prepareInvocation({ input }, token);
+        const secondAppHostPath = path.join(workspaceRoot, 'SecondAppHost', 'SecondAppHost.csproj');
+        fs.mkdirSync(path.dirname(secondAppHostPath), { recursive: true });
+        fs.writeFileSync(secondAppHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        discoveryService.candidatesByFolder.set(workspaceRoot, [createCandidate(secondAppHostPath)]);
+        debugSessions.push(createDebugSession(secondAppHostPath, false, stoppedSession => stoppedSessions.push(stoppedSession)));
+
+        const result = getToolResult(await tool.invoke({
+            input,
+            toolInvocationToken: undefined,
+        }, token));
+
+        assert.ok(prepared.confirmationMessages);
+        assert.strictEqual(result.outcome, 'unknownAppHost');
+        assert.deepStrictEqual(result.knownAppHosts, ['SecondAppHost/SecondAppHost.csproj']);
+        assert.deepStrictEqual(stoppedSessions, []);
+    });
+
+    test('does not start when an unresolved preparation becomes an exact selector before invocation', async () => {
+        const tool = new AppHostStartLanguageModelTool(service);
+        const input = { appHostPath: 'Future/Future.csproj', mode: 'run' as const };
+        const secondAppHostPath = path.join(workspaceRoot, 'SecondAppHost', 'SecondAppHost.csproj');
+        fs.mkdirSync(path.dirname(secondAppHostPath), { recursive: true });
+        fs.writeFileSync(secondAppHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        discoveryService.candidatesByFolder.set(workspaceRoot, [
+            createCandidate(appHostPath),
+            createCandidate(secondAppHostPath),
+        ]);
+        const prepared = await tool.prepareInvocation({ input }, token);
+        const futureAppHostPath = path.join(workspaceRoot, 'Future', 'Future.csproj');
+        fs.mkdirSync(path.dirname(futureAppHostPath), { recursive: true });
+        fs.writeFileSync(futureAppHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        discoveryService.candidatesByFolder.set(workspaceRoot, [createCandidate(futureAppHostPath)]);
+
+        const result = getToolResult(await tool.invoke({
+            input: { ...input },
+            toolInvocationToken: undefined,
+        }, token));
+
+        assert.strictEqual(prepared.confirmationMessages, undefined);
+        assert.strictEqual(result.outcome, 'unknownAppHost');
+        assert.deepStrictEqual(result.knownAppHosts, [
+            'AppHost/AppHost.csproj',
+            'SecondAppHost/SecondAppHost.csproj',
+        ]);
+        assert.strictEqual(launchService.launchCalls.length, 0);
+    });
+
+    test('does not stop when an unresolved preparation becomes an exact selector before invocation', async () => {
+        const tool = new AppHostStopLanguageModelTool(service);
+        const input = { appHostPath: 'Future/Future.csproj' };
+        const secondAppHostPath = path.join(workspaceRoot, 'SecondAppHost', 'SecondAppHost.csproj');
+        fs.mkdirSync(path.dirname(secondAppHostPath), { recursive: true });
+        fs.writeFileSync(secondAppHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        discoveryService.candidatesByFolder.set(workspaceRoot, [
+            createCandidate(appHostPath),
+            createCandidate(secondAppHostPath),
+        ]);
+        const prepared = await tool.prepareInvocation({ input }, token);
+        const futureAppHostPath = path.join(workspaceRoot, 'Future', 'Future.csproj');
+        fs.mkdirSync(path.dirname(futureAppHostPath), { recursive: true });
+        fs.writeFileSync(futureAppHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        discoveryService.candidatesByFolder.set(workspaceRoot, [createCandidate(futureAppHostPath)]);
+        debugSessions.push(createDebugSession(futureAppHostPath, false, stoppedSession => stoppedSessions.push(stoppedSession)));
+
+        const result = getToolResult(await tool.invoke({
+            input: { ...input },
+            toolInvocationToken: undefined,
+        }, token));
+
+        assert.strictEqual(prepared.confirmationMessages, undefined);
+        assert.strictEqual(result.outcome, 'unknownAppHost');
+        assert.deepStrictEqual(result.knownAppHosts, [
+            'AppHost/AppHost.csproj',
+            'SecondAppHost/SecondAppHost.csproj',
+        ]);
+        assert.deepStrictEqual(stoppedSessions, []);
+    });
+
+    test('fails closed when lifecycle tools are invoked without preparation', async () => {
+        const startTool = new AppHostStartLanguageModelTool(service);
+        const stopTool = new AppHostStopLanguageModelTool(service);
+        debugSessions.push(createDebugSession(appHostPath, false, stoppedSession => stoppedSessions.push(stoppedSession)));
+
+        const startResult = getToolResult(await startTool.invoke({
+            input: { appHostPath: 'AppHost/AppHost.csproj', mode: 'run' },
+            toolInvocationToken: undefined,
+        }, token));
+        const stopResult = getToolResult(await stopTool.invoke({
+            input: { appHostPath: 'AppHost/AppHost.csproj' },
+            toolInvocationToken: undefined,
+        }, token));
+
+        assert.strictEqual(startResult.outcome, 'failed');
+        assert.strictEqual(stopResult.outcome, 'failed');
+        assert.strictEqual(launchService.launchCalls.length, 0);
+        assert.deepStrictEqual(stoppedSessions, []);
+    });
+
+    test('fails duplicate start preparations closed when one becomes unresolved', async () => {
+        const tool = new AppHostStartLanguageModelTool(service);
+        const firstInput = { appHostPath: 'the discovered AppHost', mode: 'run' as const };
+        const secondInput = { ...firstInput };
+        const firstPrepared = await tool.prepareInvocation({ input: firstInput }, token);
+        const secondAppHostPath = path.join(workspaceRoot, 'SecondAppHost', 'SecondAppHost.csproj');
+        fs.mkdirSync(path.dirname(secondAppHostPath), { recursive: true });
+        fs.writeFileSync(secondAppHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        discoveryService.candidatesByFolder.set(workspaceRoot, [
+            createCandidate(appHostPath),
+            createCandidate(secondAppHostPath),
+        ]);
+        const secondPrepared = await tool.prepareInvocation({ input: secondInput }, token);
+
+        const secondResult = getToolResult(await tool.invoke({
+            input: secondInput,
+            toolInvocationToken: undefined,
+        }, token));
+        const firstResult = getToolResult(await tool.invoke({
+            input: firstInput,
+            toolInvocationToken: undefined,
+        }, token));
+
+        assert.ok(firstPrepared.confirmationMessages);
+        assert.strictEqual(secondPrepared.confirmationMessages, undefined);
+        assert.strictEqual(secondResult.outcome, 'failed');
+        assert.strictEqual(firstResult.outcome, 'failed');
+        assert.strictEqual(launchService.launchCalls.length, 0);
+    });
+
+    test('fails duplicate stop preparations closed when one becomes unresolved', async () => {
+        const tool = new AppHostStopLanguageModelTool(service);
+        const firstInput = { appHostPath: 'the discovered AppHost' };
+        const secondInput = { ...firstInput };
+        debugSessions.push(createDebugSession(appHostPath, false, stoppedSession => stoppedSessions.push(stoppedSession)));
+        const firstPrepared = await tool.prepareInvocation({ input: firstInput }, token);
+        const secondAppHostPath = path.join(workspaceRoot, 'SecondAppHost', 'SecondAppHost.csproj');
+        fs.mkdirSync(path.dirname(secondAppHostPath), { recursive: true });
+        fs.writeFileSync(secondAppHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        discoveryService.candidatesByFolder.set(workspaceRoot, [
+            createCandidate(appHostPath),
+            createCandidate(secondAppHostPath),
+        ]);
+        const secondPrepared = await tool.prepareInvocation({ input: secondInput }, token);
+
+        const secondResult = getToolResult(await tool.invoke({
+            input: secondInput,
+            toolInvocationToken: undefined,
+        }, token));
+        const firstResult = getToolResult(await tool.invoke({
+            input: firstInput,
+            toolInvocationToken: undefined,
+        }, token));
+
+        assert.ok(firstPrepared.confirmationMessages);
+        assert.strictEqual(secondPrepared.confirmationMessages, undefined);
+        assert.strictEqual(secondResult.outcome, 'failed');
+        assert.strictEqual(firstResult.outcome, 'failed');
+        assert.deepStrictEqual(stoppedSessions, []);
+    });
+
+    test('fails duplicate start preparations closed when they resolve different targets', async () => {
+        const tool = new AppHostStartLanguageModelTool(service);
+        const firstInput = { appHostPath: 'the discovered AppHost', mode: 'run' as const };
+        const secondInput = { ...firstInput };
+        const firstPrepared = await tool.prepareInvocation({ input: firstInput }, token);
+        const secondAppHostPath = path.join(workspaceRoot, 'SecondAppHost', 'SecondAppHost.csproj');
+        fs.mkdirSync(path.dirname(secondAppHostPath), { recursive: true });
+        fs.writeFileSync(secondAppHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        discoveryService.candidatesByFolder.set(workspaceRoot, [createCandidate(secondAppHostPath)]);
+        const secondPrepared = await tool.prepareInvocation({ input: secondInput }, token);
+
+        const secondResult = getToolResult(await tool.invoke({
+            input: secondInput,
+            toolInvocationToken: undefined,
+        }, token));
+        const firstResult = getToolResult(await tool.invoke({
+            input: firstInput,
+            toolInvocationToken: undefined,
+        }, token));
+
+        assert.ok(firstPrepared.confirmationMessages);
+        assert.strictEqual(secondPrepared.confirmationMessages, undefined);
+        assert.strictEqual(secondResult.outcome, 'failed');
+        assert.strictEqual(firstResult.outcome, 'failed');
+        assert.strictEqual(launchService.launchCalls.length, 0);
+    });
+
+    test('fails duplicate stop preparations closed when they resolve different targets', async () => {
+        const tool = new AppHostStopLanguageModelTool(service);
+        const firstInput = { appHostPath: 'the discovered AppHost' };
+        const secondInput = { ...firstInput };
+        const secondAppHostPath = path.join(workspaceRoot, 'SecondAppHost', 'SecondAppHost.csproj');
+        fs.mkdirSync(path.dirname(secondAppHostPath), { recursive: true });
+        fs.writeFileSync(secondAppHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        debugSessions.push(
+            createDebugSession(appHostPath, false, stoppedSession => stoppedSessions.push(stoppedSession)),
+            createDebugSession(secondAppHostPath, false, stoppedSession => stoppedSessions.push(stoppedSession)));
+        const firstPrepared = await tool.prepareInvocation({ input: firstInput }, token);
+        discoveryService.candidatesByFolder.set(workspaceRoot, [createCandidate(secondAppHostPath)]);
+        const secondPrepared = await tool.prepareInvocation({ input: secondInput }, token);
+
+        const secondResult = getToolResult(await tool.invoke({
+            input: secondInput,
+            toolInvocationToken: undefined,
+        }, token));
+        const firstResult = getToolResult(await tool.invoke({
+            input: firstInput,
+            toolInvocationToken: undefined,
+        }, token));
+
+        assert.ok(firstPrepared.confirmationMessages);
+        assert.strictEqual(secondPrepared.confirmationMessages, undefined);
+        assert.strictEqual(secondResult.outcome, 'failed');
+        assert.strictEqual(firstResult.outcome, 'failed');
+        assert.deepStrictEqual(stoppedSessions, []);
+    });
+
+    test('keeps duplicate preparation overflow fail closed', async () => {
+        const tool = new AppHostStartLanguageModelTool(service);
+
+        for (let index = 0; index <= 64; index++) {
+            const input = { appHostPath: `discovered AppHost ${index}`, mode: 'run' as const };
+            const firstPrepared = await tool.prepareInvocation({ input }, token);
+            const duplicatePrepared = await tool.prepareInvocation({ input: { ...input } }, token);
+
+            assert.ok(firstPrepared.confirmationMessages);
+            assert.strictEqual(duplicatePrepared.confirmationMessages, undefined);
+        }
+
+        const oldestInput = { appHostPath: 'discovered AppHost 0', mode: 'run' as const };
+        const prepared = await tool.prepareInvocation({ input: oldestInput }, token);
+        const result = getToolResult(await tool.invoke({
+            input: { ...oldestInput },
+            toolInvocationToken: undefined,
+        }, token));
+
+        assert.strictEqual(prepared.confirmationMessages, undefined);
+        assert.strictEqual(result.outcome, 'failed');
+        assert.strictEqual(launchService.launchCalls.length, 0);
+    });
+
+    test('tombstones an evicted live preparation while keeping the new input usable', async () => {
+        const tool = new AppHostStartLanguageModelTool(service);
+        const firstInput = { appHostPath: 'discovered AppHost 0', mode: 'run' as const };
+
+        for (let index = 0; index < 64; index++) {
+            const prepared = await tool.prepareInvocation({
+                input: { appHostPath: `discovered AppHost ${index}`, mode: 'run' },
+            }, token);
+            assert.ok(prepared.confirmationMessages);
+        }
+
+        const overflowPrepared = await tool.prepareInvocation({
+            input: { appHostPath: 'discovered AppHost overflow', mode: 'run' },
+        }, token);
+        const firstResult = getToolResult(await tool.invoke({
+            input: firstInput,
+            toolInvocationToken: undefined,
+        }, token));
+        const overflowResult = getToolResult(await tool.invoke({
+            input: { appHostPath: 'discovered AppHost overflow', mode: 'run' },
+            toolInvocationToken: undefined,
+        }, token));
+
+        assert.ok(overflowPrepared.confirmationMessages);
+        assert.strictEqual(firstResult.outcome, 'failed');
+        assert.strictEqual(overflowResult.outcome, 'started');
+        assert.strictEqual(launchService.launchCalls.length, 1);
+    });
+
+    test('fails closed after an unconsumed preparation expires', async () => {
+        const clock = sandbox.useFakeTimers({
+            now: Date.now(),
+            toFake: ['Date'],
+        });
+        const tool = new AppHostStartLanguageModelTool(service);
+        const input = { appHostPath: 'the discovered AppHost', mode: 'run' as const };
+        const firstPrepared = await tool.prepareInvocation({ input }, token);
+        clock.tick((5 * 60 * 1000) + 1);
+
+        const secondPrepared = await tool.prepareInvocation({ input: { ...input } }, token);
+        const result = getToolResult(await tool.invoke({
+            input: { ...input },
+            toolInvocationToken: undefined,
+        }, token));
+
+        assert.ok(firstPrepared.confirmationMessages);
+        assert.strictEqual(secondPrepared.confirmationMessages, undefined);
+        assert.strictEqual(result.outcome, 'failed');
+        assert.strictEqual(launchService.launchCalls.length, 0);
+    });
+
+    test('keeps distinct inputs usable after an unconsumed preparation expires', async () => {
+        const clock = sandbox.useFakeTimers({
+            now: Date.now(),
+            toFake: ['Date'],
+        });
+        const tool = new AppHostStartLanguageModelTool(service);
+        const abandonedInput = { appHostPath: 'the discovered AppHost', mode: 'run' as const };
+        const abandonedPrepared = await tool.prepareInvocation({ input: abandonedInput }, token);
+        clock.tick((5 * 60 * 1000) + 1);
+        const distinctInput = { appHostPath: 'AppHost/AppHost.csproj', mode: 'run' as const };
+
+        const distinctPrepared = await tool.prepareInvocation({ input: distinctInput }, token);
+        const result = getToolResult(await tool.invoke({
+            input: { ...distinctInput },
+            toolInvocationToken: undefined,
+        }, token));
+
+        assert.ok(abandonedPrepared.confirmationMessages);
+        assert.ok(distinctPrepared.confirmationMessages);
+        assert.strictEqual(result.outcome, 'started');
+        assert.strictEqual(launchService.launchCalls.length, 1);
     });
 
     test('POSIX selectors distinguish literal backslashes from path separators', async () => {
@@ -438,6 +830,7 @@ suite('AppHost lifecycle language model tools', () => {
                 },
             ],
             hadFailures: false,
+            hadSuppressedCandidates: false,
         });
 
         const backslashResult = await service.start({ appHostPath: 'foo\\bar.csproj', mode: 'run' }, token);
@@ -469,6 +862,7 @@ suite('AppHost lifecycle language model tools', () => {
                 },
             ],
             hadFailures: false,
+            hadSuppressedCandidates: false,
         });
 
         const driveResult = await service.start({ appHostPath: 'C:\\AppHost.csproj', mode: 'run' }, token);
@@ -492,6 +886,7 @@ suite('AppHost lifecycle language model tools', () => {
                 selector: 'foo/bar.csproj',
             }],
             hadFailures: false,
+            hadSuppressedCandidates: false,
         });
 
         const relativeResult = await service.start({ appHostPath: 'foo\\bar.csproj', mode: 'run' }, token);
@@ -557,7 +952,7 @@ suite('AppHost lifecycle language model tools', () => {
         assert.strictEqual(result.outcome, 'cancelled');
     });
 
-    test('does not echo unresolved or identity-changing paths into confirmations', async () => {
+    test('does not request confirmation for unresolved or identity-changing paths', async () => {
         const unsafePath = path.join(workspaceRoot, 'AppHost', `Bad\u202E.csproj`);
         fs.writeFileSync(unsafePath, '<Project Sdk="Microsoft.NET.Sdk" />');
         discoveryService.candidatesByFolder.set(workspaceRoot, [createCandidate(unsafePath)]);
@@ -567,10 +962,36 @@ suite('AppHost lifecycle language model tools', () => {
             input: { appHostPath: `AppHost/Bad\u202E.csproj`, mode: 'run' },
         }, token);
 
-        assert.strictEqual(prepared.confirmationMessages?.title, 'Start Aspire AppHost');
-        assert.strictEqual(
-            getMarkdownValue(prepared.confirmationMessages?.message),
-            'Start&nbsp;the&nbsp;Aspire&nbsp;AppHost&nbsp;an&nbsp;unresolved&nbsp;path&nbsp;in&nbsp;run&nbsp;mode?');
+        assert.strictEqual(prepared.confirmationMessages, undefined);
+    });
+
+    test('returns candidates without confirmation when multiple AppHosts are discovered', async () => {
+        const secondAppHostPath = path.join(workspaceRoot, 'SecondAppHost', 'SecondAppHost.csproj');
+        fs.mkdirSync(path.dirname(secondAppHostPath), { recursive: true });
+        fs.writeFileSync(secondAppHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        discoveryService.candidatesByFolder.set(workspaceRoot, [
+            createCandidate(appHostPath),
+            createCandidate(secondAppHostPath),
+        ]);
+        const startTool = new AppHostStartLanguageModelTool(service);
+        const stopTool = new AppHostStopLanguageModelTool(service);
+
+        const startPrepared = await startTool.prepareInvocation({
+            input: { appHostPath: 'the discovered AppHost', mode: 'run' },
+        }, token);
+        const stopPrepared = await stopTool.prepareInvocation({
+            input: { appHostPath: 'the discovered AppHost' },
+        }, token);
+        const result = await service.start({ appHostPath: 'the discovered AppHost', mode: 'run' }, token);
+
+        assert.strictEqual(startPrepared.confirmationMessages, undefined);
+        assert.strictEqual(stopPrepared.confirmationMessages, undefined);
+        assert.strictEqual(result.outcome, 'unknownAppHost');
+        assert.deepStrictEqual(result.knownAppHosts, [
+            'AppHost/AppHost.csproj',
+            'SecondAppHost/SecondAppHost.csproj',
+        ]);
+        assert.strictEqual(launchService.launchCalls.length, 0);
     });
 
     test('escapes Markdown metacharacters in start invocation and confirmation text while resolving the raw selector', async () => {
@@ -624,7 +1045,15 @@ suite('AppHost lifecycle language model tools', () => {
     });
 
     test('distinguishes generated Unicode escapes from literal backslash sequences in invocation and confirmation text', async () => {
-        sandbox.stub(service, 'describeTarget').resolves(`AppHost/Actual\u2028Literal\\u2028.csproj`);
+        const preparedPath = path.resolve(workspaceRoot, 'AppHost', `Actual\u2028Literal\\u2028.csproj`);
+        sandbox.stub(service, 'prepareResolution').resolves({
+            resolved: true,
+            target: {
+                launchPath: preparedPath,
+                absolutePath: preparedPath,
+                selector: `AppHost/Actual\u2028Literal\\u2028.csproj`,
+            },
+        });
         const tool = new AppHostStartLanguageModelTool(service);
 
         const prepared = await tool.prepareInvocation({
@@ -664,9 +1093,11 @@ suite('AppHost lifecycle language model tools', () => {
 
     test('serializes tool results as one bounded text part', async () => {
         const tool = new AppHostStartLanguageModelTool(service);
+        const input = { appHostPath: 'AppHost/AppHost.csproj', mode: 'run' as const };
+        await tool.prepareInvocation({ input }, token);
 
         const result = await tool.invoke({
-            input: { appHostPath: 'AppHost/AppHost.csproj', mode: 'run' },
+            input: { ...input },
             toolInvocationToken: undefined,
         }, token);
 
@@ -746,6 +1177,13 @@ function normalizeLexicalPath(value: string): string {
 function getMarkdownValue(value: string | vscode.MarkdownString | undefined): string {
     assert.ok(value instanceof vscode.MarkdownString);
     return value.value;
+}
+
+function getToolResult(value: vscode.LanguageModelToolResult): AppHostLifecycleToolResult {
+    const content = value.content as Array<{ value?: unknown }>;
+    assert.strictEqual(content.length, 1);
+    assert.strictEqual(typeof content[0].value, 'string');
+    return JSON.parse(content[0].value as string) as AppHostLifecycleToolResult;
 }
 
 function createCandidate(candidatePath: string): CandidateAppHostDisplayInfo {

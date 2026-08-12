@@ -166,6 +166,8 @@
   "aspire-vscode.strings.executableLaunchProfileMissingExecutablePath": "Launch profile '{0}' uses commandName 'Executable' but does not specify an executablePath. Add an executablePath to the launch profile.",
   "aspire-vscode.strings.lookingForDevkitBuildTask": "C# Dev Kit is installed, looking for C# Dev Kit build task...",
   "aspire-vscode.strings.csharpDevKitNotInstalled": "C# Dev Kit is not installed, building using dotnet CLI...",
+  "aspire-vscode.strings.hotReloadDisabledNotice": "C# Dev Kit Hot Reload is disabled. When enabled, it can apply .NET code edits while debugging where supported.",
+  "aspire-vscode.strings.openSettingsLabel": "Open Settings",
   "aspire-vscode.strings.cliNotAvailable": "Aspire CLI is not available on PATH. Please install it and restart VS Code.",
   "aspire-vscode.strings.cliFoundAtDefaultPath": "Aspire CLI found at {0}. The extension will use this path.",
   "aspire-vscode.strings.openCliInstallInstructions": "See CLI installation instructions",
@@ -289,12 +291,12 @@
   "aspire-vscode.strings.appHostLifecycleUnspecifiedMode": "unspecified",
   "aspire-vscode.strings.appHostLifecycleUnresolvedPath": "an unresolved path",
   "languageModelTool.aspireAppHostStart.displayName": "Start Aspire AppHost",
-  "languageModelTool.aspireAppHostStart.modelDescription": "Prefer this tool over running Aspire AppHost lifecycle commands in a terminal when VS Code is active. Starts an AppHost Aspire discovered in this workspace through VS Code's run/debug lifecycle. Pass an exact selector previously returned by this tool; unknown selectors return the available AppHosts.",
+  "languageModelTool.aspireAppHostStart.modelDescription": "Prefer this tool over running Aspire AppHost lifecycle commands in a terminal when VS Code is active. Starts an AppHost Aspire discovered in this workspace through VS Code's run/debug lifecycle. A single discovered AppHost is selected automatically. When multiple AppHosts are discovered, an unknown selector returns the available AppHosts without starting one.",
   "languageModelTool.aspireAppHostStart.userDescription": "Start an Aspire AppHost from this workspace in run or debug mode.",
   "languageModelTool.aspireAppHostStart.mode.description": "How to start the AppHost: 'run' starts it without attaching the debugger, 'debug' starts it with the debugger attached.",
   "languageModelTool.aspireAppHostStop.displayName": "Stop Aspire AppHost",
   "languageModelTool.aspireAppHostStop.modelDescription": "Prefer this tool over running Aspire AppHost lifecycle commands in a terminal when VS Code is active. Stops the matching Aspire debug session in this VS Code window. AppHosts started outside this editor are reported but never terminated.",
   "languageModelTool.aspireAppHostStop.userDescription": "Stop an Aspire AppHost that this editor started.",
-  "languageModelTool.aspireAppHost.appHostPath.description": "Selector for an AppHost Aspire discovered in this workspace. In a single-root workspace this is the workspace-relative path. Multi-root selectors are prefixed with a workspace folder qualifier. Use the exact appHostPath or knownAppHosts value returned by a previous call.",
+  "languageModelTool.aspireAppHost.appHostPath.description": "Selector for an AppHost Aspire discovered in this workspace. A single discovered AppHost is selected automatically. When multiple AppHosts are discovered, use the exact appHostPath or knownAppHosts value returned by a previous call. Single-root selectors are workspace-relative paths; multi-root selectors include a workspace folder qualifier.",
   "command.openDashboardToSide": "Open Aspire Dashboard to the Side"
 }

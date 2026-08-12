@@ -106,6 +106,9 @@
     <trans-unit id="aspire-vscode.strings.buildFailedWithExitCode">
       <source xml:lang="en">Build failed with exit code {0}.</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.hotReloadDisabledNotice">
+      <source xml:lang="en">C# Dev Kit Hot Reload is disabled. When enabled, it can apply .NET code edits while debugging where supported.</source>
+    </trans-unit>
     <trans-unit id="aspire-vscode.strings.lookingForDevkitBuildTask">
       <source xml:lang="en">C# Dev Kit is installed, looking for C# Dev Kit build task...</source>
     </trans-unit>
@@ -496,6 +499,9 @@
     <trans-unit id="command.openTerminal">
       <source xml:lang="en">Open Aspire terminal</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.openSettingsLabel">
+      <source xml:lang="en">Open Settings</source>
+    </trans-unit>
     <trans-unit id="aspire-vscode.strings.codespacesLink">
       <source xml:lang="en">Open codespaces URL</source>
     </trans-unit>
@@ -548,7 +554,7 @@
       <source xml:lang="en">Polling interval in milliseconds for fetching running AppHosts. Minimum: 1000.</source>
     </trans-unit>
     <trans-unit id="languageModelTool.aspireAppHostStart.modelDescription">
-      <source xml:lang="en">Prefer this tool over running Aspire AppHost lifecycle commands in a terminal when VS Code is active. Starts an AppHost Aspire discovered in this workspace through VS Code&apos;s run/debug lifecycle. Pass an exact selector previously returned by this tool; unknown selectors return the available AppHosts.</source>
+      <source xml:lang="en">Prefer this tool over running Aspire AppHost lifecycle commands in a terminal when VS Code is active. Starts an AppHost Aspire discovered in this workspace through VS Code&apos;s run/debug lifecycle. A single discovered AppHost is selected automatically. When multiple AppHosts are discovered, an unknown selector returns the available AppHosts without starting one.</source>
     </trans-unit>
     <trans-unit id="languageModelTool.aspireAppHostStop.modelDescription">
       <source xml:lang="en">Prefer this tool over running Aspire AppHost lifecycle commands in a terminal when VS Code is active. Stops the matching Aspire debug session in this VS Code window. AppHosts started outside this editor are reported but never terminated.</source>
@@ -647,7 +653,7 @@
       <source xml:lang="en">Select what should happen with the Aspire Dashboard when this launch configuration starts</source>
     </trans-unit>
     <trans-unit id="languageModelTool.aspireAppHost.appHostPath.description">
-      <source xml:lang="en">Selector for an AppHost Aspire discovered in this workspace. In a single-root workspace this is the workspace-relative path. Multi-root selectors are prefixed with a workspace folder qualifier. Use the exact appHostPath or knownAppHosts value returned by a previous call.</source>
+      <source xml:lang="en">Selector for an AppHost Aspire discovered in this workspace. A single discovered AppHost is selected automatically. When multiple AppHosts are discovered, use the exact appHostPath or knownAppHosts value returned by a previous call. Single-root selectors are workspace-relative paths; multi-root selectors include a workspace folder qualifier.</source>
     </trans-unit>
     <trans-unit id="configuration.aspire.enableCodeLens">
       <source xml:lang="en">Show CodeLens actions (state, restart, stop, logs) inline above resource declarations in AppHost files.</source>
