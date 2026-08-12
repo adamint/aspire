@@ -112,10 +112,10 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     stop: Promise<void>;
     retryOnNextShutdown: boolean;
   }[] = [];
-  // Publish resource start ownership before invoking VS Code. The start event can arrive after the
-  // ordinary session snapshot, so shutdown must wait for every accepted start to either register
-  // normally or enqueue its late stop before the final drain can complete.
-  private readonly _pendingResourceDebugSessionStarts = new Set<{
+  // Publish debug-session start ownership before invoking VS Code. Start events can arrive after
+  // the ordinary session snapshot, so shutdown must wait for every accepted resource or dashboard
+  // start to either register normally or enqueue its late stop before the final drain can complete.
+  private readonly _pendingDebugSessionStarts = new Set<{
     name: string;
     completion: Promise<void>;
   }>();
@@ -255,13 +255,15 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   }
 
   /**
-   * Whether any session this Aspire session owns has yet to be asked to stop. Drives both the
+   * Whether any owned session or accepted start still needs shutdown ownership. Drives both the
    * post-disposal no-op and the retry-after-failure path in {@link stopDebugging}.
    */
   private get hasSessionsToStop(): boolean {
     return this._resourceDebugSessions.length > 0
       || (this._appHostDebugSession !== undefined && !this._appHostStopped)
+      || this._dashboardDebugSession !== null
       || this._lateResourceStops.length > 0
+      || this._pendingDebugSessionStarts.size > 0
       || !this._parentStopped;
   }
 
@@ -306,20 +308,26 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // session exits. Stop those sessions before the AppHost to avoid waiting on a process whose
     // debugger would otherwise only be stopped later by dispose().
     const resourceDebugSessions = this._resourceDebugSessions.filter(session => session.id !== this._appHostDebugSession?.id);
+    const dashboardStop = this.stopDashboardWithinBudget(deadline);
     // Deliberately allSettled rather than Promise.all. Promise.all settles on the first rejection,
     // which would start the AppHost stop while the remaining resource stops were still in flight
     // and reintroduce the orphaned-resource behavior this ordering exists to prevent - on exactly
     // the path where a resource is most likely to be left behind. The rejection is kept and
     // rethrown after the AppHost and the synthetic Aspire parent have been stopped.
-    const results = await Promise.allSettled(resourceDebugSessions.map(
-      session => this.stopWithinBudget(
-        () => session.stopSession(),
-        session.session.name,
-        deadline,
-        () => session.resetStopSessionAttempt?.())));
-    const stopFailures: unknown[] = results
+    const [dashboardResults, results] = await Promise.all([
+      Promise.allSettled(dashboardStop ? [dashboardStop] : []),
+      Promise.allSettled(resourceDebugSessions.map(
+        session => this.stopWithinBudget(
+          () => session.stopSession(),
+          session.session.name,
+          deadline,
+          () => session.resetStopSessionAttempt?.()))),
+    ]);
+    const stopFailures: unknown[] = dashboardResults.flatMap(
+      result => result.status === 'rejected' ? [result.reason] : []);
+    stopFailures.push(...results
       .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-      .map(result => result.reason);
+      .map(result => result.reason));
 
     // Forget the sessions that confirmed a stop. A retry after a failed shutdown then targets only
     // what is still running, instead of calling stopSession() again on sessions VS Code has already
@@ -328,7 +336,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     this._resourceDebugSessions = this._resourceDebugSessions.filter(
       session => unstoppedResourceSessions.has(session) || session.id === this._appHostDebugSession?.id);
 
-    let pendingStartBudgetExhausted = await this.drainPendingResourceDebugSessionStarts(deadline, stopFailures);
+    let pendingStartBudgetExhausted = await this.drainPendingDebugSessionStarts(deadline, stopFailures);
     await this.drainLateResourceStops(deadline, stopFailures);
 
     // Global/E2E stop requests target the synthetic Aspire session. Stop the real AppHost session
@@ -351,7 +359,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     }
 
     if (!pendingStartBudgetExhausted) {
-      pendingStartBudgetExhausted = await this.drainPendingResourceDebugSessionStarts(deadline, stopFailures);
+      pendingStartBudgetExhausted = await this.drainPendingDebugSessionStarts(deadline, stopFailures);
     }
     await this.drainLateResourceStops(deadline, stopFailures);
 
@@ -365,16 +373,54 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     }
 
     if (!pendingStartBudgetExhausted) {
-      await this.drainPendingResourceDebugSessionStarts(deadline, stopFailures);
+      await this.drainPendingDebugSessionStarts(deadline, stopFailures);
     }
     await this.drainLateResourceStops(deadline, stopFailures);
 
     return stopFailures;
   }
 
-  private async drainPendingResourceDebugSessionStarts(deadline: number, stopFailures: unknown[]): Promise<boolean> {
-    while (this._pendingResourceDebugSessionStarts.size > 0) {
-      const pendingStarts = [...this._pendingResourceDebugSessionStarts];
+  private stopDashboardWithinBudget(deadline: number): Promise<void> | undefined {
+    const dashboardDebugSession = this._dashboardDebugSession;
+    if (!dashboardDebugSession) {
+      return undefined;
+    }
+
+    const shouldClose = vscode.workspace.getConfiguration('aspire').get<boolean>('closeDashboardOnDebugEnd', true);
+    if (!shouldClose) {
+      this._dashboardDebugSession = null;
+      return undefined;
+    }
+
+    extensionLogOutputChannel.info('Closing dashboard browser...');
+    const stop = startStop(() => vscode.debug.stopDebugging(dashboardDebugSession).then(() => { }));
+    return this.waitWithinBudget(stop, dashboardDebugSession.name, deadline).then(() => {
+      if (this._dashboardDebugSession?.id === dashboardDebugSession.id) {
+        this._dashboardDebugSession = null;
+      }
+      extensionLogOutputChannel.info('Dashboard debug session stopped.');
+    });
+  }
+
+  private stopLateDashboardSession(dashboardDebugSession: vscode.DebugSession): void {
+    const shouldClose = vscode.workspace.getConfiguration('aspire').get<boolean>('closeDashboardOnDebugEnd', true);
+    if (!shouldClose) {
+      return;
+    }
+
+    const lateDashboardSession: AspireResourceDebugSession = {
+      id: dashboardDebugSession.id,
+      session: dashboardDebugSession,
+      stopSession: () => vscode.debug.stopDebugging(dashboardDebugSession).then(() => {
+        extensionLogOutputChannel.info('Dashboard debug session stopped.');
+      }),
+    };
+    this.stopLateResourceSession(lateDashboardSession);
+  }
+
+  private async drainPendingDebugSessionStarts(deadline: number, stopFailures: unknown[]): Promise<boolean> {
+    while (this._pendingDebugSessionStarts.size > 0) {
+      const pendingStarts = [...this._pendingDebugSessionStarts];
       const results = await Promise.allSettled(pendingStarts.map(
         pendingStart => this.waitWithinBudget(
           pendingStart.completion,
@@ -393,6 +439,23 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     }
 
     return false;
+  }
+
+  private beginPendingDebugSessionStart(name: string): () => void {
+    let resolveCompletion!: () => void;
+    const pendingStart = {
+      name,
+      completion: new Promise<void>(resolve => {
+        resolveCompletion = resolve;
+      }),
+    };
+    this._pendingDebugSessionStarts.add(pendingStart);
+
+    return () => {
+      if (this._pendingDebugSessionStarts.delete(pendingStart)) {
+        resolveCompletion();
+      }
+    };
   }
 
   private stopLateResourceSession(session: AspireResourceDebugSession): void {
@@ -1220,21 +1283,9 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   }
 
   startAndGetDebugSession(debugConfig: AspireResourceExtendedDebugConfiguration): Promise<AspireResourceDebugSession | undefined> {
-    let completePendingStart!: () => void;
-    const pendingStart = {
-      name: debugConfig.name,
-      completion: new Promise<void>(resolve => {
-        completePendingStart = resolve;
-      }),
-    };
-    this._pendingResourceDebugSessionStarts.add(pendingStart);
-
+    const completePendingStart = this.beginPendingDebugSessionStart(debugConfig.name);
     const start = this.startAndGetDebugSessionCore(debugConfig);
-    const complete = () => {
-      this._pendingResourceDebugSessionStarts.delete(pendingStart);
-      completePendingStart();
-    };
-    void start.then(complete, complete);
+    void start.then(completePendingStart, completePendingStart);
 
     return start;
   }
@@ -1466,36 +1517,42 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // another session's browser.
     const disposable = vscode.debug.onDidStartDebugSession((session) => {
       if (session.parentSession?.id === this._session.id && session.configuration.name === aspireDashboard && session.type === debugType) {
-        this._dashboardDebugSession = session;
         disposable.dispose();
 
-        // The Aspire session can be disposed while the browser is still launching, for
-        // example when the AppHost exits right after reporting the dashboard URL. Run the
-        // close path again here so the late-arriving browser is not left orphaned.
-        if (this._disposed) {
-          this.closeDashboard();
+        if (this.isShuttingDown) {
+          // Shutdown owns this accepted launch until its stop succeeds or remains retryable.
+          this.stopLateDashboardSession(session);
+          return;
         }
+
+        this._dashboardDebugSession = session;
       }
     });
 
-    // Start as a child debug session so it is stopped alongside this session in `dispose`.
-    const didStart = await vscode.debug.startDebugging(
-      undefined,
-      debugConfig,
-      this._session
-    );
+    const completePendingStart = this.beginPendingDebugSessionStart(aspireDashboard);
+    try {
+      // Start as a child debug session so it is stopped alongside this session in `dispose`.
+      const didStart = await vscode.debug.startDebugging(
+        undefined,
+        debugConfig,
+        this._session
+      );
 
-    if (!didStart) {
-      disposable.dispose();
-      extensionLogOutputChannel.warn(`Failed to start debug browser (${debugType}), falling back to default browser`);
+      if (!didStart) {
+        disposable.dispose();
+        extensionLogOutputChannel.warn(`Failed to start debug browser (${debugType}), falling back to default browser`);
 
-      // Falling back after disposal would pop an untracked browser window open during
-      // teardown, long after the user stopped the session.
-      if (this._disposed) {
-        return;
+        // Falling back after disposal would pop an untracked browser window open during
+        // teardown, long after the user stopped the session.
+        if (this.isShuttingDown) {
+          return;
+        }
+
+        await vscode.env.openExternal(vscode.Uri.parse(url));
       }
-
-      await vscode.env.openExternal(vscode.Uri.parse(url));
+    }
+    finally {
+      completePendingStart();
     }
   }
 

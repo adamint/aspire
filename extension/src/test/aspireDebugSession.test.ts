@@ -765,7 +765,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(spawnStub.called, false);
     });
 
-    test('dispose stops a tracked dashboard debug session when closeDashboardOnDebugEnd is enabled', () => {
+    test('dispose stops a tracked dashboard debug session when closeDashboardOnDebugEnd is enabled', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
             type: 'aspire',
@@ -787,13 +787,14 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         (aspireDebugSession as any)._dashboardDebugSession = dashboardDebugSession;
 
         aspireDebugSession.dispose();
+        await (aspireDebugSession as any)._stopPromise;
 
         assert.strictEqual(stopDebugging.callCount, 2);
         assert.strictEqual(stopDebugging.firstCall.args[0], dashboardDebugSession);
         assert.strictEqual(stopDebugging.secondCall.args[0], parentDebugSession);
     });
 
-    test('dispose leaves a tracked dashboard debug session running when closeDashboardOnDebugEnd is disabled', () => {
+    test('dispose leaves a tracked dashboard debug session running when closeDashboardOnDebugEnd is disabled', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
             type: 'aspire',
@@ -815,6 +816,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         (aspireDebugSession as any)._dashboardDebugSession = dashboardDebugSession;
 
         aspireDebugSession.dispose();
+        await (aspireDebugSession as any)._stopPromise;
 
         sinon.assert.calledOnceWithExactly(stopDebugging, parentDebugSession);
         assert.strictEqual((aspireDebugSession as any)._dashboardDebugSession, null);
@@ -907,6 +909,61 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         assert.strictEqual(stopDebugging.calledWith(dashboardDebugSession), true);
         assert.strictEqual((aspireDebugSession as any)._dashboardDebugSession, null);
+    });
+
+    test('stopDebugging reports and retries a dashboard stop that starts during shutdown', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        const dashboardDebugSession = {
+            id: 'dashboard-session',
+            type: 'pwa-msedge',
+            name: aspireDashboard,
+            configuration: { name: aspireDashboard },
+            parentSession: parentDebugSession,
+        } as unknown as vscode.DebugSession;
+        sinon.stub(vscode.workspace, 'getConfiguration').withArgs('aspire').returns({
+            get: <T>(section: string, defaultValue: T) =>
+                section === 'closeDashboardOnDebugEnd' ? true as T : defaultValue,
+        } as vscode.WorkspaceConfiguration);
+        let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            startSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        let resolveStartDebugging: ((didStart: boolean) => void) | undefined;
+        sinon.stub(vscode.debug, 'startDebugging').returns(new Promise<boolean>(resolve => {
+            resolveStartDebugging = resolve;
+        }));
+        const dashboardStopFailure = new Error('dashboard stop failed');
+        let dashboardStopAttempts = 0;
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(session => {
+            if (session?.id !== dashboardDebugSession.id) {
+                return Promise.resolve();
+            }
+
+            dashboardStopAttempts++;
+            return dashboardStopAttempts === 1
+                ? Promise.reject(dashboardStopFailure)
+                : Promise.resolve();
+        });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+
+        const openPromise = aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
+        await Promise.resolve();
+        const shutdown = aspireDebugSession.stopDebugging();
+        startSessionCallback?.(dashboardDebugSession);
+        resolveStartDebugging?.(true);
+        await openPromise;
+
+        await assert.rejects(shutdown, error => error === dashboardStopFailure);
+        await Promise.resolve();
+        await aspireDebugSession.stopDebugging();
+
+        assert.strictEqual(dashboardStopAttempts, 2);
     });
 
     test('launching the dashboard browser does not fall back to an external browser after the Aspire session was disposed', async () => {
@@ -1657,6 +1714,86 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             stopDebuggingStub.calledWith(resourceDebugSession as unknown as vscode.DebugSession),
             true,
             'A resource accepted after the shutdown deadline must still be stopped immediately');
+        clock.restore();
+    });
+
+    test('stopDebugging retry waits for a resource start that outlived the first shutdown budget', async () => {
+        let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        let resolveStart: ((started: boolean) => void) | undefined;
+        const startRequest = new Promise<boolean>(resolve => {
+            resolveStart = resolve;
+        });
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const resourceDebugSession = {
+            id: 'resource-session',
+            type: 'node',
+            name: 'Resource',
+            configuration: {
+                runId: 'resource-run',
+            },
+        };
+        const debugConfig = {
+            runId: 'resource-run',
+            debugSessionId: 'debug-1',
+            type: 'node',
+            name: 'Resource',
+            request: 'launch',
+            program: '/workspace/app.js',
+            cwd: '/workspace',
+        } as AspireResourceExtendedDebugConfiguration;
+        const terminalProvider = { isDebugConfigEnvironmentLoggingEnabled: () => false };
+        const lateStopFailure = new Error('late resource stop failed');
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        sinon.stub(vscode.workspace, 'getWorkspaceFolder').returns(undefined);
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            startSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').returns({ dispose: sinon.stub() });
+        sinon.stub(vscode.debug, 'startDebugging').returns(startRequest);
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(session => {
+            if (session?.id === resourceDebugSession.id) {
+                return Promise.reject(lateStopFailure);
+            }
+
+            return Promise.resolve();
+        });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+
+        const resourceStart = aspireDebugSession.startAndGetDebugSession(debugConfig);
+        await Promise.resolve();
+        const firstShutdown = aspireDebugSession.stopDebugging();
+        await clock.tickAsync(10_001);
+        await assert.rejects(firstShutdown, /Timed out after 10 seconds waiting for debug session 'Resource' to start/);
+        await Promise.resolve();
+
+        const retry = aspireDebugSession.stopDebugging();
+        let retrySettled = false;
+        void retry.then(
+            () => { retrySettled = true; },
+            () => { retrySettled = true; });
+        await Promise.resolve();
+        assert.strictEqual(retrySettled, false, 'A retry must retain ownership of the unresolved resource start');
+
+        resolveStart!(true);
+        startSessionCallback?.(resourceDebugSession as unknown as vscode.DebugSession);
+        await resourceStart;
+
+        await assert.rejects(retry, error => error === lateStopFailure);
         clock.restore();
     });
 
