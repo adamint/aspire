@@ -14,6 +14,7 @@ internal sealed partial class WslEnvironmentCheck : IEnvironmentCheck
 
     private const string ProcVersionPath = "/proc/version";
     private const string WslDistroNameVariable = "WSL_DISTRO_NAME";
+    private const string WslInteropVariable = "WSL_INTEROP";
 
     private readonly IEnvironment _environment;
     private readonly Func<string?> _readProcVersion;
@@ -44,14 +45,15 @@ internal sealed partial class WslEnvironmentCheck : IEnvironmentCheck
         // Read the kernel banner once and reuse it for both detection and version classification so
         // the two decisions cannot disagree about what the file said.
         var procVersion = _readProcVersion();
+        var hasWslEnvironmentSignal = HasWslEnvironmentSignal();
 
-        if (!IsRunningInWsl(procVersion))
+        if (!IsRunningInWsl(procVersion, hasWslEnvironmentSignal))
         {
             // Running on native Linux, nothing to check
             return Task.FromResult<IReadOnlyList<EnvironmentCheckResult>>([]);
         }
 
-        return Task.FromResult<IReadOnlyList<EnvironmentCheckResult>>([CreateResult(DetermineWslVersion(procVersion))]);
+        return Task.FromResult<IReadOnlyList<EnvironmentCheckResult>>([CreateResult(DetermineWslVersion(procVersion, hasWslEnvironmentSignal))]);
     }
 
     /// <summary>
@@ -84,19 +86,18 @@ internal sealed partial class WslEnvironmentCheck : IEnvironmentCheck
             Status = EnvironmentCheckStatus.Warning,
             Message = "WSL detected but the version could not be determined",
             Details = $"Could not classify the WSL version from {ProcVersionPath}. WSL1 has limited container support, so this environment may not be able to run containers.",
-            // The upgrade is stated conditionally because a custom WSL 2 kernel also lands here. Telling
-            // an unclassified environment to upgrade would reintroduce the unconditional "upgrade to WSL2"
-            // advice this check exists to stop giving to users who are already on WSL 2.
+            // The upgrade is conditional because an established WSL environment with a missing or malformed
+            // kernel banner may already be WSL 2. Unconditional advice could tell that user to upgrade again.
             Fix = "Run 'wsl --list --verbose' from Windows to check the version. If it reports 1, upgrade with: wsl --set-version <distro> 2",
             Link = "https://aka.ms/aspire-prerequisites#wsl-setup"
         }
     };
 
     /// <summary>
-    /// Determines whether the current Linux environment is WSL, using the kernel banner when it is
-    /// readable and falling back to the variable WSL injects into every distribution shell.
+    /// Determines whether the current Linux environment is WSL from an official kernel release or
+    /// an independently observed WSL environment signal.
     /// </summary>
-    private bool IsRunningInWsl(string? procVersion)
+    private static bool IsRunningInWsl(string? procVersion, bool hasWslEnvironmentSignal)
     {
         // Only the kernel release identifies WSL. The rest of the banner is build and compiler identity,
         // which legitimately contains these markers on machines that are not WSL:
@@ -109,21 +110,36 @@ internal sealed partial class WslEnvironmentCheck : IEnvironmentCheck
         //   5.15.90.1-microsoft-standard-WSL2
         // Custom releases such as "6.1.0-custom-WSL2", "6.1.0-microsoft-standard-custom",
         // "6.1.0-custom-microsoft-standard", or "6.1.0-custom-microsoft-standard-WSL2" are not
-        // official kernels and must fall back to the distro-name check instead of being treated as WSL.
+        // official kernels and require a separate environment signal instead of being treated as WSL.
         var kernelRelease = GetKernelRelease(procVersion);
         if (kernelRelease is not null && IsOfficialWslKernelRelease(kernelRelease))
         {
             return true;
         }
 
-        return !string.IsNullOrWhiteSpace(_environment.GetEnvironmentVariable(WslDistroNameVariable));
+        return hasWslEnvironmentSignal;
     }
 
     /// <summary>
-    /// Classifies the WSL version from the contents of <c>/proc/version</c>, returning
-    /// <see cref="WslVersion.Unknown"/> when the contents do not identify a version.
+    /// Returns whether WSL has identified the current shell through a nonblank environment variable.
     /// </summary>
-    internal static WslVersion DetermineWslVersion(string? procVersion)
+    private bool HasWslEnvironmentSignal()
+    {
+        return !string.IsNullOrWhiteSpace(_environment.GetEnvironmentVariable(WslDistroNameVariable))
+            || !string.IsNullOrWhiteSpace(_environment.GetEnvironmentVariable(WslInteropVariable));
+    }
+
+    /// <summary>
+    /// Classifies the WSL version from the contents of <c>/proc/version</c> without environment
+    /// context, returning <see cref="WslVersion.Unknown"/> for custom or unrecognized releases.
+    /// </summary>
+    internal static WslVersion DetermineWslVersion(string? procVersion) =>
+        DetermineWslVersion(procVersion, hasWslEnvironmentSignal: false);
+
+    /// <summary>
+    /// Classifies a detected WSL environment from its kernel banner and shell environment signals.
+    /// </summary>
+    private static WslVersion DetermineWslVersion(string? procVersion, bool hasWslEnvironmentSignal)
     {
         var kernelRelease = GetKernelRelease(procVersion);
         if (kernelRelease is null)
@@ -141,8 +157,7 @@ internal sealed partial class WslEnvironmentCheck : IEnvironmentCheck
         // The complete release is matched, not just the "4.4." prefix: a custom kernel such as
         //   Linux version 4.4.1-custom (Microsoft@builder) ...
         // is not WSL 1, and reporting it as WSL 1 would tell that user to perform an upgrade they
-        // cannot perform. An unrecognized release falls through to Unknown, which is the state this
-        // check exists to report.
+        // cannot perform. Without an independent WSL signal, an unrecognized release remains Unknown.
         if (Wsl1KernelRelease().IsMatch(kernelRelease))
         {
             return WslVersion.Wsl1;
@@ -157,17 +172,23 @@ internal sealed partial class WslEnvironmentCheck : IEnvironmentCheck
         //   Linux version 6.1.0-microsoft-standard-custom (builder@host) ...
         //   Linux version 6.1.0-custom-microsoft-standard (builder@host) ...
         //   Linux version 6.1.0-custom-microsoft-standard-WSL2 (builder@host) ...
-        // fall through to Unknown instead of being reported as supported WSL 2 kernels.
+        // remain Unknown when classification has only the banner to work from.
         // See https://learn.microsoft.com/windows/wsl/kernel-release-notes
         if (Wsl2KernelRelease().IsMatch(kernelRelease))
         {
             return WslVersion.Wsl2;
         }
 
-        // A custom WSL 2 kernel configured through .wslconfig can omit both markers. Report the
-        // version as undetermined instead of guessing, because either guess is confidently wrong:
-        // claiming WSL 2 hides the container limitations this check exists to surface, and claiming
-        // WSL 1 tells a WSL 2 user to perform an upgrade they do not need.
+        // Once the shell independently establishes WSL, every parseable release other than the exact
+        // WSL 1 compatibility releases is WSL 2. Custom kernels can omit Microsoft's release markers,
+        // and Microsoft documents that all .wslconfig settings, including custom kernels, apply only
+        // to WSL 2 distributions:
+        // https://learn.microsoft.com/windows/wsl/wsl-config#configuration-settings-for-wslconfig
+        if (hasWslEnvironmentSignal)
+        {
+            return WslVersion.Wsl2;
+        }
+
         return WslVersion.Unknown;
     }
 
@@ -188,8 +209,14 @@ internal sealed partial class WslEnvironmentCheck : IEnvironmentCheck
         // release alone so that a build identity such as "(microsoft-standard@builder)" or "(wsl2@builder)"
         // on an otherwise ordinary kernel cannot be read as evidence of WSL.
         var match = KernelRelease().Match(procVersion);
+        if (!match.Success)
+        {
+            return null;
+        }
 
-        return match.Success ? match.Groups["release"].Value : null;
+        var kernelRelease = match.Groups["release"].Value;
+
+        return NumericKernelRelease().IsMatch(kernelRelease) ? kernelRelease : null;
     }
 
     private static string? TryReadProcVersion()
@@ -209,10 +236,11 @@ internal sealed partial class WslEnvironmentCheck : IEnvironmentCheck
     private static bool IsOfficialWslKernelRelease(string kernelRelease) =>
         Wsl1KernelRelease().IsMatch(kernelRelease) || Wsl2KernelRelease().IsMatch(kernelRelease);
 
-    // Matches the complete WSL 1 compatibility release, "4.4.0-<build>-Microsoft". The build number is
-    // the Windows build the distribution runs on (for example 19041). Anchored so that a real kernel
-    // whose release merely starts with 4.4.0 is not mistaken for the compatibility banner.
-    [GeneratedRegex(@"^4\.4\.0-\d+-Microsoft$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    // Matches the complete modern WSL 1 compatibility release, "4.4.0-<build>-Microsoft", and the
+    // historical "3.4.0-Microsoft" release. The modern build number is the Windows build the
+    // distribution runs on (for example 19041). Anchored so a real kernel whose release merely starts
+    // with either version is not mistaken for a compatibility banner.
+    [GeneratedRegex(@"^(?:4\.4\.0-\d+-Microsoft|3\.4\.0-Microsoft)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex Wsl1KernelRelease();
 
     // Matches the complete official WSL 2 release line. Older Microsoft-shipped 4.19 kernels used
@@ -229,6 +257,12 @@ internal sealed partial class WslEnvironmentCheck : IEnvironmentCheck
     // The kernel release is the first whitespace-delimited token after "Linux version".
     [GeneratedRegex(@"Linux\s+version\s+(?<release>\S+)", RegexOptions.IgnoreCase)]
     private static partial Regex KernelRelease();
+
+    // Linux kernel releases begin with at least a major and minor numeric component. A custom
+    // suffix may follow, but an arbitrary token such as "unknown-microsoft-standard-WSL2" is not
+    // enough to determine that an established WSL environment is WSL 2.
+    [GeneratedRegex(@"^\d+(?:\.\d+)+(?:[-+._~]\S+)?$", RegexOptions.CultureInvariant)]
+    private static partial Regex NumericKernelRelease();
 }
 
 /// <summary>

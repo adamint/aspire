@@ -14,6 +14,19 @@ public class WslEnvironmentCheckTests
     private const string Wsl1Banner =
         "Linux version 4.4.0-19041-Microsoft (Microsoft@Microsoft.com) (gcc version 5.4.0 (GCC) ) #488-Microsoft Mon Sep 01 13:43:00 PST 2020";
 
+    // Historical WSL 1 compatibility banner from https://github.com/Microsoft/WSL/issues/1090.
+    // This release string is synthetic and should still be treated as WSL 1, not a real Linux kernel.
+    private const string HistoricalWsl1Banner =
+        "Linux version 3.4.0-Microsoft (Microsoft@Microsoft.com) (gcc version 4.7 (GCC) ) #1 SMP PREEMPT Wed Dec 31 14:42:53 PST 2014";
+
+    // Parseable custom kernel release used by .wslconfig. It carries no WSL-specific tokens, so
+    // the WSL environment check must rely on the surrounding shell signals instead of the banner.
+    private const string CustomKernelBanner =
+        "Linux version 6.1.0-custom (builder@host) (gcc version 11.2.0) #1 SMP Tue Jan 2 00:00:00 UTC 2024";
+
+    private const string CustomTerminalPlusKernelBanner =
+        "Linux version 6.1.0+ (builder@host) (gcc version 11.2.0) #1 SMP Tue Jan 2 00:00:00 UTC 2024";
+
     private const string Wsl2Banner =
         "Linux version 5.15.90.1-microsoft-standard-WSL2 (oe-user@oe-host) (x86_64-msft-linux-gcc (GCC) 9.3.0) #1 SMP Fri Jan 27 02:56:13 UTC 2023";
 
@@ -54,16 +67,45 @@ public class WslEnvironmentCheckTests
     private const string NativeLinuxBannerBuiltByMicrosoft =
         "Linux version 6.8.0-64-generic (Microsoft@builder) (x86_64-linux-gnu-gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0) #67-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 15 20:23:31 UTC 2025";
 
-    public static TheoryData<string?, string, string?, string?> WslDetectionCases => new()
+    // A malformed nonblank /proc/version line that cannot yield a kernel release.
+    private const string MalformedProcVersionBanner = "Linux version";
+
+    // A malformed release token that contains a Microsoft marker but no numeric kernel version.
+    private const string MalformedKernelReleaseBanner =
+        "Linux version unknown-microsoft-standard-WSL2 (builder@host) (gcc version 11.2.0) #1 SMP";
+
+    public static TheoryData<string?, string?, string> Wsl2PassCases => new()
     {
-        { null, NativeLinuxBanner, null, null },
-        { "", NativeLinuxBanner, null, null },
-        { "   ", NativeLinuxBanner, null, null },
-        { "Ubuntu-22.04", NativeLinuxBanner, nameof(EnvironmentCheckStatus.Warning), "WSL detected but the version could not be determined" },
-        { null, Wsl2Banner, nameof(EnvironmentCheckStatus.Pass), "WSL2 environment detected" },
-        { "", Wsl2Banner, nameof(EnvironmentCheckStatus.Pass), "WSL2 environment detected" },
-        { "   ", Wsl2Banner, nameof(EnvironmentCheckStatus.Pass), "WSL2 environment detected" },
-        { "Ubuntu-22.04", Wsl2Banner, nameof(EnvironmentCheckStatus.Pass), "WSL2 environment detected" },
+        { null, null, Wsl2Banner },
+        { "", null, Wsl2Banner },
+        { "   ", null, Wsl2Banner },
+        // Once WSL is established by the shell, a parseable non-WSL1 kernel is WSL2.
+        { "Ubuntu-22.04", null, NativeLinuxBanner },
+        { null, "/run/WSL/interop", NativeLinuxBanner },
+        { "Ubuntu-22.04", null, Wsl2Banner },
+        { null, "/run/WSL/interop", Wsl2Banner },
+    };
+
+    public static TheoryData<string?, string?, string> Wsl1EnvironmentSignalCases => new()
+    {
+        { "Ubuntu-22.04", null, Wsl1Banner },
+        { null, "/run/WSL/interop", Wsl1Banner },
+        { "Ubuntu-22.04", "/run/WSL/interop", Wsl1Banner },
+        { "Ubuntu-22.04", null, HistoricalWsl1Banner },
+        { null, "/run/WSL/interop", HistoricalWsl1Banner },
+        { "Ubuntu-22.04", "/run/WSL/interop", HistoricalWsl1Banner },
+    };
+
+    public static TheoryData<string?, string?, string?> WslUnreadableBannerSignalCases => new()
+    {
+        { "Ubuntu-22.04", null, null },
+        { "Ubuntu-22.04", null, "   " },
+        { "Ubuntu-22.04", null, MalformedProcVersionBanner },
+        { "Ubuntu-22.04", null, MalformedKernelReleaseBanner },
+        { null, "/run/WSL/interop", null },
+        { null, "/run/WSL/interop", "   " },
+        { null, "/run/WSL/interop", MalformedProcVersionBanner },
+        { null, "/run/WSL/interop", MalformedKernelReleaseBanner },
     };
 
     [Fact]
@@ -72,6 +114,20 @@ public class WslEnvironmentCheckTests
         // Regression test: WSL 1 reports kernel 4.4.0, so classifying by "major version >= 4"
         // reported every real WSL 1 system as WSL 2 and suppressed the limited-container warning.
         Assert.Equal(WslVersion.Wsl1, WslEnvironmentCheck.DetermineWslVersion(Wsl1Banner));
+    }
+
+    [Fact]
+    public void DetermineWslVersion_ReportsWsl1_ForHistoricalWsl1Banner()
+    {
+        Assert.Equal(WslVersion.Wsl1, WslEnvironmentCheck.DetermineWslVersion(HistoricalWsl1Banner));
+    }
+
+    [Theory]
+    [InlineData("Linux version 3.4.0-Microsoft-custom (builder@host) (gcc version 4.7) #1 SMP")]
+    [InlineData("Linux version 3.4.0-custom-Microsoft (builder@host) (gcc version 4.7) #1 SMP")]
+    public void DetermineWslVersion_ReportsUnknown_ForUnofficialHistoricalWsl1Suffixes(string procVersion)
+    {
+        Assert.Equal(WslVersion.Unknown, WslEnvironmentCheck.DetermineWslVersion(procVersion));
     }
 
     [Fact]
@@ -124,9 +180,7 @@ public class WslEnvironmentCheckTests
     {
         // A custom kernel configured through .wslconfig carries neither the WSL2 marker nor the
         // WSL 1 compatibility banner, so neither version can be claimed.
-        Assert.Equal(
-            WslVersion.Unknown,
-            WslEnvironmentCheck.DetermineWslVersion("Linux version 6.1.0-custom (builder@host) #1 SMP Tue Jan 2 00:00:00 UTC 2024"));
+        Assert.Equal(WslVersion.Unknown, WslEnvironmentCheck.DetermineWslVersion(CustomKernelBanner));
     }
 
     [Fact]
@@ -195,8 +249,8 @@ public class WslEnvironmentCheckTests
     [Fact]
     public void CreateResult_MakesTheUpgradeConditional_WhenVersionIsUnknown()
     {
-        // A custom WSL 2 kernel classifies as Unknown, so unconditional upgrade advice would tell a
-        // WSL 2 user to run 'wsl --set-version 2' on an environment that is already WSL 2.
+        // A missing or malformed banner can classify an established WSL 2 environment as Unknown,
+        // so unconditional advice could tell that user to upgrade an environment already on WSL 2.
         Assert.Equal(
             "Run 'wsl --list --verbose' from Windows to check the version. If it reports 1, upgrade with: wsl --set-version <distro> 2",
             WslEnvironmentCheck.CreateResult(WslVersion.Unknown).Fix);
@@ -240,11 +294,27 @@ public class WslEnvironmentCheckTests
         Assert.Empty(await check.CheckAsync(TestContext.Current.CancellationToken));
     }
 
-    [Fact]
-    public async Task CheckAsync_ReportsNothing_WhenLinuxIsNotWsl()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task CheckAsync_ReportsNothing_WhenLinuxIsNotWsl(string? distroName)
+    {
+        // Blank WSL_DISTRO_NAME values should behave like the signal is absent.
+        var check = new WslEnvironmentCheck(
+            CreateLinuxEnvironment(distroName),
+            () => NativeLinuxBanner);
+
+        Assert.Empty(await check.CheckAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task CheckAsync_ReportsNothing_WhenWslInteropIsBlank(string wslInterop)
     {
         var check = new WslEnvironmentCheck(
-            TestEnvironment.CreateLinux(),
+            CreateLinuxEnvironment(null, wslInterop),
             () => NativeLinuxBanner);
 
         Assert.Empty(await check.CheckAsync(TestContext.Current.CancellationToken));
@@ -283,29 +353,17 @@ public class WslEnvironmentCheckTests
     }
 
     [Theory]
-    [MemberData(nameof(WslDetectionCases))]
-    public async Task CheckAsync_DetectsWslOnlyFromKernelBannerOrNonBlankDistroName(
+    [MemberData(nameof(Wsl2PassCases))]
+    public async Task CheckAsync_ReportsPass_WhenWsl2IsDetected(
         string? distroName,
-        string procVersion,
-        string? expectedStatus,
-        string? expectedMessage)
+        string? wslInterop,
+        string procVersion)
     {
-        var environment = distroName is null
-            ? TestEnvironment.CreateLinux()
-            : TestEnvironment.CreateLinux(new Dictionary<string, string?> { ["WSL_DISTRO_NAME"] = distroName });
-        var check = new WslEnvironmentCheck(environment, () => procVersion);
+        var check = new WslEnvironmentCheck(CreateLinuxEnvironment(distroName, wslInterop), () => procVersion);
 
-        var results = await check.CheckAsync(TestContext.Current.CancellationToken);
-
-        if (expectedStatus is null)
-        {
-            Assert.Empty(results);
-            return;
-        }
-
-        var result = Assert.Single(results);
-        Assert.Equal(expectedStatus, result.Status.ToString());
-        Assert.Equal(expectedMessage, result.Message);
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal("WSL2 environment detected", result.Message);
     }
 
     [Fact]
@@ -319,68 +377,152 @@ public class WslEnvironmentCheckTests
         Assert.Equal("WSL1 detected - limited container support", result.Message);
     }
 
-    [Theory]
-    [InlineData(CustomWsl2LookingBanner)]
-    [InlineData(CustomMicrosoftStandardLookingBanner)]
-    public async Task CheckAsync_ReportsUnknownWarning_ForUnofficialKernelReleaseSuffixes_WhenWslDistroNameIsSet(string procVersion)
+    [Fact]
+    public async Task CheckAsync_ReportsWarning_ForHistoricalWsl1Banner()
     {
-        var check = new WslEnvironmentCheck(
-            TestEnvironment.CreateLinux(new Dictionary<string, string?> { ["WSL_DISTRO_NAME"] = "Ubuntu-22.04" }),
-            () => procVersion);
+        var check = new WslEnvironmentCheck(TestEnvironment.CreateLinux(), () => HistoricalWsl1Banner);
 
         var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
 
         Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
-        Assert.Equal("WSL detected but the version could not be determined", result.Message);
-        Assert.Equal(
-            "Run 'wsl --list --verbose' from Windows to check the version. If it reports 1, upgrade with: wsl --set-version <distro> 2",
-            result.Fix);
+        Assert.Equal("WSL1 detected - limited container support", result.Message);
+    }
+
+    [Theory]
+    [MemberData(nameof(Wsl1EnvironmentSignalCases))]
+    public async Task CheckAsync_ReportsWarning_ForWsl1Banners_WhenWslDistroNameOrWslInteropIsSet(
+        string? distroName,
+        string? wslInterop,
+        string procVersion)
+    {
+        // WSL_DISTRO_NAME and WSL_INTEROP establish that the shell is already inside WSL. Those
+        // environment signals should not hide a WSL1 banner behind the generic unknown warning.
+        var check = new WslEnvironmentCheck(CreateLinuxEnvironment(distroName, wslInterop), () => procVersion);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
+        Assert.Equal("WSL1 detected - limited container support", result.Message);
+    }
+
+    [Theory]
+    [InlineData(CustomWsl2LookingBanner)]
+    [InlineData(CustomMicrosoftStandardLookingBanner)]
+    public async Task CheckAsync_ReportsPass_ForUnofficialKernelReleaseSuffixes_WhenWslDistroNameIsSet(string procVersion)
+    {
+        // WSL_DISTRO_NAME means we're already inside WSL. A parseable custom kernel should be treated
+        // as WSL2 instead of being downgraded to "unknown".
+        var check = new WslEnvironmentCheck(
+            CreateLinuxEnvironment("Ubuntu-22.04"),
+            () => procVersion);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal("WSL2 environment detected", result.Message);
         Assert.Equal(WslVersion.Unknown, WslEnvironmentCheck.DetermineWslVersion(procVersion));
     }
 
     [Theory]
     [InlineData(CustomPrefixWsl2LookingBanner)]
     [InlineData(CustomPrefixMicrosoftStandardLookingBanner)]
-    public async Task CheckAsync_ReportsUnknownWarning_ForUnofficialKernelReleasePrefixes_WhenWslDistroNameIsSet(string procVersion)
+    public async Task CheckAsync_ReportsPass_ForUnofficialKernelReleasePrefixes_WhenWslDistroNameIsSet(string procVersion)
     {
+        // WSL_DISTRO_NAME means we're already inside WSL. A parseable custom kernel should be treated
+        // as WSL2 instead of being downgraded to "unknown".
         var check = new WslEnvironmentCheck(
-            TestEnvironment.CreateLinux(new Dictionary<string, string?> { ["WSL_DISTRO_NAME"] = "Ubuntu-22.04" }),
+            CreateLinuxEnvironment("Ubuntu-22.04"),
             () => procVersion);
-
-        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
-
-        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
-        Assert.Equal("WSL detected but the version could not be determined", result.Message);
-        Assert.Equal(
-            "Run 'wsl --list --verbose' from Windows to check the version. If it reports 1, upgrade with: wsl --set-version <distro> 2",
-            result.Fix);
-        Assert.Equal(WslVersion.Unknown, WslEnvironmentCheck.DetermineWslVersion(procVersion));
-    }
-
-    [Fact]
-    public async Task CheckAsync_ReportsWarning_WhenBannerIsUnreadableButDistroNameIsSet()
-    {
-        // WSL injects WSL_DISTRO_NAME into every distribution shell, so the environment is known to
-        // be WSL even when the kernel banner cannot be read. That combination must warn, not pass.
-        var check = new WslEnvironmentCheck(
-            TestEnvironment.CreateLinux(new Dictionary<string, string?> { ["WSL_DISTRO_NAME"] = "Ubuntu-22.04" }),
-            () => null);
-
-        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
-
-        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
-        Assert.Equal("WSL detected but the version could not be determined", result.Message);
-    }
-
-    [Fact]
-    public async Task CheckAsync_ReportsPass_ForWsl2()
-    {
-        var check = new WslEnvironmentCheck(TestEnvironment.CreateLinux(), () => Wsl2Banner);
 
         var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
 
         Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
         Assert.Equal("WSL2 environment detected", result.Message);
+        Assert.Equal(WslVersion.Unknown, WslEnvironmentCheck.DetermineWslVersion(procVersion));
+    }
+
+    [Theory]
+    [InlineData(CustomKernelBanner)]
+    [InlineData(CustomTerminalPlusKernelBanner)]
+    public async Task CheckAsync_ReportsPass_ForCustomKernelWithoutMarkers_WhenWslDistroNameIsSet(string procVersion)
+    {
+        var check = new WslEnvironmentCheck(
+            CreateLinuxEnvironment("Ubuntu-22.04"),
+            () => procVersion);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal("WSL2 environment detected", result.Message);
+    }
+
+    [Theory]
+    [InlineData(CustomWsl2LookingBanner)]
+    [InlineData(CustomMicrosoftStandardLookingBanner)]
+    public async Task CheckAsync_ReportsPass_ForUnofficialKernelReleaseSuffixes_WhenWslInteropIsSet(string procVersion)
+    {
+        // WSL_INTEROP is injected into WSL shells even when WSL_DISTRO_NAME is absent. Once WSL is
+        // established, a parseable custom release should still be treated as WSL2.
+        var check = new WslEnvironmentCheck(
+            CreateLinuxEnvironment(null, "/run/WSL/interop"),
+            () => procVersion);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal("WSL2 environment detected", result.Message);
+        Assert.Equal(WslVersion.Unknown, WslEnvironmentCheck.DetermineWslVersion(procVersion));
+    }
+
+    [Theory]
+    [InlineData(CustomPrefixWsl2LookingBanner)]
+    [InlineData(CustomPrefixMicrosoftStandardLookingBanner)]
+    public async Task CheckAsync_ReportsPass_ForUnofficialKernelReleasePrefixes_WhenWslInteropIsSet(string procVersion)
+    {
+        // WSL_INTEROP is injected into WSL shells even when WSL_DISTRO_NAME is absent. Once WSL is
+        // established, a parseable custom release should still be treated as WSL2.
+        var check = new WslEnvironmentCheck(
+            CreateLinuxEnvironment(null, "/run/WSL/interop"),
+            () => procVersion);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal("WSL2 environment detected", result.Message);
+        Assert.Equal(WslVersion.Unknown, WslEnvironmentCheck.DetermineWslVersion(procVersion));
+    }
+
+    [Theory]
+    [InlineData(CustomKernelBanner)]
+    [InlineData(CustomTerminalPlusKernelBanner)]
+    public async Task CheckAsync_ReportsPass_ForCustomKernelWithoutMarkers_WhenWslInteropIsSet(string procVersion)
+    {
+        var check = new WslEnvironmentCheck(
+            CreateLinuxEnvironment(null, "/run/WSL/interop"),
+            () => procVersion);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal("WSL2 environment detected", result.Message);
+    }
+
+    [Theory]
+    [MemberData(nameof(WslUnreadableBannerSignalCases))]
+    public async Task CheckAsync_ReportsWarning_WhenBannerIsMissingOrUnreadableAndWslIsDetected(
+        string? distroName,
+        string? wslInterop,
+        string? procVersion)
+    {
+        // WSL_DISTRO_NAME and WSL_INTEROP both mean the shell is already inside WSL, so an unreadable
+        // banner must warn instead of looking like the machine is not WSL at all.
+        var check = new WslEnvironmentCheck(CreateLinuxEnvironment(distroName, wslInterop), () => procVersion);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
+        Assert.Equal("WSL detected but the version could not be determined", result.Message);
+        Assert.Equal(WslVersion.Unknown, WslEnvironmentCheck.DetermineWslVersion(procVersion));
     }
 
     [Theory]
@@ -388,14 +530,33 @@ public class WslEnvironmentCheckTests
     [InlineData("Ubuntu-22.04")]
     public async Task CheckAsync_ReportsPass_ForLegacyMicrosoftWsl2StandardKernel(string? distroName)
     {
-        var environment = distroName is null
-            ? TestEnvironment.CreateLinux()
-            : TestEnvironment.CreateLinux(new Dictionary<string, string?> { ["WSL_DISTRO_NAME"] = distroName });
-        var check = new WslEnvironmentCheck(environment, () => LegacyWsl2Banner);
+        var check = new WslEnvironmentCheck(CreateLinuxEnvironment(distroName), () => LegacyWsl2Banner);
 
         var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
 
         Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
         Assert.Equal("WSL2 environment detected", result.Message);
+    }
+
+    private static TestEnvironment CreateLinuxEnvironment(string? distroName, string? wslInterop = null)
+    {
+        if (distroName is null && wslInterop is null)
+        {
+            return TestEnvironment.CreateLinux();
+        }
+
+        var environmentVariables = new Dictionary<string, string?>();
+
+        if (distroName is not null)
+        {
+            environmentVariables["WSL_DISTRO_NAME"] = distroName;
+        }
+
+        if (wslInterop is not null)
+        {
+            environmentVariables["WSL_INTEROP"] = wslInterop;
+        }
+
+        return TestEnvironment.CreateLinux(environmentVariables);
     }
 }
