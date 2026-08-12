@@ -267,7 +267,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             operationKind: owner.operationKind,
             get startupCompleted() { return owner.startupCompleted; },
             configuration: owner.configuration,
-            stopDebugging: async () => { await debugSession.stopSession(); },
+            stopDebugging: async () => { await owner.stopDebugging(); },
         };
         this._appHostDebugSessions.set(debugSession.id, { owner, session });
     }
@@ -606,11 +606,11 @@ export class AppHostLaunchService implements vscode.Disposable {
      * `launch.json`/F5 goes straight to `vscode.debug.startDebugging` and never reaches
      * {@link launch}.
      *
-     * Returns `false` when a lifecycle-owned launch already holds the claim. Recording the
-     * launch without refusing it would leave both callers running: the lifecycle caller has
-     * already passed its own check and is on its way to `startDebugging`, so nothing later
-     * can stop it, and two AppHosts would start against the same project. Whoever claimed
-     * first wins, which is the only rule that produces one process from a race.
+        * Returns `false` when another launch or run session already owns the AppHost. Recording
+        * the launch without refusing it would leave both callers running: a lifecycle caller
+        * may have already passed its own check and be on its way to `startDebugging`, or an
+        * editor session may already control the AppHost. Whoever claimed first wins, which is
+        * the only rule that produces one process from a race.
      *
      * The reservation is self-expiring, because this path has no completion signal of its
      * own: when VS Code declines a configuration after resolving it, no session is created
@@ -618,9 +618,12 @@ export class AppHostLaunchService implements vscode.Disposable {
      * editor session, so the reservation has nothing left to cover.
      */
     tryReserveExternalLaunch(appHostPath: string): string | false {
+        const editorSessions = this.getEditorRunSessions(appHostPath);
         if (this.isLaunching(appHostPath) ||
             this.hasLifecycleLaunchClaim(appHostPath) ||
-            this.hasActiveLifecycleOperation(appHostPath)) {
+            this.hasActiveLifecycleOperation(appHostPath) ||
+            editorSessions.sessions.length > 0 ||
+            editorSessions.ambiguous) {
             return false;
         }
 

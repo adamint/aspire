@@ -16,7 +16,7 @@ export { stripAspireDebugConfigurationProviderInternalProperties } from './Aspir
  * launch visible to the shared launching reservation.
  */
 export interface ExternalLaunchReservation {
-    /** Returns the reservation ID, or `false` when a lifecycle-owned launch already claimed this AppHost. */
+    /** Returns the reservation ID, or `false` when another launch or run session already owns this AppHost. */
     tryReserveExternalLaunch(appHostPath: string): string | false;
 }
 
@@ -145,8 +145,8 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
                     ? this._launchReservation.tryReserveExternalLaunch(claimedPath)
                     : false);
                 if (claimedPath && !reservationId) {
-                    // A lifecycle-owned launch already claimed this AppHost and cannot be
-                    // called back, so proceeding would produce two AppHosts for one project.
+                    // Another launch or run session already owns this AppHost, so proceeding
+                    // would produce two AppHosts for one project.
                     // Abort this session and tell the user why rather than starting a second.
                     void vscode.window.showInformationMessage(appHostLifecycleLaunchAlreadyClaimed);
                     return undefined;

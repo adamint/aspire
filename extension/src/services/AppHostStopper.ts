@@ -57,39 +57,49 @@ export async function stopExternalAppHost(
             terminateForCancellation();
         });
 
-        cliProcess = spawnCliProcess(terminalProvider, cliPath, ['stop', '--apphost', appHostPath], {
-            createProcessGroup: true,
-            noExtensionVariables: true,
-            stderrCallback: data => {
-                if (stderr.length < maxRetainedStderrLength) {
-                    stderr += data.slice(0, maxRetainedStderrLength - stderr.length);
-                }
-            },
-            exitCallback: code => {
-                if (cancellationRequested) {
-                    settleCancellation();
-                    return;
-                }
+        try {
+            cliProcess = spawnCliProcess(terminalProvider, cliPath, ['stop', '--apphost', appHostPath], {
+                createProcessGroup: true,
+                noExtensionVariables: true,
+                stderrCallback: data => {
+                    if (stderr.length < maxRetainedStderrLength) {
+                        stderr += data.slice(0, maxRetainedStderrLength - stderr.length);
+                    }
+                },
+                exitCallback: code => {
+                    if (cancellationRequested) {
+                        settleCancellation();
+                        return;
+                    }
 
-                if (code === 0) {
-                    settle(resolve);
-                    return;
-                }
+                    if (code === 0) {
+                        settle(resolve);
+                        return;
+                    }
 
-                const detail = stderr.trim();
-                settle(() => reject(new Error(
-                    detail
-                        ? `aspire stop exited with code ${code ?? 1}: ${detail}`
-                        : `aspire stop exited with code ${code ?? 1}.`)));
-            },
-            errorCallback: error => {
-                if (cancellationRequested) {
-                    settleCancellation();
-                } else {
-                    settle(() => reject(error));
-                }
-            },
-        });
+                    const detail = stderr.trim();
+                    settle(() => reject(new Error(
+                        detail
+                            ? `aspire stop exited with code ${code ?? 1}: ${detail}`
+                            : `aspire stop exited with code ${code ?? 1}.`)));
+                },
+                errorCallback: error => {
+                    if (cancellationRequested) {
+                        settleCancellation();
+                    } else {
+                        settle(() => reject(error));
+                    }
+                },
+            });
+        }
+        catch (error) {
+            if (cancellationRequested) {
+                settleCancellation();
+            } else {
+                settle(() => reject(error));
+            }
+            return;
+        }
         if (cancellationRequested) {
             terminateForCancellation();
         }

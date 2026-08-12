@@ -282,6 +282,35 @@ suite('AppHostLaunchService', () => {
         await operation;
     });
 
+    test('refuses an external launch claim while an editor run session owns the AppHost', () => {
+        const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+        const projectPath = path.join(directory, 'AppHost.csproj');
+        service.setEditorSessionProvider(() => [{
+            appHostPath: projectPath,
+            resolvedAppHostPath: projectPath,
+            operationKind: 'run',
+            startupCompleted: true,
+            configuration: { noDebug: false },
+            stopDebugging: async () => { },
+        }]);
+
+        assert.strictEqual(service.tryReserveExternalLaunch(path.join(directory, 'Program.cs')), false);
+    });
+
+    test('refuses an external launch claim when an editor session association is ambiguous', () => {
+        const directory = createAppHostDirectory('First.csproj', 'Second.csproj', 'Program.cs');
+        service.setEditorSessionProvider(() => [{
+            appHostPath: path.join(directory, 'Program.cs'),
+            resolvedAppHostPath: undefined,
+            operationKind: 'run',
+            startupCompleted: true,
+            configuration: { noDebug: true },
+            stopDebugging: async () => { },
+        }]);
+
+        assert.strictEqual(service.tryReserveExternalLaunch(path.join(directory, 'First.csproj')), false);
+    });
+
     test('allows an external launch claim for an unrelated AppHost', async () => {
         const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
         const otherDirectory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
@@ -854,6 +883,19 @@ suite('AppHostLaunchService', () => {
         assert.strictEqual(getAppHostIdentityKey(linkedProject), getAppHostIdentityKey(realProject));
     });
 
+    test('treats differently-cased paths to one existing AppHost as the same identity', function () {
+        const directory = createAppHostDirectory('AppHost.csproj');
+        const appHostPath = path.join(directory, 'AppHost.csproj');
+        const differentlyCasedPath = path.join(directory, 'apphost.CSPROJ');
+        if (!fs.existsSync(differentlyCasedPath)) {
+            this.skip();
+            return;
+        }
+
+        assert.strictEqual(service.compareAppHostIdentity(differentlyCasedPath, appHostPath), 'same');
+        assert.strictEqual(getAppHostIdentityKey(differentlyCasedPath), getAppHostIdentityKey(appHostPath));
+    });
+
     test('returns only editor-owned run sessions for the requested AppHost identity', () => {
         const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
         const runSession = {
@@ -885,16 +927,17 @@ suite('AppHostLaunchService', () => {
         assert.deepStrictEqual(service.getEditorRunSessions(path.join(directory, 'AppHost.csproj')), { sessions: [runSession], ambiguous: false });
     });
 
-    test('keeps an AppHost child stoppable after its parent controller is removed', async () => {
+    test('uses an AppHost child identity while preserving its parent as the stop owner', async () => {
         const directory = createAppHostDirectory('AppHost.csproj');
         const appHostPath = path.join(directory, 'AppHost.csproj');
+        let parentStopCount = 0;
         const parentSession = {
             appHostPath,
             resolvedAppHostPath: undefined,
             operationKind: 'run' as const,
             startupCompleted: true,
             configuration: { noDebug: true },
-            stopDebugging: async () => { },
+            stopDebugging: async () => { parentStopCount++; },
         };
         let editorSessions = [parentSession];
         let childStopCount = 0;
@@ -913,16 +956,18 @@ suite('AppHostLaunchService', () => {
         assert.strictEqual(orphaned.sessions.length, 1);
         assert.strictEqual(orphaned.sessions[0].configuration.noDebug, true);
         await orphaned.sessions[0].stopDebugging();
-        assert.strictEqual(childStopCount, 1);
+        assert.strictEqual(parentStopCount, 1);
+        assert.strictEqual(childStopCount, 0);
         assert.strictEqual(stopDebuggingStub.called, false);
 
         onDidTerminateDebugSessionCallback?.(childDebugSession.session);
         assert.deepStrictEqual(service.getEditorRunSessions(appHostPath), { sessions: [], ambiguous: false });
     });
 
-    test('uses a concrete tracked child when its live parent has no resolved AppHost', async () => {
+    test('uses a concrete tracked child identity when its live parent has no resolved AppHost', async () => {
         const directory = createAppHostDirectory('AppHost.csproj');
         const appHostPath = path.join(directory, 'AppHost.csproj');
+        let parentStopCount = 0;
         let childStopCount = 0;
         const parentSession: AppHostLaunchSession = {
             appHostPath: directory,
@@ -930,7 +975,7 @@ suite('AppHostLaunchService', () => {
             operationKind: 'run',
             startupCompleted: true,
             configuration: { noDebug: false },
-            stopDebugging: async () => { throw new Error('The unresolved parent should not own this stop.'); },
+            stopDebugging: async () => { parentStopCount++; },
         };
         const childDebugSession = {
             id: 'concrete-apphost-child',
@@ -943,7 +988,8 @@ suite('AppHostLaunchService', () => {
         const result = await service.stopAppHost(appHostPath, new vscode.CancellationTokenSource().token);
 
         assert.deepStrictEqual(result, { outcome: 'stopped', controller: 'editor', noDebug: false });
-        assert.strictEqual(childStopCount, 1);
+        assert.strictEqual(parentStopCount, 1);
+        assert.strictEqual(childStopCount, 0);
     });
 
 

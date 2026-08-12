@@ -63,6 +63,55 @@ suite('AppHostStopper', () => {
         }
     });
 
+    test('disposes cancellation tracking when aspire stop fails to spawn', async () => {
+        const spawnStub = sinon.stub(nodeChildProcess, 'spawn').throws(new Error('spawn failed'));
+        let cancellationRegistrationDisposed = false;
+        const cancellationToken = {
+            isCancellationRequested: false,
+            onCancellationRequested: () => new vscode.Disposable(() => { cancellationRegistrationDisposed = true; }),
+        } as vscode.CancellationToken;
+
+        try {
+            await assert.rejects(
+                stopExternalAppHost(
+                    createTerminalProvider(),
+                    '/repo/AppHost/AppHost.csproj',
+                    cancellationToken),
+                /spawn failed/);
+
+            assert.strictEqual(cancellationRegistrationDisposed, true);
+        }
+        finally {
+            spawnStub.restore();
+        }
+    });
+
+    test('preserves cancellation when aspire stop fails to spawn after cancellation', async () => {
+        const spawnStub = sinon.stub(nodeChildProcess, 'spawn').throws(new Error('spawn failed'));
+        let cancellationRegistrationDisposed = false;
+        const cancellationToken = {
+            isCancellationRequested: false,
+            onCancellationRequested: (listener: () => void) => {
+                listener();
+                return new vscode.Disposable(() => { cancellationRegistrationDisposed = true; });
+            },
+        } as vscode.CancellationToken;
+
+        try {
+            await assert.rejects(
+                stopExternalAppHost(
+                    createTerminalProvider(),
+                    '/repo/AppHost/AppHost.csproj',
+                    cancellationToken),
+                error => error instanceof vscode.CancellationError);
+
+            assert.strictEqual(cancellationRegistrationDisposed, true);
+        }
+        finally {
+            spawnStub.restore();
+        }
+    });
+
     test('bounds stderr retained from a failed aspire stop', async () => {
         const childState = createTestChildProcess();
         const child = childState as unknown as nodeChildProcess.ChildProcessWithoutNullStreams;

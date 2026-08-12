@@ -179,8 +179,8 @@ export async function activate(context: vscode.ExtensionContext) {
   // Aspire panel - running app hosts tree view
   const dataRepository = new AppHostDataRepository(terminalProvider, appHostDiscoveryService, configInfoProvider);
   appHostLaunchService.setEditorSessionProvider(() => aspireExtensionContext.aspireDebugSessions);
-  appHostLaunchService.setRunningAppHostProvider(async _token => {
-    const appHosts = await dataRepository.fetchAppHostsOnce();
+  appHostLaunchService.setRunningAppHostProvider(async token => {
+    const appHosts = await dataRepository.fetchRunningAppHostsOnce(token);
     return appHosts.map(appHost => ({ appHostPath: appHost.appHostPath }));
   });
   appHostLaunchService.setExternalAppHostStopper((appHostPath, token) =>

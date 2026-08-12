@@ -207,14 +207,18 @@ export function terminateCliProcess(childProcess: ChildProcessWithoutNullStreams
                 const signalSent = terminateCliProcessTree(childProcess, false);
                 if (!signalSent) {
                     extensionLogOutputChannel.warn(`Failed to terminate ${description}.`);
-                    stopTracking();
-                    return;
+                    if (childProcess.pid === undefined) {
+                        stopTracking();
+                        return;
+                    }
                 }
             }
         } catch (error) {
             extensionLogOutputChannel.error(`Failed to terminate ${description}: ${String(error)}`);
-            stopTracking();
-            return;
+            if (childProcess.pid === undefined) {
+                stopTracking();
+                return;
+            }
         }
 
         forceKillTimer = setTimeout(() => {

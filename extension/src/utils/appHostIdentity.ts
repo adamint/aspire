@@ -145,7 +145,9 @@ export function canonicalizeAppHostPath(resolvedPath: string): string {
 
 function canonicalize(resolvedPath: string): string {
     try {
-        return fs.realpathSync(resolvedPath);
+        return process.platform === 'darwin'
+            ? fs.realpathSync.native(resolvedPath)
+            : fs.realpathSync(resolvedPath);
     }
     catch {
         return resolvedPath;
