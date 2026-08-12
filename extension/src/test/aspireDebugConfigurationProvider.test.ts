@@ -16,12 +16,18 @@ import { AppHostDiscoveryService } from '../utils/appHostDiscovery';
 /** Captures the AppHost paths the provider claims for `launch.json`/F5 launches. */
 class RecordingLaunchReservation implements ExternalLaunchReservation {
     readonly reserved: string[] = [];
+    readonly replacements: { previousAppHostPath: string; previousReservationId: string; appHostPath: string }[] = [];
     /** When set, the claim is refused as if a lifecycle-owned launch already held it. */
     claimedByLifecycle = false;
 
     tryReserveExternalLaunch(appHostPath: string): string | false {
         this.reserved.push(appHostPath);
         return this.claimedByLifecycle ? false : `reservation-${this.reserved.length}`;
+    }
+
+    replaceExternalLaunchReservation(previousAppHostPath: string, previousReservationId: string, appHostPath: string): string | false {
+        this.replacements.push({ previousAppHostPath, previousReservationId, appHostPath });
+        return this.tryReserveExternalLaunch(appHostPath);
     }
 }
 
@@ -243,6 +249,137 @@ suite('AspireDebugConfigurationProvider', () => {
         assert.deepStrictEqual(launchReservation.reserved, [appHostPath]);
         assert.strictEqual(firstPass?.[appHostLaunchReservationIdConfigKey], 'reservation-1');
         assert.strictEqual(secondPass?.[appHostLaunchReservationIdConfigKey], 'reservation-1');
+    });
+
+    test('reuses one reservation when repeated resolver passes use equivalent AppHost paths', async () => {
+        const appHostDirectory = path.join(tempDir, 'AppHost');
+        const projectPath = path.join(appHostDirectory, 'AppHost.csproj');
+        const sourcePath = path.join(appHostDirectory, 'Program.cs');
+        fs.mkdirSync(appHostDirectory);
+        fs.writeFileSync(projectPath, '<Project Sdk="Aspire.AppHost.Sdk" />');
+        fs.writeFileSync(sourcePath, 'var builder = DistributedApplication.CreateBuilder(args);');
+
+        const folder = createWorkspaceFolder(tempDir);
+        let selectedAppHostPath = projectPath;
+        const discoveryService = {
+            resolveDebugTarget: async (filePath: string) => filePath,
+            tryFindWorkspaceDefaultCandidate: async () => ({
+                path: selectedAppHostPath,
+                language: 'csharp',
+                status: 'buildable',
+            }),
+        } as unknown as AppHostDiscoveryService;
+        const provider = new AspireDebugConfigurationProvider(discoveryService, launchReservation);
+        const config: vscode.DebugConfiguration = {
+            name: 'Debug AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: folder.uri.fsPath,
+        };
+
+        const firstPass = await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, config);
+        selectedAppHostPath = sourcePath;
+        const secondPass = firstPass
+            ? await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, firstPass)
+            : undefined;
+
+        assert.deepStrictEqual(launchReservation.reserved, [projectPath]);
+        assert.deepStrictEqual(launchReservation.replacements, []);
+        assert.strictEqual(secondPass?.[appHostLaunchReservationIdConfigKey], 'reservation-1');
+    });
+
+    test('replaces an equivalent-path reservation after its identity later becomes ambiguous', async () => {
+        const appHostDirectory = path.join(tempDir, 'AppHost');
+        const projectPath = path.join(appHostDirectory, 'AppHost.csproj');
+        const sourcePath = path.join(appHostDirectory, 'Program.cs');
+        const replacementDirectory = path.join(tempDir, 'Replacement');
+        const replacementPath = path.join(replacementDirectory, 'Replacement.csproj');
+        fs.mkdirSync(appHostDirectory);
+        fs.mkdirSync(replacementDirectory);
+        fs.writeFileSync(projectPath, '<Project Sdk="Aspire.AppHost.Sdk" />');
+        fs.writeFileSync(sourcePath, 'var builder = DistributedApplication.CreateBuilder(args);');
+        fs.writeFileSync(replacementPath, '<Project Sdk="Aspire.AppHost.Sdk" />');
+
+        const folder = createWorkspaceFolder(tempDir);
+        let selectedAppHostPath = projectPath;
+        const discoveryService = {
+            resolveDebugTarget: async (filePath: string) => filePath,
+            tryFindWorkspaceDefaultCandidate: async () => ({
+                path: selectedAppHostPath,
+                language: 'csharp',
+                status: 'buildable',
+            }),
+        } as unknown as AppHostDiscoveryService;
+        const provider = new AspireDebugConfigurationProvider(discoveryService, launchReservation);
+        const config: vscode.DebugConfiguration = {
+            name: 'Debug AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: folder.uri.fsPath,
+        };
+
+        const firstPass = await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, config);
+        selectedAppHostPath = sourcePath;
+        const secondPass = firstPass
+            ? await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, firstPass)
+            : undefined;
+        fs.writeFileSync(path.join(appHostDirectory, 'Sibling.csproj'), '<Project Sdk="Aspire.AppHost.Sdk" />');
+        selectedAppHostPath = replacementPath;
+        const thirdPass = secondPass
+            ? await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, secondPass)
+            : undefined;
+
+        assert.deepStrictEqual(launchReservation.reserved, [projectPath, replacementPath]);
+        assert.deepStrictEqual(launchReservation.replacements, [{
+            previousAppHostPath: projectPath,
+            previousReservationId: 'reservation-1',
+            appHostPath: replacementPath,
+        }]);
+        assert.strictEqual(thirdPass?.[appHostLaunchReservationIdConfigKey], 'reservation-2');
+    });
+
+    test('replaces an external reservation when repeated default discovery resolves a different AppHost', async () => {
+        const workspaceRoot = path.join(tempDir, 'workspace');
+        const firstAppHostPath = path.join(workspaceRoot, 'First', 'First.csproj');
+        const secondAppHostPath = path.join(workspaceRoot, 'Second', 'Second.csproj');
+        fs.mkdirSync(path.dirname(firstAppHostPath), { recursive: true });
+        fs.mkdirSync(path.dirname(secondAppHostPath), { recursive: true });
+        fs.writeFileSync(firstAppHostPath, '<Project Sdk="Aspire.AppHost.Sdk" />');
+        fs.writeFileSync(secondAppHostPath, '<Project Sdk="Aspire.AppHost.Sdk" />');
+
+        const folder = createWorkspaceFolder(workspaceRoot);
+        let selectedAppHostPath = firstAppHostPath;
+        const discoveryService = {
+            resolveDebugTarget: async (filePath: string) => filePath,
+            tryFindWorkspaceDefaultCandidate: async () => ({
+                path: selectedAppHostPath,
+                language: 'csharp',
+                status: 'buildable',
+            }),
+        } as unknown as AppHostDiscoveryService;
+        const provider = new AspireDebugConfigurationProvider(discoveryService, launchReservation);
+        const config: vscode.DebugConfiguration = {
+            name: 'Debug AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: folder.uri.fsPath,
+        };
+
+        const firstPass = await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, config);
+        const firstReservationId = firstPass?.[appHostLaunchReservationIdConfigKey];
+        selectedAppHostPath = secondAppHostPath;
+        const secondPass = firstPass
+            ? await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, firstPass)
+            : undefined;
+
+        assert.deepStrictEqual(launchReservation.reserved, [firstAppHostPath, secondAppHostPath]);
+        assert.deepStrictEqual(launchReservation.replacements, [{
+            previousAppHostPath: firstAppHostPath,
+            previousReservationId: 'reservation-1',
+            appHostPath: secondAppHostPath,
+        }]);
+        assert.strictEqual(firstReservationId, 'reservation-1');
+        assert.strictEqual(secondPass?.[appHostLaunchReservationIdConfigKey], 'reservation-2');
     });
 
     test('does not claim an AppHostLaunchService launch as an external one', async () => {

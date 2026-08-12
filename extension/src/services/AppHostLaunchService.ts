@@ -686,6 +686,18 @@ export class AppHostLaunchService implements vscode.Disposable {
         return reservationId;
     }
 
+    /**
+     * Moves a repeated debug-configuration resolver pass to its newly selected AppHost.
+     *
+     * This is synchronous so no other launch can interleave between releasing the old
+     * reservation and claiming the new target. The old reservation is released even when
+     * the replacement is refused, because VS Code will abandon this debug configuration.
+     */
+    replaceExternalLaunchReservation(previousAppHostPath: string, previousReservationId: string, appHostPath: string): string | false {
+        this.clearMatchingLaunching(previousAppHostPath, previousReservationId);
+        return this.tryReserveExternalLaunch(appHostPath);
+    }
+
     private hasActiveLifecycleOperation(appHostPath: string): boolean {
         for (const activePathKeys of this._lifecycleLockPathKeys.values()) {
             if (Array.from(activePathKeys).some(activePathKey =>

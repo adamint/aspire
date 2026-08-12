@@ -6,6 +6,11 @@ const extensionOwnedConfigurationMarker = `__aspireAppHostLaunchServiceConfigura
 const extensionOwnedConfigurationValue = randomUUID();
 const externalLaunchReservationMarker = `__aspireExternalLaunchReservation_${randomUUID()}`;
 
+interface ExternalLaunchReservationMarker {
+    reservationId: string;
+    appHostPath: string;
+}
+
 export function markAspireDebugConfigurationAsExtensionOwned(configuration: vscode.DebugConfiguration): void {
     const configRecord = configuration as Record<string, unknown>;
     configRecord[extensionOwnedConfigurationMarker] = extensionOwnedConfigurationValue;
@@ -18,13 +23,20 @@ export function isAspireDebugConfigurationExtensionOwned(configuration: vscode.D
         configRecord.launchedByExtension === extensionOwnedConfigurationValue;
 }
 
-export function markAspireDebugConfigurationWithExternalLaunchReservation(configuration: vscode.DebugConfiguration, reservationId: string): void {
-    (configuration as Record<string, unknown>)[externalLaunchReservationMarker] = reservationId;
+export function markAspireDebugConfigurationWithExternalLaunchReservation(configuration: vscode.DebugConfiguration, reservationId: string, appHostPath: string): void {
+    (configuration as Record<string, unknown>)[externalLaunchReservationMarker] = { reservationId, appHostPath };
 }
 
-export function getAspireDebugConfigurationExternalLaunchReservation(configuration: vscode.DebugConfiguration): string | undefined {
-    const reservationId = (configuration as Record<string, unknown>)[externalLaunchReservationMarker];
-    return typeof reservationId === 'string' ? reservationId : undefined;
+export function getAspireDebugConfigurationExternalLaunchReservation(configuration: vscode.DebugConfiguration): ExternalLaunchReservationMarker | undefined {
+    const reservation = (configuration as Record<string, unknown>)[externalLaunchReservationMarker];
+    if (!reservation || typeof reservation !== 'object') {
+        return undefined;
+    }
+
+    const candidate = reservation as Partial<ExternalLaunchReservationMarker>;
+    return typeof candidate.reservationId === 'string' && typeof candidate.appHostPath === 'string'
+        ? { reservationId: candidate.reservationId, appHostPath: candidate.appHostPath }
+        : undefined;
 }
 
 export function stripAspireDebugConfigurationProviderInternalProperties(configuration: vscode.DebugConfiguration): void {

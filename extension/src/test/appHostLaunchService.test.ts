@@ -339,6 +339,44 @@ suite('AppHostLaunchService', () => {
         assert.strictEqual(service.tryReserveExternalLaunch(projectPath), false);
     });
 
+    test('replacing an external launch reservation releases the previous AppHost immediately', () => {
+        const firstDirectory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+        const secondDirectory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+        const firstPath = path.join(firstDirectory, 'AppHost.csproj');
+        const secondPath = path.join(secondDirectory, 'AppHost.csproj');
+        const firstReservationId = service.tryReserveExternalLaunch(firstPath);
+        assert.strictEqual(typeof firstReservationId, 'string');
+
+        const secondReservationId = service.replaceExternalLaunchReservation(firstPath, firstReservationId || '', secondPath);
+
+        assert.strictEqual(typeof secondReservationId, 'string');
+        assert.notStrictEqual(secondReservationId, firstReservationId);
+        assert.strictEqual(service.isLaunching(firstPath), false);
+        assert.strictEqual(service.isLaunching(secondPath), true);
+    });
+
+    test('a refused external launch replacement still releases the previous AppHost', () => {
+        const firstDirectory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+        const secondDirectory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+        const firstPath = path.join(firstDirectory, 'AppHost.csproj');
+        const secondPath = path.join(secondDirectory, 'AppHost.csproj');
+        const firstReservationId = service.tryReserveExternalLaunch(firstPath);
+        assert.strictEqual(typeof firstReservationId, 'string');
+        service.setEditorSessionProvider(() => [{
+            appHostPath: secondPath,
+            resolvedAppHostPath: secondPath,
+            operationKind: 'run',
+            startupCompleted: true,
+            configuration: { noDebug: false },
+            stopDebugging: async () => { },
+        }]);
+
+        const replacement = service.replaceExternalLaunchReservation(firstPath, firstReservationId || '', secondPath);
+
+        assert.strictEqual(replacement, false);
+        assert.strictEqual(service.isLaunching(firstPath), false);
+    });
+
     test('multiple paths can be tracked independently', async () => {
         await service.launch('/repo/AppHost1.csproj', 'run', true);
         await service.launch('/repo/AppHost2.csproj', 'run', true);

@@ -3,6 +3,7 @@ import { appHostLifecycleLaunchAlreadyClaimed, defaultConfigurationName } from '
 import type { AspireExtendedDebugConfiguration } from '../dcp/types';
 import { AppHostDiscoveryService, getDebugTargetForCandidate, isSamePath } from '../utils/appHostDiscovery';
 import type { CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
+import { compareAppHostIdentity } from '../utils/appHostIdentity';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { appHostLaunchReservationIdConfigKey, appHostSelectionOriginConfigKey, appHostTelemetryTargetPathConfigKey } from './AspireDebugConfigurationMetadata';
@@ -18,6 +19,8 @@ export { stripAspireDebugConfigurationProviderInternalProperties } from './Aspir
 export interface ExternalLaunchReservation {
     /** Returns the reservation ID, or `false` when another launch or run session already owns this AppHost. */
     tryReserveExternalLaunch(appHostPath: string): string | false;
+    /** Replaces this resolver's previous reservation, or returns `false` when the new AppHost is already owned. */
+    replaceExternalLaunchReservation(previousAppHostPath: string, previousReservationId: string, appHostPath: string): string | false;
 }
 
 export class AspireDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
@@ -99,13 +102,16 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
         // property. A launch.json can spell `launchedByExtension`, but it cannot know the
         // per-activation value that makes the property authoritative.
         const launchedByExtension = isAspireDebugConfigurationExtensionOwned(config);
-        const existingExternalReservationId = getAspireDebugConfigurationExternalLaunchReservation(config);
+        const existingExternalReservation = getAspireDebugConfigurationExternalLaunchReservation(config);
         if (launchedByExtension) {
             markAspireDebugConfigurationAsExtensionOwned(config);
         }
-        else if (existingExternalReservationId) {
-            markAspireDebugConfigurationWithExternalLaunchReservation(config, existingExternalReservationId);
-            configRecord[appHostLaunchReservationIdConfigKey] = existingExternalReservationId;
+        else if (existingExternalReservation) {
+            markAspireDebugConfigurationWithExternalLaunchReservation(
+                config,
+                existingExternalReservation.reservationId,
+                existingExternalReservation.appHostPath);
+            configRecord[appHostLaunchReservationIdConfigKey] = existingExternalReservation.reservationId;
         }
         else {
             delete configRecord[appHostLaunchReservationIdConfigKey];
@@ -141,20 +147,38 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
             // it, so claiming the directory would leave the tool free to start a duplicate.
             if (!launchedByExtension && getAspireDebugConfigurationCommand(aspireConfig) === 'run') {
                 const claimedPath = telemetryTarget?.path ?? (typeof config.program === 'string' ? config.program : undefined);
-                const reservationId = existingExternalReservationId ?? (claimedPath
-                    ? this._launchReservation.tryReserveExternalLaunch(claimedPath)
-                    : false);
-                if (claimedPath && !reservationId) {
+                if (!claimedPath) {
+                    return config;
+                }
+
+                let reservationPath = claimedPath;
+                let reservationId: string | false;
+                if (!existingExternalReservation) {
+                    reservationId = this._launchReservation.tryReserveExternalLaunch(claimedPath);
+                }
+                else if (compareAppHostIdentity(existingExternalReservation.appHostPath, claimedPath) === 'same') {
+                    reservationId = existingExternalReservation.reservationId;
+                    // Keep the path where the reservation was actually stored. The identity
+                    // can become ambiguous on a later resolver pass if sibling files appear.
+                    reservationPath = existingExternalReservation.appHostPath;
+                }
+                else {
+                    reservationId = this._launchReservation.replaceExternalLaunchReservation(
+                        existingExternalReservation.appHostPath,
+                        existingExternalReservation.reservationId,
+                        claimedPath);
+                }
+
+                if (!reservationId) {
                     // Another launch or run session already owns this AppHost, so proceeding
                     // would produce two AppHosts for one project.
                     // Abort this session and tell the user why rather than starting a second.
                     void vscode.window.showInformationMessage(appHostLifecycleLaunchAlreadyClaimed);
                     return undefined;
                 }
-                if (reservationId) {
-                    config[appHostLaunchReservationIdConfigKey] = reservationId;
-                    markAspireDebugConfigurationWithExternalLaunchReservation(config, reservationId);
-                }
+
+                config[appHostLaunchReservationIdConfigKey] = reservationId;
+                markAspireDebugConfigurationWithExternalLaunchReservation(config, reservationId, reservationPath);
             }
         }
 
