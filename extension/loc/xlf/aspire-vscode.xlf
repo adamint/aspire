@@ -751,6 +751,9 @@
     <trans-unit id="configuration.aspire.globalAppHostsPollingInterval.deprecated">
       <source xml:lang="en">This setting has been renamed to aspire.appHostsPollingInterval.</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.debugSessionStartTimedOut">
+      <source xml:lang="en">Timed out after {1} seconds waiting for debug session &apos;{0}&apos; to start.</source>
+    </trans-unit>
     <trans-unit id="aspire-vscode.strings.debugSessionStopTimedOut">
       <source xml:lang="en">Timed out after {1} seconds waiting for debug session &apos;{0}&apos; to stop.</source>
     </trans-unit>

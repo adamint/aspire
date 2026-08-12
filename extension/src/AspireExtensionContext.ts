@@ -28,6 +28,7 @@ export class AspireExtensionContext implements vscode.Disposable {
     private readonly _lateDebugSessionStops: Promise<void>[] = [];
     private _shutdownPromise?: Promise<void>;
     private _isShuttingDown = false;
+    private _hasOrderedDebugSessionStopSnapshot = false;
     private _isFinalizingShutdown = false;
     private _isShutdownRegistrationClosed = false;
     private _isDisposed = false;
@@ -118,7 +119,7 @@ export class AspireExtensionContext implements vscode.Disposable {
         this._debugSessionOutputSubscriptions.set(debugSession.debugSessionId, debugSession.onDidSendDebugConsoleOutput(event => this._onDidReceiveDebugConsoleOutput.fire(event)));
         this._onDidChangeDebugSessions.fire();
 
-        if (this._isShuttingDown) {
+        if (this._isShuttingDown && this._hasOrderedDebugSessionStopSnapshot) {
             const orderedStop = (async () => debugSession.stopDebugging())();
             // The drain below owns the failure, but observe it immediately so a rejection that
             // arrives before the next drain turn is never reported as unhandled.
@@ -197,6 +198,10 @@ export class AspireExtensionContext implements vscode.Disposable {
     }
 
     private async _waitForOrderedDebugSessionStops(): Promise<unknown[]> {
+        // Sessions registered after deactivate() but before this synchronous snapshot are already
+        // included below. Queue only later registrations separately so one failed stop is not
+        // reported once from the snapshot and again from the late-stop drain.
+        this._hasOrderedDebugSessionStopSnapshot = true;
         const sessions = [...this._aspireDebugSessions];
         const results: PromiseSettledResult<void>[] = await Promise.allSettled(
             sessions.map(async session => session.stopDebugging()));

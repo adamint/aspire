@@ -106,6 +106,7 @@
   "aspire-vscode.strings.failedToStartProject": "Failed to start project: {0}.",
   "aspire-vscode.strings.dcpServerNotInitialized": "DCP server not initialized - cannot forward debug output.",
   "aspire-vscode.strings.appHostSessionTerminated": "The AppHost process has terminated. To view console output, select the AppHost session from the debug console dropdown.",
+  "aspire-vscode.strings.debugSessionStartTimedOut": "Timed out after {1} seconds waiting for debug session '{0}' to start.",
   "aspire-vscode.strings.debugSessionStopTimedOut": "Timed out after {1} seconds waiting for debug session '{0}' to stop.",
   "aspire-vscode.strings.debugSessionsFailedToStop": "{0} debug sessions failed to stop: {1}",
   "aspire-vscode.strings.invalidTokenProvided": "Invalid token provided.",

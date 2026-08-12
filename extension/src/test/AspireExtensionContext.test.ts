@@ -150,6 +150,25 @@ suite('AspireExtensionContext', () => {
         assert.ok(order.indexOf('late stopped') < order.indexOf('rpc server'));
     });
 
+    test('deactivation reports a pre-snapshot debug-session failure once', async () => {
+        const order: string[] = [];
+        const context = createContext(order);
+        const expectedError = new Error('ordered stop failed');
+        const stopDebugging = sinon.stub().rejects(expectedError);
+
+        const shutdown = deactivateContext(context);
+        addSession(
+            context,
+            'pre-snapshot',
+            () => Promise.resolve(),
+            () => order.push('dispose pre-snapshot'),
+            undefined,
+            stopDebugging);
+
+        await assert.rejects(shutdown, error => error === expectedError);
+        sinon.assert.calledOnce(stopDebugging);
+    });
+
     test('deactivation resolves when a late ordered shutdown succeeds during CLI stop settlement', async () => {
         const order: string[] = [];
         const context = createContext(order);
