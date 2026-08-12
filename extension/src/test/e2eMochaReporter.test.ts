@@ -144,14 +144,30 @@ suite('E2E Mocha reporter', () => {
         assert.strictEqual(spawnError.message, `Failed to start node run-tests: spawn EPERM.${diagnosticsSuffix}`);
     });
 
-    test('process failure: completed Mocha exit-code failure is advisory', () => {
+    test('process failure: completed Mocha exit codes in the failure range are advisory', () => {
         const { E2eProcessError, shouldAllowAdvisoryTestFailure } = require(getProcessFailureModulePath());
-        const exitCodeError = new E2eProcessError('exit-code', 'node', ['run-tests'], {
-            exitCode: 1,
-            diagnosticsSuffix,
-        });
 
-        assert.strictEqual(shouldAllowAdvisoryTestFailure(exitCodeError, createCompletedMochaResults(), false), true);
+        for (const exitCode of [1, 255]) {
+            const exitCodeError = new E2eProcessError('exit-code', 'node', ['run-tests'], {
+                exitCode,
+                diagnosticsSuffix,
+            });
+
+            assert.strictEqual(shouldAllowAdvisoryTestFailure(exitCodeError, createCompletedMochaResults(), false), true);
+        }
+    });
+
+    test('process failure: numeric statuses outside the Mocha failure range stay blocking', () => {
+        const { E2eProcessError, shouldAllowAdvisoryTestFailure } = require(getProcessFailureModulePath());
+
+        for (const exitCode of [0, -1, 256, 0xC0000005]) {
+            const exitCodeError = new E2eProcessError('exit-code', 'node', ['run-tests'], {
+                exitCode,
+                diagnosticsSuffix,
+            });
+
+            assert.strictEqual(shouldAllowAdvisoryTestFailure(exitCodeError, createCompletedMochaResults(), false), false);
+        }
     });
 
     test('process failure: cleanup failure keeps completed Mocha failure blocking', () => {
@@ -166,6 +182,25 @@ suite('E2E Mocha reporter', () => {
 });
 
 suite('E2E process runner', () => {
+    test('rejects an invalid process-tree terminator before spawning', async () => {
+        const { runWithProcessTreeTimeout } = require(getProcessRunnerModulePath());
+        let spawnCalled = false;
+
+        await assert.rejects(runWithProcessTreeTimeout('node', ['run-tests'], {
+            spawn: () => {
+                spawnCalled = true;
+                throw new Error('spawn must not be called');
+            },
+            terminateProcessTree: undefined,
+            timeout: 1000,
+        }), {
+            name: 'TypeError',
+            message: 'terminateProcessTree must be a function.',
+        });
+
+        assert.strictEqual(spawnCalled, false);
+    });
+
     test('child error becomes a structured spawn failure with visible diagnostics', async () => {
         const child = new FakeChildProcess();
         const cause = new Error('spawn ENOENT');

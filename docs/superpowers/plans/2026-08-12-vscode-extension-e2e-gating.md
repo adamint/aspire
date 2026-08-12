@@ -546,6 +546,7 @@ Run:
 ```bash
 cd extension
 corepack yarn lint
+corepack yarn compile-e2e
 corepack yarn compile-tests
 corepack yarn compile
 corepack yarn unit-test \

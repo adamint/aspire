@@ -221,6 +221,21 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes('process.kill(-pid, signal)'));
     });
 
+    test('wires the ExTester process lifecycle into the extracted runner', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const invocationStart = runner.indexOf('await runWithProcessTreeTimeout(process.execPath');
+        const invocationEnd = runner.indexOf('\n      });', invocationStart);
+        const runnerOptions = runner.slice(invocationStart, invocationEnd);
+
+        assert.ok(invocationStart >= 0);
+        assert.ok(invocationEnd > invocationStart);
+        assert.ok(runnerOptions.includes('quoteShellArgument: quoteWindowsShellArgument,'));
+        assert.ok(runnerOptions.includes("stdio: 'inherit',"));
+        assert.ok(runnerOptions.includes("detached: process.platform !== 'win32',"));
+        assert.ok(runnerOptions.includes('terminateProcessTree,'));
+    });
+
     test('bounds retryable runner setup steps so setup failures still collect diagnostics', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');

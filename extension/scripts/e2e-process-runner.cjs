@@ -16,6 +16,10 @@ function runWithProcessTreeTimeout(command, args, options) {
     useShell = false,
   } = options;
 
+  if (typeof terminateProcessTree !== 'function') {
+    return Promise.reject(new TypeError('terminateProcessTree must be a function.'));
+  }
+
   return new Promise((resolve, reject) => {
     const child = useShell
       ? spawn([command, ...args].map(quoteShellArgument).join(' '), [], {

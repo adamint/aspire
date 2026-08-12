@@ -32,8 +32,13 @@ class E2eProcessError extends Error {
 }
 
 function shouldAllowAdvisoryTestFailure(error, results, cleanupFailed) {
+  // Mocha clamps ordinary test-failure exits to 1..255; Windows native crash statuses are numeric
+  // too, but fall outside that range and must remain blocking.
   return error instanceof E2eProcessError
     && error.reason === 'exit-code'
+    && Number.isInteger(error.exitCode)
+    && error.exitCode >= 1
+    && error.exitCode <= 255
     && hasCompletedMochaTestFailures(results)
     && !cleanupFailed;
 }
