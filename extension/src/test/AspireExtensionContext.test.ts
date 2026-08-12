@@ -11,9 +11,23 @@ import { ErrorCodes, ResponseError } from 'vscode-jsonrpc';
 import { AspireExtensionContext } from '../AspireExtensionContext';
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
 import * as cliModule from '../debugger/languages/cli';
+import { deactivate as deactivateExtension } from '../extension';
 import { extensionLogOutputChannel } from '../utils/logging';
 
 suite('AspireExtensionContext', () => {
+    test('extension deactivate returns the AspireExtensionContext shutdown promise', () => {
+        const shutdown = Promise.resolve();
+        const deactivateStub = sinon.stub(AspireExtensionContext.prototype, 'deactivate').returns(shutdown);
+
+        try {
+            assert.strictEqual(deactivateExtension(), shutdown);
+            sinon.assert.calledOnce(deactivateStub);
+        }
+        finally {
+            deactivateStub.restore();
+        }
+    });
+
     test('deactivation waits for every CLI stop request before disposing transport', async () => {
         const order: string[] = [];
         const context = createContext(order);
