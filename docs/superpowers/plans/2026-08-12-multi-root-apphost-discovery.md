@@ -41,8 +41,8 @@ test('workspace discovery includes AppHosts from every workspace folder', async 
     const workspaceFoldersStub = stubWorkspaceFolders(workspaceFolders);
     const candidateChangeEmitter = new vscode.EventEmitter<vscode.WorkspaceFolder>();
     const discover = sinon.stub().callsFake(async (workspaceFolder: vscode.WorkspaceFolder) => [{
-        path: path.join(workspaceFolder.uri.fsPath, workspaceFolder.name === 'typescript' ? 'apphost.mts' : 'apphost.py'),
-        language: workspaceFolder.name,
+        path: path.join(workspaceFolder.uri.fsPath, 'apphost.mts'),
+        language: 'typescript',
         status: 'buildable',
         selected: true,
     }]);
@@ -62,7 +62,7 @@ test('workspace discovery includes AppHosts from every workspace folder', async 
             discover.getCalls().map(call => (call.args[0] as vscode.WorkspaceFolder).uri.fsPath),
             workspaceFolders.map(folder => folder.uri.fsPath));
         assert.deepStrictEqual(repository.workspaceAppHostCandidatePaths, [
-            path.join(workspaceFolders[1].uri.fsPath, 'apphost.py'),
+            path.join(workspaceFolders[1].uri.fsPath, 'apphost.mts'),
             path.join(workspaceFolders[0].uri.fsPath, 'apphost.mts'),
         ]);
         assert.strictEqual(repository.workspaceAppHostPath, undefined);
@@ -143,7 +143,8 @@ In `_fetchWorkspaceAppHost`, replace `rootFolder` and the single streamed candid
 
 ```typescript
 const discoveryVersion = ++this._workspaceAppHostDiscoveryVersion;
-const workspaceFolderCandidates: WorkspaceFolderAppHostCandidates[] = workspaceFolders.map(workspaceFolder => ({
+const workspaceFolderSnapshot = [...workspaceFolders];
+const workspaceFolderCandidates: WorkspaceFolderAppHostCandidates[] = workspaceFolderSnapshot.map(workspaceFolder => ({
     workspaceFolder,
     candidates: [],
 }));
@@ -157,7 +158,7 @@ const onIncrementalCandidate = (
     candidate: CandidateAppHostDisplayInfo
 ): void => {
     if (cancellationSource.token.isCancellationRequested
-        || !this._isCurrentWorkspaceDiscovery(discoveryVersion, workspaceFolders)) {
+        || !this._isCurrentWorkspaceDiscovery(discoveryVersion, workspaceFolderSnapshot)) {
         return;
     }
 
@@ -189,7 +190,7 @@ Use the combined helper for incremental updates:
 const applyIncrementalCandidateUpdates = (): void => {
     cancelIncrementalCandidateUpdate();
     if (cancellationSource.token.isCancellationRequested
-        || !this._isCurrentWorkspaceDiscovery(discoveryVersion, workspaceFolders)) {
+        || !this._isCurrentWorkspaceDiscovery(discoveryVersion, workspaceFolderSnapshot)) {
         return;
     }
 
@@ -214,7 +215,7 @@ Promise.all(workspaceFolderCandidates.map(async folderCandidates => {
 })).then(() => {
     cancelIncrementalCandidateUpdate();
     if (cancellationSource.token.isCancellationRequested
-        || !this._isCurrentWorkspaceDiscovery(discoveryVersion, workspaceFolders)) {
+        || !this._isCurrentWorkspaceDiscovery(discoveryVersion, workspaceFolderSnapshot)) {
         return;
     }
 
@@ -223,7 +224,7 @@ Promise.all(workspaceFolderCandidates.map(async folderCandidates => {
     this._handleWorkspaceAppHostCandidates(result.appHostCandidates, result.selectedAppHostPath);
 ```
 
-Use the same complete-folder validation in the catch branch.
+Use the same complete-folder validation in the catch branch. After confirming the error belongs to the current discovery and is not a `CancellationError`, call `cancellationSource.cancel()` before clearing state and reporting the existing error so unfinished sibling callers cannot publish later candidates.
 
 - [ ] **Step 5: Validate the complete folder snapshot**
 
@@ -322,9 +323,10 @@ test('workspace ps shows running AppHosts from every folder before discovery com
         { uri: vscode.Uri.file('/workspace/python'), name: 'python', index: 1 },
     ];
     const workspaceFoldersStub = stubWorkspaceFolders(workspaceFolders);
+    const candidateChangeEmitter = new vscode.EventEmitter<vscode.WorkspaceFolder>();
     const discoveryService = {
         discover: () => new Promise<CandidateAppHostDisplayInfo[]>(() => { }),
-        onDidChangeCandidates: new vscode.EventEmitter<vscode.WorkspaceFolder>().event,
+        onDidChangeCandidates: candidateChangeEmitter.event,
         dispose: () => { },
     } as unknown as AppHostDiscoveryService;
     const repository = new AppHostDataRepository(terminalProvider, discoveryService);
@@ -349,6 +351,7 @@ test('workspace ps shows running AppHosts from every folder before discovery com
         assert.deepStrictEqual(repository.appHosts.map(appHost => appHost.appHostPath), [appHostPath]);
     } finally {
         repository.dispose();
+        candidateChangeEmitter.dispose();
         workspaceFoldersStub.restore();
     }
 });

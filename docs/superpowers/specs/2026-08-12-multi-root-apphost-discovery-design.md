@@ -22,7 +22,7 @@ The fallback used while discovery is pending will consider a path inside any wor
 
 ## Errors
 
-The combined discovery keeps the existing all-or-nothing error behavior. If one folder's discovery rejects, the repository cancels the visible combined update, clears workspace discovery state, and surfaces the existing fetch error. Empty or non-buildable results from one folder are not errors and do not hide valid candidates from other folders.
+The combined discovery keeps the existing all-or-nothing error behavior. If one folder's discovery rejects, the repository cancels the sibling discovery callers, clears workspace discovery state, and surfaces the existing fetch error. Empty or non-buildable results from one folder are not errors and do not hide valid candidates from other folders.
 
 No new user-facing strings, settings, telemetry events, or public APIs are required.
 
