@@ -1156,7 +1156,6 @@ function toCandidatesFromLegacySearchResult(parsed: LegacyAppHostProjectSearchRe
         path: candidatePath,
         language: 'csharp',
         status: 'buildable',
-        selected: typeof parsed.selected_project_file === 'string' && isSamePath(parsed.selected_project_file, candidatePath),
     }));
 }
 

@@ -1789,7 +1789,6 @@ suite('AppHost discovery', () => {
                     path: appHostPath,
                     language: 'csharp',
                     status: 'buildable',
-                    selected: true,
                 }]);
             }
             finally {
@@ -1988,7 +1987,6 @@ suite('AppHost discovery', () => {
                     path: appHostPath,
                     language: 'csharp',
                     status: 'buildable',
-                    selected: true,
                 }]);
             }
             finally {
