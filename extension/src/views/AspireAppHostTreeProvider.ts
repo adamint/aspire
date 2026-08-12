@@ -58,6 +58,7 @@ import { collectResourceCommandArguments, ResourceCommandArgumentValue } from '.
 import { createResourceCommandArgumentLoader } from './ResourceCommandArgumentsLoader';
 import { executeResourceCommand as executeResourceCommandWithUi, type ResourceCommandExecutionOutcome } from './resourceCommandExecution';
 import { AppHostLaunchService } from '../services/AppHostLaunchService';
+import { isSameFileSystemEntry } from '../utils/appHostDiscovery';
 import { isCommandCancellation } from '../utils/telemetry';
 
 type TreeElement = AppHostItem | EndpointUrlItem | ResourcesGroupItem | ResourceItem | WorkspaceResourcesItem | WorkspaceAppHostItem | WorkspaceAppHostsGroupItem | RunningAppHostsGroupItem | WorkspaceAppHostActionItem | WorkspaceAppHostPathItem | HealthChecksGroupItem | HealthCheckItem | LogFileItem | CommandsGroupItem | ResourceCommandItem;
@@ -83,9 +84,7 @@ function getLinkableResourceUrls(resource: ResourceJson) {
 }
 
 function isSamePath(left: string, right: string): boolean {
-    const resolvedLeft = path.resolve(left);
-    const resolvedRight = path.resolve(right);
-    return getComparisonKey(resolvedLeft) === getComparisonKey(resolvedRight);
+    return isSameFileSystemEntry(left, right);
 }
 
 function getComparisonKey(value: string): string {
@@ -195,7 +194,7 @@ class WorkspaceAppHostItem extends vscode.TreeItem {
         public readonly stopping = false
     ) {
         super(appHostName ?? workspaceAppHostLabel, vscode.TreeItemCollapsibleState.Collapsed);
-        this.id = `workspace-apphost:${getComparisonKey(path.resolve(appHostPath))}`;
+        this.id = `workspace-apphost:${path.resolve(appHostPath)}`;
 
         if (stopping) {
             this.iconPath = new vscode.ThemeIcon('loading~spin');

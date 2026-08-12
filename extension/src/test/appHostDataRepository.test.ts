@@ -7,7 +7,7 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
-import { AppHostDataRepository, AspireCliFailedError, shortenPath } from '../views/AppHostDataRepository';
+import { AppHostDataRepository, AspireCliFailedError, isMatchingAppHostPath, shortenPath } from '../views/AppHostDataRepository';
 import { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
 import { AppHostDiscoveryService, type CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
 import * as cliModule from '../debugger/languages/cli';
@@ -560,12 +560,70 @@ suite('AppHostDataRepository', () => {
                 'workspace AppHost discovery did not complete');
 
             assert.deepStrictEqual(repository.workspaceAppHostCandidatePaths, [upperCasePath, lowerCasePath]);
+            assert.strictEqual(statStub.callCount, 2, 'Expected one filesystem identity lookup per unique candidate path');
         } finally {
             repository.dispose();
             candidateChangeEmitter.dispose();
             statStub.restore();
             platformStub.restore();
             workspaceFoldersStub.restore();
+        }
+    });
+
+    test('workspace discovery reads each candidate filesystem identity once per combination pass', async () => {
+        const workspaceFolders = Array.from({ length: 5 }, (_, index) => ({
+            uri: vscode.Uri.file(`/workspace/root${index}`),
+            name: `root${index}`,
+            index,
+        }));
+        const candidatePaths = workspaceFolders.map((_, index) => `/workspace/AppHost${index}/apphost.mts`);
+        const workspaceFoldersStub = stubWorkspaceFolders(workspaceFolders);
+        const statStub = sinon.stub(fs, 'statSync').callsFake((filePath: fs.PathLike) => ({
+            dev: 1n,
+            ino: BigInt(candidatePaths.indexOf(String(filePath)) + 1),
+        }) as fs.BigIntStats);
+        const candidateChangeEmitter = new vscode.EventEmitter<vscode.WorkspaceFolder>();
+        const discover = sinon.stub().callsFake(async (workspaceFolder: vscode.WorkspaceFolder) => [{
+            path: candidatePaths[workspaceFolder.index],
+            language: 'typescript',
+            status: 'buildable',
+        }]);
+        const discoveryService = {
+            discover,
+            onDidChangeCandidates: candidateChangeEmitter.event,
+            dispose: () => { },
+        } as unknown as AppHostDiscoveryService;
+        const repository = new AppHostDataRepository(terminalProvider, discoveryService);
+
+        try {
+            await waitForCondition(
+                () => repository.isWorkspaceAppHostDiscoveryComplete,
+                'workspace AppHost discovery did not complete');
+
+            assert.deepStrictEqual(repository.workspaceAppHostCandidatePaths, candidatePaths);
+            assert.strictEqual(statStub.callCount, candidatePaths.length);
+        } finally {
+            repository.dispose();
+            candidateChangeEmitter.dispose();
+            statStub.restore();
+            workspaceFoldersStub.restore();
+        }
+    });
+
+    test('running AppHost matching preserves case-distinct Windows filesystem entries', () => {
+        const platformStub = sinon.stub(process, 'platform').value('win32');
+        const statStub = sinon.stub(fs, 'statSync').callsFake((filePath: fs.PathLike) => ({
+            dev: 1n,
+            ino: path.basename(path.dirname(String(filePath))) === 'AppHost' ? 100n : 101n,
+        }) as fs.BigIntStats);
+
+        try {
+            assert.strictEqual(
+                isMatchingAppHostPath('/workspace/AppHost/apphost.mts', '/workspace/apphost/apphost.mts'),
+                false);
+        } finally {
+            statStub.restore();
+            platformStub.restore();
         }
     });
 

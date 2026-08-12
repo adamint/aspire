@@ -5,7 +5,7 @@ import { spawnCliProcess, terminateCliProcess } from '../debugger/languages/cli'
 import { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { appHostDescribeMayNotBeSupported, appHostDiscoveryProgress, appHostPathMustBeNonEmptyAbsolute, aspireCliCommandFailed, aspireCliCommandTimedOut, aspireCliDescribeNotSupported, aspireCliOutputParseFailed, aspireCommandOutputTruncated, aspireDescribeMinimumVersion, errorFetchingAppHosts, workspaceViewSelectedMultipleAppHosts, workspaceViewSelectedSingleAppHost } from '../loc/strings';
-import { AppHostCandidate, AppHostDiscoveryService, CandidateAppHostDisplayInfo, formatAppHostLanguage, getWorkspaceAppHostProjectSearchResult, isBuildableAppHostCandidate, isSameFileSystemEntry } from '../utils/appHostDiscovery';
+import { AppHostCandidate, AppHostDiscoveryService, CandidateAppHostDisplayInfo, FileSystemEntryDescriptor, formatAppHostLanguage, getFileSystemEntryDescriptor, getWorkspaceAppHostProjectSearchResult, isBuildableAppHostCandidate, isSameFileSystemEntry, isSameFileSystemEntryDescriptor } from '../utils/appHostDiscovery';
 import { isNoLogoUnsupportedOutput, noLogoOption, removeRootNoLogoOption } from '../utils/cliCompatibility';
 import { ConfigInfoProvider } from '../utils/configInfoProvider';
 import { describeIncludeDisabledCommandsCapability } from '../types/configInfo';
@@ -2157,26 +2157,43 @@ function formatWorkspaceFolderDiscoveryError(error: WorkspaceFolderDiscoveryErro
 }
 
 function combineWorkspaceAppHostCandidates(workspaceFolderCandidates: readonly WorkspaceFolderAppHostCandidates[]): CombinedWorkspaceAppHostCandidates {
-    const appHostCandidates: Array<{ candidate: AppHostCandidate; workspaceFolderDepth: number }> = [];
+    const appHostCandidates: Array<{ candidate: AppHostCandidate; descriptor: FileSystemEntryDescriptor; workspaceFolderDepth: number }> = [];
+    const appHostCandidateIndex = new FileSystemEntryDescriptorIndex();
     const explicitlySelectedPaths: string[] = [];
+    const explicitlySelectedPathIndex = new FileSystemEntryDescriptorIndex();
+    const descriptorByResolvedPath = new Map<string, FileSystemEntryDescriptor>();
+    const getDescriptor = (candidatePath: string): FileSystemEntryDescriptor => {
+        const resolvedPath = path.resolve(candidatePath);
+        let descriptor = descriptorByResolvedPath.get(resolvedPath);
+        if (!descriptor) {
+            descriptor = getFileSystemEntryDescriptor(resolvedPath);
+            descriptorByResolvedPath.set(resolvedPath, descriptor);
+        }
+
+        return descriptor;
+    };
 
     for (const folderCandidates of workspaceFolderCandidates) {
         const result = getWorkspaceAppHostProjectSearchResult(folderCandidates.workspaceFolder, folderCandidates.candidates);
         const workspaceFolderDepth = path.resolve(folderCandidates.workspaceFolder.uri.fsPath).length;
         for (const candidate of result.app_host_candidates) {
-            const existingIndex = appHostCandidates.findIndex(existing =>
-                isSameFileSystemEntry(existing.candidate.path, candidate.path));
-            if (existingIndex < 0) {
-                appHostCandidates.push({ candidate, workspaceFolderDepth });
+            const descriptor = getDescriptor(candidate.path);
+            const existingIndex = appHostCandidateIndex.find(descriptor);
+            if (existingIndex === undefined) {
+                appHostCandidates.push({ candidate, descriptor, workspaceFolderDepth });
+                appHostCandidateIndex.add(descriptor);
             } else if (appHostCandidates[existingIndex].workspaceFolderDepth < workspaceFolderDepth) {
-                appHostCandidates[existingIndex] = { candidate, workspaceFolderDepth };
+                appHostCandidates[existingIndex] = { candidate, descriptor, workspaceFolderDepth };
+                appHostCandidateIndex.replace(existingIndex, descriptor);
             }
         }
         for (const candidate of folderCandidates.candidates) {
+            const descriptor = getDescriptor(candidate.path);
             if (candidate.selected === true
                 && candidate.status === 'buildable'
-                && !explicitlySelectedPaths.some(selectedPath => isSameFileSystemEntry(selectedPath, candidate.path))) {
+                && explicitlySelectedPathIndex.find(descriptor) === undefined) {
                 explicitlySelectedPaths.push(candidate.path);
+                explicitlySelectedPathIndex.add(descriptor);
             }
         }
     }
@@ -2184,8 +2201,7 @@ function combineWorkspaceAppHostCandidates(workspaceFolderCandidates: readonly W
     const combinedAppHostCandidates = appHostCandidates.map(({ candidate }) => candidate);
     const buildableAppHostCandidates = combinedAppHostCandidates.filter(isBuildableAppHostCandidate);
     const selectedAppHostPath = explicitlySelectedPaths.length === 1
-        ? combinedAppHostCandidates.find(candidate =>
-            isSameFileSystemEntry(candidate.path, explicitlySelectedPaths[0]))?.path
+        ? combinedAppHostCandidates[appHostCandidateIndex.find(getDescriptor(explicitlySelectedPaths[0])) ?? -1]?.path
         : explicitlySelectedPaths.length === 0 && buildableAppHostCandidates.length === 1
             ? buildableAppHostCandidates[0].path
             : null;
@@ -2196,6 +2212,86 @@ function combineWorkspaceAppHostCandidates(workspaceFolderCandidates: readonly W
     };
 }
 
+class FileSystemEntryDescriptorIndex {
+    private readonly _descriptors: FileSystemEntryDescriptor[] = [];
+    private readonly _exactPathBuckets = new Map<string, number[]>();
+    private readonly _identityBuckets = new Map<string, number[]>();
+    private readonly _fallbackPathBuckets = new Map<string, number[]>();
+    private readonly _unstableFallbackPathBuckets = new Map<string, number[]>();
+
+    find(descriptor: FileSystemEntryDescriptor): number | undefined {
+        const identityKey = getStableIdentityKey(descriptor);
+        const candidateBuckets = [
+            this._exactPathBuckets.get(descriptor.resolvedPath),
+            identityKey === undefined ? undefined : this._identityBuckets.get(identityKey),
+            identityKey === undefined
+                ? this._fallbackPathBuckets.get(getFallbackPathKey(descriptor))
+                : this._unstableFallbackPathBuckets.get(getFallbackPathKey(descriptor)),
+        ];
+        const checkedIndexes = new Set<number>();
+
+        for (const bucket of candidateBuckets) {
+            for (const index of bucket ?? []) {
+                if (!checkedIndexes.has(index)
+                    && isSameFileSystemEntryDescriptor(this._descriptors[index], descriptor)) {
+                    return index;
+                }
+
+                checkedIndexes.add(index);
+            }
+        }
+
+        return undefined;
+    }
+
+    add(descriptor: FileSystemEntryDescriptor): void {
+        const index = this._descriptors.length;
+        this._descriptors.push(descriptor);
+        this.addToBuckets(index, descriptor);
+    }
+
+    replace(index: number, descriptor: FileSystemEntryDescriptor): void {
+        this._descriptors[index] = descriptor;
+        this.addToBuckets(index, descriptor);
+    }
+
+    private addToBuckets(index: number, descriptor: FileSystemEntryDescriptor): void {
+        addToBucket(this._exactPathBuckets, descriptor.resolvedPath, index);
+
+        const fallbackPathKey = getFallbackPathKey(descriptor);
+        addToBucket(this._fallbackPathBuckets, fallbackPathKey, index);
+
+        const identityKey = getStableIdentityKey(descriptor);
+        if (identityKey === undefined) {
+            addToBucket(this._unstableFallbackPathBuckets, fallbackPathKey, index);
+        } else {
+            addToBucket(this._identityBuckets, identityKey, index);
+        }
+    }
+}
+
+function getStableIdentityKey(descriptor: FileSystemEntryDescriptor): string | undefined {
+    const identity = descriptor.identity;
+    return identity !== undefined && identity.ino !== 0n
+        ? `${identity.dev}:${identity.ino}`
+        : undefined;
+}
+
+function getFallbackPathKey(descriptor: FileSystemEntryDescriptor): string {
+    return process.platform === 'win32'
+        ? descriptor.resolvedPath.toLowerCase()
+        : descriptor.resolvedPath;
+}
+
+function addToBucket(buckets: Map<string, number[]>, key: string, index: number): void {
+    const bucket = buckets.get(key);
+    if (!bucket) {
+        buckets.set(key, [index]);
+    } else if (bucket[bucket.length - 1] !== index) {
+        bucket.push(index);
+    }
+}
+
 const projectFileExtensions = new Set(['.csproj', '.fsproj', '.vbproj']);
 
 export function shortenPaths(filePaths: readonly string[]): string[] {
@@ -2203,7 +2299,7 @@ export function shortenPaths(filePaths: readonly string[]): string[] {
     const stateByPath = new Map<string, ShortenedPathState>();
 
     for (const filePath of filePaths) {
-        const pathKey = getComparisonKey(filePath);
+        const pathKey = filePath;
         let state = stateByPath.get(pathKey);
         if (!state) {
             state = createShortenedPathState(filePath);
@@ -2217,7 +2313,7 @@ export function shortenPaths(filePaths: readonly string[]): string[] {
         const seenLabels = new Set<string>();
 
         for (const state of states) {
-            const labelKey = getComparisonKey(state.label);
+            const labelKey = state.label;
             if (seenLabels.has(labelKey)) {
                 duplicateLabels.add(labelKey);
             } else {
@@ -2230,13 +2326,13 @@ export function shortenPaths(filePaths: readonly string[]): string[] {
         }
 
         for (const state of states) {
-            if (duplicateLabels.has(getComparisonKey(state.label))) {
+            if (duplicateLabels.has(state.label)) {
                 expandShortenedPathState(state);
             }
         }
     }
 
-    return filePaths.map(filePath => stateByPath.get(getComparisonKey(filePath))?.label ?? filePath);
+    return filePaths.map(filePath => stateByPath.get(filePath)?.label ?? filePath);
 }
 
 interface ShortenedPathState {
@@ -2527,17 +2623,18 @@ export function isMatchingAppHostPath(left: string | undefined, right: string | 
         return false;
     }
 
-    const normalizedLeft = getComparisonKey(path.normalize(left));
-    const normalizedRight = getComparisonKey(path.normalize(right));
-    if (normalizedLeft === normalizedRight) {
+    if (isSameFileSystemEntry(left, right)) {
         return true;
     }
+
+    const normalizedLeft = path.normalize(left);
+    const normalizedRight = path.normalize(right);
 
     // `aspire extension get-apphosts` resolves a project file while `aspire ps`
     // can report the AppHost source file. Match by directory only for that
     // project/source-file shape so sibling AppHost projects don't collapse into
     // the same workspace AppHost.
-    return getComparisonKey(path.dirname(normalizedLeft)) === getComparisonKey(path.dirname(normalizedRight))
+    return isSameFileSystemEntry(path.dirname(normalizedLeft), path.dirname(normalizedRight))
         && isProjectFileToSourceFileMatch(normalizedLeft, normalizedRight);
 }
 

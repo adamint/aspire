@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import * as childProcess from 'child_process';
-import * as fs from 'fs';
+import fs = require('fs');
 import * as os from 'os';
 import * as path from 'path';
 import * as sinon from 'sinon';
@@ -389,6 +389,24 @@ suite('shortenPaths', () => {
             'Project.csproj',
             'Project.csproj',
         ]);
+    });
+
+    test('case-distinct Windows paths keep distinct labels', () => {
+        const platformStub = sinon.stub(process, 'platform').value('win32');
+
+        try {
+            const result = shortenPaths([
+                '/workspace/AppHost/apphost.mts',
+                '/workspace/apphost/apphost.mts',
+            ]);
+
+            assert.deepStrictEqual(result, [
+                'AppHost/apphost.mts',
+                'apphost/apphost.mts',
+            ]);
+        } finally {
+            platformStub.restore();
+        }
     });
 });
 
@@ -2175,6 +2193,71 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             'workspaceAppHost',
         ]);
         provider.dispose();
+    });
+
+    test('workspace mode gives case-distinct Windows AppHosts unique rendered IDs', () => {
+        const platformStub = sinon.stub(process, 'platform').value('win32');
+        const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
+        const upperCasePath = '/workspace/AppHost/apphost.mts';
+        const lowerCasePath = '/workspace/apphost/apphost.mts';
+        const repository = {
+            viewMode: 'workspace' as ViewMode,
+            appHosts: [],
+            workspaceResources: [],
+            workspaceAppHostPath: undefined,
+            workspaceAppHostCandidatePaths: [upperCasePath, lowerCasePath],
+            workspaceAppHostName: undefined,
+            onDidChangeData,
+        } as unknown as AppHostDataRepository;
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+
+        try {
+            const [group] = provider.getChildren();
+            const appHostItems = provider.getChildren(group);
+
+            assert.deepStrictEqual(appHostItems.map(item => item.label), [
+                'AppHost/apphost.mts',
+                'apphost/apphost.mts',
+            ]);
+            assert.strictEqual(new Set(appHostItems.map(item => item.id)).size, 2);
+        } finally {
+            provider.dispose();
+            platformStub.restore();
+        }
+    });
+
+    test('workspace mode does not associate a case-distinct Windows candidate with the wrong running AppHost', () => {
+        const platformStub = sinon.stub(process, 'platform').value('win32');
+        const statStub = sinon.stub(fs, 'statSync').callsFake((filePath: fs.PathLike) => ({
+            dev: 1n,
+            ino: path.basename(path.dirname(String(filePath))) === 'AppHost' ? 100n : 101n,
+        }) as fs.BigIntStats);
+        const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
+        const upperCasePath = '/workspace/AppHost/apphost.mts';
+        const lowerCasePath = '/workspace/apphost/apphost.mts';
+        const repository = {
+            viewMode: 'workspace' as ViewMode,
+            appHosts: [makeAppHost({ appHostPath: upperCasePath, resources: [] })],
+            workspaceResources: [],
+            workspaceAppHostPath: upperCasePath,
+            workspaceAppHostCandidatePaths: [upperCasePath, lowerCasePath],
+            workspaceAppHostName: undefined,
+            onDidChangeData,
+        } as unknown as AppHostDataRepository;
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+
+        try {
+            const topLevelItems = provider.getChildren();
+
+            assert.strictEqual(topLevelItems.length, 2);
+            assert.ok(topLevelItems[0].contextValue?.startsWith('workspaceResources'));
+            assert.strictEqual(topLevelItems[1].contextValue, 'workspaceAppHost');
+            assert.strictEqual((topLevelItems[1] as vscode.TreeItem & { appHostPath: string }).appHostPath, lowerCasePath);
+        } finally {
+            provider.dispose();
+            statStub.restore();
+            platformStub.restore();
+        }
     });
 
     test('loading hides stale AppHosts', () => {

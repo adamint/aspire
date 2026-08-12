@@ -1207,6 +1207,35 @@ function isCSharpSourceFileForProjectCandidate(filePath: string, projectPath: st
 type FileSystemEntryIdentity = Pick<fs.BigIntStats, 'dev' | 'ino'>;
 type FileSystemEntryIdentityProvider = (filePath: string) => FileSystemEntryIdentity | undefined;
 
+export interface FileSystemEntryDescriptor {
+    resolvedPath: string;
+    identity: FileSystemEntryIdentity | undefined;
+}
+
+export function getFileSystemEntryDescriptor(
+    filePath: string,
+    getIdentity: FileSystemEntryIdentityProvider = tryGetFileSystemEntryIdentity): FileSystemEntryDescriptor {
+    const resolvedPath = path.resolve(filePath);
+    return {
+        resolvedPath,
+        identity: getIdentity(resolvedPath),
+    };
+}
+
+export function isSameFileSystemEntryDescriptor(
+    left: FileSystemEntryDescriptor,
+    right: FileSystemEntryDescriptor): boolean {
+    if (left.resolvedPath === right.resolvedPath) {
+        return true;
+    }
+
+    if (hasStableFileSystemEntryIdentity(left.identity) && hasStableFileSystemEntryIdentity(right.identity)) {
+        return left.identity.dev === right.identity.dev && left.identity.ino === right.identity.ino;
+    }
+
+    return isSamePath(left.resolvedPath, right.resolvedPath);
+}
+
 export function isSameFileSystemEntry(
     left: string,
     right: string,
@@ -1217,16 +1246,14 @@ export function isSameFileSystemEntry(
         return true;
     }
 
-    const leftIdentity = getIdentity(resolvedLeft);
-    const rightIdentity = getIdentity(resolvedRight);
-    if (leftIdentity && rightIdentity && leftIdentity.ino !== 0n && rightIdentity.ino !== 0n) {
-        // Stable native identities are authoritative: case-sensitive Windows directories can
-        // contain distinct entries such as Foo and foo even though textual comparison ignores case.
-        return leftIdentity.dev === rightIdentity.dev && leftIdentity.ino === rightIdentity.ino;
-    }
+    return isSameFileSystemEntryDescriptor(
+        { resolvedPath: resolvedLeft, identity: getIdentity(resolvedLeft) },
+        { resolvedPath: resolvedRight, identity: getIdentity(resolvedRight) });
+}
 
-    // Missing or unstable identities cannot distinguish entries, so retain the platform fallback.
-    return isSamePath(resolvedLeft, resolvedRight);
+function hasStableFileSystemEntryIdentity(
+    identity: FileSystemEntryIdentity | undefined): identity is FileSystemEntryIdentity {
+    return identity !== undefined && identity.ino !== 0n;
 }
 
 function tryGetFileSystemEntryIdentity(filePath: string): FileSystemEntryIdentity | undefined {
