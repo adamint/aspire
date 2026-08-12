@@ -379,20 +379,27 @@ export async function startAppHostsSectionTextTransition(expectedTexts: readonly
             }
 
             const expectedPattern = new RegExp(patternSource, patternFlags);
-            const matchesExpectedText = element =>
-                expectedTexts.every(text => element.innerText.includes(text)) && expectedPattern.test(element.innerText);
+            const matchesExpectedText = element => {
+                expectedPattern.lastIndex = 0;
+                return element.getClientRects().length > 0
+                    && expectedTexts.every(text => element.innerText.includes(text))
+                    && expectedPattern.test(element.innerText);
+            };
             const trackedRow = Array.from(pane.querySelectorAll('.monaco-list-row')).find(matchesExpectedText);
             if (!trackedRow) {
                 return false;
             }
 
             window[stateKey]?.observer?.disconnect();
-            const state = { sawNonMatchingText: false };
+            const state = { lastNonMatchingAt: 0, trackedRow };
             state.observer = new MutationObserver(records => {
-                state.sawNonMatchingText ||= records.some(record =>
+                const sawNonMatchingText = records.some(record =>
                     Array.from(record.removedNodes).some(node => node === trackedRow || node.contains?.(trackedRow)))
                     || !trackedRow.isConnected
                     || !matchesExpectedText(trackedRow);
+                if (sawNonMatchingText) {
+                    state.lastNonMatchingAt = Date.now();
+                }
             });
             state.observer.observe(pane, { childList: true, subtree: true, characterData: true });
             window[stateKey] = state;
@@ -401,14 +408,21 @@ export async function startAppHostsSectionTextTransition(expectedTexts: readonly
     }, timeoutMs, `Timed out starting '${aspireAppHostsSectionTitle}' section text transition tracking.`);
 }
 
-export async function waitForAppHostsSectionTextAfterTransition(expectedTexts: readonly string[], expectedPattern: RegExp, timeoutMs = 30000): Promise<string> {
+export async function cancelAppHostsSectionTextTransition(): Promise<void> {
+    await VSBrowser.instance.driver.executeScript(`
+        window[arguments[0]]?.observer?.disconnect();
+        delete window[arguments[0]];
+    `, appHostsSectionTransitionStateKey).catch(() => undefined);
+}
+
+export async function waitForAppHostsSectionTextAfterTransition(expectedTexts: readonly string[], expectedPattern: RegExp, notBeforeTimestamp: number, timeoutMs = 30000): Promise<string> {
     let lastText = '';
     const expectedDescription = [...expectedTexts.map(text => `'${text}'`), expectedPattern.toString()].join(' and ');
 
     try {
         return await VSBrowser.instance.driver.wait(async () => {
             const result = await VSBrowser.instance.driver.executeScript<{ matched: boolean; text: string }>(`
-                const [stateKey, sectionTitle, expectedTexts, patternSource, patternFlags] = arguments;
+                const [stateKey, sectionTitle, expectedTexts, patternSource, patternFlags, notBeforeTimestamp] = arguments;
                 return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => {
                     const state = window[stateKey];
                     const titles = Array.from(document.querySelectorAll('.part.sidebar .pane > .pane-header > .title'));
@@ -416,19 +430,23 @@ export async function waitForAppHostsSectionTextAfterTransition(expectedTexts: r
                     const pane = title?.closest('.pane');
                     const text = pane && pane.getClientRects().length > 0 ? pane.innerText : '';
                     const expectedPattern = new RegExp(patternSource, patternFlags);
+                    const matchesExpectedText = row => {
+                        expectedPattern.lastIndex = 0;
+                        return row.getClientRects().length > 0
+                            && expectedTexts.every(expectedText => row.innerText.includes(expectedText))
+                            && expectedPattern.test(row.innerText);
+                    };
                     const matchingRow = pane
-                        ? Array.from(pane.querySelectorAll('.monaco-list-row')).find(row =>
-                            expectedTexts.every(expectedText => row.innerText.includes(expectedText))
-                            && expectedPattern.test(row.innerText))
+                        ? Array.from(pane.querySelectorAll('.monaco-list-row')).find(matchesExpectedText)
                         : undefined;
-                    const matched = Boolean(state?.sawNonMatchingText && matchingRow);
+                    const matched = Boolean(state?.lastNonMatchingAt >= notBeforeTimestamp && matchingRow);
                     if (matched) {
                         state.observer.disconnect();
                         delete window[stateKey];
                     }
                     resolve({ matched, text });
                 })));
-            `, appHostsSectionTransitionStateKey, aspireAppHostsSectionTitle, expectedTexts, expectedPattern.source, expectedPattern.flags);
+            `, appHostsSectionTransitionStateKey, aspireAppHostsSectionTitle, expectedTexts, expectedPattern.source, expectedPattern.flags, notBeforeTimestamp);
             lastText = result.text;
             return result.matched ? lastText : false;
         }, timeoutMs, `Timed out waiting for '${aspireAppHostsSectionTitle}' section text to transition back to ${expectedDescription}.`);
