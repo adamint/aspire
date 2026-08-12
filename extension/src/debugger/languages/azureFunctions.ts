@@ -443,8 +443,17 @@ function getJsonOutputFileArgument(args: string[]): string | undefined {
     return undefined;
 }
 
-function hasFlag(args: string[], flag: string): boolean {
-    return args.some(argument => argument === flag || argument.startsWith(`${flag}=`));
+function ensureFlagEnabled(args: string[], flag: string): void {
+    let firstMatch = -1;
+    for (let i = args.length - 1; i >= 0; i--) {
+        const argument = args[i];
+        if (argument === flag || argument.startsWith(`${flag}=`)) {
+            firstMatch = i;
+            args.splice(i, 1);
+        }
+    }
+
+    args.splice(firstMatch >= 0 ? firstMatch : args.length, 0, flag);
 }
 
 function readJsonOutputFile(jsonOutputFile: string): string | undefined {
@@ -683,12 +692,10 @@ export const azureFunctionsDebuggerExtension: ResourceDebuggerExtension = {
             workerProcessIdDiscovery = { jsonOutputFile, initialContents: '' };
             ownedJsonOutputFileArgument = path.relative(buildOutputPath, jsonOutputFile).split(path.sep).join('/');
         }
-        if (launchOptions.debug && !hasFlag(rawArgs, '--dotnet-isolated-debug')) {
-            rawArgs.push('--dotnet-isolated-debug');
+        if (launchOptions.debug) {
+            ensureFlagEnabled(rawArgs, '--dotnet-isolated-debug');
         }
-        if (!hasFlag(rawArgs, '--enable-json-output')) {
-            rawArgs.push('--enable-json-output');
-        }
+        ensureFlagEnabled(rawArgs, '--enable-json-output');
         if (ownedJsonOutputFileArgument) {
             rawArgs.push('--json-output-file', ownedJsonOutputFileArgument);
         }

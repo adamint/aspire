@@ -339,7 +339,7 @@ suite('Azure Functions Debugger Extension Tests', () => {
         assert.strictEqual(
             (executedTask.execution as vscode.ShellExecution).commandLine,
             `func host start --dotnet-isolated-debug --enable-json-output --json-output-file ${relativeMetadataFile}`);
-        assert.strictEqual(path.resolve(buildOutputPath, relativeMetadataFile), ownedMetadataFile);
+        assert.strictEqual(path.resolve(buildOutputPath, relativeMetadataFile), path.resolve(ownedMetadataFile));
         sinon.assert.calledOnceWithExactly(fsMkdtempSync, path.join(buildOutputPath, 'aspire-functions-worker-'));
 
         cleanupRun('azure-functions-test-run');
@@ -938,7 +938,7 @@ suite('Azure Functions Debugger Extension Tests', () => {
         const targetPath = path.join('/workspace', 'FunctionsApp', 'bin', 'Debug', 'net10.0', 'FunctionsApp.dll');
         const buildOutputPath = path.dirname(targetPath);
         const existingWorkerPidArgument = 'existing-worker.json';
-        const existingWorkerPidPath = path.join(buildOutputPath, existingWorkerPidArgument);
+        const existingWorkerPidPath = path.resolve(buildOutputPath, existingWorkerPidArgument);
         const staleOutput = `${JSON.stringify({ name: 'dotnet-worker-startup', workerProcessId: 4545 })}\n`;
         const freshOutput = [
             JSON.stringify({ name: 'dotnet-worker-startup', workerProcessId: 4646 }),
@@ -969,6 +969,32 @@ suite('Azure Functions Debugger Extension Tests', () => {
         assert.strictEqual(debugConfiguration.processId, '4747');
         sinon.assert.alwaysCalledWithExactly(fsReadFileSync, existingWorkerPidPath, 'utf8');
         sinon.assert.notCalled(fsMkdtempSync);
+
+        cleanupRun('azure-functions-test-run');
+        taskHarness.end(0);
+        await new Promise<void>(resolve => setImmediate(resolve));
+    });
+
+    test('enables required Core Tools flags when explicitly disabled', async () => {
+        const projectPath = path.join('/workspace', 'FunctionsApp', 'FunctionsApp.csproj');
+        const targetPath = path.join('/workspace', 'FunctionsApp', 'bin', 'Debug', 'net10.0', 'FunctionsApp.dll');
+        const args = ['--dotnet-isolated-debug=false', '--enable-json-output=false'];
+        sinon.stub(DotNetService.prototype, 'getDotNetTargetPath').resolves(targetPath);
+        sinon.stub(DotNetService.prototype, 'buildDotNetProject').resolves();
+
+        await azureFunctionsDebuggerExtension.createDebugSessionConfigurationCallback!(
+            createLaunchConfiguration(projectPath),
+            args,
+            [],
+            createLaunchOptions(true),
+            createDebugConfiguration(projectPath, args));
+
+        assert.deepStrictEqual(taskHarness.getExecutedTask()?.definition.args, [
+            '--dotnet-isolated-debug',
+            '--enable-json-output',
+            '--json-output-file',
+            defaultWorkerPidArgument
+        ]);
 
         cleanupRun('azure-functions-test-run');
         taskHarness.end(0);
