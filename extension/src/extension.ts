@@ -283,6 +283,9 @@ export async function activate(context: vscode.ExtensionContext) {
     void debuggerInstallHintService.notifyMissingDebuggers(resources);
   };
   const debuggerInstallHintSubscription = dataRepository.onDidChangeData(notifyMissingDebuggers);
+  // Missing-debugger guidance is a one-time background experience, so it must observe resource
+  // snapshots even when the Aspire panel and AppHost source are both closed.
+  const debuggerInstallHintDataLease = dataRepository.keepDataActive();
   notifyMissingDebuggers();
 
   const codeLensProvider = new AspireCodeLensProvider(appHostTreeProvider, dataRepository);
@@ -351,7 +354,7 @@ export async function activate(context: vscode.ExtensionContext) {
     additionalArgs.push('--follow');
     terminalProvider.sendAspireCommandToAspireTerminal('logs', true, additionalArgs);
   });
-  context.subscriptions.push(codeLensRegistration, installDebuggerExtensionRegistration, codeLensDebugPipelineStepRegistration, codeLensResourceActionRegistration, codeLensViewLogsRegistration, codeLensRevealResourceRegistration, codeLensOpenDashboardRegistration, codeLensViewAppHostLogsRegistration, codeLensProvider, debuggerInstallHintSubscription);
+  context.subscriptions.push(codeLensRegistration, installDebuggerExtensionRegistration, codeLensDebugPipelineStepRegistration, codeLensResourceActionRegistration, codeLensViewLogsRegistration, codeLensRevealResourceRegistration, codeLensOpenDashboardRegistration, codeLensViewAppHostLogsRegistration, codeLensProvider, debuggerInstallHintSubscription, debuggerInstallHintDataLease);
 
   // Gutter decorations — colored dots next to resources showing runtime state
   const gutterDecorationProvider = new AspireGutterDecorationProvider(appHostTreeProvider);

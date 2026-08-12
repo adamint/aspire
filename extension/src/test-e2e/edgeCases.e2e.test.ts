@@ -2,14 +2,15 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { AspireExtensionE2EControlCommand } from '../types/extensionApi';
-import { getCommandInvocationCount, getDebugLaunchCount, isSamePath, waitForCommandOutcome, waitForDebugLaunch, waitForExtensionState, waitForRepositoryIdle, waitForWorkspaceAppHost } from './helpers/assertions';
-import { createExternalSingleFileAppHost, executeE2eControlCommand, removeExternalSingleFileAppHost, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, setDebugLaunchSuppressedForE2E, stopAppHostIfRunning, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
+import { getCommandInvocationCount, getDebugLaunchCount, isSamePath, waitForCommandOutcome, waitForDebugLaunch, waitForExtensionState, waitForRepositoryIdle, waitForSelectedWorkspaceAppHost, waitForWorkspaceAppHost } from './helpers/assertions';
+import { addIntegrationPackageToAppHost, createEmptyAppHostProject, createExternalSingleFileAppHost, executeE2eControlCommand, getGeneratedAppHostPath, getGeneratedProjectRoot, removeExternalSingleFileAppHost, removeGeneratedProject, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, setDebugLaunchSuppressedForE2E, stopAppHostIfRunning, stopPrimaryAppHostIfRunning, writeFileWithRetry, writeWorkspaceAppHostConfigForPath } from './helpers/fixtures';
 import { getPrimaryAppHostProjectPath, getWorkspaceRoot } from './helpers/paths';
-import { chooseActiveQuickPick, executeCommandFromPalette, openAspireView, waitForEditorTitle } from './helpers/vscode';
+import { chooseActiveQuickPick, executeCommandFromPalette, openAspireView, waitForEditorTitle, waitForNotificationMessage, waitForWorkbenchText } from './helpers/vscode';
 
 suite('Aspire extension edge case E2E', function () {
     this.timeout(240000);
     let externalAppHostPath: string | undefined;
+    let debuggerInstallHintProjectName: string | undefined;
 
     teardown(async () => {
         await runE2eTeardown([
@@ -17,10 +18,18 @@ suite('Aspire extension edge case E2E', function () {
             () => setDebugLaunchSuppressedForE2E(false),
             () => restoreWorkspaceCliPath(),
             () => externalAppHostPath ? stopAppHostIfRunning(externalAppHostPath) : undefined,
+            () => debuggerInstallHintProjectName ? stopAppHostIfRunning(getGeneratedAppHostPath(debuggerInstallHintProjectName)) : undefined,
+            () => debuggerInstallHintProjectName ? restoreWorkspaceAppHostConfig() : undefined,
             () => executeE2eControlCommand({ name: 'closeAllEditors' }),
             () => {
                 removeExternalSingleFileAppHost();
                 externalAppHostPath = undefined;
+            },
+            () => {
+                if (debuggerInstallHintProjectName) {
+                    removeGeneratedProject(debuggerInstallHintProjectName);
+                    debuggerInstallHintProjectName = undefined;
+                }
             },
             () => stopPrimaryAppHostIfRunning(),
         ], 'Edge case E2E teardown failed.');
@@ -138,5 +147,52 @@ suite('Aspire extension edge case E2E', function () {
         'external AppHost and resources to remain followed after its tab is backgrounded and the Aspire panel is hidden',
         60000);
         assert.ok(backgrounded.state.appHosts.some(appHost => isSamePath(appHost.appHostPath, appHostPath)));
+    });
+
+    test('shows debugger install guidance while the Aspire panel and AppHost source are closed', async () => {
+        await openAspireView();
+        await waitForRepositoryIdle();
+
+        const debuggerExtensions = await executeE2eControlCommand({ name: 'getResourceDebuggerExtensions' });
+        const installedDebuggerTypes = (debuggerExtensions.result as Array<{ resourceType: string }>).map(extension => extension.resourceType);
+        assert.ok(!installedDebuggerTypes.includes('python'), 'The clean E2E host must not have the Python debugger extension installed.');
+
+        debuggerInstallHintProjectName = 'DebuggerInstallHintApp';
+        const appHostPath = getGeneratedAppHostPath(debuggerInstallHintProjectName);
+        await createEmptyAppHostProject(debuggerInstallHintProjectName);
+        await addIntegrationPackageToAppHost('Aspire.Hosting.Python', appHostPath);
+
+        const pythonAppDirectory = path.join(getGeneratedProjectRoot(debuggerInstallHintProjectName), 'pythonapp');
+        fs.mkdirSync(pythonAppDirectory, { recursive: true });
+        writeFileWithRetry(path.join(pythonAppDirectory, 'app.py'), 'import time\n\nprint("ready", flush=True)\ntime.sleep(600)\n');
+
+        const appHostSource = fs.readFileSync(appHostPath, 'utf8');
+        writeFileWithRetry(
+            appHostPath,
+            appHostSource.replace(
+                'builder.Build().Run();',
+                `builder.AddPythonApp("pythonapp", "./pythonapp", "app.py")
+    .WithVirtualEnvironment(".venv", createIfNotExists: false)
+    .WithCommand(OperatingSystem.IsWindows() ? "python" : "python3");
+
+builder.Build().Run();`));
+        writeWorkspaceAppHostConfigForPath(appHostPath);
+
+        await waitForSelectedWorkspaceAppHost(appHostPath);
+        await executeE2eControlCommand({ name: 'closeAllEditors' });
+        await executeCommandFromPalette('workbench.view.explorer');
+
+        const runBefore = getCommandInvocationCount('aspire-vscode.runAppHost');
+        await executeE2eControlCommand({ name: 'runAppHost', appHostPath }, { waitFor: 'started' });
+        await waitForCommandOutcome('aspire-vscode.runAppHost', 'success', 180000, runBefore);
+
+        const notification = await waitForNotificationMessage(
+            'Install the Python debugger extension to debug resources in this app.',
+            60000);
+        await notification.dismiss();
+
+        await executeE2eControlCommand({ name: 'openFile', filePath: appHostPath });
+        await waitForEditorTitle('apphost.cs');
+        await waitForWorkbenchText('Install Python debugger', 60000);
     });
 });
