@@ -199,6 +199,37 @@ suite('AppHostLaunchService', () => {
         }
     });
 
+    test('equivalent Windows path spellings share one launching state entry', async () => {
+        const platformStub = sinon.stub(process, 'platform').value('win32');
+        const statStub = sinon.stub(fs, 'statSync').returns({
+            dev: 1n,
+            ino: 100n,
+        } as fs.BigIntStats);
+        const upperCasePath = 'C:\\workspace\\AppHost\\AppHost.csproj';
+        const lowerCasePath = 'c:\\workspace\\apphost\\apphost.csproj';
+
+        try {
+            await service.launch(upperCasePath, 'run', true);
+            await service.launch(lowerCasePath, 'run', true);
+
+            assert.strictEqual(service.launchingPaths.length, 1);
+
+            onDidTerminateDebugSessionCallback?.({
+                configuration: {
+                    type: 'aspire',
+                    program: upperCasePath,
+                },
+            } as unknown as vscode.DebugSession);
+
+            assert.strictEqual(service.isLaunching(upperCasePath), false);
+            assert.strictEqual(service.isLaunching(lowerCasePath), false);
+            assert.deepStrictEqual(service.launchingPaths, []);
+        } finally {
+            statStub.restore();
+            platformStub.restore();
+        }
+    });
+
     test('launch clears launching state and throws when startDebugging returns false', async () => {
         // vscode.debug.startDebugging returns Promise<boolean> and resolves false when
         // the debug adapter rejects or no provider matches — no terminate event is

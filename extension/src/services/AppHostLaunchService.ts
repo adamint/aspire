@@ -174,7 +174,9 @@ export class AppHostLaunchService implements vscode.Disposable {
             // "Starting..." immediately after the user invokes the command. Every pre-start
             // failure path below clears it because VS Code will not emit a terminate event.
             // See https://code.visualstudio.com/api/references/vscode-api#debug.startDebugging
-            this._launchingPaths.add(path.resolve(appHostPath));
+            if (this.findLaunchingPath(appHostPath) === undefined) {
+                this._launchingPaths.add(path.resolve(appHostPath));
+            }
             this._onDidChangeLaunchingState.fire();
 
             const cliAvailability = await checkCliAvailableOrRedirect('debug_gate');
