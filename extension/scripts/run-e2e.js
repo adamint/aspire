@@ -16,7 +16,7 @@ const {
   runWithRetries,
   terminateOrphanedDescendants,
 } = require('./e2e-download-retry');
-const { hasCompletedMochaTestFailures } = require('./e2e-mocha-results.cjs');
+const { E2eProcessError, shouldAllowAdvisoryTestFailure } = require('./e2e-process-failure.cjs');
 
 const extensionRoot = path.resolve(__dirname, '..');
 const extensionPackageJson = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.json'), 'utf8'));
@@ -93,7 +93,7 @@ const COMMAND_INERT_PATH_ALPHABET = isWindows ? '._-+@~:\\/' : '._-+,=:@%/';
 const primaryAppHostProject = path.join(workspaceRoot, 'AspireE2E.AppHost', 'AspireE2E.AppHost.csproj');
 const workspaceNuGetConfigPath = path.join(workspaceRoot, 'NuGet.config');
 const enableAzureFunctionsE2E = process.env.ASPIRE_EXTENSION_E2E_ENABLE_AZURE_FUNCTIONS === 'true';
-const allowTestFailure = process.env.ASPIRE_EXTENSION_E2E_ALLOW_TEST_FAILURE === 'true';
+const advisoryIssue = process.env.ASPIRE_EXTENSION_E2E_ADVISORY_ISSUE || '';
 let cliPathForCleanup;
 const csharpFileHeader = `// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
@@ -118,6 +118,7 @@ function prepareRunDirectories() {
 
 function runWithProcessTreeTimeout(command, args, extraEnv, timeout) {
   return new Promise((resolve, reject) => {
+    const diagnosticsSuffix = ` Diagnostics are under ${path.relative(extensionRoot, resultsDir)} and ${path.relative(extensionRoot, storageDiagnosticsDir)}.`;
     const useShell = shouldUseShellForCommand(command);
     const child = useShell
       ? spawn([command, ...args].map(quoteWindowsShellArgument).join(' '), [], {
@@ -133,7 +134,7 @@ function runWithProcessTreeTimeout(command, args, extraEnv, timeout) {
         shell: false,
         stdio: 'inherit',
         detached: process.platform !== 'win32',
-      })
+      });
 
     let timedOut = false;
     let settled = false;
@@ -150,7 +151,7 @@ function runWithProcessTreeTimeout(command, args, extraEnv, timeout) {
         child.removeAllListeners();
         child.unref();
         settle();
-        reject(new Error(`${command} ${args.join(' ')} timed out after ${timeout}ms and did not exit after process-tree termination. Diagnostics are under ${path.relative(extensionRoot, resultsDir)} and ${path.relative(extensionRoot, storageDiagnosticsDir)}.`));
+        reject(new E2eProcessError('timeout', command, args, { timeout, didNotExit: true, diagnosticsSuffix }));
       }, 15000);
     }, timeout);
 
@@ -160,8 +161,8 @@ function runWithProcessTreeTimeout(command, args, extraEnv, timeout) {
       }
 
       settle();
-      reject(error);
-    })
+      reject(new E2eProcessError('spawn', command, args, { cause: error, diagnosticsSuffix }));
+    });
 
     child.on('close', (exitCode, signal) => {
       if (settled) {
@@ -170,12 +171,17 @@ function runWithProcessTreeTimeout(command, args, extraEnv, timeout) {
 
       settle();
       if (timedOut) {
-        reject(new Error(`${command} ${args.join(' ')} timed out after ${timeout}ms. Diagnostics are under ${path.relative(extensionRoot, resultsDir)} and ${path.relative(extensionRoot, storageDiagnosticsDir)}.`));
+        reject(new E2eProcessError('timeout', command, args, { timeout, diagnosticsSuffix }));
+        return;
+      }
+
+      if (typeof exitCode !== 'number') {
+        reject(new E2eProcessError('signal', command, args, { signal, diagnosticsSuffix }));
         return;
       }
 
       if (exitCode !== 0) {
-        reject(new Error(`${command} ${args.join(' ')} exited with code ${exitCode ?? `signal ${signal ?? 'unknown'}`}. Diagnostics are under ${path.relative(extensionRoot, resultsDir)} and ${path.relative(extensionRoot, storageDiagnosticsDir)}.`));
+        reject(new E2eProcessError('exit-code', command, args, { exitCode, diagnosticsSuffix }));
         return;
       }
 
@@ -735,10 +741,10 @@ async function main() {
 
   if (testFailure) {
     printFailureDiagnosticsSummary();
-    // Setup failures throw past the run-tests catch, while the reporter's completed-test records
-    // distinguish assertion failures from ExTester startup, hook, crash, and timeout failures.
-    if (allowTestFailure && hasCompletedMochaTestFailures(readMochaResults()) && !cleanupFailed) {
-      console.warn(`::warning title=VS Code extension E2E test failure allowed::${shardName} failed during test execution. Diagnostics were uploaded for investigation.`);
+    // Only completed test failures become advisory. Structured setup, spawn, signal, timeout, and
+    // cleanup failures keep the shard blocking even when mocha.json recorded completed test cases.
+    if (advisoryIssue && shouldAllowAdvisoryTestFailure(testFailure, readMochaResults(), cleanupFailed)) {
+      console.warn(`::warning title=VS Code extension E2E test failure advisory::${shardName} has completed test failures tracked by ${advisoryIssue}. Diagnostics were uploaded for investigation.`);
       return;
     }
 

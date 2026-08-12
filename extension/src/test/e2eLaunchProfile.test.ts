@@ -357,14 +357,22 @@ suite('E2E launch profile', () => {
         assert.strictEqual(runStep.includes('continue-on-error:'), false);
     });
 
-    test('allows completed E2E test failures without hiding setup or cleanup failures', () => {
+    test('wires structured E2E harness failures into advisory handling', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
 
-        assert.ok(runner.includes("const allowTestFailure = process.env.ASPIRE_EXTENSION_E2E_ALLOW_TEST_FAILURE === 'true';"));
+        assert.ok(runner.includes("const { E2eProcessError, shouldAllowAdvisoryTestFailure } = require('./e2e-process-failure.cjs');"));
+        assert.ok(runner.includes("const advisoryIssue = process.env.ASPIRE_EXTENSION_E2E_ADVISORY_ISSUE || '';"));
         assert.ok(runner.includes('let cleanupFailed = false;'));
         assert.ok(runner.includes('cleanupFailed = true;'));
-        assert.ok(runner.includes('if (allowTestFailure && hasCompletedMochaTestFailures(readMochaResults()) && !cleanupFailed)'));
+        assert.ok(runner.includes("new E2eProcessError('spawn', command, args, { cause: error, diagnosticsSuffix })"));
+        assert.ok(runner.includes("new E2eProcessError('timeout', command, args, { timeout, didNotExit: true, diagnosticsSuffix })"));
+        assert.ok(runner.includes("new E2eProcessError('timeout', command, args, { timeout, diagnosticsSuffix })"));
+        assert.ok(runner.includes("new E2eProcessError('signal', command, args, { signal, diagnosticsSuffix })"));
+        assert.ok(runner.includes("new E2eProcessError('exit-code', command, args, { exitCode, diagnosticsSuffix })"));
+        assert.ok(runner.includes('shouldAllowAdvisoryTestFailure(testFailure, readMochaResults(), cleanupFailed)'));
+        assert.ok(runner.includes('completed test failures tracked by ${advisoryIssue}. Diagnostics were uploaded for investigation.'));
+        assert.strictEqual(runner.includes('ASPIRE_EXTENSION_E2E_ALLOW_TEST_FAILURE'), false);
         assert.strictEqual(runner.includes('completedTests'), false);
     });
 
