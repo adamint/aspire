@@ -11,11 +11,12 @@ import { AspireExtendedDebugConfiguration, EnvVar } from '../dcp/types';
 import { AnsiColors } from '../utils/AspireTerminalProvider';
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
 import type { DashboardLaunchBehavior } from '../debugger/AspireDebugSession';
+import { appHostSelectionOriginConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
 import { isDirectory } from '../utils/io';
 import { sendTelemetryEvent } from '../utils/telemetry';
 import { dashboardDefaultChangedNotificationKey } from '../utils/dashboardNotificationState';
 
-export interface IInteractionService {
+export interface IInteractionService extends vscode.Disposable {
     showStatus: (statusText: string | null) => void;
     clearProgressNotification: () => void;
     promptForString: (promptText: string, defaultValue: string | null, required: boolean, rpcClient: ICliRpcClient) => Promise<string | null>;
@@ -160,6 +161,7 @@ function getConsoleLineText(line: ConsoleLine): string {
 type DebugSessionOptions = {
     command?: string;
     args?: string[];
+    env?: { [key: string]: string };
 };
 
 export class InteractionService implements IInteractionService {
@@ -167,6 +169,7 @@ export class InteractionService implements IInteractionService {
 
     private _rpcClient?: ICliRpcClient;
     private _progressNotifier: ProgressNotifier;
+    private _isDisposed = false;
 
     constructor(getAspireDebugSession: () => AspireDebugSession | null, rpcClient: ICliRpcClient, private readonly _globalState?: vscode.Memento) {
         this._getAspireDebugSession = getAspireDebugSession;
@@ -175,6 +178,13 @@ export class InteractionService implements IInteractionService {
     }
 
     showStatus(statusText: string | null) {
+        if (this._isDisposed) {
+            // The RPC connection owning this service is gone. A status message that was still in
+            // flight when the transport closed must not paint progress that nothing is left alive
+            // to clear, which would strand the indicator for the rest of the window's lifetime.
+            return;
+        }
+
         delayStatusForE2E();
         this._progressNotifier.show(statusText);
     }
@@ -676,7 +686,9 @@ export class InteractionService implements IInteractionService {
             program: projectFile ?? workingDirectory,
             command: command as AspireExtendedDebugConfiguration['command'],
             args: options?.args,
+            env: options?.env,
             noDebug: !debug,
+            [appHostSelectionOriginConfigKey]: projectFile ? 'user-selection' : 'default-discovery',
         };
 
         const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(workingDirectory));
@@ -687,6 +699,14 @@ export class InteractionService implements IInteractionService {
     }
 
     clearProgressNotification() {
+        this._progressNotifier.clear();
+    }
+
+    dispose() {
+        // The RPC connection owning this service is going away, so tear down any progress it
+        // still has on screen. Otherwise a CLI that dies with the extension leaves a permanent
+        // "Building..." indicator that nothing is left alive to clear.
+        this._isDisposed = true;
         this._progressNotifier.clear();
     }
 
