@@ -718,7 +718,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
     private _trackStoppingAppHost(appHostPath: string): void {
         const resolvedAppHostPath = this._findKnownRunningAppHostPath(appHostPath) ?? appHostPath;
         const existingKey = this._findStoppingAppHostKey(resolvedAppHostPath);
-        const key = existingKey ?? getComparisonKey(path.normalize(path.resolve(resolvedAppHostPath)));
+        const key = existingKey ?? path.normalize(path.resolve(resolvedAppHostPath));
         const existingTimeout = this._stoppingAppHostTimeouts.get(key);
         if (existingTimeout) {
             clearTimeout(existingTimeout);

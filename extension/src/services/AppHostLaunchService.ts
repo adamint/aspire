@@ -8,10 +8,7 @@ import { classifyAppHostDirectory, classifyAppHostPath } from '../utils/appHostL
 import { classifyError, isCommandCancellation, sendTelemetryEvent, type EventProperties } from '../utils/telemetry';
 import { bucketAspireCommand } from '../utils/telemetryBuckets';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
-
-function getComparisonKey(value: string): string {
-    return process.platform === 'win32' ? value.toLowerCase() : value;
-}
+import { isSameFileSystemEntry } from '../utils/appHostDiscovery';
 
 function isAspireCommandType(value: unknown): value is AspireCommandType {
     return value === 'run' || value === 'deploy' || value === 'publish' || value === 'do';
@@ -69,8 +66,7 @@ export class AppHostLaunchService implements vscode.Disposable {
         this._debugSessionSubscription = vscode.debug.onDidTerminateDebugSession(session => {
             const appHostPath = session.configuration?.program;
             if (appHostPath && session.configuration?.type === 'aspire') {
-                const key = getComparisonKey(path.resolve(appHostPath));
-                if (this._launchingPaths.delete(key)) {
+                if (this.deleteLaunchingPath(appHostPath)) {
                     this._onDidChangeLaunchingState.fire();
                 }
                 const command = getTerminationCommand(session.configuration);
@@ -98,7 +94,7 @@ export class AppHostLaunchService implements vscode.Disposable {
     }
 
     isLaunching(appHostPath: string): boolean {
-        return this._launchingPaths.has(getComparisonKey(path.resolve(appHostPath)));
+        return this.findLaunchingPath(appHostPath) !== undefined;
     }
 
     /**
@@ -106,16 +102,14 @@ export class AppHostLaunchService implements vscode.Disposable {
      * appears in the running AppHosts list).
      */
     clearLaunching(appHostPath: string): void {
-        const key = getComparisonKey(path.resolve(appHostPath));
-        if (this._launchingPaths.delete(key)) {
+        if (this.deleteLaunchingPath(appHostPath)) {
             this._onDidChangeLaunchingState.fire();
         }
     }
 
     clearMatchingLaunching(appHostPath: string): void {
         const resolvedAppHostPath = path.resolve(appHostPath);
-        const exactKey = getComparisonKey(path.normalize(resolvedAppHostPath));
-        if (this._launchingPaths.delete(exactKey)) {
+        if (this.deleteLaunchingPath(resolvedAppHostPath)) {
             this._onDidChangeLaunchingState.fire();
             return;
         }
@@ -180,7 +174,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             // "Starting..." immediately after the user invokes the command. Every pre-start
             // failure path below clears it because VS Code will not emit a terminate event.
             // See https://code.visualstudio.com/api/references/vscode-api#debug.startDebugging
-            this._launchingPaths.add(getComparisonKey(path.resolve(appHostPath)));
+            this._launchingPaths.add(path.resolve(appHostPath));
             this._onDidChangeLaunchingState.fire();
 
             const cliAvailability = await checkCliAvailableOrRedirect('debug_gate');
@@ -222,6 +216,16 @@ export class AppHostLaunchService implements vscode.Disposable {
             throw err;
         }
     }
+
+    private findLaunchingPath(appHostPath: string): string | undefined {
+        return Array.from(this._launchingPaths)
+            .find(launchingPath => isSameFileSystemEntry(launchingPath, appHostPath));
+    }
+
+    private deleteLaunchingPath(appHostPath: string): boolean {
+        const launchingPath = this.findLaunchingPath(appHostPath);
+        return launchingPath !== undefined && this._launchingPaths.delete(launchingPath);
+    }
 }
 
 async function getLaunchTelemetryProperties(appHostPath: string, command: AspireCommandType, noDebug: boolean, executionSuppressed: boolean) {
@@ -253,11 +257,11 @@ function isE2eDebugLaunchSuppressed(): boolean {
 function isMatchingAppHostPath(left: string, right: string): boolean {
     const normalizedLeft = path.normalize(left);
     const normalizedRight = path.normalize(right);
-    if (getComparisonKey(normalizedLeft) === getComparisonKey(normalizedRight)) {
+    if (isSameFileSystemEntry(normalizedLeft, normalizedRight)) {
         return true;
     }
 
-    return getComparisonKey(path.dirname(normalizedLeft)) === getComparisonKey(path.dirname(normalizedRight)) &&
+    return isSameFileSystemEntry(path.dirname(normalizedLeft), path.dirname(normalizedRight)) &&
         isProjectFileToSourceFileMatch(normalizedLeft, normalizedRight);
 }
 

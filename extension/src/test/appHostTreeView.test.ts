@@ -514,6 +514,44 @@ suite('AspireAppHostTreeProvider', () => {
         provider.dispose();
     });
 
+    test('global stop state preserves case-distinct Windows AppHosts', () => {
+        const platformStub = sinon.stub(process, 'platform').value('win32');
+        const statStub = sinon.stub(fs, 'statSync').callsFake((filePath: fs.PathLike) => ({
+            dev: 1n,
+            ino: path.basename(path.dirname(String(filePath))) === 'AppHost' ? 100n : 101n,
+        }) as fs.BigIntStats);
+        const upperCasePath = '/workspace/AppHost/apphost.mts';
+        const lowerCasePath = '/workspace/apphost/apphost.mts';
+        const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
+        const repository = {
+            viewMode: 'global' as ViewMode,
+            appHosts: [
+                makeAppHost({ appHostPath: upperCasePath, appHostPid: 100 }),
+                makeAppHost({ appHostPath: lowerCasePath, appHostPid: 101 }),
+            ],
+            workspaceResources: [],
+            workspaceAppHostPath: undefined,
+            workspaceAppHostCandidatePaths: [],
+            workspaceAppHostName: undefined,
+            workspaceAppHostDescription: undefined,
+            requestAppHostStopRefresh: sandbox.stub(),
+            onDidChangeData,
+        } as unknown as AppHostDataRepository;
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+
+        try {
+            provider.notifyAppHostStopping(upperCasePath);
+
+            const items = provider.getChildren();
+            assert.strictEqual(items[0].contextValue, 'appHost:stopping');
+            assert.strictEqual(items[1].contextValue, 'appHost');
+        } finally {
+            provider.dispose();
+            statStub.restore();
+            platformStub.restore();
+        }
+    });
+
     test('stop AppHost requests refresh after terminal command is sent', async () => {
         const appHostPath = path.resolve('workspace', 'apps', 'Store', 'AppHost.csproj');
         const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
@@ -603,7 +641,7 @@ suite('AspireAppHostTreeProvider', () => {
         assert.strictEqual(stoppingItem.description, 'Stopping...');
         assert.strictEqual(requestAppHostStopRefresh.callCount, 1);
         assert.deepStrictEqual(requestAppHostStopRefresh.firstCall.args, [workspaceRoot]);
-        assert.deepStrictEqual(provider.stoppingPaths, [process.platform === 'win32' ? appHostPath.toLowerCase() : appHostPath]);
+        assert.deepStrictEqual(provider.stoppingPaths, [appHostPath]);
         provider.dispose();
     });
 

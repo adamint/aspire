@@ -1,4 +1,6 @@
 import * as assert from 'assert';
+import fs = require('fs');
+import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { AspireExtendedDebugConfiguration } from '../dcp/types';
@@ -175,6 +177,26 @@ suite('AppHostLaunchService', () => {
 
         assert.strictEqual(service.isLaunching('/repo/AppHost1.csproj'), false);
         assert.strictEqual(service.isLaunching('/repo/AppHost2.csproj'), true);
+    });
+
+    test('case-distinct Windows AppHosts have independent launching state', async () => {
+        const platformStub = sinon.stub(process, 'platform').value('win32');
+        const statStub = sinon.stub(fs, 'statSync').callsFake((filePath: fs.PathLike) => ({
+            dev: 1n,
+            ino: path.basename(path.dirname(String(filePath))) === 'AppHost' ? 100n : 101n,
+        }) as fs.BigIntStats);
+        const upperCasePath = '/workspace/AppHost/apphost.mts';
+        const lowerCasePath = '/workspace/apphost/apphost.mts';
+
+        try {
+            await service.launch(upperCasePath, 'run', true);
+
+            assert.strictEqual(service.isLaunching(upperCasePath), true);
+            assert.strictEqual(service.isLaunching(lowerCasePath), false);
+        } finally {
+            statStub.restore();
+            platformStub.restore();
+        }
     });
 
     test('launch clears launching state and throws when startDebugging returns false', async () => {
