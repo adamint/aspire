@@ -174,7 +174,7 @@ partial class Resource
             Hosting.ApplicationModel.ResourceCommandState.Enabled => ResourceCommandState.Enabled,
             Hosting.ApplicationModel.ResourceCommandState.Disabled => ResourceCommandState.Disabled,
             Hosting.ApplicationModel.ResourceCommandState.Hidden => ResourceCommandState.Hidden,
-            _ => throw new InvalidOperationException("Unexpected state: " + state)
+            _ => ResourceCommandState.Hidden
         };
     }
 }
