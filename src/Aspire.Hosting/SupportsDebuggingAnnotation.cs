@@ -23,13 +23,11 @@ public sealed class SupportsDebuggingAnnotation : IResourceAnnotation
     private SupportsDebuggingAnnotation(
         string launchConfigurationType,
         Func<Executable, LaunchConfigurationCallbackContext, Task> launchConfigurationAnnotator,
-        Func<LaunchConfigurationCallbackContext, Task<object>> launchConfigurationProducer,
-        bool rewritesArgumentsForDebugging)
+        Func<LaunchConfigurationCallbackContext, Task<object>> launchConfigurationProducer)
     {
         LaunchConfigurationType = launchConfigurationType;
         LaunchConfigurationAnnotator = launchConfigurationAnnotator;
         LaunchConfigurationProducer = launchConfigurationProducer;
-        RewritesArgumentsForDebugging = rewritesArgumentsForDebugging;
     }
 
     /// <summary>
@@ -55,33 +53,10 @@ public sealed class SupportsDebuggingAnnotation : IResourceAnnotation
     // untyped object is consumed by internal launch-configuration plumbing.
     internal Func<LaunchConfigurationCallbackContext, Task<object>> LaunchConfigurationProducer { get; }
 
-    /// <summary>
-    /// Indicates that the debug support rewrites the resource's command-line arguments while a debug
-    /// session is active (via the <c>argsCallback</c> passed to <c>WithDebugSupport</c>).
-    /// </summary>
-    /// <remarks>
-    /// Integrations such as Go and Python strip the process entrypoint tokens 
-    /// (e.g. <c>go run &lt;pkg&gt;</c>, <c>python -m &lt;mod&gt;</c>)
-    /// so the IDE debugger can own them, which leaves the executable's <c>Spec.Args</c> valid 
-    /// only for IDE execution. When this is <see langword="true"/>, a Process fallback 
-    /// (either the DCP-level <c>FallbackExecutionTypes</c> or the in-process fallback when the launch configuration fails) 
-    /// would attempt to run <c>ExecutablePath + Args</c> with the entrypoint stripped — a broken command — 
-    /// so a process fallback must NOT be offered.
-    /// <para>
-    /// This is set based purely on the presence of an <c>argsCallback</c> in <c>WithDebugSupport</c>,
-    /// not on whether that callback actually rewrites anything for a given resource configuration. This is a
-    /// deliberate, conservative rule: a resource that supplies an args callback forgoes the process fallback
-    /// even when the callback happens to be a no-op (e.g. a Python "Executable" entrypoint), keeping the rule
-    /// simple and predictable.
-    /// </para>
-    /// </remarks>
-    public bool RewritesArgumentsForDebugging { get; }
-
     internal static SupportsDebuggingAnnotation Create<T>(
         string resourceName,
         string launchConfigurationType,
-        Func<LaunchConfigurationCallbackContext, Task<T>> launchConfigurationProducer,
-        bool rewritesArgumentsForDebugging = false)
+        Func<LaunchConfigurationCallbackContext, Task<T>> launchConfigurationProducer)
     {
         // The annotator stays generic over T so the DCP annotation is serialized against the concrete
         // launch configuration type rather than a boxed object, which would change the emitted JSON.
@@ -92,8 +67,7 @@ public sealed class SupportsDebuggingAnnotation : IResourceAnnotation
                 await ProduceAsync(context).ConfigureAwait(false)),
             // The suppression is safe because ProduceAsync throws rather than returning null; the
             // compiler cannot see that because T is unconstrained and so may be a nullable type.
-            async context => (await ProduceAsync(context).ConfigureAwait(false))!,
-            rewritesArgumentsForDebugging);
+            async context => (await ProduceAsync(context).ConfigureAwait(false))!);
 
         async Task<T> ProduceAsync(LaunchConfigurationCallbackContext context)
         {
