@@ -432,3 +432,142 @@ Expected: lint and compilation succeed; the repository test file and complete ex
 git add extension/src/test/appHostDataRepository.test.ts extension/src/views/AppHostDataRepository.ts
 git commit -m "Handle every workspace root in the Aspire panel"
 ```
+
+### Task 3: Address full-review findings
+
+**Consumed by:** nothing
+
+**Files:**
+- Modify: `extension/src/test/appHostDataRepository.test.ts:268-550`
+- Modify: `extension/src/test/appHostDiscovery.test.ts:274-345`
+- Modify: `extension/src/views/AppHostDataRepository.ts:200-205`
+- Modify: `extension/src/views/AppHostDataRepository.ts:301-308`
+- Modify: `extension/src/views/AppHostDataRepository.ts:707-850`
+- Modify: `extension/src/views/AppHostDataRepository.ts:2065-2150`
+- Modify: `extension/src/utils/appHostDiscovery.ts:92-135`
+
+- [ ] **Step 1: Write failing path and selection tests**
+
+Add tests named:
+
+```typescript
+test('workspace discovery preserves case-distinct AppHost paths on case-sensitive platforms', async () => {
+    // Return `/workspace/AppHost/apphost.mts` from one root and
+    // `/workspace/apphost/apphost.mts` from another.
+    // Expect one candidate only on Windows and two on macOS/Linux.
+});
+
+test('workspace discovery preserves one explicit selection across roots', async () => {
+    // Root A returns two buildable candidates with one `selected: true`.
+    // Root B returns one buildable candidate without `selected`.
+    // Expect Root A's explicit path to remain `workspaceAppHostPath`.
+});
+```
+
+Run:
+
+```bash
+cd extension
+corepack yarn compile-tests
+corepack yarn unit-test --run out/test/appHostDataRepository.test.js --grep "case-distinct AppHost paths|preserves one explicit selection"
+```
+
+Expected: both tests fail against the pre-review merge behavior.
+
+- [ ] **Step 2: Align merge identity and selection semantics**
+
+Change the path key to normalize while preserving the repository's platform casing behavior:
+
+```typescript
+function getPathComparisonKey(filePath: string): string {
+    return getComparisonKey(path.resolve(filePath));
+}
+```
+
+Store the winning candidate with its workspace-root depth, replacing it only when the new candidate comes from a deeper root. Track explicit selections from `CandidateAppHostDisplayInfo.selected === true`. Return one explicit selected candidate when exactly one exists; otherwise fall back only when the merged buildable candidate list has one item.
+
+- [ ] **Step 3: Write failing partial-result and concurrency tests**
+
+Replace the sibling-cancellation fake with:
+
+```typescript
+test('workspace discovery failure preserves healthy folder candidates', async () => {
+    // Reject Root A, resolve Root B with a buildable candidate.
+    // Expect Root B to remain visible and `repository.hasError` to be false.
+});
+```
+
+Add:
+
+```typescript
+test('workspace discovery limits concurrent folder scans', async () => {
+    // Create six roots and controlled promises.
+    // Assert four calls start, resolving one starts the fifth, and max active calls is four.
+});
+
+test('workspace-folder changes reuse surviving discovery caches', async () => {
+    // Change [rootA, rootB] to [rootA, rootC].
+    // Assert rootA is requested without `forceRefresh` and only rootC needs new CLI work.
+});
+```
+
+Run the three tests and verify they fail for the expected all-or-nothing, unbounded, and forced-refresh behavior.
+
+- [ ] **Step 4: Implement bounded partial discovery**
+
+Add:
+
+```typescript
+private static readonly _workspaceAppHostDiscoveryConcurrency = 4;
+```
+
+Use a fixed worker pool that records an `error` on each `WorkspaceFolderAppHostCandidates` entry instead of rejecting early. Stop scheduling new work when the shared caller token is cancelled. After all workers finish:
+
+```typescript
+const failedFolders = workspaceFolderCandidates.filter(result => result.error !== undefined);
+const combined = combineWorkspaceAppHostCandidates(workspaceFolderCandidates);
+const hasBuildableCandidate = combined.appHostCandidates.some(isBuildableAppHostCandidate);
+
+if (failedFolders.length > 0 && !hasBuildableCandidate) {
+    // Preserve the existing fatal error path.
+} else {
+    // Log each failed root and apply healthy candidates.
+}
+```
+
+Folder-set changes must call `_fetchWorkspaceAppHost()` without `forceRefresh`; explicit user refresh keeps `forceRefresh: true`.
+
+- [ ] **Step 5: Retire removed-root discovery state**
+
+Add this service method:
+
+```typescript
+forgetWorkspaceFolder(workspaceFolder: vscode.WorkspaceFolder): void {
+    const key = path.resolve(workspaceFolder.uri.fsPath);
+    this._cache.delete(key);
+    const timer = this._pendingInvalidationTimers.get(key);
+    if (timer) {
+        clearTimeout(timer);
+        this._pendingInvalidationTimers.delete(key);
+    }
+    this._watchers.get(key)?.forEach(watcher => watcher.dispose());
+    this._watchers.delete(key);
+}
+```
+
+The method intentionally does not cancel an active cached promise so existing subscribers can finish. Call it for every removed folder in the workspace-folder change handler. Add an `AppHostDiscoveryService` test that proves watchers are disposed and the next discovery creates fresh watchers/cache.
+
+- [ ] **Step 6: Verify and re-review**
+
+Run:
+
+```bash
+cd extension
+corepack yarn lint
+corepack yarn compile-tests
+corepack yarn compile
+corepack yarn unit-test --run out/test/appHostDataRepository.test.js --run out/test/appHostDiscovery.test.js
+corepack yarn unit-test
+```
+
+Then rerun the affected regression/domain/performance lanes and the Playwright CLI proof against the new head. Expected: all tests pass, no blocking review findings remain, and Playwright again shows both real AppHosts while the base SHA shows one.
