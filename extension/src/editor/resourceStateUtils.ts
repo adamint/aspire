@@ -80,19 +80,11 @@ function pathsMatch(documentPath: string, appHostPath: string): boolean {
 function tryGetCanonicalPath(value: string): string | undefined {
     try {
         return realpathSync.native(value);
-    } catch (error) {
-        if (isMissingPathError(error)) {
-            return undefined;
-        }
-
-        throw error;
+    } catch {
+        // Canonicalization is a best-effort fallback. Broken links, permissions,
+        // and other filesystem failures must not break CodeLens or gutter updates.
+        return undefined;
     }
-}
-
-function isMissingPathError(error: unknown): error is NodeJS.ErrnoException {
-    return error instanceof Error
-        && 'code' in error
-        && (error.code === 'ENOENT' || error.code === 'ENOTDIR');
 }
 
 function getComparisonKey(value: string): string {

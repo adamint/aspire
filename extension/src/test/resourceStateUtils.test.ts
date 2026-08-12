@@ -215,6 +215,22 @@ suite('matchesAppHostPathOrDirectory', () => {
         assert.strictEqual(matchesAppHostPathOrDirectory(documentPath, appHostPath), false);
     });
 
+    test('does not throw when canonicalization encounters a symlink loop', () => {
+        const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-resource-state-loop-'));
+        const loopPath = path.join(tempDirectory, 'loop');
+        const appHostDirectory = path.join(tempDirectory, 'apphost');
+        const appHostPath = path.join(appHostDirectory, 'AppHost.csproj');
+        try {
+            fs.mkdirSync(appHostDirectory);
+            fs.writeFileSync(appHostPath, '');
+            fs.symlinkSync(loopPath, loopPath, process.platform === 'win32' ? 'junction' : 'dir');
+
+            assert.strictEqual(matchesAppHostPathOrDirectory(path.join(loopPath, 'AppHost.cs'), appHostPath), false);
+        } finally {
+            fs.rmSync(tempDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+        }
+    });
+
     test('matches a TypeScript AppHost opened through a directory symlink', () => {
         const workspace = createSymlinkedWorkspace();
         try {
