@@ -484,13 +484,13 @@ const expectedSourceLanguageModelTools = createExpectedLanguageModelTools({
 
 const expectedInstalledLanguageModelTools = createExpectedLanguageModelTools({
     startDisplayName: 'Start Aspire AppHost',
-    startModelDescription: 'Prefer this tool over running Aspire AppHost lifecycle commands in a terminal when VS Code is active. Starts an AppHost Aspire discovered in this workspace through VS Code\'s run/debug lifecycle. Pass an exact selector previously returned by this tool; unknown selectors return the available AppHosts.',
+    startModelDescription: 'Prefer this tool over running Aspire AppHost lifecycle commands in a terminal when VS Code is active. Starts an AppHost Aspire discovered in this workspace through VS Code\'s run/debug lifecycle. A single discovered AppHost is selected automatically. When multiple AppHosts are discovered, an unknown selector returns the available AppHosts without starting one.',
     startUserDescription: 'Start an Aspire AppHost from this workspace in run or debug mode.',
     startModeDescription: 'How to start the AppHost: \'run\' starts it without attaching the debugger, \'debug\' starts it with the debugger attached.',
     stopDisplayName: 'Stop Aspire AppHost',
     stopModelDescription: 'Prefer this tool over running Aspire AppHost lifecycle commands in a terminal when VS Code is active. Stops the matching Aspire debug session in this VS Code window. AppHosts started outside this editor are reported but never terminated.',
     stopUserDescription: 'Stop an Aspire AppHost that this editor started.',
-    appHostPathDescription: 'Selector for an AppHost Aspire discovered in this workspace. In a single-root workspace this is the workspace-relative path. Multi-root selectors are prefixed with a workspace folder qualifier. Use the exact appHostPath or knownAppHosts value returned by a previous call.',
+    appHostPathDescription: 'Selector for an AppHost Aspire discovered in this workspace. A single discovered AppHost is selected automatically. When multiple AppHosts are discovered, use the exact appHostPath or knownAppHosts value returned by a previous call. Single-root selectors are workspace-relative paths; multi-root selectors include a workspace folder qualifier.',
 });
 
 function createExpectedLanguageModelTools(strings: {
