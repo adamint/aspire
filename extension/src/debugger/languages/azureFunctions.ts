@@ -26,6 +26,8 @@ const DEFAULT_PICK_PROCESS_TIMEOUT_SECONDS = 30;
 const FUNC_HOST_DEFAULT_PORT = 7071;
 const POLL_INTERVAL_MS = 100;
 const REQUEST_TIMEOUT_MS = 1_000;
+const TEMP_DIRECTORY_CLEANUP_MAX_ATTEMPTS = 5;
+const TEMP_DIRECTORY_CLEANUP_RETRY_DELAY_MS = 100;
 
 type FuncHostTaskShell = 'cmd' | 'fish' | 'powershell' | 'posix';
 
@@ -34,14 +36,43 @@ type TerminalProfileConfiguration = {
     source?: string;
 };
 
+type WorkerProcessIdDiscovery = {
+    jsonOutputFile: string;
+    initialContents: string;
+};
+
 /** Tracks worker PIDs by runId for cleanup. */
 const workerPidsByRunId = new Map<string, number>();
 
 /** Tracks the VS Code Task executions (func host start) by runId for cleanup. */
 const taskExecutionsByRunId = new Map<string, vscode.TaskExecution>();
 
-/** Tracks debug metadata directories by runId for cleanup. */
+/** Tracks worker startup metadata directories by runId for cleanup. */
 const tempDirectoriesByRunId = new Map<string, string>();
+
+function removeTempDirectory(runId: string, attempt = 1): void {
+    const tempDirectory = tempDirectoriesByRunId.get(runId);
+    if (!tempDirectory) {
+        return;
+    }
+
+    try {
+        fs.rmSync(tempDirectory, { recursive: true, force: true });
+        tempDirectoriesByRunId.delete(runId);
+    } catch (error) {
+        if (attempt < TEMP_DIRECTORY_CLEANUP_MAX_ATTEMPTS) {
+            // TaskExecution.terminate() only requests termination. Retry briefly so
+            // Windows can release Core Tools files before the directory is removed.
+            setTimeout(
+                () => removeTempDirectory(runId, attempt + 1),
+                TEMP_DIRECTORY_CLEANUP_RETRY_DELAY_MS).unref();
+            return;
+        }
+
+        tempDirectoriesByRunId.delete(runId);
+        extensionLogOutputChannel.warn(`Failed to remove Azure Functions temporary directory ${tempDirectory}: ${error}`);
+    }
+}
 
 /** Kill the func host task and worker process for the given runId, if any. */
 function killFuncProcess(runId: string): void {
@@ -65,11 +96,7 @@ function killFuncProcess(runId: string): void {
         workerPidsByRunId.delete(runId);
     }
 
-    const tempDirectory = tempDirectoriesByRunId.get(runId);
-    if (tempDirectory) {
-        fs.rmSync(tempDirectory, { recursive: true, force: true });
-        tempDirectoriesByRunId.delete(runId);
-    }
+    removeTempDirectory(runId);
 }
 
 async function activateAzureFunctionsExtension(): Promise<void> {
@@ -202,28 +229,9 @@ function hasFlag(args: string[], flag: string): boolean {
     return args.some(argument => argument === flag || argument.startsWith(`${flag}=`));
 }
 
-function readWorkerProcessId(jsonOutputFile: string): number | undefined {
+function readJsonOutputFile(jsonOutputFile: string): string | undefined {
     try {
-        // Core Tools emits newline-delimited JSON. For example:
-        //   {"name":"dotnet-worker-startup","workerProcessId":4242}
-        // The file may contain unrelated or partially-written lines while the host starts.
-        for (const line of fs.readFileSync(jsonOutputFile, 'utf8').split(/\r?\n/)) {
-            if (!line) {
-                continue;
-            }
-
-            try {
-                const event = JSON.parse(line) as { name?: unknown; workerProcessId?: unknown };
-                if (event.name === 'dotnet-worker-startup' &&
-                    typeof event.workerProcessId === 'number' &&
-                    Number.isInteger(event.workerProcessId) &&
-                    event.workerProcessId > 0) {
-                    return event.workerProcessId;
-                }
-            } catch {
-                // The final NDJSON line may still be in flight.
-            }
-        }
+        return fs.readFileSync(jsonOutputFile, 'utf8');
     } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code !== 'ENOENT') {
@@ -234,9 +242,44 @@ function readWorkerProcessId(jsonOutputFile: string): number | undefined {
     return undefined;
 }
 
-async function waitForWorkerProcessId(jsonOutputFile: string, deadline: number, timeoutSeconds: number): Promise<number> {
+function readWorkerProcessId(discovery: WorkerProcessIdDiscovery): number | undefined {
+    const contents = readJsonOutputFile(discovery.jsonOutputFile);
+    if (contents === undefined) {
+        return undefined;
+    }
+
+    // Core Tools appends newline-delimited JSON. For example:
+    //   {"name":"dotnet-worker-startup","workerProcessId":4242}
+    // Ignore content captured before this launch and use the latest valid worker event;
+    // unrelated lines and a partially-written final line are expected while polling.
+    const launchContents = contents.startsWith(discovery.initialContents)
+        ? contents.slice(discovery.initialContents.length)
+        : contents;
+    let workerProcessId: number | undefined;
+    for (const line of launchContents.split(/\r?\n/)) {
+        if (!line) {
+            continue;
+        }
+
+        try {
+            const event = JSON.parse(line) as { name?: unknown; workerProcessId?: unknown };
+            if (event.name === 'dotnet-worker-startup' &&
+                typeof event.workerProcessId === 'number' &&
+                Number.isInteger(event.workerProcessId) &&
+                event.workerProcessId > 0) {
+                workerProcessId = event.workerProcessId;
+            }
+        } catch {
+            // The final NDJSON line may still be in flight.
+        }
+    }
+
+    return workerProcessId;
+}
+
+async function waitForWorkerProcessId(discovery: WorkerProcessIdDiscovery, deadline: number, timeoutSeconds: number): Promise<number> {
     while (Date.now() < deadline) {
-        const workerProcessId = readWorkerProcessId(jsonOutputFile);
+        const workerProcessId = readWorkerProcessId(discovery);
         if (workerProcessId !== undefined) {
             return workerProcessId;
         }
@@ -399,26 +442,36 @@ export const azureFunctionsDebuggerExtension: ResourceDebuggerExtension = {
         const dcpEnv = Object.fromEntries(
             (env ?? []).filter(e => e.value !== undefined).map(e => [e.name, e.value])
         );
-
         await activateAzureFunctionsExtension();
-        registerRunCleanup(runId, () => killFuncProcess(runId));
+        await activateAzureFunctionsExtension();
         const rawArgs = [...(args ?? [])];
-        let jsonOutputFile: string | undefined;
-        if (launchOptions.debug) {
+        const jsonOutputFileArgument = getJsonOutputFileArgument(rawArgs);
+        let workerProcessIdDiscovery: WorkerProcessIdDiscovery;
+        let addJsonOutputFileArgument = false;
+        if (jsonOutputFileArgument) {
+            const jsonOutputFile = path.resolve(buildOutputPath, jsonOutputFileArgument);
+            workerProcessIdDiscovery = {
+                jsonOutputFile,
+                initialContents: readJsonOutputFile(jsonOutputFile) ?? ''
+            };
+        } else {
             const secureTempRoot = fs.realpathSync(os.tmpdir());
-            const tempDirectory = fs.mkdtempSync(path.join(secureTempRoot, 'aspire-functions-debug-'));
+            const tempDirectory = fs.mkdtempSync(path.join(secureTempRoot, 'aspire-functions-worker-'));
             tempDirectoriesByRunId.set(runId, tempDirectory);
-            jsonOutputFile = getJsonOutputFileArgument(rawArgs) ?? path.join(tempDirectory, 'worker-startup.json');
-            if (!hasFlag(rawArgs, '--dotnet-isolated-debug')) {
-                rawArgs.push('--dotnet-isolated-debug');
-            }
-            if (!hasFlag(rawArgs, '--enable-json-output')) {
-                rawArgs.push('--enable-json-output');
-            }
-            if (!getJsonOutputFileArgument(rawArgs)) {
-                rawArgs.push('--json-output-file', jsonOutputFile);
-            }
+            const jsonOutputFile = path.join(tempDirectory, 'worker-startup.json');
+            workerProcessIdDiscovery = { jsonOutputFile, initialContents: '' };
+            addJsonOutputFileArgument = true;
         }
+        if (launchOptions.debug && !hasFlag(rawArgs, '--dotnet-isolated-debug')) {
+            rawArgs.push('--dotnet-isolated-debug');
+        }
+        if (!hasFlag(rawArgs, '--enable-json-output')) {
+            rawArgs.push('--enable-json-output');
+        }
+        if (addJsonOutputFileArgument) {
+            rawArgs.push('--json-output-file', workerProcessIdDiscovery.jsonOutputFile);
+        }
+        registerRunCleanup(runId, () => killFuncProcess(runId));
 
         let quotedArgs: string[];
         try {
@@ -475,6 +528,9 @@ export const azureFunctionsDebuggerExtension: ResourceDebuggerExtension = {
 
             funcExecution ??= event.execution;
             taskExitCode = event.exitCode ?? 0;
+            taskExecutionsByRunId.delete(runId);
+            workerPidsByRunId.delete(runId);
+            removeTempDirectory(runId);
             resolveTaskExited?.(taskExitCode);
             if (!launchOptions.debug && completeSession) {
                 let normalizedExitCode = taskExitCode;
@@ -489,6 +545,7 @@ export const azureFunctionsDebuggerExtension: ResourceDebuggerExtension = {
 
         funcTask = createFuncTask(rawArgs, quotedArgs, buildOutputPath, dcpEnv);
         let startupTimeout: NodeJS.Timeout | undefined;
+        let startupSucceeded = false;
         try {
             const timeoutSeconds = getPickProcessTimeoutSeconds();
             const startupDeadline = Date.now() + timeoutSeconds * 1_000;
@@ -498,7 +555,9 @@ export const azureFunctionsDebuggerExtension: ResourceDebuggerExtension = {
                     : azureFunctionsHostStartupTimedOut(timeoutSeconds, getFuncHostPort(rawArgs)))), timeoutSeconds * 1_000);
             });
             funcExecution = await vscode.tasks.executeTask(funcTask);
-            taskExecutionsByRunId.set(runId, funcExecution);
+            if (taskExitCode === undefined) {
+                taskExecutionsByRunId.set(runId, funcExecution);
+            }
             if (!taskProcessId) {
                 await Promise.race([
                     taskStarted,
@@ -507,9 +566,13 @@ export const azureFunctionsDebuggerExtension: ResourceDebuggerExtension = {
                 ]);
             }
 
+            const workerProcessId = waitForWorkerProcessId(workerProcessIdDiscovery, startupDeadline, timeoutSeconds);
             const readiness = launchOptions.debug
-                ? waitForWorkerProcessId(jsonOutputFile!, startupDeadline, timeoutSeconds)
-                : waitForFuncHostRunning(getFuncHostPort(rawArgs), startupDeadline, timeoutSeconds).then(() => taskProcessId!);
+                ? workerProcessId
+                : Promise.all([
+                    waitForFuncHostRunning(getFuncHostPort(rawArgs), startupDeadline, timeoutSeconds),
+                    workerProcessId
+                ]).then(([, processId]) => processId);
             const processId = await Promise.race([
                 readiness,
                 taskExited.then(exitCode => Promise.reject(createTaskExitError(exitCode))),
@@ -518,9 +581,10 @@ export const azureFunctionsDebuggerExtension: ResourceDebuggerExtension = {
             if (launchOptions.debug && taskExitCode !== undefined) {
                 throw createTaskExitError(taskExitCode);
             }
-            if (launchOptions.debug) {
+            if (taskExitCode === undefined) {
                 workerPidsByRunId.set(runId, processId);
             }
+            startupSucceeded = true;
             extensionLogOutputChannel.info(`Azure Functions process started for runId ${runId} (PID: ${processId})`);
 
             if (!launchOptions.debug) {
@@ -561,7 +625,7 @@ export const azureFunctionsDebuggerExtension: ResourceDebuggerExtension = {
                 clearTimeout(startupTimeout);
             }
             taskStartSubscription.dispose();
-            if (launchOptions.debug || completed) {
+            if (launchOptions.debug || completed || !startupSucceeded) {
                 taskEndSubscription.dispose();
             } else {
                 registerRunCleanup(runId, () => taskEndSubscription.dispose());

@@ -10,19 +10,32 @@ import * as vscode from 'vscode';
 import { prepareDebugSession } from '../debugger/debuggerExtensions';
 import { azureFunctionsDebuggerExtension } from '../debugger/languages/azureFunctions';
 import { DotNetService } from '../debugger/languages/dotnet';
-import { cleanupRun } from '../debugger/runCleanupRegistry';
+import { cleanupRun, registerRunCleanup } from '../debugger/runCleanupRegistry';
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
 import { AspireResourceExtendedDebugConfiguration, AzureFunctionsLaunchConfiguration, EnvVar, LaunchOptions } from '../dcp/types';
 import { azureFunctionsCmdDelayedExpansion, azureFunctionsCmdPercentArgument, azureFunctionsUnsupportedTaskShell } from '../loc/strings';
 
 suite('Azure Functions Debugger Extension Tests', () => {
+    const defaultSecureTempPath = path.join(path.parse('/workspace').root, 'secure-temp');
+    const defaultTempPath = path.join(defaultSecureTempPath, 'aspire-functions-worker-test');
+    const defaultWorkerPidPath = path.join(defaultTempPath, 'worker-startup.json');
+    const defaultWorkerPid = 4343;
     let activateAzureFunctionsExtension: sinon.SinonStub;
+    let fsMkdtempSync: sinon.SinonStub;
+    let fsReadFileSync: sinon.SinonStub;
+    let fsRealpathSync: sinon.SinonStub;
+    let fsRmSync: sinon.SinonStub;
     let funcHostStatus: string;
     let getAzureFunctionsApi: sinon.SinonStub;
     let taskHarness: ReturnType<typeof stubRegisteredFuncTaskExecution>;
 
     setup(() => {
         sinon.stub(process, 'kill').returns(true);
+        fsRealpathSync = sinon.stub(fs, 'realpathSync').withArgs(os.tmpdir()).returns(defaultSecureTempPath);
+        fsMkdtempSync = sinon.stub(fs, 'mkdtempSync').returns(defaultTempPath);
+        fsReadFileSync = sinon.stub(fs, 'readFileSync').returns(
+            `${JSON.stringify({ name: 'dotnet-worker-startup', workerProcessId: defaultWorkerPid })}\n`);
+        fsRmSync = sinon.stub(fs, 'rmSync');
         funcHostStatus = 'Running';
         taskHarness = stubRegisteredFuncTaskExecution();
         ({ activate: activateAzureFunctionsExtension, getApi: getAzureFunctionsApi } = installAzureFunctionsExtensionStub());
@@ -33,7 +46,7 @@ suite('Azure Functions Debugger Extension Tests', () => {
         sinon.restore();
     });
 
-    test('builds the project and starts func host with HTTPS arguments in run mode', async () => {
+    test('builds the project and returns the worker process in run mode', async () => {
         const projectPath = path.join('/workspace', 'FunctionsApp', 'FunctionsApp.csproj');
         const targetPath = path.join('/workspace', 'FunctionsApp', 'bin', 'Debug', 'net10.0', 'FunctionsApp.dll');
         const certificatePath = path.join('/workspace with spaces', 'FunctionsApp', 'aspire-functions-https.pfx');
@@ -57,11 +70,13 @@ suite('Azure Functions Debugger Extension Tests', () => {
             sinon.assert.callOrder(buildDotNetProject, getDotNetTargetPath, activateAzureFunctionsExtension, vscode.tasks.executeTask as sinon.SinonStub);
             assert.ok(resourceDebugSession);
             assert.strictEqual(resourceDebugSession.id, 'azure-functions-test-run');
-            assert.strictEqual(resourceDebugSession.processId, 4242);
+            assert.strictEqual(resourceDebugSession.processId, defaultWorkerPid);
             assert.strictEqual(debugConfiguration.processId, undefined);
 
             await resourceDebugSession.stopSession();
             assert.strictEqual(await resourceDebugSession.termination, -1);
+            sinon.assert.calledOnceWithExactly(process.kill as sinon.SinonStub, defaultWorkerPid);
+            sinon.assert.neverCalledWith(process.kill as sinon.SinonStub, 4242);
         } finally {
             await close(statusServer.server);
         }
@@ -93,7 +108,13 @@ suite('Azure Functions Debugger Extension Tests', () => {
             assert.deepStrictEqual(executedTask.definition, {
                 type: 'func',
                 command: 'host start',
-                args: ['--port', String(statusServer.port), '--cert', certificatePath, '--password', ')456Y7R.D*S3Fwdr7mAv-p']
+                args: [
+                    '--port', String(statusServer.port),
+                    '--cert', certificatePath,
+                    '--password', ')456Y7R.D*S3Fwdr7mAv-p',
+                    '--enable-json-output',
+                    '--json-output-file', defaultWorkerPidPath
+                ]
             });
             assert.strictEqual(executedTask.name, 'func: host start');
             assert.strictEqual(executedTask.source, 'func');
@@ -103,7 +124,9 @@ suite('Azure Functions Debugger Extension Tests', () => {
                 AzureWebJobsStorage: 'UseDevelopmentStorage=true',
                 ASPIRE_HTTPS_PORTS: '7042',
             });
-            assert.strictEqual(shellExecution.commandLine, `func host start --port ${statusServer.port} --cert "${certificatePath}" --password ")456Y7R.D*S3Fwdr7mAv-p"`);
+            assert.strictEqual(
+                shellExecution.commandLine,
+                `func host start --port ${statusServer.port} --cert "${certificatePath}" --password ")456Y7R.D*S3Fwdr7mAv-p" --enable-json-output --json-output-file ${defaultWorkerPidPath}`);
             sinon.assert.callOrder(
                 activateAzureFunctionsExtension,
                 vscode.tasks.onDidStartTaskProcess as sinon.SinonStub,
@@ -113,7 +136,7 @@ suite('Azure Functions Debugger Extension Tests', () => {
 
             await resourceDebugSession?.stopSession();
             sinon.assert.calledOnce(taskHarness.getExecution()!.terminate as sinon.SinonStub);
-            sinon.assert.notCalled(process.kill as sinon.SinonStub);
+            sinon.assert.calledOnceWithExactly(process.kill as sinon.SinonStub, defaultWorkerPid);
         } finally {
             await close(statusServer.server);
         }
@@ -139,7 +162,7 @@ suite('Azure Functions Debugger Extension Tests', () => {
 
             assert.strictEqual(
                 (taskHarness.getExecutedTask()?.execution as vscode.ShellExecution).commandLine,
-                `func host start --port ${statusServer.port} --password ")456Y7R.D*S3Fwdr7mAv-p"`);
+                `func host start --port ${statusServer.port} --password ")456Y7R.D*S3Fwdr7mAv-p" --enable-json-output --json-output-file ${defaultWorkerPidPath}`);
         } finally {
             await close(statusServer.server);
         }
@@ -165,7 +188,7 @@ suite('Azure Functions Debugger Extension Tests', () => {
 
             assert.strictEqual(
                 (taskHarness.getExecutedTask()?.execution as vscode.ShellExecution).commandLine,
-                `func host start --port ${statusServer.port} --password 'a\\b'"'"'c'`);
+                `func host start --port ${statusServer.port} --password 'a\\b'"'"'c' --enable-json-output --json-output-file ${defaultWorkerPidPath}`);
         } finally {
             await close(statusServer.server);
         }
@@ -192,7 +215,7 @@ suite('Azure Functions Debugger Extension Tests', () => {
 
             assert.strictEqual(
                 (taskHarness.getExecutedTask()?.execution as vscode.ShellExecution).commandLine,
-                `func host start --port ${statusServer.port} --password ${String.raw`'prefix\\\'; touch /tmp/owned'`}`);
+                `func host start --port ${statusServer.port} --password ${String.raw`'prefix\\\'; touch /tmp/owned'`} --enable-json-output --json-output-file ${defaultWorkerPidPath}`);
         } finally {
             await close(statusServer.server);
         }
@@ -278,7 +301,7 @@ suite('Azure Functions Debugger Extension Tests', () => {
 
             assert.strictEqual(
                 (taskHarness.getExecutedTask()?.execution as vscode.ShellExecution).commandLine,
-                `func host start --port ${statusServer.port}`);
+                `func host start --port ${statusServer.port} --enable-json-output --json-output-file ${defaultWorkerPidPath}`);
         } finally {
             await close(statusServer.server);
         }
@@ -305,7 +328,7 @@ suite('Azure Functions Debugger Extension Tests', () => {
 
             assert.strictEqual(
                 (taskHarness.getExecutedTask()?.execution as vscode.ShellExecution).commandLine,
-                `func host start ${args.join(' ')}`);
+                `func host start ${args.join(' ')} --enable-json-output --json-output-file ${defaultWorkerPidPath}`);
         } finally {
             await close(statusServer.server);
         }
@@ -332,7 +355,7 @@ suite('Azure Functions Debugger Extension Tests', () => {
                 azureFunctionsDebuggerExtension);
 
             assert.ok(preparedSession.alreadyStartedSession);
-            assert.strictEqual(preparedSession.alreadyStartedSession.processId, 4242);
+            assert.strictEqual(preparedSession.alreadyStartedSession.processId, defaultWorkerPid);
             const resourceDebugSession = aspireDebugSession.trackAlreadyStartedResourceSession(
                 preparedSession.debugConfiguration,
                 preparedSession.alreadyStartedSession);
@@ -370,7 +393,9 @@ suite('Azure Functions Debugger Extension Tests', () => {
             taskHarness.end(17);
 
             assert.strictEqual(await resourceDebugSession.termination, 17);
-            sinon.assert.calledOnce(taskHarness.getExecution()!.terminate as sinon.SinonStub);
+            sinon.assert.notCalled(taskHarness.getExecution()!.terminate as sinon.SinonStub);
+            sinon.assert.notCalled(process.kill as sinon.SinonStub);
+            sinon.assert.calledOnceWithExactly(fsRmSync, defaultTempPath, { recursive: true, force: true });
             sinon.assert.notCalled(unrelatedExecution.terminate as sinon.SinonStub);
         } finally {
             await close(statusServer.server);
@@ -394,6 +419,9 @@ suite('Azure Functions Debugger Extension Tests', () => {
                 createLaunchOptions(false),
                 createDebugConfiguration(projectPath)),
             /Azure Functions task exited with code 23 before startup completed/);
+        sinon.assert.calledOnce(taskHarness.getEndListenerDispose());
+        sinon.assert.notCalled(taskHarness.getExecution()!.terminate as sinon.SinonStub);
+        sinon.assert.notCalled(process.kill as sinon.SinonStub);
     });
 
     for (const { platform, expectedExitCode } of [
@@ -428,7 +456,7 @@ suite('Azure Functions Debugger Extension Tests', () => {
         });
     }
 
-    test('waits for loopback host readiness and uses the exact task process ID in run mode', async () => {
+    test('waits for loopback host readiness and returns the worker process ID in run mode', async () => {
         const requests: string[] = [];
         const server = http.createServer((request, response) => {
             requests.push(request.url ?? '');
@@ -450,7 +478,7 @@ suite('Azure Functions Debugger Extension Tests', () => {
                 createDebugConfiguration(projectPath, ['--port', String(port)]));
 
             assert.ok(resourceDebugSession);
-            assert.strictEqual(resourceDebugSession.processId, 4242);
+            assert.strictEqual(resourceDebugSession.processId, defaultWorkerPid);
             assert.deepStrictEqual(requests, ['/admin/host/status']);
         } finally {
             await close(server);
@@ -497,22 +525,23 @@ suite('Azure Functions Debugger Extension Tests', () => {
         assert.deepStrictEqual(requestedPorts, [7071]);
     });
 
-    test('configures coreclr attach from worker startup JSON and cleans the debug temp directory', async () => {
+    test('configures coreclr attach from the latest worker startup JSON and cleans the debug temp directory', async () => {
         const projectPath = path.join('/workspace', 'FunctionsApp', 'FunctionsApp.csproj');
         const targetPath = path.join('/workspace', 'FunctionsApp', 'bin', 'Debug', 'net10.0', 'FunctionsApp.dll');
         const secureTempPath = path.join(path.parse(projectPath).root, 'secure-temp');
-        const debugTempPath = path.join(secureTempPath, 'aspire-functions-debug-abc123');
+        const debugTempPath = path.join(secureTempPath, 'aspire-functions-worker-abc123');
         const workerPidPath = path.join(debugTempPath, 'worker-startup.json');
         const getDotNetTargetPath = sinon.stub(DotNetService.prototype, 'getDotNetTargetPath').resolves(targetPath);
         const buildDotNetProject = sinon.stub(DotNetService.prototype, 'buildDotNetProject').resolves();
-        const realpathSync = sinon.stub(fs, 'realpathSync').withArgs(os.tmpdir()).returns(secureTempPath);
-        const mkdtempSync = sinon.stub(fs, 'mkdtempSync').returns(debugTempPath);
-        sinon.stub(fs, 'readFileSync').withArgs(workerPidPath, 'utf8').returns([
+        fsRealpathSync.withArgs(os.tmpdir()).returns(secureTempPath);
+        fsMkdtempSync.returns(debugTempPath);
+        fsReadFileSync.withArgs(workerPidPath, 'utf8').returns([
             JSON.stringify({ name: 'unrelated-event', workerProcessId: 1111 }),
+            JSON.stringify({ name: 'dotnet-worker-startup', workerProcessId: 4242 }),
             JSON.stringify({ name: 'dotnet-worker-startup', workerProcessId: 4343 }),
+            '{"name":"dotnet-worker-startup","workerProcessId":',
             ''
         ].join('\n'));
-        const rmSync = sinon.stub(fs, 'rmSync');
         const debugConfiguration = createDebugConfiguration(projectPath, ['--verbose']);
 
         const resourceDebugSession = await azureFunctionsDebuggerExtension.createDebugSessionConfigurationCallback!(
@@ -524,8 +553,8 @@ suite('Azure Functions Debugger Extension Tests', () => {
 
         assert.ok(getDotNetTargetPath.calledOnceWith(projectPath));
         assert.ok(buildDotNetProject.calledOnceWith(projectPath));
-        sinon.assert.calledOnceWithExactly(realpathSync, os.tmpdir());
-        sinon.assert.calledOnceWithExactly(mkdtempSync, path.join(secureTempPath, 'aspire-functions-debug-'));
+        sinon.assert.calledOnceWithExactly(fsRealpathSync, os.tmpdir());
+        sinon.assert.calledOnceWithExactly(fsMkdtempSync, path.join(secureTempPath, 'aspire-functions-worker-'));
         assert.deepStrictEqual(taskHarness.getExecutedTask()?.definition, {
             type: 'func',
             command: 'host start',
@@ -542,26 +571,70 @@ suite('Azure Functions Debugger Extension Tests', () => {
         assert.strictEqual(resourceDebugSession, undefined);
 
         cleanupRun('azure-functions-test-run');
-        sinon.assert.calledOnceWithExactly(rmSync, debugTempPath, { recursive: true, force: true });
+        sinon.assert.calledOnceWithExactly(fsRmSync, debugTempPath, { recursive: true, force: true });
         sinon.assert.calledOnceWithExactly(process.kill as sinon.SinonStub, 4343);
         sinon.assert.calledOnce(taskHarness.getExecution()!.terminate as sinon.SinonStub);
+    });
+
+    test('continues run cleanup and retries when debug temp directory removal fails', async () => {
+        const projectPath = path.join('/workspace', 'FunctionsApp', 'FunctionsApp.csproj');
+        const targetPath = path.join('/workspace', 'FunctionsApp', 'bin', 'Debug', 'net10.0', 'FunctionsApp.dll');
+        const secureTempPath = path.join(path.parse(projectPath).root, 'secure-temp');
+        const debugTempPath = path.join(secureTempPath, 'aspire-functions-worker-retry');
+        const workerPidPath = path.join(debugTempPath, 'worker-startup.json');
+        sinon.stub(DotNetService.prototype, 'getDotNetTargetPath').resolves(targetPath);
+        sinon.stub(DotNetService.prototype, 'buildDotNetProject').resolves();
+        fsRealpathSync.withArgs(os.tmpdir()).returns(secureTempPath);
+        fsMkdtempSync.returns(debugTempPath);
+        fsReadFileSync
+            .withArgs(workerPidPath, 'utf8')
+            .returns(`${JSON.stringify({ name: 'dotnet-worker-startup', workerProcessId: 4646 })}\n`);
+        let resolveRemovalRetried: (() => void) | undefined;
+        const removalRetried = new Promise<void>(resolve => resolveRemovalRetried = resolve);
+        fsRmSync.onFirstCall().throws(Object.assign(new Error('directory is busy'), { code: 'EBUSY' }));
+        fsRmSync.onSecondCall().callsFake(() => resolveRemovalRetried?.());
+        const laterCleanup = sinon.stub();
+        const debugConfiguration = createDebugConfiguration(projectPath);
+
+        await azureFunctionsDebuggerExtension.createDebugSessionConfigurationCallback!(
+            createLaunchConfiguration(projectPath),
+            [],
+            [],
+            createLaunchOptions(true),
+            debugConfiguration);
+        registerRunCleanup('azure-functions-test-run', laterCleanup);
+
+        assert.doesNotThrow(() => cleanupRun('azure-functions-test-run'));
+        sinon.assert.calledOnce(laterCleanup);
+        sinon.assert.calledOnce(fsRmSync);
+
+        await removalRetried;
+        sinon.assert.calledTwice(fsRmSync);
     });
 
     test('does not duplicate existing Core Tools debug flags', async () => {
         const projectPath = path.join('/workspace', 'FunctionsApp', 'FunctionsApp.csproj');
         const targetPath = path.join('/workspace', 'FunctionsApp', 'bin', 'Debug', 'net10.0', 'FunctionsApp.dll');
+        const buildOutputPath = path.dirname(targetPath);
         const secureTempPath = path.join(path.parse(projectPath).root, 'secure-temp');
-        const debugTempPath = path.join(secureTempPath, 'aspire-functions-debug-existing');
-        const existingWorkerPidPath = path.join(path.dirname(projectPath), 'existing-worker.json');
-        const args = ['--dotnet-isolated-debug', '--enable-json-output', '--json-output-file', existingWorkerPidPath];
+        const debugTempPath = path.join(secureTempPath, 'aspire-functions-worker-existing');
+        const existingWorkerPidArgument = 'existing-worker.json';
+        const existingWorkerPidPath = path.join(buildOutputPath, existingWorkerPidArgument);
+        const staleOutput = `${JSON.stringify({ name: 'dotnet-worker-startup', workerProcessId: 4545 })}\n`;
+        const freshOutput = [
+            JSON.stringify({ name: 'dotnet-worker-startup', workerProcessId: 4646 }),
+            JSON.stringify({ name: 'dotnet-worker-startup', workerProcessId: 4747 }),
+            ''
+        ].join('\n');
+        const args = ['--dotnet-isolated-debug', '--enable-json-output', '--json-output-file', existingWorkerPidArgument];
         sinon.stub(DotNetService.prototype, 'getDotNetTargetPath').resolves(targetPath);
         sinon.stub(DotNetService.prototype, 'buildDotNetProject').resolves();
-        sinon.stub(fs, 'realpathSync').withArgs(os.tmpdir()).returns(secureTempPath);
-        sinon.stub(fs, 'mkdtempSync').returns(debugTempPath);
-        sinon.stub(fs, 'readFileSync')
-            .withArgs(existingWorkerPidPath, 'utf8')
-            .returns(`${JSON.stringify({ name: 'dotnet-worker-startup', workerProcessId: 4545 })}\n`);
-        sinon.stub(fs, 'rmSync');
+        fsRealpathSync.withArgs(os.tmpdir()).returns(secureTempPath);
+        fsMkdtempSync.returns(debugTempPath);
+        fsReadFileSync.withArgs(existingWorkerPidPath, 'utf8')
+            .onFirstCall().returns(staleOutput)
+            .onSecondCall().returns(staleOutput + freshOutput);
+        fsReadFileSync.withArgs(existingWorkerPidArgument, 'utf8').returns(staleOutput + freshOutput);
         const debugConfiguration = createDebugConfiguration(projectPath, args);
 
         await azureFunctionsDebuggerExtension.createDebugSessionConfigurationCallback!(
@@ -576,7 +649,10 @@ suite('Azure Functions Debugger Extension Tests', () => {
             command: 'host start',
             args
         });
-        assert.strictEqual(debugConfiguration.processId, '4545');
+        assert.strictEqual(debugConfiguration.processId, '4747');
+        sinon.assert.alwaysCalledWithExactly(fsReadFileSync, existingWorkerPidPath, 'utf8');
+        sinon.assert.notCalled(fsRealpathSync);
+        sinon.assert.notCalled(fsMkdtempSync);
     });
 
     test('surfaces a bounded host readiness timeout from Azure Functions configuration', async () => {
@@ -667,6 +743,7 @@ function createFuncTaskExecution(buildOutputPath: string, source = 'func', comma
 function stubRegisteredFuncTaskExecution(processId = 4242): {
     getExecutedTask(): vscode.Task | undefined;
     getExecution(): vscode.TaskExecution | undefined;
+    getEndListenerDispose(): sinon.SinonStub;
     endExecution(execution: vscode.TaskExecution, exitCode: number | undefined): void;
     endOnStart(exitCode: number | undefined): void;
     end(exitCode: number | undefined): void;
@@ -676,6 +753,7 @@ function stubRegisteredFuncTaskExecution(processId = 4242): {
     let exitCodeOnStart: number | undefined;
     let executedTask: vscode.Task | undefined;
     let execution: vscode.TaskExecution | undefined;
+    const endListenerDispose = sinon.stub();
 
     sinon.stub(vscode.tasks, 'onDidStartTaskProcess').callsFake(listener => {
         startTaskProcess = listener;
@@ -683,7 +761,7 @@ function stubRegisteredFuncTaskExecution(processId = 4242): {
     });
     sinon.stub(vscode.tasks, 'onDidEndTaskProcess').callsFake(listener => {
         endTaskProcess = listener;
-        return new vscode.Disposable(() => { });
+        return new vscode.Disposable(endListenerDispose);
     });
     sinon.stub(vscode.tasks, 'executeTask').callsFake(async task => {
         executedTask = task;
@@ -708,6 +786,7 @@ function stubRegisteredFuncTaskExecution(processId = 4242): {
     return {
         getExecutedTask: () => executedTask,
         getExecution: () => execution,
+        getEndListenerDispose: () => endListenerDispose,
         endExecution: (taskExecution, exitCode) => endTaskProcess?.({ execution: taskExecution, exitCode }),
         endOnStart: exitCode => {
             exitCodeOnStart = exitCode;
