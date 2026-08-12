@@ -77,6 +77,14 @@ suite('E2E bridge production gate', () => {
             'The E2E VSIX package step must assert the emitted VSIX still contains the real bridge.');
     });
 
+    test('packages the local E2E VSIX with the bridge opt-in', () => {
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+
+        assert.ok(
+            runner.includes("run('corepack', ['yarn@1.22.22', 'run', 'vsce', 'package', '--pre-release', '-o', defaultVsixPath], { ASPIRE_EXTENSION_E2E_INCLUDE_BRIDGE: 'true' }, { timeout: 300000 });"),
+            'The local E2E runner packages in production mode, so it must opt into bundling the real bridge.');
+    });
+
     /**
      * The bridge-included VSIX above only proves the E2E opt-in still works; it says nothing about
      * what ships when nobody sets ASPIRE_EXTENSION_E2E_INCLUDE_BRIDGE. Without a separate assertion
