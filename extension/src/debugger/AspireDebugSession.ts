@@ -932,7 +932,8 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
   /**
    * Opens the dashboard URL in the specified browser.
-   * For debugChrome/debugEdge/debugFirefox, launches as a child debug session that auto-closes with the Aspire debug session.
+   * For debugChrome/debugEdge/debugFirefox, launches as a child debug session that is stopped
+   * explicitly when this Aspire session is disposed.
    */
   async openDashboard(url: string, browserType: DashboardBrowserType): Promise<void> {
     extensionLogOutputChannel.info(`Opening dashboard in browser: ${browserType}.`);
@@ -966,7 +967,8 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
   /**
    * Launches a browser as a child debug session.
-   * The browser will automatically close when the parent Aspire debug session ends.
+   * VS Code does not stop this child session when the parent Aspire session terminates, so the
+   * started session is tracked here and stopped explicitly from `dispose` via `closeDashboard`.
    */
   private async launchDebugBrowser(url: string, debugType: 'pwa-chrome' | 'pwa-msedge' | 'firefox'): Promise<void> {
     const debugConfig: vscode.DebugConfiguration = {
@@ -987,15 +989,26 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       debugConfig.pathMappings = [];
     }
 
-    // Register listener before starting so we don't miss the event
+    // Register listener before starting so we don't miss the event.
+    // The started session must be matched to *this* Aspire session: concurrent Aspire
+    // debug sessions all launch their dashboard with the same configuration name and
+    // browser type, so name and type alone would let one session adopt (and later close)
+    // another session's browser.
     const disposable = vscode.debug.onDidStartDebugSession((session) => {
-      if (session.configuration.name === aspireDashboard && session.type === debugType) {
+      if (session.parentSession?.id === this._session.id && session.configuration.name === aspireDashboard && session.type === debugType) {
         this._dashboardDebugSession = session;
         disposable.dispose();
+
+        // The Aspire session can be disposed while the browser is still launching, for
+        // example when the AppHost exits right after reporting the dashboard URL. Run the
+        // close path again here so the late-arriving browser is not left orphaned.
+        if (this._disposed) {
+          this.closeDashboard();
+        }
       }
     });
 
-    // Start as a child debug session - it will close when parent closes
+    // Start as a child debug session so it is stopped alongside this session in `dispose`.
     const didStart = await vscode.debug.startDebugging(
       undefined,
       debugConfig,
@@ -1005,6 +1018,13 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     if (!didStart) {
       disposable.dispose();
       extensionLogOutputChannel.warn(`Failed to start debug browser (${debugType}), falling back to default browser`);
+
+      // Falling back after disposal would pop an untracked browser window open during
+      // teardown, long after the user stopped the session.
+      if (this._disposed) {
+        return;
+      }
+
       await vscode.env.openExternal(vscode.Uri.parse(url));
     }
   }
