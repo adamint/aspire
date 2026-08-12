@@ -575,7 +575,7 @@ Run:
 git grep -n -E 'allowFailure|disabledIssue|advisoryIssue|ASPIRE_EXTENSION_E2E_(ALLOW_TEST_FAILURE|ADVISORY_ISSUE)' -- .github/workflows/extension-e2e-tests.yml extension/scripts extension/src/test tests/Infrastructure.Tests/Pipelines
 ```
 
-Expected: no `allowFailure`, `disabledIssue`, or `ASPIRE_EXTENSION_E2E_ALLOW_TEST_FAILURE`; exactly four `advisoryIssue` workflow rows and the matching test allowlist.
+Expected: no legacy field or environment variable in workflow/runtime code; legacy names appear only in negative contract tests. The workflow has exactly four `advisoryIssue` rows and the tests contain the matching allowlist.
 
 - [ ] **Step 4: Confirm no unrelated files changed**
 
