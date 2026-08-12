@@ -123,7 +123,11 @@ function ensureDownloadCache(options) {
     normalizedOptions.populate(candidateDirectory);
     pruneDownloadArchives(candidateDirectory);
 
-    const artifacts = discoverCacheArtifacts(candidateDirectory, normalizedOptions.platform, normalizedOptions.architecture);
+    const artifacts = discoverCacheArtifacts(
+      candidateDirectory,
+      normalizedOptions.platform,
+      normalizedOptions.architecture,
+      normalizedOptions.extesterVersion);
     assertCacheEntryTreeIsContained(candidateDirectory);
     writeCacheManifest(candidateDirectory, { ...expectedManifest, ...artifacts });
 
@@ -655,7 +659,7 @@ function normalizeEnsureDownloadCacheOptions(options) {
   // Validate the VS Code layout up front so unsupported combinations fail before
   // populate() starts an expensive download into a staging directory.
   getVsCodeDirectoryName(platform, architecture);
-  getVsCodeExecutableRelativePaths(platform, architecture);
+  getVsCodeExecutableRelativePaths(platform, architecture, options.extesterVersion);
 
   return {
     cacheRoot: path.resolve(options.cacheRoot),
@@ -733,7 +737,12 @@ function readCacheManifest(cacheDirectory, expectedManifest, { cacheRoot }) {
   assertOrdinaryRelativePath(cacheDirectory, realCacheDirectory, manifestPaths.chromeDriverEntry, 'chromeDriverEntry', 'directory-or-file');
   assertOrdinaryRelativePath(cacheDirectory, realCacheDirectory, manifestPaths.chromeDriverBinary, 'chromeDriverBinary', 'file');
 
-  const discoveredArtifacts = discoverCacheArtifacts(cacheDirectory, expectedManifest.platform, expectedManifest.architecture, realCacheDirectory);
+  const discoveredArtifacts = discoverCacheArtifacts(
+    cacheDirectory,
+    expectedManifest.platform,
+    expectedManifest.architecture,
+    expectedManifest.extesterVersion,
+    realCacheDirectory);
   for (const [field, expectedValue] of Object.entries(discoveredArtifacts)) {
     if (manifestPaths[field] !== expectedValue) {
       throw new Error(`${field} must be '${expectedValue}' for ${expectedManifest.platform}/${expectedManifest.architecture}, but found '${manifest[field]}'.`);
@@ -1115,9 +1124,9 @@ function isPathContainedWithin(rootPath, candidatePath) {
   return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
 }
 
-function discoverCacheArtifacts(rootDirectory, platform, architecture, realRootDirectory = resolveRealPath(rootDirectory)) {
+function discoverCacheArtifacts(rootDirectory, platform, architecture, extesterVersion, realRootDirectory = resolveRealPath(rootDirectory)) {
   const vscodeDirectory = getVsCodeDirectoryName(platform, architecture);
-  const vscodeExecutableRelativePaths = getVsCodeExecutableRelativePaths(platform, architecture);
+  const vscodeExecutableRelativePaths = getVsCodeExecutableRelativePaths(platform, architecture, extesterVersion);
   const vscodeExecutableRelativePath = vscodeExecutableRelativePaths.find(
     relativePath => pathExistsWithoutFollowingLinks(path.join(rootDirectory, relativePath)));
   const chromeDriverBinaryName = getChromeDriverBinaryName(platform);
@@ -1180,18 +1189,23 @@ function getVsCodeDirectoryName(platform, architecture) {
   }
 }
 
-function getVsCodeExecutableRelativePaths(platform, architecture) {
+function getVsCodeExecutableRelativePaths(platform, architecture, extesterVersion) {
   const vscodeDirectory = getVsCodeDirectoryName(platform, architecture);
 
   switch (platform) {
     case 'darwin':
       // VS Code 1.131 removes the legacy Contents/MacOS/Electron -> Code compatibility symlink. The
-      // Darwin runner rejects the resulting Code-only layout while ExTester 8.23 is pinned; keeping
-      // discovery aware of both names lets a future ExTester 8.24 bump use Code-only entries without
-      // invalidating older cache entries.
+      // cache key includes ExTester because 8.23 can launch only Electron while 8.24 falls back to
+      // Code. Validate against the executable that keyed dependency can actually launch rather than
+      // publishing a cache entry that will fail later in install-vsix or run-tests.
+      const legacyExecutable = path.join(vscodeDirectory, 'Contents', 'MacOS', 'Electron');
+      if (!isConcreteVersionAtLeast(extesterVersion, '8.24.0')) {
+        return [legacyExecutable];
+      }
+
       return [
         path.join(vscodeDirectory, 'Contents', 'MacOS', 'Code'),
-        path.join(vscodeDirectory, 'Contents', 'MacOS', 'Electron'),
+        legacyExecutable,
       ];
     case 'linux':
       return [path.join(vscodeDirectory, 'code')];
@@ -1200,6 +1214,23 @@ function getVsCodeExecutableRelativePaths(platform, architecture) {
     default:
       throw new Error(`Unsupported VS Code platform/architecture combination: ${platform}/${architecture}.`);
   }
+}
+
+function isConcreteVersionAtLeast(version, minimumVersion) {
+  const versionParts = version.split('.').map(Number);
+  const minimumParts = minimumVersion.split('.').map(Number);
+  if (versionParts.some(part => !Number.isInteger(part) || part < 0)) {
+    return false;
+  }
+
+  for (let index = 0; index < Math.max(versionParts.length, minimumParts.length); index++) {
+    const difference = (versionParts[index] ?? 0) - (minimumParts[index] ?? 0);
+    if (difference !== 0) {
+      return difference > 0;
+    }
+  }
+
+  return true;
 }
 
 function getChromeDriverBinaryName(platform) {

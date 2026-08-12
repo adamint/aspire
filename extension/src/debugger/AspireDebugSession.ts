@@ -25,7 +25,7 @@ import { classifyAppHostPath, classifyAppHostDirectory } from "../utils/appHostL
 import { bucketAspireCommand } from "../utils/telemetryBuckets";
 import { getAppHostTargetVersion } from "../utils/appHostTargetVersion";
 import type { AspireDebugConsoleOutputEvent } from "../types/extensionApi";
-import { appHostTelemetryTargetPathConfigKey } from "./AspireDebugConfigurationMetadata";
+import { appHostSelectionOriginConfigKey, appHostTelemetryTargetPathConfigKey } from "./AspireDebugConfigurationMetadata";
 
 export type DashboardLaunchBehavior = 'none' | 'notification' | DashboardBrowserType;
 export type DashboardBrowserType = 'openExternalBrowser' | 'integratedBrowser' | 'debugChrome' | 'debugEdge' | 'debugFirefox';
@@ -236,6 +236,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     const appHostTelemetryTargetPath = typeof this._session.configuration[appHostTelemetryTargetPathConfigKey] === 'string'
       ? this._session.configuration[appHostTelemetryTargetPathConfigKey]
       : undefined;
+    const appHostSelectionOrigin = this.configuration[appHostSelectionOriginConfigKey];
     const extensionArgs: string[] = [];
     // Telemetry: emit `debug/apphost/start` once per AppHost launch. This must
     // happen before any awaited filesystem metadata work because child
@@ -307,13 +308,13 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     if (appHostIsDirectory) {
       this.sendMessageWithEmoji("📁", launchingWithDirectory(sessionType, appHostPath));
 
-      void this.spawnAspireCommand(args, appHostPath, noDebug, commandLabel);
+      void this.spawnAspireCommand(args, appHostPath, noDebug, commandLabel, this.getAppHostSelectionOriginEnvironment(appHostSelectionOrigin));
     }
     else {
       this.sendMessageWithEmoji("📂", launchingWithAppHost(sessionType, appHostPath));
 
       const workspaceFolder = path.dirname(appHostPath);
-      void this.spawnAspireCommand(args, workspaceFolder, noDebug, commandLabel);
+      void this.spawnAspireCommand(args, workspaceFolder, noDebug, commandLabel, this.getAppHostSelectionOriginEnvironment(appHostSelectionOrigin));
     }
   }
 
@@ -355,7 +356,13 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     return this._appHostTargetVersionAtLaunch;
   }
 
-  async spawnAspireCommand(args: string[], workingDirectory: string | undefined, noDebug: boolean, commandLabel: string = 'aspire run') {
+  private getAppHostSelectionOriginEnvironment(selectionOrigin: AspireExtendedDebugConfiguration[typeof appHostSelectionOriginConfigKey]): EnvVar[] | undefined {
+    return selectionOrigin
+      ? [{ name: EnvironmentVariables.ASPIRE_CLI_APPHOST_SELECTION_ORIGIN, value: selectionOrigin }]
+      : undefined;
+  }
+
+  async spawnAspireCommand(args: string[], workingDirectory: string | undefined, noDebug: boolean, commandLabel: string = 'aspire run', internalEnv?: EnvVar[]) {
     const disposable = this._rpcServer.onNewConnection((client: ICliRpcClient) => {
       if (client.debugSessionId === this.debugSessionId) {
         this._rpcClient = client;
@@ -366,7 +373,10 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     const configuredEnv = this.configuration.env;
     const env = configuredEnv
       ? Object.entries(configuredEnv).map(([name, value]) => ({ name, value: String(value) }))
-      : undefined;
+      : [];
+    if (internalEnv) {
+      env.push(...internalEnv);
+    }
 
     // Per-stream line buffers. CLI stdio chunks aren't guaranteed to arrive aligned to line
     // boundaries; without buffering, partial lines (and split-point ANSI sequences) would be
@@ -429,7 +439,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
         workingDirectory: workingDirectory,
         debugSessionId: this.debugSessionId,
         noDebug: noDebug,
-        env: env
+        env: env.length > 0 ? env : undefined
       },
     );
 
@@ -637,19 +647,33 @@ export class AspireDebugSession implements vscode.DebugAdapter {
             return;
           }
 
-          let stopSessionPromise: Thenable<void> | undefined;
+          let stopSessionPromise: Promise<void> | undefined;
+          let cleanupStarted = false;
           const disposalFunction = () => {
             if (stopSessionPromise) {
               return stopSessionPromise;
             }
 
             extensionLogOutputChannel.info(`Stopping debug session: ${session.name} (run id: ${session.configuration.runId})`);
-            stopSessionPromise = vscode.debug.stopDebugging(session);
-
-            // Run any cleanup registered by resource-type extensions (e.g. func host for Azure Functions)
-            cleanupRun(debugConfig.runId);
-
-            return stopSessionPromise;
+            try {
+              const stop = Promise.resolve(vscode.debug.stopDebugging(session));
+              const trackedStop = stop.catch(error => {
+                if (stopSessionPromise === trackedStop) {
+                  stopSessionPromise = undefined;
+                }
+                throw error;
+              });
+              stopSessionPromise = trackedStop;
+              return trackedStop;
+            }
+            finally {
+              if (!cleanupStarted) {
+                cleanupStarted = true;
+                // Resource-specific cleanup belongs to the first stop attempt even when
+                // VS Code rejects it; retrying stopSession must not run teardown twice.
+                cleanupRun(debugConfig.runId);
+              }
+            }
           };
 
           const vsCodeDebugSession: AspireResourceDebugSession = {
