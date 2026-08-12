@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import nodeChildProcess = require('child_process');
-import * as fs from 'fs';
+import fs = require('fs');
 import * as os from 'os';
 import * as path from 'path';
 import * as sinon from 'sinon';
@@ -449,7 +449,7 @@ suite('AppHostDataRepository', () => {
         }
     });
 
-    test('workspace discovery preserves case-distinct AppHost paths on case-sensitive platforms', async () => {
+    test('workspace discovery preserves case-distinct Windows AppHosts with different filesystem identities', async () => {
         const workspaceFolders = [
             {
                 uri: vscode.Uri.file('/workspace/upper'),
@@ -463,6 +463,11 @@ suite('AppHostDataRepository', () => {
             },
         ];
         const workspaceFoldersStub = stubWorkspaceFolders(workspaceFolders);
+        const platformStub = sinon.stub(process, 'platform').value('win32');
+        const statStub = sinon.stub(fs, 'statSync').callsFake((filePath: fs.PathLike) => ({
+            dev: 1n,
+            ino: String(filePath).includes('/AppHost/') ? 100n : 101n,
+        }) as fs.BigIntStats);
         const candidateChangeEmitter = new vscode.EventEmitter<vscode.WorkspaceFolder>();
         const upperCasePath = '/workspace/AppHost/apphost.mts';
         const lowerCasePath = '/workspace/apphost/apphost.mts';
@@ -483,13 +488,12 @@ suite('AppHostDataRepository', () => {
                 () => repository.isWorkspaceAppHostDiscoveryComplete,
                 'workspace AppHost discovery did not complete');
 
-            const expectedPaths = process.platform === 'win32'
-                ? [upperCasePath]
-                : [upperCasePath, lowerCasePath];
-            assert.deepStrictEqual(repository.workspaceAppHostCandidatePaths, expectedPaths);
+            assert.deepStrictEqual(repository.workspaceAppHostCandidatePaths, [upperCasePath, lowerCasePath]);
         } finally {
             repository.dispose();
             candidateChangeEmitter.dispose();
+            statStub.restore();
+            platformStub.restore();
             workspaceFoldersStub.restore();
         }
     });

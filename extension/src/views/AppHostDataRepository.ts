@@ -5,7 +5,7 @@ import { spawnCliProcess, terminateCliProcess } from '../debugger/languages/cli'
 import { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { appHostDescribeMayNotBeSupported, appHostDiscoveryProgress, appHostPathMustBeNonEmptyAbsolute, aspireCliCommandFailed, aspireCliCommandTimedOut, aspireCliDescribeNotSupported, aspireCliOutputParseFailed, aspireCommandOutputTruncated, aspireDescribeMinimumVersion, errorFetchingAppHosts, workspaceViewSelectedMultipleAppHosts, workspaceViewSelectedSingleAppHost } from '../loc/strings';
-import { AppHostCandidate, AppHostDiscoveryService, CandidateAppHostDisplayInfo, formatAppHostLanguage, getWorkspaceAppHostProjectSearchResult, isBuildableAppHostCandidate } from '../utils/appHostDiscovery';
+import { AppHostCandidate, AppHostDiscoveryService, CandidateAppHostDisplayInfo, formatAppHostLanguage, getWorkspaceAppHostProjectSearchResult, isBuildableAppHostCandidate, isSameFileSystemEntry } from '../utils/appHostDiscovery';
 import { isNoLogoUnsupportedOutput, noLogoOption, removeRootNoLogoOption } from '../utils/cliCompatibility';
 import { ConfigInfoProvider } from '../utils/configInfoProvider';
 import { describeIncludeDisabledCommandsCapability } from '../types/configInfo';
@@ -2103,39 +2103,41 @@ export function shortenPath(filePath: string): string {
 }
 
 function combineWorkspaceAppHostCandidates(workspaceFolderCandidates: readonly WorkspaceFolderAppHostCandidates[]): CombinedWorkspaceAppHostCandidates {
-    const appHostCandidatesByPath = new Map<string, { candidate: AppHostCandidate; workspaceFolderDepth: number }>();
-    const explicitlySelectedPathKeys = new Set<string>();
+    const appHostCandidates: Array<{ candidate: AppHostCandidate; workspaceFolderDepth: number }> = [];
+    const explicitlySelectedPaths: string[] = [];
 
     for (const folderCandidates of workspaceFolderCandidates) {
         const result = getWorkspaceAppHostProjectSearchResult(folderCandidates.workspaceFolder, folderCandidates.candidates);
         const workspaceFolderDepth = path.resolve(folderCandidates.workspaceFolder.uri.fsPath).length;
         for (const candidate of result.app_host_candidates) {
-            const pathKey = getPathComparisonKey(candidate.path);
-            const existing = appHostCandidatesByPath.get(pathKey);
-            if (!existing || existing.workspaceFolderDepth < workspaceFolderDepth) {
-                appHostCandidatesByPath.set(pathKey, { candidate, workspaceFolderDepth });
+            const existingIndex = appHostCandidates.findIndex(existing =>
+                isSameFileSystemEntry(existing.candidate.path, candidate.path));
+            if (existingIndex < 0) {
+                appHostCandidates.push({ candidate, workspaceFolderDepth });
+            } else if (appHostCandidates[existingIndex].workspaceFolderDepth < workspaceFolderDepth) {
+                appHostCandidates[existingIndex] = { candidate, workspaceFolderDepth };
             }
         }
         for (const candidate of folderCandidates.candidates) {
-            if (candidate.selected === true && candidate.status === 'buildable') {
-                explicitlySelectedPathKeys.add(getPathComparisonKey(candidate.path));
+            if (candidate.selected === true
+                && candidate.status === 'buildable'
+                && !explicitlySelectedPaths.some(selectedPath => isSameFileSystemEntry(selectedPath, candidate.path))) {
+                explicitlySelectedPaths.push(candidate.path);
             }
         }
     }
 
-    const appHostCandidates = [...appHostCandidatesByPath.values()].map(({ candidate }) => candidate);
-    const buildableAppHostCandidates = appHostCandidates.filter(isBuildableAppHostCandidate);
-    const selectedPathKey = explicitlySelectedPathKeys.size === 1
-        ? explicitlySelectedPathKeys.values().next().value
-        : null;
-    const selectedAppHostPath = selectedPathKey
-        ? appHostCandidatesByPath.get(selectedPathKey)?.candidate.path
-        : explicitlySelectedPathKeys.size === 0 && buildableAppHostCandidates.length === 1
+    const combinedAppHostCandidates = appHostCandidates.map(({ candidate }) => candidate);
+    const buildableAppHostCandidates = combinedAppHostCandidates.filter(isBuildableAppHostCandidate);
+    const selectedAppHostPath = explicitlySelectedPaths.length === 1
+        ? combinedAppHostCandidates.find(candidate =>
+            isSameFileSystemEntry(candidate.path, explicitlySelectedPaths[0]))?.path
+        : explicitlySelectedPaths.length === 0 && buildableAppHostCandidates.length === 1
             ? buildableAppHostCandidates[0].path
             : null;
 
     return {
-        appHostCandidates,
+        appHostCandidates: combinedAppHostCandidates,
         selectedAppHostPath: selectedAppHostPath ?? null,
     };
 }
@@ -2181,10 +2183,6 @@ export function shortenPaths(filePaths: readonly string[]): string[] {
     }
 
     return filePaths.map(filePath => stateByPath.get(getComparisonKey(filePath))?.label ?? filePath);
-}
-
-function getPathComparisonKey(filePath: string): string {
-    return getComparisonKey(path.resolve(filePath));
 }
 
 interface ShortenedPathState {
