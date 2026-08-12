@@ -11,6 +11,7 @@ import { AspireExtendedDebugConfiguration, EnvVar } from '../dcp/types';
 import { AnsiColors } from '../utils/AspireTerminalProvider';
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
 import type { DashboardLaunchBehavior } from '../debugger/AspireDebugSession';
+import { appHostSelectionOriginConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
 import { isDirectory } from '../utils/io';
 import { sendTelemetryEvent } from '../utils/telemetry';
 import { dashboardDefaultChangedNotificationKey } from '../utils/dashboardNotificationState';
@@ -160,6 +161,7 @@ function getConsoleLineText(line: ConsoleLine): string {
 type DebugSessionOptions = {
     command?: string;
     args?: string[];
+    env?: { [key: string]: string };
 };
 
 export class InteractionService implements IInteractionService {
@@ -681,7 +683,9 @@ export class InteractionService implements IInteractionService {
             program: projectFile ?? workingDirectory,
             command: command as AspireExtendedDebugConfiguration['command'],
             args: options?.args,
+            env: options?.env,
             noDebug: !debug,
+            [appHostSelectionOriginConfigKey]: projectFile ? 'user-selection' : 'default-discovery',
         };
 
         const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(workingDirectory));
