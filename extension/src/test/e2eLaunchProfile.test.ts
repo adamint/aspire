@@ -485,16 +485,17 @@ suite('E2E launch profile', () => {
         assert.ok(debugDashboard.includes('await resetDashboardDefaultChangedNotificationForE2E();'));
     });
 
-    test('observes CLI run status before asserting it is not a notification', () => {
+    test('keeps CLI status surface coverage in the deterministic ProgressNotifier unit test', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const debugDashboard = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'debugDashboard.e2e.test.ts'), 'utf8');
-        const statusNotificationTest = getTestBlock(debugDashboard, 'keeps long-running CLI run status out of notifications');
-        const statusWaitIndex = statusNotificationTest.indexOf('await waitForAnyWorkbenchText(cliRunStatusTexts, 120000);');
-        const notificationReadIndex = statusNotificationTest.indexOf('const notificationMessages = await getNotificationMessages();');
+        const progressNotifierTests = fs.readFileSync(path.join(extensionRoot, 'src', 'test', 'progressNotifier.test.ts'), 'utf8');
+        const statusSurfaceTest = getTestBlock(progressNotifierTests, 'CLI status is reported as dismissible window progress rather than a notification');
 
-        assert.ok(debugDashboard.includes('waitForAnyWorkbenchText'));
-        assert.ok(statusWaitIndex >= 0, 'The E2E must observe a live CLI status before classifying notification UI.');
-        assert.ok(notificationReadIndex > statusWaitIndex, 'Notifications must be read while the delayed status is still present.');
+        assert.ok(statusSurfaceTest.includes('vscode.ProgressLocation.Window'));
+        assert.ok(statusSurfaceTest.includes('vscode.ProgressLocation.Notification'));
+        assert.ok(
+            !debugDashboard.includes("test('keeps long-running CLI run status out of notifications'"),
+            'Workbench-wide text includes persistent Debug Console output, so it cannot prove status-bar progress is active.');
     });
 
     test('uses known AppHost PID when E2E teardown CLI status probes time out', () => {
