@@ -76,7 +76,7 @@ suite('E2E Mocha reporter', () => {
         }), false);
     });
 
-    test('keeps WebDriver session failures blocking', () => {
+    test('keeps WebDriver lifecycle failures blocking', () => {
         const { E2eProcessError, shouldAllowAdvisoryTestFailure } = require(getProcessFailureModulePath());
         const exitCodeError = new E2eProcessError('exit-code', 'node', ['run-tests'], {
             exitCode: 1,
@@ -88,7 +88,6 @@ suite('E2E Mocha reporter', () => {
             'NoSuchSessionError',
             'NoSuchWindowError',
             'SessionNotCreatedError',
-            'WebDriverError',
         ]) {
             assert.strictEqual(shouldAllowAdvisoryTestFailure(
                 exitCodeError,
@@ -97,6 +96,23 @@ suite('E2E Mocha reporter', () => {
             ), false);
         }
 
+        for (const message of [
+            'unknown error: session deleted because of page crash',
+            'unknown error: disconnected: not connected to DevTools',
+            'unknown error: chrome not reachable',
+        ]) {
+            assert.strictEqual(shouldAllowAdvisoryTestFailure(
+                exitCodeError,
+                createCompletedMochaResults('WebDriverError', message),
+                false,
+            ), false);
+        }
+
+        assert.strictEqual(shouldAllowAdvisoryTestFailure(
+            exitCodeError,
+            createCompletedMochaResults('WebDriverError', 'unknown error: element is not clickable at point'),
+            false,
+        ), true);
         assert.strictEqual(shouldAllowAdvisoryTestFailure(
             exitCodeError,
             createCompletedMochaResults('TimeoutError'),
@@ -344,13 +360,13 @@ function getProcessRunnerModulePath() {
     return path.join(__dirname, '..', '..', 'scripts', 'e2e-process-runner.cjs');
 }
 
-function createCompletedMochaResults(errorName?: string) {
+function createCompletedMochaResults(errorName?: string, errorMessage?: string) {
     const failedTest = { fullTitle: 'Aspire E2E starts an AppHost' };
     return {
         tests: [failedTest],
         failures: [{
             ...failedTest,
-            ...(errorName ? { err: { name: errorName } } : {}),
+            ...(errorName ? { err: { name: errorName, message: errorMessage } } : {}),
         }],
     };
 }
