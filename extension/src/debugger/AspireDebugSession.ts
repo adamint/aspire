@@ -441,7 +441,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     return false;
   }
 
-  private beginPendingDebugSessionStart(name: string): () => void {
+  beginPendingDebugSessionStart(name: string): vscode.Disposable {
     let resolveCompletion!: () => void;
     const pendingStart = {
       name,
@@ -451,10 +451,12 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     };
     this._pendingDebugSessionStarts.add(pendingStart);
 
-    return () => {
-      if (this._pendingDebugSessionStarts.delete(pendingStart)) {
-        resolveCompletion();
-      }
+    return {
+      dispose: () => {
+        if (this._pendingDebugSessionStarts.delete(pendingStart)) {
+          resolveCompletion();
+        }
+      },
     };
   }
 
@@ -1283,9 +1285,9 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   }
 
   startAndGetDebugSession(debugConfig: AspireResourceExtendedDebugConfiguration): Promise<AspireResourceDebugSession | undefined> {
-    const completePendingStart = this.beginPendingDebugSessionStart(debugConfig.name);
+    const pendingStart = this.beginPendingDebugSessionStart(debugConfig.name);
     const start = this.startAndGetDebugSessionCore(debugConfig);
-    void start.then(completePendingStart, completePendingStart);
+    void start.then(() => pendingStart.dispose(), () => pendingStart.dispose());
 
     return start;
   }
@@ -1529,7 +1531,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       }
     });
 
-    const completePendingStart = this.beginPendingDebugSessionStart(aspireDashboard);
+    const pendingStart = this.beginPendingDebugSessionStart(aspireDashboard);
     try {
       // Start as a child debug session so it is stopped alongside this session in `dispose`.
       const didStart = await vscode.debug.startDebugging(
@@ -1552,7 +1554,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       }
     }
     finally {
-      completePendingStart();
+      pendingStart.dispose();
     }
   }
 
