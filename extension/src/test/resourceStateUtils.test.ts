@@ -201,6 +201,20 @@ suite('findWorkspaceResourceState', () => {
 });
 
 suite('matchesAppHostPathOrDirectory', () => {
+    test('preserves normalized matching when paths no longer exist', () => {
+        const documentPath = path.join(path.sep, 'missing', 'AppHost', 'AppHost.cs');
+        const appHostPath = path.join(path.sep, 'missing', 'AppHost', 'AppHost.csproj');
+
+        assert.strictEqual(matchesAppHostPathOrDirectory(documentPath, appHostPath), true);
+    });
+
+    test('does not throw when mismatched paths no longer exist', () => {
+        const documentPath = path.join(path.sep, 'missing', 'FirstAppHost', 'AppHost.cs');
+        const appHostPath = path.join(path.sep, 'missing', 'SecondAppHost', 'AppHost.csproj');
+
+        assert.strictEqual(matchesAppHostPathOrDirectory(documentPath, appHostPath), false);
+    });
+
     test('matches a TypeScript AppHost opened through a directory symlink', () => {
         const workspace = createSymlinkedWorkspace();
         try {
