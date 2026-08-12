@@ -263,6 +263,7 @@ export class AppHostDataRepository {
     private _workspaceAppHostName: string | undefined;
     private _workspaceAppHostPath: string | undefined;
     private _workspaceAppHostCandidatePaths: string[] = [];
+    private readonly _workspaceFolderAppHostCandidates = new Map<string, CandidateAppHostDisplayInfo[]>();
     private _workspaceAppHostDescription: string | undefined;
     private _workspaceAppHostDiscoveryComplete = false;
     private _workspaceAppHostDiscoveryVersion = 0;
@@ -783,6 +784,9 @@ export class AppHostDataRepository {
             } else {
                 folderCandidates.candidates.push(candidate);
             }
+            this._workspaceFolderAppHostCandidates.set(
+                folderCandidates.workspaceFolder.uri.toString(),
+                [...folderCandidates.candidates]);
 
             // Use a trailing debounce to coalesce short bursts, but start the maximum-wait timer
             // only for the first candidate so a dense stream cannot postpone every tree update.
@@ -830,6 +834,7 @@ export class AppHostDataRepository {
                 return;
             }
 
+            this._setWorkspaceFolderAppHostCandidates(workspaceFolderCandidates);
             const result = combineWorkspaceAppHostCandidates(workspaceFolderCandidates);
             const buildableAppHostCandidates = result.appHostCandidates.filter(isBuildableAppHostCandidate);
             if (errors.length > 0 && buildableAppHostCandidates.length === 0) {
@@ -1036,25 +1041,42 @@ export class AppHostDataRepository {
     private _clearWorkspaceAppHostDiscovery(): void {
         this._clearWorkspaceAppHostSelection();
         this._workspaceAppHostCandidatePaths = [];
+        this._workspaceFolderAppHostCandidates.clear();
         this._workspaceAppHostDescription = undefined;
     }
 
     private _removeWorkspaceFolderCandidates(removedWorkspaceFolders: readonly vscode.WorkspaceFolder[]): void {
-        if (removedWorkspaceFolders.length === 0) {
-            return;
+        for (const workspaceFolder of removedWorkspaceFolders) {
+            this._workspaceFolderAppHostCandidates.delete(workspaceFolder.uri.toString());
         }
 
-        const belongsToRemovedWorkspaceFolder = (appHostPath: string): boolean =>
-            removedWorkspaceFolders.some(workspaceFolder =>
-                isAppHostPathUnderFolder(appHostPath, workspaceFolder.uri.fsPath));
-        this._workspaceAppHostCandidatePaths = this._workspaceAppHostCandidatePaths.filter(
-            appHostPath => !belongsToRemovedWorkspaceFolder(appHostPath));
-        if (this._workspaceAppHostPath && belongsToRemovedWorkspaceFolder(this._workspaceAppHostPath)) {
-            this._clearWorkspaceAppHostSelection();
+        const workspaceFolderCandidates = (vscode.workspace.workspaceFolders ?? []).map(workspaceFolder => ({
+            workspaceFolder,
+            candidates: this._workspaceFolderAppHostCandidates.get(workspaceFolder.uri.toString()) ?? [],
+        }));
+        const result = combineWorkspaceAppHostCandidates(workspaceFolderCandidates);
+        this._setWorkspaceAppHostCandidatePaths(result.appHostCandidates.filter(isBuildableAppHostCandidate));
+
+        const selectedAppHostPath = this._workspaceAppHostPath;
+        if (selectedAppHostPath) {
+            if (this._workspaceAppHostCandidatePaths.some(candidatePath => isMatchingAppHostPath(candidatePath, selectedAppHostPath))) {
+                this._setWorkspaceAppHostPathFromCurrentCandidates(selectedAppHostPath);
+            } else {
+                this._clearWorkspaceAppHostSelection();
+            }
         }
         this._workspaceAppHostDescription = this._workspaceAppHostCandidatePaths.length > 1
             ? workspaceViewSelectedMultipleAppHosts(this._workspaceAppHostCandidatePaths.length)
             : undefined;
+    }
+
+    private _setWorkspaceFolderAppHostCandidates(workspaceFolderCandidates: readonly WorkspaceFolderAppHostCandidates[]): void {
+        this._workspaceFolderAppHostCandidates.clear();
+        for (const folderCandidates of workspaceFolderCandidates) {
+            this._workspaceFolderAppHostCandidates.set(
+                folderCandidates.workspaceFolder.uri.toString(),
+                [...folderCandidates.candidates]);
+        }
     }
 
     // ── describe --follow ──

@@ -7,7 +7,7 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
-import { AppHostDataRepository, AspireCliFailedError } from '../views/AppHostDataRepository';
+import { AppHostDataRepository, AspireCliFailedError, shortenPath } from '../views/AppHostDataRepository';
 import { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
 import { AppHostDiscoveryService, type CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
 import * as cliModule from '../debugger/languages/cli';
@@ -261,8 +261,8 @@ suite('AppHostDataRepository', () => {
             name: 'root-c',
             index: 1,
         };
-        const rootAAppHostPath = path.join(rootA.uri.fsPath, 'apphost.mts');
-        const rootBAppHostPath = path.join(rootB.uri.fsPath, 'apphost.mts');
+        const rootAAppHostPath = path.join(rootA.uri.fsPath, 'MyAppHost.csproj');
+        const rootBAppHostPath = path.join('/configured', 'root-b', 'MyAppHost.csproj');
         defaultWorkspaceFoldersStub.restore();
         let currentWorkspaceFolders: readonly vscode.WorkspaceFolder[] = [rootA, rootB];
         const workspaceFoldersStub = sinon.stub(vscode.workspace, 'workspaceFolders').get(() => currentWorkspaceFolders);
@@ -281,8 +281,9 @@ suite('AppHostDataRepository', () => {
 
             return Promise.resolve([{
                 path: workspaceFolder === rootA ? rootAAppHostPath : rootBAppHostPath,
-                language: 'typescript',
+                language: 'csharp',
                 status: 'buildable',
+                selected: workspaceFolder === rootA,
             }]);
         });
         const discoveryService = {
@@ -297,7 +298,7 @@ suite('AppHostDataRepository', () => {
             await waitForCondition(
                 () => repository.isWorkspaceAppHostDiscoveryComplete,
                 'initial workspace discovery did not complete');
-            assert.deepStrictEqual(repository.workspaceAppHostCandidatePaths, [rootAAppHostPath, rootBAppHostPath]);
+            assert.deepStrictEqual(repository.workspaceAppHostCandidatePaths, [rootBAppHostPath, rootAAppHostPath]);
 
             currentWorkspaceFolders = [rootA, rootC];
             assert.ok(folderChangeListener);
@@ -305,6 +306,7 @@ suite('AppHostDataRepository', () => {
             await waitForMicrotasks();
 
             assert.deepStrictEqual(repository.workspaceAppHostCandidatePaths, [rootAAppHostPath]);
+            assert.strictEqual(repository.workspaceAppHostName, shortenPath(rootAAppHostPath));
             assert.strictEqual(repository.isWorkspaceAppHostDiscoveryComplete, false);
         } finally {
             repository.dispose();
