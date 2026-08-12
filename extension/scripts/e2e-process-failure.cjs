@@ -32,13 +32,11 @@ class E2eProcessError extends Error {
 }
 
 function shouldAllowAdvisoryTestFailure(error, results, cleanupFailed) {
-  // Mocha clamps ordinary test-failure exits to 1..255; Windows native crash statuses are numeric
-  // too, but fall outside that range and must remain blocking.
+  // ExTester's suite runner normalizes completed Mocha failures to exit code 1. Any other
+  // numeric status can represent a later Node/runtime failure and must remain blocking.
   return error instanceof E2eProcessError
     && error.reason === 'exit-code'
-    && Number.isInteger(error.exitCode)
-    && error.exitCode >= 1
-    && error.exitCode <= 255
+    && error.exitCode === 1
     && hasCompletedMochaTestFailures(results)
     && !cleanupFailed;
 }

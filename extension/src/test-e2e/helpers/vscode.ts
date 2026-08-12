@@ -1,4 +1,5 @@
 import { BottomBarPanel, By, EditorView, InputBox, Notification, SideBarView, TreeItem, TreeSection, VSBrowser, WebView, Workbench } from './extester';
+import { error as webDriverError } from 'selenium-webdriver';
 
 const escapeKey = '\uE00C';
 const aspireAppHostsSectionTitle = 'AppHosts';
@@ -250,10 +251,14 @@ export async function waitForNotificationMessage(expectedText: string, timeoutMs
 
             return false;
         }
-        catch {
+        catch (error) {
             // VS Code can replace notification elements while Selenium reads them, so let the
             // next WebDriver poll reacquire the current notification list.
-            return false;
+            if (error instanceof webDriverError.StaleElementReferenceError) {
+                return false;
+            }
+
+            throw error;
         }
     }, timeoutMs, `Timed out waiting for notification containing '${expectedText}'.`);
 }

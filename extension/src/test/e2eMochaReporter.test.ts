@@ -144,23 +144,20 @@ suite('E2E Mocha reporter', () => {
         assert.strictEqual(spawnError.message, `Failed to start node run-tests: spawn EPERM.${diagnosticsSuffix}`);
     });
 
-    test('process failure: completed Mocha exit codes in the failure range are advisory', () => {
+    test('process failure: ExTester Mocha failure exit code is advisory', () => {
         const { E2eProcessError, shouldAllowAdvisoryTestFailure } = require(getProcessFailureModulePath());
+        const exitCodeError = new E2eProcessError('exit-code', 'node', ['run-tests'], {
+            exitCode: 1,
+            diagnosticsSuffix,
+        });
 
-        for (const exitCode of [1, 255]) {
-            const exitCodeError = new E2eProcessError('exit-code', 'node', ['run-tests'], {
-                exitCode,
-                diagnosticsSuffix,
-            });
-
-            assert.strictEqual(shouldAllowAdvisoryTestFailure(exitCodeError, createCompletedMochaResults(), false), true);
-        }
+        assert.strictEqual(shouldAllowAdvisoryTestFailure(exitCodeError, createCompletedMochaResults(), false), true);
     });
 
-    test('process failure: numeric statuses outside the Mocha failure range stay blocking', () => {
+    test('process failure: other numeric statuses stay blocking', () => {
         const { E2eProcessError, shouldAllowAdvisoryTestFailure } = require(getProcessFailureModulePath());
 
-        for (const exitCode of [0, -1, 256, 0xC0000005]) {
+        for (const exitCode of [0, -1, 2, 255, 256, 0xC0000005]) {
             const exitCodeError = new E2eProcessError('exit-code', 'node', ['run-tests'], {
                 exitCode,
                 diagnosticsSuffix,

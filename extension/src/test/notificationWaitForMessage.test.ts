@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import * as path from 'path';
+import { error as webDriverError } from 'selenium-webdriver';
 
 interface NotificationLike {
     getMessage(): Promise<string>;
@@ -41,7 +42,7 @@ suite('waitForNotificationMessage', () => {
 
     test('retries when a notification message read hits a replaced VS Code element', async () => {
         const staleNotification = createNotification(() => {
-            throw new Error('StaleElementReferenceError: stale element reference');
+            throw new webDriverError.StaleElementReferenceError('stale element reference');
         });
         const freshNotification = createNotification('Aspire Dashboard ready');
         const { stub, vscode } = loadNotificationWaitModules();
@@ -64,7 +65,7 @@ suite('waitForNotificationMessage', () => {
         const { stub, vscode } = loadNotificationWaitModules();
 
         stub.setNotificationPolls([
-            new Error('StaleElementReferenceError: notifications list replaced'),
+            new webDriverError.StaleElementReferenceError('notifications list replaced'),
             [freshNotification],
         ]);
 
@@ -74,6 +75,18 @@ suite('waitForNotificationMessage', () => {
         assert.strictEqual(notification, freshNotification);
         assert.strictEqual(waitState.notificationPollCount, 2);
         assert.deepStrictEqual(waitState.pollResults, [false, freshNotification]);
+    });
+
+    test('propagates non-stale WebDriver failures', async () => {
+        const sessionError = new webDriverError.NoSuchSessionError('session closed');
+        const { stub, vscode } = loadNotificationWaitModules();
+
+        stub.setNotificationPolls([sessionError]);
+
+        await assert.rejects(
+            vscode.waitForNotificationMessage('Dashboard ready', 5000),
+            error => error === sessionError,
+        );
     });
 });
 
