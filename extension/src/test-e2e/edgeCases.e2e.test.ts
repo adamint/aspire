@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { AspireExtensionE2EControlCommand } from '../types/extensionApi';
 import { getCommandInvocationCount, getDebugLaunchCount, isSamePath, waitForCommandOutcome, waitForDebugLaunch, waitForDebugSessionStartup, waitForExtensionState, waitForNoDebugSessions, waitForNoRunningAppHost, waitForRepositoryIdle, waitForRunningAppHost, waitForSelectedWorkspaceAppHost, waitForWorkspaceAppHost } from './helpers/assertions';
-import { addIntegrationPackageToAppHost, createEmptyAppHostProject, createExternalSingleFileAppHost, executeE2eControlCommand, getGeneratedAppHostPath, getGeneratedProjectRoot, isProcessAlive, removeExternalSingleFileAppHost, removeGeneratedProject, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, setDebugLaunchSuppressedForE2E, stopAppHostIfRunning, stopPrimaryAppHostIfRunning, waitForKnownProcessExit, writeFileWithRetry, writeWorkspaceAppHostConfigForPath } from './helpers/fixtures';
+import { createEmptyAppHostProject, createExternalSingleFileAppHost, executeE2eControlCommand, getGeneratedAppHostPath, getGeneratedProjectRoot, isProcessAlive, removeExternalSingleFileAppHost, removeGeneratedProject, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, setDebugLaunchSuppressedForE2E, stopAppHostIfRunning, stopPrimaryAppHostIfRunning, waitForKnownProcessExit, writeFileWithRetry, writeWorkspaceAppHostConfigForPath } from './helpers/fixtures';
 import { getPrimaryAppHostProjectPath, getWorkspaceRoot } from './helpers/paths';
 import { chooseActiveQuickPick, executeCommandFromPalette, openAspireView, waitForEditorTitle, waitForNotificationMessage, waitForWorkbenchText } from './helpers/vscode';
 
@@ -166,7 +166,6 @@ suite('Aspire extension edge case E2E', function () {
         debuggerInstallHintProjectName = 'DebuggerInstallHintApp';
         const appHostPath = getGeneratedAppHostPath(debuggerInstallHintProjectName);
         await createEmptyAppHostProject(debuggerInstallHintProjectName);
-        await addIntegrationPackageToAppHost('Aspire.Hosting.Python', appHostPath);
 
         const pythonAppDirectory = path.join(getGeneratedProjectRoot(debuggerInstallHintProjectName), 'pythonapp');
         fs.mkdirSync(pythonAppDirectory, { recursive: true });
@@ -177,9 +176,10 @@ suite('Aspire extension edge case E2E', function () {
             appHostPath,
             appHostSource.replace(
                 'builder.Build().Run();',
-                `builder.AddPythonApp("pythonapp", "./pythonapp", "app.py")
-    .WithVirtualEnvironment(".venv", createIfNotExists: false)
-    .WithCommand(OperatingSystem.IsWindows() ? "python" : "python3");
+                `#pragma warning disable ASPIREEXTENSION001
+builder.AddExecutable("pythonapp", OperatingSystem.IsWindows() ? "python" : "python3", "./pythonapp", "app.py")
+    .WithDebugSupport(mode => new { type = "python", mode }, "python");
+#pragma warning restore ASPIREEXTENSION001
 
 builder.Build().Run();`));
         writeWorkspaceAppHostConfigForPath(appHostPath);
