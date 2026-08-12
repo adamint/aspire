@@ -58,6 +58,44 @@ suite('Azure Functions Debugger Extension Tests', () => {
         assert.strictEqual(await resourceDebugSession.termination, -1);
     });
 
+    test('executes a registered func host task with a VS Code-accepted definition in run mode', async () => {
+        const projectPath = path.join('/workspace', 'FunctionsApp', 'FunctionsApp.csproj');
+        const targetPath = path.join('/workspace', 'FunctionsApp', 'bin', 'Debug', 'net10.0', 'FunctionsApp.dll');
+        const certificatePath = path.join('/workspace with spaces', 'FunctionsApp', 'aspire-functions-https.pfx');
+        const startFuncProcess = sinon.stub().resolves({ success: true, processId: '4242' });
+        const debugConfiguration = createDebugConfiguration(projectPath, ['--cert', certificatePath, '--password', ')456Y7R.D*S3Fwdr7mAv-p']);
+        const taskHarness = stubRegisteredFuncTaskExecution();
+
+        sinon.stub(DotNetService.prototype, 'getDotNetTargetPath').resolves(targetPath);
+        sinon.stub(DotNetService.prototype, 'buildDotNetProject').resolves();
+        stubTaskShell('win32', { path: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' });
+        installAzureFunctionsExtensionStub(createAzureFunctionsApi(startFuncProcess));
+
+        const resourceDebugSession = await azureFunctionsDebuggerExtension.createDebugSessionConfigurationCallback!(
+            createLaunchConfiguration(projectPath),
+            debugConfiguration.args as string[],
+            createEnvironmentVariables(),
+            createLaunchOptions(false),
+            debugConfiguration);
+
+        const executedTask = taskHarness.getExecutedTask();
+        assert.ok(executedTask, 'Expected createDebugSessionConfigurationCallback to execute a registered func task');
+
+        const shellExecution = executedTask.execution as vscode.ShellExecution;
+        assert.deepStrictEqual(executedTask.definition, { type: 'func', command: 'host start' });
+        assert.strictEqual(executedTask.name, 'func: host start');
+        assert.strictEqual(executedTask.source, 'func');
+        assert.ok(shellExecution instanceof vscode.ShellExecution);
+        assert.strictEqual(shellExecution.options?.cwd, path.dirname(targetPath));
+        assert.deepStrictEqual(shellExecution.options?.env, {
+            AzureWebJobsStorage: 'UseDevelopmentStorage=true',
+            ASPIRE_HTTPS_PORTS: '7042',
+        });
+        assert.strictEqual(shellExecution.commandLine, `func host start --cert "${certificatePath}" --password ")456Y7R.D*S3Fwdr7mAv-p"`);
+
+        await resourceDebugSession?.stopSession();
+    });
+
     test('quotes HTTPS arguments for a configured cmd task shell', async () => {
         const projectPath = path.join('/workspace', 'FunctionsApp', 'FunctionsApp.csproj');
         const targetPath = path.join('/workspace', 'FunctionsApp', 'bin', 'Debug', 'net10.0', 'FunctionsApp.dll');
@@ -480,6 +518,51 @@ function createFuncTaskExecution(buildOutputPath: string, source = 'func', comma
         task,
         terminate: sinon.stub(),
     } as unknown as vscode.TaskExecution;
+}
+
+function stubRegisteredFuncTaskExecution(processId = 4242): {
+    getExecutedTask(): vscode.Task | undefined;
+    getExecution(): vscode.TaskExecution | undefined;
+    end(exitCode: number | undefined): void;
+} {
+    let startTaskProcess: ((event: vscode.TaskProcessStartEvent) => unknown) | undefined;
+    let endTaskProcess: ((event: vscode.TaskProcessEndEvent) => unknown) | undefined;
+    let executedTask: vscode.Task | undefined;
+    let execution: vscode.TaskExecution | undefined;
+
+    sinon.stub(vscode.tasks, 'onDidStartTaskProcess').callsFake(listener => {
+        startTaskProcess = listener;
+        return new vscode.Disposable(() => { });
+    });
+    sinon.stub(vscode.tasks, 'onDidEndTaskProcess').callsFake(listener => {
+        endTaskProcess = listener;
+        return new vscode.Disposable(() => { });
+    });
+    sinon.stub(vscode.tasks, 'executeTask').callsFake(async task => {
+        executedTask = task;
+        execution = {
+            task,
+            terminate: sinon.stub(),
+        } as unknown as vscode.TaskExecution;
+        const currentExecution = execution;
+
+        // Emit the synthetic start on a microtask so executeTask callers can finish
+        // any immediate listener wiring before the task process appears to start.
+        queueMicrotask(() => startTaskProcess?.({ execution: currentExecution, processId }));
+        return currentExecution;
+    });
+
+    return {
+        getExecutedTask: () => executedTask,
+        getExecution: () => execution,
+        end: exitCode => {
+            if (!execution) {
+                throw new Error('No func task execution was recorded');
+            }
+
+            endTaskProcess?.({ execution, exitCode });
+        },
+    };
 }
 
 function stubFuncTaskEvents(): {
