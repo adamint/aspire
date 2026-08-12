@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import * as cliModule from '../debugger/languages/cli';
+import * as debuggerExtensionsModule from '../debugger/debuggerExtensions';
 import { AspireDebugSession, buildAspireCommandArgs, getLoggableDebugConfiguration } from '../debugger/AspireDebugSession';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
@@ -1471,6 +1472,48 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(stopSession.callCount, 1, 'The ordered shutdown must run once, not once per caller');
     });
 
+    test('a synchronous reentrant stopDebugging call joins the current shutdown', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = { isCliDebugLoggingEnabled: () => false };
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        let reentrantStop: Promise<void> | undefined;
+        const stopSession = sinon.stub().callsFake(() => {
+            if (stopSession.callCount === 1) {
+                reentrantStop = aspireDebugSession.stopDebugging();
+            }
+
+            return Promise.resolve();
+        });
+        (aspireDebugSession as any)._resourceDebugSessions = [
+            {
+                id: 'resource-session',
+                session: { id: 'resource-session', name: 'Resource' } as unknown as vscode.DebugSession,
+                stopSession,
+            },
+        ];
+
+        const firstStop = aspireDebugSession.stopDebugging();
+        await firstStop;
+
+        assert.strictEqual(reentrantStop, firstStop, 'A synchronous reentrant caller must receive the published shutdown promise');
+        assert.strictEqual(stopSession.callCount, 1, 'Reentrancy must not start a second ordered shutdown');
+    });
+
     // The shutdown is reachable from the CLI's AppDomain.ProcessExit handler, which blocks the
     // exiting process on the RPC call with CancellationToken.None. vscode.debug.stopDebugging()
     // only resolves once the adapter acknowledges, so an unbounded wait on one wedged adapter hangs
@@ -1530,6 +1573,51 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(stopDebuggingStub.callCount, 2);
         assert.strictEqual(stopDebuggingStub.firstCall.args[0], appHostDebugSession);
         assert.strictEqual(stopDebuggingStub.secondCall.args[0], parentDebugSession);
+        clock.restore();
+    });
+
+    test('a timed-out stop reports the remaining shutdown budget', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = { isCliDebugLoggingEnabled: () => false };
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        const appHostSession = {
+            id: 'apphost-session',
+            session: { id: 'apphost-session', name: 'AppHost' } as unknown as vscode.DebugSession,
+            stopSession: () => new Promise<void>(() => { }),
+        };
+        (aspireDebugSession as any)._appHostDebugSession = appHostSession;
+        (aspireDebugSession as any)._resourceDebugSessions = [
+            appHostSession,
+            {
+                id: 'slow-resource',
+                session: { id: 'slow-resource', name: 'Slow resource' } as unknown as vscode.DebugSession,
+                stopSession: () => new Promise<void>(resolve => setTimeout(resolve, 9_000)),
+            },
+        ];
+
+        const stopPromise = aspireDebugSession.stopDebugging();
+        await clock.tickAsync(10_001);
+
+        await assert.rejects(stopPromise, (err: Error) => {
+            assert.strictEqual(err.message, debugSessionStopTimedOut('AppHost', 1));
+            return true;
+        });
         clock.restore();
     });
 
@@ -1671,6 +1759,80 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         assert.strictEqual(failingResourceStop.callCount, 2, 'The session that did not stop must be asked again');
         assert.strictEqual(stoppedResourceStop.callCount, 1, 'A session that already stopped must not be stopped again by the retry');
+    });
+
+    test('a timed-out VS Code resource stop issues a fresh request on retry', async () => {
+        let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const resourceDebugSession = {
+            id: 'resource-session',
+            type: 'node',
+            name: 'Resource',
+            configuration: {
+                runId: 'resource-run',
+            },
+        };
+        const debugConfig = {
+            runId: 'resource-run',
+            debugSessionId: 'debug-1',
+            type: 'node',
+            name: 'Resource',
+            request: 'launch',
+            program: '/workspace/app.js',
+            cwd: '/workspace',
+        } as AspireResourceExtendedDebugConfiguration;
+        const terminalProvider = { isDebugConfigEnvironmentLoggingEnabled: () => false };
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        sinon.stub(vscode.workspace, 'getWorkspaceFolder').returns(undefined);
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            startSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').returns({ dispose: sinon.stub() });
+        sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+        let resourceStopAttempts = 0;
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(session => {
+            if (session?.id === resourceDebugSession.id) {
+                resourceStopAttempts++;
+                return resourceStopAttempts === 1
+                    ? new Promise<void>(() => { })
+                    : Promise.resolve();
+            }
+
+            return Promise.resolve();
+        });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+
+        const sessionPromise = aspireDebugSession.startAndGetDebugSession(debugConfig);
+        await Promise.resolve();
+        startSessionCallback?.(resourceDebugSession as unknown as vscode.DebugSession);
+        await sessionPromise;
+
+        const firstStop = aspireDebugSession.stopDebugging();
+        await clock.tickAsync(10_001);
+        await assert.rejects(firstStop, /Timed out after 10 seconds waiting for debug session 'Resource' to stop/);
+
+        const retry = aspireDebugSession.stopDebugging();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        assert.strictEqual(resourceStopAttempts, 2, 'The retry must issue a new vscode.debug.stopDebugging request');
+        await retry;
+        clock.restore();
     });
 
     test('a late resource that fails to stop between shutdown attempts is retried by the next attempt', async () => {
@@ -2382,6 +2544,77 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(stopDebuggingStub.callCount, 2);
         assert.strictEqual(stopDebuggingStub.firstCall.args[0], appHostDebugSession);
         assert.strictEqual(stopDebuggingStub.secondCall.args[0], parentDebugSession);
+    });
+
+    test('an AppHost restart is aborted and forces CLI cleanup when resource shutdown fails', async () => {
+        let restartHandler: ((debugSessionId: string) => boolean) | undefined;
+        let terminateSessionCallback: ((session: vscode.DebugSession) => unknown) | undefined;
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const appHostDebugSession = {
+            id: 'apphost-session',
+            type: 'coreclr',
+            name: 'AppHost',
+            configuration: {
+                runId: 'apphost-run',
+            },
+        };
+        const appHostResourceSession = {
+            id: appHostDebugSession.id,
+            session: appHostDebugSession as unknown as vscode.DebugSession,
+            stopSession: sinon.stub().resolves(),
+        };
+        const terminalProvider = {
+            isDebugConfigEnvironmentLoggingEnabled: () => false,
+        };
+        sinon.stub(debuggerExtensionsModule, 'createDebugSessionConfiguration').resolves({
+            runId: 'apphost-run',
+            debugSessionId: 'debug-1',
+            type: 'coreclr',
+            name: 'AppHost',
+            request: 'launch',
+        });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(callback => {
+            terminateSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        const startDebuggingStub = sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        sinon.stub(aspireDebugSession, 'createDebugAdapterTrackerCore').callsFake((_debugAdapter, onRestart) => {
+            restartHandler = onRestart;
+        });
+        sinon.stub(aspireDebugSession, 'startAndGetDebugSession').resolves(appHostResourceSession);
+        const cliStop = sinon.stub().resolves();
+        (aspireDebugSession as any)._rpcClient = { stopCli: cliStop };
+        const terminateCliProcessTree = sinon.stub(aspireDebugSession, 'terminateCliProcessTree');
+
+        await aspireDebugSession.startAppHost('/workspace/AppHost.csproj', ['run'], [], true, { forceBuild: false });
+        (aspireDebugSession as any)._resourceDebugSessions.push({
+            id: 'resource-session',
+            session: { id: 'resource-session', name: 'Resource' } as unknown as vscode.DebugSession,
+            stopSession: sinon.stub().rejects(new Error('Resource stop failed')),
+        });
+
+        assert.strictEqual(restartHandler?.(aspireDebugSession.debugSessionId), true);
+        await terminateSessionCallback?.(appHostDebugSession as unknown as vscode.DebugSession);
+
+        assert.strictEqual(startDebuggingStub.callCount, 0, 'A replacement AppHost must not start after failed cleanup');
+        sinon.assert.calledOnce(cliStop);
+        sinon.assert.calledOnceWithExactly(terminateCliProcessTree, { force: true });
     });
 
     test('reports AppHost target version in end telemetry', async () => {

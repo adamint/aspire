@@ -91,10 +91,12 @@ export class AspireExtensionContext implements vscode.Disposable {
         }
 
         if (this._isShutdownRegistrationClosed) {
-            // The final async drain has already taken its snapshot. Start ordered shutdown while
-            // resource stop requests can still be issued, then synchronously force and finalize so
-            // this session cannot outlive the extension through the last await-to-dispose window.
-            this._forceFinalizeUntrackedDebugSession(debugSession);
+            // The final drain is still responsible for sessions that arrive after registration
+            // closes. Keep their complete ordered/CLI/process finalization in that drain so shared
+            // RPC and DCP infrastructure cannot be disposed while a resource adapter is stopping.
+            const stop = this._finalizeLateDebugSession(debugSession);
+            void stop.catch(() => { });
+            this._lateDebugSessionStops.push(stop);
             return;
         }
 
@@ -179,7 +181,7 @@ export class AspireExtensionContext implements vscode.Disposable {
             // ordered-stop drain has closed. Those sessions are refused as context owners and run
             // their complete ordered/CLI/process finalization through this tracked drain.
             this._isShutdownRegistrationClosed = true;
-            stopFailures.push(...await this._drainLateDebugSessionStops());
+            stopFailures.push(...await this._drainLateDebugSessionStops(true));
         }
         finally {
             this._forceTerminateCliProcesses();
@@ -211,7 +213,7 @@ export class AspireExtensionContext implements vscode.Disposable {
         return stopFailures;
     }
 
-    private async _drainLateDebugSessionStops(): Promise<unknown[]> {
+    private async _drainLateDebugSessionStops(finalizeShutdown = false): Promise<unknown[]> {
         const stopFailures: unknown[] = [];
         while (this._lateDebugSessionStops.length > 0) {
             const lateStops = this._lateDebugSessionStops.splice(0);
@@ -219,6 +221,14 @@ export class AspireExtensionContext implements vscode.Disposable {
             stopFailures.push(...results
                 .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
                 .map(result => result.reason));
+        }
+
+        if (finalizeShutdown) {
+            // Finalize in the same synchronous turn that observes an empty drain. Returning first
+            // would create one last microtask window where a newly registered session could be
+            // queued after the drain but before shared infrastructure is disposed.
+            this._forceTerminateCliProcesses();
+            this._disposeCore();
         }
 
         return stopFailures;

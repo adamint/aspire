@@ -477,7 +477,7 @@ suite('AspireExtensionContext', () => {
         }
     });
 
-    test('a session registered after the final drain closes is synchronously force-finalized', async () => {
+    test('a session registered after the final drain closes is awaited before shared infrastructure is disposed', async () => {
         const order: string[] = [];
         const context = createContext(order);
         const initialCliStop = createDeferred<void>();
@@ -515,6 +515,7 @@ suite('AspireExtensionContext', () => {
             await new Promise(resolve => setImmediate(resolve));
         }
 
+        const finalWindowStop = createDeferred<void>();
         addSession(
             context,
             'final-window',
@@ -526,18 +527,23 @@ suite('AspireExtensionContext', () => {
             () => order.push('terminate final-window'),
             async () => {
                 order.push('stop final-window');
+                await finalWindowStop.promise;
             },
             () => order.push('finalize final-window'));
 
-        assert.deepStrictEqual(order.slice(-4), [
-            'stop final-window',
-            'stop CLI final-window',
-            'terminate final-window',
-            'finalize final-window',
-        ]);
+        assert.strictEqual(order.at(-1), 'stop final-window');
+        assert.strictEqual(order.includes('stop CLI final-window'), false);
+        assert.strictEqual(order.includes('terminate final-window'), false);
+        assert.strictEqual(order.includes('finalize final-window'), false);
         assert.strictEqual(order.includes('rpc server'), false);
 
         drainingStop.resolve();
+        await new Promise(resolve => setImmediate(resolve));
+
+        assert.strictEqual(order.includes('rpc server'), false);
+        assert.strictEqual(order.includes('finalize final-window'), false);
+
+        finalWindowStop.resolve();
         await shutdown;
 
         assert.ok(order.indexOf('finalize final-window') < order.indexOf('rpc server'));

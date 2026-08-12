@@ -212,8 +212,18 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     }
 
     this._stopAttemptInProgress = true;
-    const attempt = this.stopDebuggingCore();
+    this._stopping = true;
+    let resolveAttempt!: () => void;
+    let rejectAttempt!: (reason: unknown) => void;
+    const attempt = new Promise<void>((resolve, reject) => {
+      resolveAttempt = resolve;
+      rejectAttempt = reject;
+    });
     this._stopPromise = attempt;
+    // Publish the shared promise before starting the core operation. Resource stop callbacks can
+    // synchronously re-enter stopDebugging(), but the stops themselves must still start eagerly so
+    // dispose() retains its existing synchronous initiation behavior.
+    void this.stopDebuggingCore().then(resolveAttempt, rejectAttempt);
 
     // A rejected shutdown left something running. Caching that rejection forever would make every
     // later attempt rethrow the original failure without retrying, so drop it and let the next
@@ -249,9 +259,6 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   }
 
   private async stopDebuggingCore(): Promise<void> {
-    // Latch before the first await so any resource that starts while the shutdown is in flight is
-    // stopped immediately by the start paths instead of being registered behind the snapshot.
-    this._stopping = true;
     const stopFailures = await this.stopAllSessions();
 
     if (stopFailures.length === 1) {
@@ -298,7 +305,11 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // the path where a resource is most likely to be left behind. The rejection is kept and
     // rethrown after the AppHost and the synthetic Aspire parent have been stopped.
     const results = await Promise.allSettled(resourceDebugSessions.map(
-      session => this.stopWithinBudget(() => session.stopSession(), session.session.name, deadline)));
+      session => this.stopWithinBudget(
+        () => session.stopSession(),
+        session.session.name,
+        deadline,
+        () => session.resetStopSessionAttempt?.())));
     const stopFailures: unknown[] = results
       .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
       .map(result => result.reason);
@@ -318,7 +329,11 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     if (this._appHostDebugSession && !this._appHostStopped) {
       const appHostDebugSession = this._appHostDebugSession;
       try {
-        await this.stopWithinBudget(() => appHostDebugSession.stopSession(), appHostDebugSession.session.name, deadline);
+        await this.stopWithinBudget(
+          () => appHostDebugSession.stopSession(),
+          appHostDebugSession.session.name,
+          deadline,
+          () => appHostDebugSession.resetStopSessionAttempt?.());
         this._appHostStopped = true;
         this._resourceDebugSessions = this._resourceDebugSessions.filter(session => session.id !== appHostDebugSession.id);
       }
@@ -386,7 +401,11 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     lateStop: (typeof this._lateResourceStops)[number],
     deadline: number): Promise<void> {
     try {
-      await this.waitWithinBudget(lateStop.stop, lateStop.session.session.name, deadline);
+      await this.waitWithinBudget(
+        lateStop.stop,
+        lateStop.session.session.name,
+        deadline,
+        () => lateStop.session.resetStopSessionAttempt?.());
     }
     catch (err) {
       if (!lateStop.retryOnNextShutdown) {
@@ -398,7 +417,8 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       await this.stopWithinBudget(
         () => lateStop.session.stopSession(),
         lateStop.session.session.name,
-        deadline);
+        deadline,
+        () => lateStop.session.resetStopSessionAttempt?.());
     }
   }
 
@@ -540,16 +560,28 @@ export class AspireDebugSession implements vscode.DebugAdapter {
    * wait there hangs the exiting process indefinitely. The timeout is reported through the same
    * `stopFailures` list as an ordinary rejection, so it is surfaced rather than swallowed.
    */
-  private stopWithinBudget(operation: () => Thenable<void>, sessionName: string, deadline: number): Promise<void> {
-    return this.waitWithinBudget(startStop(operation), sessionName, deadline);
+  private stopWithinBudget(
+    operation: () => Thenable<void>,
+    sessionName: string,
+    deadline: number,
+    onTimeout?: () => void): Promise<void> {
+    return this.waitWithinBudget(startStop(operation), sessionName, deadline, onTimeout);
   }
 
-  private waitWithinBudget(stop: PromiseLike<void>, sessionName: string, deadline: number): Promise<void> {
+  private waitWithinBudget(
+    stop: PromiseLike<void>,
+    sessionName: string,
+    deadline: number,
+    onTimeout?: () => void): Promise<void> {
     const remainingMs = Math.max(0, deadline - Date.now());
+    const remainingSeconds = Math.ceil(remainingMs / 1000);
 
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(
-        () => reject(new Error(debugSessionStopTimedOut(sessionName, Math.round(AspireDebugSession._stopSessionsTimeoutMs / 1000)))),
+        () => {
+          onTimeout?.();
+          reject(new Error(debugSessionStopTimedOut(sessionName, remainingSeconds)));
+        },
         remainingMs);
 
       // Whichever way this settles the timer has to be cleared: an outstanding timer keeps the
@@ -1069,9 +1101,17 @@ export class AspireDebugSession implements vscode.DebugAdapter {
             // Awaited only on the restart path, so the replacement session is not started while the
             // outgoing one is still tearing its resources down. The wait is bounded by
             // _stopSessionsTimeoutMs.
-            await this.stopDebugging().catch(err => {
+            try {
+              await this.stopDebugging();
+            }
+            catch (err) {
               extensionLogOutputChannel.error(`Ordered shutdown before AppHost restart failed: ${describeStopFailure(err)}`);
-            });
+              void this.requestCliStopForExtensionShutdown().catch(cliStopError => {
+                extensionLogOutputChannel.warn(`Failed to stop Aspire CLI after AppHost restart cleanup failed: ${cliStopError}`);
+              });
+              this.terminateCliProcessTree({ force: true });
+              return;
+            }
 
             extensionLogOutputChannel.info('AppHost restart requested, restarting Aspire debug session');
             await vscode.debug.startDebugging(undefined, config);
@@ -1210,11 +1250,15 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
             return stop;
           };
+          const resetStopSessionAttempt = () => {
+            stopSessionPromise = undefined;
+          };
 
           const vsCodeDebugSession: AspireResourceDebugSession = {
             id: session.id,
             session: session,
-            stopSession: disposalFunction
+            stopSession: disposalFunction,
+            resetStopSessionAttempt,
           };
 
           if (this.isShuttingDown) {
