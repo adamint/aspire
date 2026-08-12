@@ -14,7 +14,7 @@ import { extensionLogOutputChannel } from '../utils/logging';
 import { appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
 import { AspireResourceExtendedDebugConfiguration } from '../dcp/types';
 import { __resetCommonPropertiesForTests, __setReporterForTests } from '../utils/telemetry';
-import { debugSessionStopTimedOut } from '../loc/strings';
+import { aspireDashboard, debugSessionStopTimedOut } from '../loc/strings';
 import { registerRunCleanup } from '../debugger/runCleanupRegistry';
 
 interface RecordedEvent {
@@ -814,6 +814,462 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         assert.strictEqual(spawnCliProcessStub.callCount, 0);
         assert.strictEqual(connectionSubscription.dispose.callCount, 1);
+    });
+
+    test('dispose stops a tracked dashboard debug session when closeDashboardOnDebugEnd is enabled', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        const dashboardDebugSession = {
+            id: 'dashboard-session',
+            type: 'pwa-msedge',
+            name: 'Aspire Dashboard',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        sinon.stub(vscode.workspace, 'getConfiguration').withArgs('aspire').returns({
+            get: <T>(section: string, defaultValue: T) =>
+                section === 'closeDashboardOnDebugEnd' ? true as T : defaultValue,
+        } as vscode.WorkspaceConfiguration);
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+        (aspireDebugSession as any)._dashboardDebugSession = dashboardDebugSession;
+
+        aspireDebugSession.dispose();
+        await aspireDebugSession.stopDebugging();
+
+        assert.strictEqual(stopDebugging.callCount, 2);
+        assert.strictEqual(stopDebugging.firstCall.args[0], dashboardDebugSession);
+        assert.strictEqual(stopDebugging.secondCall.args[0], parentDebugSession);
+    });
+
+    test('dispose leaves a tracked dashboard debug session running when closeDashboardOnDebugEnd is disabled', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        const dashboardDebugSession = {
+            id: 'dashboard-session',
+            type: 'pwa-msedge',
+            name: 'Aspire Dashboard',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        sinon.stub(vscode.workspace, 'getConfiguration').withArgs('aspire').returns({
+            get: <T>(section: string, defaultValue: T) =>
+                section === 'closeDashboardOnDebugEnd' ? false as T : defaultValue,
+        } as vscode.WorkspaceConfiguration);
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+        (aspireDebugSession as any)._dashboardDebugSession = dashboardDebugSession;
+
+        aspireDebugSession.dispose();
+        await aspireDebugSession.stopDebugging();
+
+        sinon.assert.calledOnceWithExactly(stopDebugging, parentDebugSession);
+        assert.strictEqual((aspireDebugSession as any)._dashboardDebugSession, null);
+    });
+
+    test('stopDebugging retries a failed dashboard debug session stop', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        const dashboardDebugSession = {
+            id: 'dashboard-session',
+            type: 'pwa-msedge',
+            name: 'Aspire Dashboard',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        sinon.stub(vscode.workspace, 'getConfiguration').withArgs('aspire').returns({
+            get: <T>(section: string, defaultValue: T) =>
+                section === 'closeDashboardOnDebugEnd' ? true as T : defaultValue,
+        } as vscode.WorkspaceConfiguration);
+        let dashboardStopAttempts = 0;
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').callsFake(async session => {
+            if (session === dashboardDebugSession && dashboardStopAttempts++ === 0) {
+                throw new Error('Dashboard stop failed');
+            }
+        });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+        (aspireDebugSession as any)._dashboardDebugSession = dashboardDebugSession;
+
+        await assert.rejects(() => aspireDebugSession.stopDebugging(), /Dashboard stop failed/);
+        await aspireDebugSession.stopDebugging();
+
+        assert.strictEqual(stopDebugging.callCount, 3);
+        assert.strictEqual(stopDebugging.firstCall.args[0], dashboardDebugSession);
+        assert.strictEqual(stopDebugging.secondCall.args[0], parentDebugSession);
+        assert.strictEqual(stopDebugging.thirdCall.args[0], dashboardDebugSession);
+    });
+
+    test('stopDebugging ignores a dashboard debug session that already terminated', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        const dashboardDebugSession = {
+            id: 'dashboard-session',
+            type: 'pwa-msedge',
+            name: aspireDashboard,
+            configuration: { name: aspireDashboard },
+            parentSession: parentDebugSession,
+        } as unknown as vscode.DebugSession;
+        let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        let terminateSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            startSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(callback => {
+            terminateSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+
+        const openPromise = aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
+        startSessionCallback?.(dashboardDebugSession);
+        await openPromise;
+        terminateSessionCallback?.(dashboardDebugSession);
+        await aspireDebugSession.stopDebugging();
+
+        sinon.assert.calledOnceWithExactly(stopDebugging, parentDebugSession);
+    });
+
+    test('stopDebugging retries a failed dashboard stop that started during shutdown', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        const dashboardDebugSession = {
+            id: 'dashboard-session',
+            type: 'pwa-msedge',
+            name: aspireDashboard,
+            configuration: { name: aspireDashboard },
+            parentSession: parentDebugSession,
+        } as unknown as vscode.DebugSession;
+        sinon.stub(vscode.workspace, 'getConfiguration').withArgs('aspire').returns({
+            get: <T>(section: string, defaultValue: T) =>
+                section === 'closeDashboardOnDebugEnd' ? true as T : defaultValue,
+        } as vscode.WorkspaceConfiguration);
+        let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            startSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').returns({ dispose: sinon.stub() });
+        let resolveStartDebugging: ((didStart: boolean) => void) | undefined;
+        sinon.stub(vscode.debug, 'startDebugging').returns(new Promise<boolean>(resolve => {
+            resolveStartDebugging = resolve;
+        }));
+        let dashboardStopAttempts = 0;
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').callsFake(async session => {
+            if (session === dashboardDebugSession && dashboardStopAttempts++ === 0) {
+                throw new Error('Late dashboard stop failed');
+            }
+        });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+
+        const openPromise = aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
+        await Promise.resolve();
+        const firstStop = aspireDebugSession.stopDebugging();
+        startSessionCallback?.(dashboardDebugSession);
+        resolveStartDebugging?.(true);
+        await openPromise;
+
+        await firstStop;
+
+        assert.strictEqual(stopDebugging.callCount, 3);
+        assert.strictEqual(stopDebugging.firstCall.args[0], dashboardDebugSession);
+        assert.strictEqual(stopDebugging.secondCall.args[0], dashboardDebugSession);
+        assert.strictEqual(stopDebugging.thirdCall.args[0], parentDebugSession);
+    });
+
+    test('stopDebugging closes a dashboard session whose start promise remains pending', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        const dashboardDebugSession = {
+            id: 'dashboard-session',
+            type: 'pwa-msedge',
+            name: aspireDashboard,
+            configuration: { name: aspireDashboard },
+            parentSession: parentDebugSession,
+        } as unknown as vscode.DebugSession;
+        let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            startSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').returns({ dispose: sinon.stub() });
+        let resolveStartDebugging: ((didStart: boolean) => void) | undefined;
+        sinon.stub(vscode.debug, 'startDebugging').returns(new Promise<boolean>(resolve => {
+            resolveStartDebugging = resolve;
+        }));
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+
+        const openPromise = aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
+        await Promise.resolve();
+        const stopPromise = aspireDebugSession.stopDebugging();
+        startSessionCallback?.(dashboardDebugSession);
+        await clock.tickAsync(2000);
+        await stopPromise;
+
+        assert.strictEqual(stopDebugging.firstCall.args[0], dashboardDebugSession);
+        assert.strictEqual(stopDebugging.secondCall.args[0], parentDebugSession);
+
+        resolveStartDebugging?.(true);
+        await openPromise;
+    });
+
+    test('a dashboard that starts after shutdown retries a failed background stop', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        const dashboardDebugSession = {
+            id: 'dashboard-session',
+            type: 'pwa-msedge',
+            name: aspireDashboard,
+            configuration: { name: aspireDashboard },
+            parentSession: parentDebugSession,
+        } as unknown as vscode.DebugSession;
+        let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            startSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').returns({ dispose: sinon.stub() });
+        let resolveStartDebugging: ((didStart: boolean) => void) | undefined;
+        sinon.stub(vscode.debug, 'startDebugging').returns(new Promise<boolean>(resolve => {
+            resolveStartDebugging = resolve;
+        }));
+        let dashboardStopAttempts = 0;
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').callsFake(async session => {
+            if (session === dashboardDebugSession && dashboardStopAttempts++ === 0) {
+                throw new Error('Late dashboard stop failed');
+            }
+        });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+
+        const openPromise = aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
+        await Promise.resolve();
+        const stopPromise = aspireDebugSession.stopDebugging();
+        await clock.tickAsync(2000);
+        await stopPromise;
+
+        startSessionCallback?.(dashboardDebugSession);
+        await clock.tickAsync(0);
+
+        assert.strictEqual(stopDebugging.callCount, 3);
+        assert.strictEqual(stopDebugging.firstCall.args[0], parentDebugSession);
+        assert.strictEqual(stopDebugging.secondCall.args[0], dashboardDebugSession);
+        assert.strictEqual(stopDebugging.thirdCall.args[0], dashboardDebugSession);
+
+        resolveStartDebugging?.(true);
+        await openPromise;
+    });
+
+    test('stopDebugging treats dashboard termination during a pending stop as success', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        const dashboardDebugSession = {
+            id: 'dashboard-session',
+            type: 'pwa-msedge',
+            name: aspireDashboard,
+            configuration: { name: aspireDashboard },
+            parentSession: parentDebugSession,
+        } as unknown as vscode.DebugSession;
+        let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        let terminateSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            startSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(callback => {
+            terminateSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging');
+        stopDebugging.withArgs(dashboardDebugSession).returns(new Promise<void>(() => { }));
+        stopDebugging.withArgs(parentDebugSession).resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+
+        const openPromise = aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
+        startSessionCallback?.(dashboardDebugSession);
+        await openPromise;
+        const stopPromise = aspireDebugSession.stopDebugging();
+        terminateSessionCallback?.(dashboardDebugSession);
+        await stopPromise;
+
+        assert.strictEqual(stopDebugging.firstCall.args[0], dashboardDebugSession);
+        assert.strictEqual(stopDebugging.secondCall.args[0], parentDebugSession);
+    });
+
+    test('finalizeForExtensionShutdown stops a tracked dashboard debug session', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        const dashboardDebugSession = {
+            id: 'dashboard-session',
+            type: 'pwa-msedge',
+            name: 'Aspire Dashboard',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        sinon.stub(vscode.workspace, 'getConfiguration').withArgs('aspire').returns({
+            get: <T>(section: string, defaultValue: T) =>
+                section === 'closeDashboardOnDebugEnd' ? true as T : defaultValue,
+        } as vscode.WorkspaceConfiguration);
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+        (aspireDebugSession as any)._dashboardDebugSession = dashboardDebugSession;
+
+        aspireDebugSession.finalizeForExtensionShutdown();
+        await Promise.resolve();
+
+        sinon.assert.calledOnceWithExactly(stopDebugging, dashboardDebugSession);
+    });
+
+    test('launching the dashboard browser ignores a dashboard session belonging to another Aspire session', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        const foreignDashboardSession = {
+            id: 'foreign-dashboard-session',
+            type: 'pwa-msedge',
+            name: aspireDashboard,
+            configuration: { name: aspireDashboard },
+            parentSession: { id: 'other-aspire-session' },
+        } as unknown as vscode.DebugSession;
+        const ownDashboardSession = {
+            id: 'own-dashboard-session',
+            type: 'pwa-msedge',
+            name: aspireDashboard,
+            configuration: { name: aspireDashboard },
+            parentSession: parentDebugSession,
+        } as unknown as vscode.DebugSession;
+        let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        let listenerDisposed = false;
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            // Mirror VS Code: once the listener is disposed it stops receiving events. Without
+            // this, a listener that wrongly consumed a foreign session would still observe the
+            // session it was supposed to capture and hide the bug.
+            startSessionCallback = session => {
+                if (!listenerDisposed) {
+                    callback(session);
+                }
+            };
+            return { dispose: () => { listenerDisposed = true; } };
+        });
+        sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+
+        const openPromise = aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
+        await Promise.resolve();
+        startSessionCallback?.(foreignDashboardSession);
+        const trackedAfterForeignSession = (aspireDebugSession as any)._dashboardDebugSession;
+        startSessionCallback?.(ownDashboardSession);
+        await openPromise;
+
+        assert.strictEqual(trackedAfterForeignSession, null);
+        assert.strictEqual((aspireDebugSession as any)._dashboardDebugSession, ownDashboardSession);
+    });
+
+    test('launching the dashboard browser stops a session that starts after the Aspire session was disposed', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        const dashboardDebugSession = {
+            id: 'dashboard-session',
+            type: 'pwa-msedge',
+            name: aspireDashboard,
+            configuration: { name: aspireDashboard },
+            parentSession: parentDebugSession,
+        } as unknown as vscode.DebugSession;
+        sinon.stub(vscode.workspace, 'getConfiguration').withArgs('aspire').returns({
+            get: <T>(section: string, defaultValue: T) =>
+                section === 'closeDashboardOnDebugEnd' ? true as T : defaultValue,
+        } as vscode.WorkspaceConfiguration);
+        let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            startSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        let resolveStartDebugging: ((didStart: boolean) => void) | undefined;
+        sinon.stub(vscode.debug, 'startDebugging').returns(new Promise<boolean>(resolve => {
+            resolveStartDebugging = resolve;
+        }));
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+
+        const openPromise = aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
+        await Promise.resolve();
+        aspireDebugSession.dispose();
+        startSessionCallback?.(dashboardDebugSession);
+        resolveStartDebugging?.(true);
+        await openPromise;
+        await aspireDebugSession.stopDebugging();
+
+        assert.strictEqual(stopDebugging.calledWith(dashboardDebugSession), true);
+        assert.strictEqual((aspireDebugSession as any)._dashboardDebugSession, null);
+    });
+
+    test('launching the dashboard browser does not fall back to an external browser after the Aspire session was disposed', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(() => ({ dispose: sinon.stub() }));
+        let resolveStartDebugging: ((didStart: boolean) => void) | undefined;
+        sinon.stub(vscode.debug, 'startDebugging').returns(new Promise<boolean>(resolve => {
+            resolveStartDebugging = resolve;
+        }));
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const openExternal = sinon.stub(vscode.env, 'openExternal').resolves(true);
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+
+        const openPromise = aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
+        await Promise.resolve();
+        aspireDebugSession.dispose();
+        resolveStartDebugging?.(false);
+        await openPromise;
+
+        assert.strictEqual(openExternal.called, false);
     });
 
     test('stopDebugging stops resource sessions before the AppHost and Aspire parent sessions', async () => {
