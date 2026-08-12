@@ -1,5 +1,8 @@
 import * as assert from 'assert';
-import { findResourceState, findWorkspaceResourceState, ResourceMatch } from '../editor/resourceStateUtils';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { findResourceState, findWorkspaceResourceState, matchesAppHostPathOrDirectory } from '../editor/resourceStateUtils';
 import type { ResourceJson, AppHostDisplayInfo } from '../views/AppHostDataRepository';
 import { ResourceState } from '../editor/resourceConstants';
 
@@ -28,6 +31,27 @@ function makeAppHost(overrides: Partial<AppHostDisplayInfo> = {}): AppHostDispla
         resources: null,
         ...overrides,
     } as AppHostDisplayInfo;
+}
+
+function createSymlinkedWorkspace(): {
+    canonicalDirectory: string;
+    linkedDirectory: string;
+    dispose(): void;
+} {
+    const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-resource-state-'));
+    const canonicalDirectory = path.join(tempDirectory, 'workspace');
+    const linkedDirectory = path.join(tempDirectory, 'workspace-link');
+
+    fs.mkdirSync(canonicalDirectory);
+    fs.symlinkSync(canonicalDirectory, linkedDirectory, process.platform === 'win32' ? 'junction' : 'dir');
+
+    return {
+        canonicalDirectory,
+        linkedDirectory,
+        dispose() {
+            fs.rmSync(tempDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+        },
+    };
 }
 
 suite('findResourceState', () => {
@@ -173,5 +197,50 @@ suite('findWorkspaceResourceState', () => {
         assert.ok(finder('cache'));
         assert.ok(finder('db'));
         assert.strictEqual(finder('nonexistent'), undefined);
+    });
+});
+
+suite('matchesAppHostPathOrDirectory', () => {
+    test('matches a TypeScript AppHost opened through a directory symlink', () => {
+        const workspace = createSymlinkedWorkspace();
+        try {
+            const canonicalAppHostPath = path.join(workspace.canonicalDirectory, 'apphost.ts');
+            const linkedAppHostPath = path.join(workspace.linkedDirectory, 'apphost.ts');
+            fs.writeFileSync(canonicalAppHostPath, '');
+
+            assert.strictEqual(matchesAppHostPathOrDirectory(linkedAppHostPath, canonicalAppHostPath), true);
+        } finally {
+            workspace.dispose();
+        }
+    });
+
+    test('matches a C# source file to its project through a directory symlink', () => {
+        const workspace = createSymlinkedWorkspace();
+        try {
+            const canonicalProjectPath = path.join(workspace.canonicalDirectory, 'AppHost.csproj');
+            const linkedSourcePath = path.join(workspace.linkedDirectory, 'AppHost.cs');
+            fs.writeFileSync(canonicalProjectPath, '');
+            fs.writeFileSync(path.join(workspace.canonicalDirectory, 'AppHost.cs'), '');
+
+            assert.strictEqual(matchesAppHostPathOrDirectory(linkedSourcePath, canonicalProjectPath), true);
+        } finally {
+            workspace.dispose();
+        }
+    });
+
+    test('does not match unrelated canonical directories', () => {
+        const firstWorkspace = createSymlinkedWorkspace();
+        const secondWorkspace = createSymlinkedWorkspace();
+        try {
+            const documentPath = path.join(firstWorkspace.linkedDirectory, 'apphost.ts');
+            const appHostPath = path.join(secondWorkspace.canonicalDirectory, 'apphost.ts');
+            fs.writeFileSync(path.join(firstWorkspace.canonicalDirectory, 'apphost.ts'), '');
+            fs.writeFileSync(appHostPath, '');
+
+            assert.strictEqual(matchesAppHostPathOrDirectory(documentPath, appHostPath), false);
+        } finally {
+            firstWorkspace.dispose();
+            secondWorkspace.dispose();
+        }
     });
 });
