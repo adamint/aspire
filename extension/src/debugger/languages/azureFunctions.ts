@@ -144,15 +144,28 @@ function removeOwnedTempDirectory(state: FuncRunState): Promise<void> {
                 return;
             }
 
-            state.ownedTempDirectory = undefined;
             state.tempDirectoryCleanupRetryTimer = undefined;
-            extensionLogOutputChannel.warn(`Failed to remove Azure Functions temporary directory ${tempDirectory}: ${error}`);
             resolveCleanup();
         }
     };
 
     remove();
     return cleanup;
+}
+
+function finalizeOwnedTempDirectoryRemoval(state: FuncRunState): void {
+    const tempDirectory = state.ownedTempDirectory;
+    if (!tempDirectory) {
+        return;
+    }
+
+    try {
+        fs.rmSync(tempDirectory, { recursive: true, force: true });
+    } catch (error) {
+        extensionLogOutputChannel.warn(`Failed to remove Azure Functions temporary directory ${tempDirectory}: ${error}`);
+    } finally {
+        state.ownedTempDirectory = undefined;
+    }
 }
 
 function disposeFuncRunState(state: FuncRunState): void {
@@ -175,6 +188,22 @@ function disposeFuncRunState(state: FuncRunState): void {
     state.taskEndSubscription = undefined;
 }
 
+function requestFuncTaskTermination(state: FuncRunState, taskExecution: vscode.TaskExecution): boolean {
+    if (state.terminateRequested) {
+        return true;
+    }
+
+    state.terminateRequested = true;
+    extensionLogOutputChannel.info(`Terminating func host task for runId ${state.runId}`);
+    try {
+        taskExecution.terminate();
+        return true;
+    } catch (error) {
+        extensionLogOutputChannel.warn(`Failed to terminate Azure Functions task for runId ${state.runId}: ${error}`);
+        return false;
+    }
+}
+
 async function terminateFuncTaskAndWaitForExit(state: FuncRunState): Promise<void> {
     let taskExecution = state.taskExecution;
     if (!taskExecution && state.taskLaunchStarted) {
@@ -184,10 +213,8 @@ async function terminateFuncTaskAndWaitForExit(state: FuncRunState): Promise<voi
         return;
     }
 
-    if (!state.terminateRequested) {
-        state.terminateRequested = true;
-        extensionLogOutputChannel.info(`Terminating func host task for runId ${state.runId}`);
-        taskExecution.terminate();
+    if (!requestFuncTaskTermination(state, taskExecution)) {
+        return;
     }
 
     await new Promise<void>(resolve => {
@@ -221,6 +248,9 @@ async function runFuncCleanup(state: FuncRunState): Promise<void> {
         terminateFuncTaskAndWaitForExit(state),
         removeOwnedTempDirectory(state)
     ]);
+    // The task can release its last Windows file lock at the same moment the
+    // bounded retry window ends, so make one final attempt after task shutdown.
+    finalizeOwnedTempDirectoryRemoval(state);
     disposeFuncRunState(state);
 }
 
@@ -736,7 +766,14 @@ export const azureFunctionsDebuggerExtension: ResourceDebuggerExtension = {
             });
             state.taskLaunchStarted = true;
             try {
-                setTaskExecution(state, await vscode.tasks.executeTask(state.task));
+                const taskExecution = vscode.tasks.executeTask(state.task).then(execution => {
+                    setTaskExecution(state, execution);
+                    if (state.startupAbortController.signal.aborted && state.taskExitCode === undefined) {
+                        requestFuncTaskTermination(state, execution);
+                    }
+                    return execution;
+                });
+                await Promise.race([taskExecution, startupTimedOut]);
             } catch (error) {
                 completeTaskExecutionDiscovery(state);
                 throw error;

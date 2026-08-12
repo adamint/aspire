@@ -822,7 +822,7 @@ suite('Azure Functions Debugger Extension Tests', () => {
         sinon.assert.calledTwice(fsRmSync);
     });
 
-    test('retries debug temp directory cleanup for the bounded task termination period', async () => {
+    test('bounds debug temp directory retries and makes a final post-shutdown attempt', async () => {
         const projectPath = path.join('/workspace', 'FunctionsApp', 'FunctionsApp.csproj');
         const targetPath = path.join('/workspace', 'FunctionsApp', 'bin', 'Debug', 'net10.0', 'FunctionsApp.dll');
         const buildOutputPath = path.dirname(targetPath);
@@ -849,7 +849,88 @@ suite('Azure Functions Debugger Extension Tests', () => {
         sinon.assert.calledOnce(fsRmSync);
 
         await clock.tickAsync(30_000);
+        assert.strictEqual(fsRmSync.callCount, 301);
+    });
+
+    test('makes a final debug temp directory cleanup attempt after the task exits', async () => {
+        const projectPath = path.join('/workspace', 'FunctionsApp', 'FunctionsApp.csproj');
+        const targetPath = path.join('/workspace', 'FunctionsApp', 'bin', 'Debug', 'net10.0', 'FunctionsApp.dll');
+        let directoryLocked = true;
+        sinon.stub(DotNetService.prototype, 'getDotNetTargetPath').resolves(targetPath);
+        sinon.stub(DotNetService.prototype, 'buildDotNetProject').resolves();
+        fsRmSync.callsFake(() => {
+            if (directoryLocked) {
+                throw Object.assign(new Error('directory is busy'), { code: 'EBUSY' });
+            }
+        });
+
+        await azureFunctionsDebuggerExtension.createDebugSessionConfigurationCallback!(
+            createLaunchConfiguration(projectPath),
+            [],
+            [],
+            createLaunchOptions(true),
+            createDebugConfiguration(projectPath));
+
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        cleanupRun('azure-functions-test-run');
+        await clock.tickAsync(29_900);
         assert.strictEqual(fsRmSync.callCount, 300);
+
+        directoryLocked = false;
+        taskHarness.end(0);
+        await clock.tickAsync(0);
+
+        assert.strictEqual(fsRmSync.callCount, 301);
+    });
+
+    test('bounds startup when VS Code task execution does not resolve', async () => {
+        const projectPath = path.join('/workspace', 'FunctionsApp', 'FunctionsApp.csproj');
+        const targetPath = path.join('/workspace', 'FunctionsApp', 'bin', 'Debug', 'net10.0', 'FunctionsApp.dll');
+        sinon.stub(DotNetService.prototype, 'getDotNetTargetPath').resolves(targetPath);
+        sinon.stub(DotNetService.prototype, 'buildDotNetProject').resolves();
+        sinon.stub(vscode.workspace, 'getConfiguration').withArgs('azureFunctions').returns({
+            get: sinon.stub().withArgs('pickProcessTimeout').returns(0.01)
+        } as unknown as vscode.WorkspaceConfiguration);
+        (vscode.tasks.executeTask as sinon.SinonStub).resetBehavior();
+        (vscode.tasks.executeTask as sinon.SinonStub).returns(new Promise<vscode.TaskExecution>(() => { }));
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+
+        const launch = azureFunctionsDebuggerExtension.createDebugSessionConfigurationCallback!(
+            createLaunchConfiguration(projectPath),
+            [],
+            [],
+            createLaunchOptions(true),
+            createDebugConfiguration(projectPath));
+        await clock.tickAsync(10);
+
+        await assert.rejects(
+            launch,
+            /Timed out after 0.01 seconds waiting for the Azure Functions worker process to start/);
+    });
+
+    test('settles run-mode stop when VS Code task termination throws', async () => {
+        const projectPath = path.join('/workspace', 'FunctionsApp', 'FunctionsApp.csproj');
+        const targetPath = path.join('/workspace', 'FunctionsApp', 'bin', 'Debug', 'net10.0', 'FunctionsApp.dll');
+        const statusServer = await createFuncHostStatusServer(() => funcHostStatus);
+        sinon.stub(DotNetService.prototype, 'getDotNetTargetPath').resolves(targetPath);
+        sinon.stub(DotNetService.prototype, 'buildDotNetProject').resolves();
+
+        try {
+            const resourceDebugSession = await azureFunctionsDebuggerExtension.createDebugSessionConfigurationCallback!(
+                createLaunchConfiguration(projectPath),
+                ['--port', String(statusServer.port)],
+                [],
+                createLaunchOptions(false),
+                createDebugConfiguration(projectPath));
+            assert.ok(resourceDebugSession);
+            (taskHarness.getExecution()!.terminate as sinon.SinonStub).throws(new Error('task termination failed'));
+
+            await resourceDebugSession.stopSession();
+
+            assert.strictEqual(await resourceDebugSession.termination, -1);
+        } finally {
+            await close(statusServer.server);
+        }
     });
 
     test('does not duplicate existing Core Tools debug flags', async () => {
