@@ -239,15 +239,22 @@ export async function getActiveQuickPickLabels(timeoutMs = 30000): Promise<strin
 
 export async function waitForNotificationMessage(expectedText: string, timeoutMs = 30000): Promise<Notification> {
     return await VSBrowser.instance.driver.wait(async () => {
-        const notifications = await new Workbench().getNotifications();
-        for (const notification of notifications) {
-            const message = await notification.getMessage();
-            if (message.includes(expectedText)) {
-                return notification;
+        try {
+            const notifications = await new Workbench().getNotifications();
+            for (const notification of notifications) {
+                const message = await notification.getMessage();
+                if (message.includes(expectedText)) {
+                    return notification;
+                }
             }
-        }
 
-        return false;
+            return false;
+        }
+        catch {
+            // VS Code can replace notification elements while Selenium reads them, so let the
+            // next WebDriver poll reacquire the current notification list.
+            return false;
+        }
     }, timeoutMs, `Timed out waiting for notification containing '${expectedText}'.`);
 }
 
