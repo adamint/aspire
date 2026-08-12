@@ -248,6 +248,21 @@ export class AppHostDiscoveryService implements vscode.Disposable {
         return findCandidateForEditorFile(filePath, result);
     }
 
+    forgetWorkspaceFolder(workspaceFolder: vscode.WorkspaceFolder): void {
+        const key = path.resolve(workspaceFolder.uri.fsPath);
+        this._cache.delete(key);
+        const watchers = this._watchers.get(key);
+        if (watchers) {
+            watchers.forEach(watcher => watcher.dispose());
+            this._watchers.delete(key);
+        }
+        const pendingInvalidationTimer = this._pendingInvalidationTimers.get(key);
+        if (pendingInvalidationTimer) {
+            clearTimeout(pendingInvalidationTimer);
+            this._pendingInvalidationTimers.delete(key);
+        }
+    }
+
     dispose(): void {
         if (this._disposed) {
             return;
