@@ -1031,6 +1031,10 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     const debugSessionId = this.debugSessionId;
     const dcpServer = this._dcpServer;
 
+    // Dashboard debug browser sessions do not reliably stop when VS Code terminates
+    // their parent session.
+    this.closeDashboard();
+
     // Stop child debug sessions first so their `sessionTerminated`
     // notifications can flow back through `AspireDcpServer.sendNotification`
     // and update the aggregate stats BEFORE we snapshot them for
@@ -1103,10 +1107,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       this._dashboardDebugSession = null;
       return;
     }
-    // At this point there is no tracked dashboard debug session to stop.
-    // Any debug browser child sessions (debugChrome, debugEdge, debugFirefox) will
-    // automatically close when the parent Aspire session is stopped, so no further
-    // cleanup is required here.
+    // No dashboard debug session was started or its launch did not complete.
   }
 
   private sendResponse(request: any, body: any = {}) {
