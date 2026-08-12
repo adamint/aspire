@@ -265,6 +265,54 @@ suite('AppHostDataRepository', () => {
         }
     });
 
+    test('workspace discovery includes AppHosts from every workspace folder', async () => {
+        const workspaceFolders = [
+            {
+                uri: vscode.Uri.file('/workspace/typescript'),
+                name: 'typescript',
+                index: 0,
+            },
+            {
+                uri: vscode.Uri.file('/workspace/python'),
+                name: 'python',
+                index: 1,
+            },
+        ];
+        const workspaceFoldersStub = stubWorkspaceFolders(workspaceFolders);
+        const candidateChangeEmitter = new vscode.EventEmitter<vscode.WorkspaceFolder>();
+        const discover = sinon.stub().callsFake(async (workspaceFolder: vscode.WorkspaceFolder) => [{
+            path: path.join(workspaceFolder.uri.fsPath, 'apphost.mts'),
+            language: 'typescript',
+            status: 'buildable',
+            selected: true,
+        }]);
+        const discoveryService = {
+            discover,
+            onDidChangeCandidates: candidateChangeEmitter.event,
+            dispose: () => { },
+        } as unknown as AppHostDiscoveryService;
+        const repository = new AppHostDataRepository(terminalProvider, discoveryService);
+
+        try {
+            await waitForCondition(
+                () => repository.isWorkspaceAppHostDiscoveryComplete,
+                'workspace AppHost discovery did not complete');
+
+            assert.deepStrictEqual(
+                discover.getCalls().map(call => (call.args[0] as vscode.WorkspaceFolder).uri.fsPath),
+                workspaceFolders.map(folder => folder.uri.fsPath));
+            assert.deepStrictEqual(repository.workspaceAppHostCandidatePaths, [
+                path.join(workspaceFolders[1].uri.fsPath, 'apphost.mts'),
+                path.join(workspaceFolders[0].uri.fsPath, 'apphost.mts'),
+            ]);
+            assert.strictEqual(repository.workspaceAppHostPath, undefined);
+        } finally {
+            repository.dispose();
+            candidateChangeEmitter.dispose();
+            workspaceFoldersStub.restore();
+        }
+    });
+
     test('visible workspace panel starts a describe for a running AppHost', async () => {
         const repository = new AppHostDataRepository(terminalProvider);
 
