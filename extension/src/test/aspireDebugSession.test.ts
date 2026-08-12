@@ -1354,6 +1354,74 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         ]);
     });
 
+    test('stopDebugging awaits a resource start event that arrives after the original session snapshot', async () => {
+        let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const resourceDebugSession = {
+            id: 'resource-session',
+            type: 'node',
+            name: 'Late resource',
+            configuration: {
+                runId: 'resource-run',
+            },
+        };
+        const debugConfig = {
+            runId: 'resource-run',
+            debugSessionId: 'debug-1',
+            type: 'node',
+            name: 'Late resource',
+            request: 'launch',
+            program: '/workspace/app.js',
+            cwd: '/workspace',
+        } as AspireResourceExtendedDebugConfiguration;
+        const terminalProvider = { isDebugConfigEnvironmentLoggingEnabled: () => false };
+        sinon.stub(vscode.workspace, 'getWorkspaceFolder').returns(undefined);
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            startSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').returns({ dispose: sinon.stub() });
+        sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+        const lateStopFailure = new Error('Late resource stop failed');
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(session => {
+            if (session?.id === resourceDebugSession.id) {
+                return Promise.reject(lateStopFailure);
+            }
+
+            return Promise.resolve();
+        });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+
+        const resourceStart = aspireDebugSession.startAndGetDebugSession(debugConfig);
+        await Promise.resolve();
+        const shutdown = aspireDebugSession.stopDebugging();
+        const shutdownState = await Promise.race([
+            shutdown.then(() => 'completed' as const, () => 'failed' as const),
+            new Promise<'pending'>(resolve => setImmediate(() => resolve('pending'))),
+        ]);
+
+        assert.strictEqual(shutdownState, 'pending', 'Shutdown must retain ownership of an accepted resource start');
+
+        startSessionCallback?.(resourceDebugSession as unknown as vscode.DebugSession);
+
+        await resourceStart;
+        await assert.rejects(shutdown, error => error === lateStopFailure);
+    });
+
     // The AppHost process exiting disposes this session, so a disposal can land while the CLI's
     // ordered shutdown is still in flight. Disposal must not fire the owned-session stop callbacks
     // behind its back: that stops every resource a second time and lets the AppHost stop start
@@ -3370,7 +3438,10 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         // its budget. It has to have given up rather than still be waiting - that is the whole point
         // of the bound - and the timeout has to be reported rather than swallowed.
         await assert.rejects(stopPromise, (err: Error) => {
-            assert.strictEqual(err.message, debugSessionStopTimedOut('MauiAppHost', 10));
+            // The accepted MAUI start owns the shutdown until its 5-second retry delay observes the
+            // shutdown latch. The AppHost then receives the roughly 5 seconds left in the shared
+            // budget rather than incorrectly reporting that it waited for all 10 seconds.
+            assert.strictEqual(err.message, debugSessionStopTimedOut('MauiAppHost', 6));
             return true;
         });
 
