@@ -466,7 +466,7 @@ suite('AppHostDataRepository', () => {
         const platformStub = sinon.stub(process, 'platform').value('win32');
         const statStub = sinon.stub(fs, 'statSync').callsFake((filePath: fs.PathLike) => ({
             dev: 1n,
-            ino: String(filePath).includes('/AppHost/') ? 100n : 101n,
+            ino: path.basename(path.dirname(String(filePath))) === 'AppHost' ? 100n : 101n,
         }) as fs.BigIntStats);
         const candidateChangeEmitter = new vscode.EventEmitter<vscode.WorkspaceFolder>();
         const upperCasePath = '/workspace/AppHost/apphost.mts';
