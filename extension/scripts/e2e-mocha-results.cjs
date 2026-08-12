@@ -3,7 +3,9 @@
 const BLOCKING_HARNESS_ERROR_NAMES = new Set([
   'InvalidSessionIdError',
   'NoSuchSessionError',
+  'NoSuchWindowError',
   'SessionNotCreatedError',
+  'WebDriverError',
 ]);
 
 function hasCompletedMochaTestFailures(results) {

@@ -83,7 +83,13 @@ suite('E2E Mocha reporter', () => {
             diagnosticsSuffix,
         });
 
-        for (const errorName of ['InvalidSessionIdError', 'NoSuchSessionError', 'SessionNotCreatedError']) {
+        for (const errorName of [
+            'InvalidSessionIdError',
+            'NoSuchSessionError',
+            'NoSuchWindowError',
+            'SessionNotCreatedError',
+            'WebDriverError',
+        ]) {
             assert.strictEqual(shouldAllowAdvisoryTestFailure(
                 exitCodeError,
                 createCompletedMochaResults(errorName),
