@@ -220,13 +220,18 @@ suite('matchesAppHostPathOrDirectory', () => {
         const loopPath = path.join(tempDirectory, 'loop');
         const appHostDirectory = path.join(tempDirectory, 'apphost');
         const appHostPath = path.join(appHostDirectory, 'AppHost.csproj');
+        let loopCreated = false;
         try {
             fs.mkdirSync(appHostDirectory);
             fs.writeFileSync(appHostPath, '');
             fs.symlinkSync(loopPath, loopPath, process.platform === 'win32' ? 'junction' : 'dir');
+            loopCreated = true;
 
             assert.strictEqual(matchesAppHostPathOrDirectory(path.join(loopPath, 'AppHost.cs'), appHostPath), false);
         } finally {
+            if (loopCreated) {
+                fs.unlinkSync(loopPath);
+            }
             fs.rmSync(tempDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
         }
     });
