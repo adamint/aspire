@@ -1,7 +1,19 @@
-import * as vscode from 'vscode';
+import * as fs from 'fs';
+import http = require('http');
+import https = require('https');
+import * as os from 'os';
 import * as path from 'path';
+import * as vscode from 'vscode';
 import { AspireResourceExtendedDebugConfiguration, ExecutableLaunchConfiguration, isAzureFunctionsLaunchConfiguration } from '../../dcp/types';
-import { azureFunctionsCmdDelayedExpansion, azureFunctionsCmdPercentArgument, azureFunctionsUnsupportedTaskShell, invalidLaunchConfiguration } from '../../loc/strings';
+import {
+    azureFunctionsCmdDelayedExpansion,
+    azureFunctionsCmdPercentArgument,
+    azureFunctionsHostStartupTimedOut,
+    azureFunctionsTaskExitedBeforeStartup,
+    azureFunctionsUnsupportedTaskShell,
+    azureFunctionsWorkerStartupTimedOut,
+    invalidLaunchConfiguration
+} from '../../loc/strings';
 import { assertNoTerminalControlCharacters, quoteShellArg } from '../../utils/AspireTerminalProvider';
 import { quoteCmdArgument } from '../../utils/cmdShim';
 import { extensionLogOutputChannel } from '../../utils/logging';
@@ -10,31 +22,10 @@ import { DotNetService } from './dotnet';
 import { cleanupRun, registerRunCleanup } from '../runCleanupRegistry';
 
 const AF_EXTENSION_ID = 'ms-azuretools.vscode-azurefunctions';
-
-/**
- * Result from the Azure Functions extension's startFuncProcess API.
- * processId is a string — it's the PID of the dotnet worker process
- * (found via pickChildProcess which searches for a child matching /(dotnet|func)/).
- */
-interface StartFuncProcessResult {
-    processId: string;
-    success: boolean;
-    error?: string;
-}
-
-/**
- * The Azure Functions extension API (v1.10.0).
- * Obtained via the @microsoft/vscode-azext-utils API provider pattern:
- *   ext.exports.getApi('~1.10.0') → AzureFunctionsApi
- */
-interface AzureFunctionsApi {
-    apiVersion: string;
-    startFuncProcess(buildPath: string, args: string[], env: Record<string, string>): Promise<StartFuncProcessResult>;
-}
-
-interface AzureFunctionsApiProvider {
-    getApi(apiVersion: string): AzureFunctionsApi;
-}
+const DEFAULT_PICK_PROCESS_TIMEOUT_SECONDS = 30;
+const FUNC_HOST_DEFAULT_PORT = 7071;
+const POLL_INTERVAL_MS = 100;
+const REQUEST_TIMEOUT_MS = 1_000;
 
 type FuncHostTaskShell = 'cmd' | 'fish' | 'powershell' | 'posix';
 
@@ -48,6 +39,9 @@ const workerPidsByRunId = new Map<string, number>();
 
 /** Tracks the VS Code Task executions (func host start) by runId for cleanup. */
 const taskExecutionsByRunId = new Map<string, vscode.TaskExecution>();
+
+/** Tracks debug metadata directories by runId for cleanup. */
+const tempDirectoriesByRunId = new Map<string, string>();
 
 /** Kill the func host task and worker process for the given runId, if any. */
 function killFuncProcess(runId: string): void {
@@ -70,38 +64,187 @@ function killFuncProcess(runId: string): void {
         }
         workerPidsByRunId.delete(runId);
     }
+
+    const tempDirectory = tempDirectoriesByRunId.get(runId);
+    if (tempDirectory) {
+        fs.rmSync(tempDirectory, { recursive: true, force: true });
+        tempDirectoriesByRunId.delete(runId);
+    }
 }
 
-async function getAzureFunctionsApi(): Promise<AzureFunctionsApi> {
-    const ext = vscode.extensions.getExtension(AF_EXTENSION_ID);
-    if (!ext) {
+async function activateAzureFunctionsExtension(): Promise<void> {
+    const extension = vscode.extensions.getExtension(AF_EXTENSION_ID);
+    if (!extension) {
         throw new Error(`Azure Functions extension (${AF_EXTENSION_ID}) is not installed`);
     }
-    if (!ext.isActive) {
-        await ext.activate();
-    }
 
-    // The AF extension uses the @microsoft/vscode-azext-utils API provider
-    // pattern. ext.exports has a getApi(version) method that returns the actual API.
-    const provider = ext.exports as AzureFunctionsApiProvider;
-    if (typeof provider?.getApi !== 'function') {
-        throw new Error('Azure Functions extension does not expose the expected getApi provider');
-    }
-
-    return provider.getApi('~1.10.0');
+    // Activating the extension registers its `func` task definition and listeners.
+    // Do not use startFuncProcess: vscode-azurefunctions 1.22.0 creates an unregistered
+    // dynamic task type that VS Code 1.130 and later reject before Core Tools starts.
+    await extension.activate();
 }
 
-function isFuncHostTaskForBuildPath(task: vscode.Task, buildOutputPath: string): boolean {
-    // Azure Functions API v1.10 starts tasks as:
-    //   source: "func"
-    //   ShellExecution.commandLine: "func host start ..."
-    //   ShellExecution.options.cwd: <build output path>
-    // See https://github.com/microsoft/vscode-azurefunctions/blob/v1.22.0/src/commands/pickFuncProcess.ts
-    const execution = task.execution as vscode.ShellExecution | undefined;
-    return task.source === 'func' &&
-        execution?.options?.cwd === buildOutputPath &&
-        typeof execution.commandLine === 'string' &&
-        /^func(?:\.exe)?\s+host\s+start(?:\s|$)/i.test(execution.commandLine);
+function getPickProcessTimeoutSeconds(): number {
+    const configuredTimeout = vscode.workspace.getConfiguration('azureFunctions').get<number>('pickProcessTimeout');
+    return typeof configuredTimeout === 'number' && Number.isFinite(configuredTimeout) && configuredTimeout > 0
+        ? configuredTimeout
+        : DEFAULT_PICK_PROCESS_TIMEOUT_SECONDS;
+}
+
+function getFuncHostPort(args: string[]): number {
+    for (let index = 0; index < args.length; index++) {
+        const argument = args[index];
+        if ((argument === '--port' || argument === '-p') && index + 1 < args.length) {
+            const port = Number(args[index + 1]);
+            if (Number.isInteger(port) && port > 0 && port <= 65_535) {
+                return port;
+            }
+        }
+
+        const match = /^(?:--port|-p)=(\d+)$/.exec(argument);
+        if (match) {
+            const port = Number(match[1]);
+            if (port > 0 && port <= 65_535) {
+                return port;
+            }
+        }
+    }
+
+    return FUNC_HOST_DEFAULT_PORT;
+}
+
+function createFuncTask(rawArgs: string[], quotedArgs: string[], buildOutputPath: string, env: Record<string, string>): vscode.Task {
+    const commandLine = ['func', 'host', 'start', ...quotedArgs].join(' ');
+    return new vscode.Task(
+        { type: 'func', command: 'host start', args: rawArgs },
+        vscode.TaskScope.Workspace,
+        'func: host start',
+        'func',
+        new vscode.ShellExecution(commandLine, {
+            cwd: buildOutputPath,
+            env
+        }));
+}
+
+function createTaskExitError(exitCode: number): Error {
+    return new Error(azureFunctionsTaskExitedBeforeStartup(exitCode));
+}
+
+function delay(milliseconds: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+async function probeFuncHostStatus(protocol: typeof http | typeof https, port: number): Promise<boolean> {
+    return await new Promise(resolve => {
+        const request = protocol.request({
+            hostname: '127.0.0.1',
+            port,
+            path: '/admin/host/status',
+            method: 'GET',
+            rejectUnauthorized: false
+        }, response => {
+            if (response.statusCode !== 200) {
+                response.resume();
+                resolve(false);
+                return;
+            }
+
+            let body = '';
+            response.setEncoding('utf8');
+            response.on('data', chunk => body += chunk);
+            response.on('end', () => {
+                try {
+                    const state = (JSON.parse(body) as { state?: unknown }).state;
+                    resolve(typeof state === 'string' && state.toLowerCase() === 'running');
+                } catch {
+                    resolve(false);
+                }
+            });
+        });
+        request.setTimeout(REQUEST_TIMEOUT_MS, () => {
+            resolve(false);
+            request.destroy();
+        });
+        request.on('error', () => resolve(false));
+        request.end();
+    });
+}
+
+async function waitForFuncHostRunning(port: number, deadline: number, timeoutSeconds: number): Promise<void> {
+    while (Date.now() < deadline) {
+        if (await probeFuncHostStatus(http, port) || await probeFuncHostStatus(https, port)) {
+            return;
+        }
+
+        await delay(POLL_INTERVAL_MS);
+    }
+
+    throw new Error(azureFunctionsHostStartupTimedOut(timeoutSeconds, port));
+}
+
+function getJsonOutputFileArgument(args: string[]): string | undefined {
+    for (let index = 0; index < args.length; index++) {
+        const argument = args[index];
+        if (argument === '--json-output-file') {
+            return args[index + 1];
+        }
+
+        const match = /^--json-output-file=(.+)$/.exec(argument);
+        if (match) {
+            return match[1];
+        }
+    }
+
+    return undefined;
+}
+
+function hasFlag(args: string[], flag: string): boolean {
+    return args.some(argument => argument === flag || argument.startsWith(`${flag}=`));
+}
+
+function readWorkerProcessId(jsonOutputFile: string): number | undefined {
+    try {
+        // Core Tools emits newline-delimited JSON. For example:
+        //   {"name":"dotnet-worker-startup","workerProcessId":4242}
+        // The file may contain unrelated or partially-written lines while the host starts.
+        for (const line of fs.readFileSync(jsonOutputFile, 'utf8').split(/\r?\n/)) {
+            if (!line) {
+                continue;
+            }
+
+            try {
+                const event = JSON.parse(line) as { name?: unknown; workerProcessId?: unknown };
+                if (event.name === 'dotnet-worker-startup' &&
+                    typeof event.workerProcessId === 'number' &&
+                    Number.isInteger(event.workerProcessId) &&
+                    event.workerProcessId > 0) {
+                    return event.workerProcessId;
+                }
+            } catch {
+                // The final NDJSON line may still be in flight.
+            }
+        }
+    } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== 'ENOENT') {
+            extensionLogOutputChannel.warn(`Failed to read Azure Functions worker startup JSON: ${error}`);
+        }
+    }
+
+    return undefined;
+}
+
+async function waitForWorkerProcessId(jsonOutputFile: string, deadline: number, timeoutSeconds: number): Promise<number> {
+    while (Date.now() < deadline) {
+        const workerProcessId = readWorkerProcessId(jsonOutputFile);
+        if (workerProcessId !== undefined) {
+            return workerProcessId;
+        }
+
+        await delay(POLL_INTERVAL_MS);
+    }
+
+    throw new Error(azureFunctionsWorkerStartupTimedOut(timeoutSeconds));
 }
 
 function quoteFuncHostArguments(args: string[] | undefined): string[] {
@@ -236,145 +379,193 @@ export const azureFunctionsDebuggerExtension: ResourceDebuggerExtension = {
             throw new Error(invalidLaunchConfiguration(JSON.stringify(launchConfig)));
         }
 
-        // Register cleanup for this run up-front so that killFuncProcess is called
-        // via the generic cleanupRun path regardless of how the session ends.
-        registerRunCleanup(debugConfiguration.runId, () => killFuncProcess(debugConfiguration.runId));
-
+        const runId = debugConfiguration.runId;
         const projectPath = launchConfig.project_path;
         const dotNetService = new DotNetService(launchOptions.debugSession);
         // project_path from the hosting integration is currently a .csproj file path
         // (resolved by AzureFunctionsProjectMetadata.ResolveProjectPath). If Aspire
         // later supports non-.NET Functions resources, that launch config should carry
         // an explicit language/build contract instead of reusing this .NET project path.
-        // The AF extension API expects the project build output as buildPath.
         // Always build because path-based Functions resources do not have to be ProjectReferences
         // of the AppHost, so an existing target can be stale even after the AppHost was rebuilt.
-        extensionLogOutputChannel.info(`Building Azure Functions project before starting via extension API: ${projectPath}`);
+        extensionLogOutputChannel.info(`Building Azure Functions project before starting func host: ${projectPath}`);
         await dotNetService.buildDotNetProject(projectPath);
         const targetPath = await dotNetService.getDotNetTargetPath(projectPath);
         const buildOutputPath = path.dirname(targetPath);
-        extensionLogOutputChannel.info(`Starting Azure Functions project via extension API: ${projectPath} (buildPath: ${buildOutputPath})`);
+        extensionLogOutputChannel.info(`Starting Azure Functions project with a registered func task: ${projectPath} (buildPath: ${buildOutputPath})`);
 
-        // Only pass DCP-specific env vars to the AF extension. The VS Code Task
-        // it creates already inherits the VS Code process environment, so we
-        // don't need to merge process.env — that would just duplicate values.
+        // ShellExecution inherits the VS Code process environment. Only add the
+        // DCP-specific values so the task environment stays equivalent to the old path.
         const dcpEnv = Object.fromEntries(
             (env ?? []).filter(e => e.value !== undefined).map(e => [e.name, e.value])
         );
 
-        // Start func host via the Azure Functions extension API.
-        // The API creates a VS Code Task running "func host start" from the
-        // build output path, polls /admin/host/status until ready, then finds
-        // the dotnet worker child process and returns its PID.
-        //
-        // The AF extension API has no stopFuncProcess method. Register before calling
-        // startFuncProcess because that API waits for host readiness before returning.
-        const api = await getAzureFunctionsApi();
-        extensionLogOutputChannel.info(`Got Azure Functions API (version ${api.apiVersion}), calling startFuncProcess`);
-
-        let funcExecution: vscode.TaskExecution | undefined;
-        let pendingFuncExitCode: number | undefined;
-        let completeFuncSession: ((exitCode: number) => void) | undefined;
-        const captureFuncExecution = (execution: vscode.TaskExecution): void => {
-            if (funcExecution) {
-                return;
+        await activateAzureFunctionsExtension();
+        registerRunCleanup(runId, () => killFuncProcess(runId));
+        const rawArgs = [...(args ?? [])];
+        let jsonOutputFile: string | undefined;
+        if (launchOptions.debug) {
+            const secureTempRoot = fs.realpathSync(os.tmpdir());
+            const tempDirectory = fs.mkdtempSync(path.join(secureTempRoot, 'aspire-functions-debug-'));
+            tempDirectoriesByRunId.set(runId, tempDirectory);
+            jsonOutputFile = getJsonOutputFileArgument(rawArgs) ?? path.join(tempDirectory, 'worker-startup.json');
+            if (!hasFlag(rawArgs, '--dotnet-isolated-debug')) {
+                rawArgs.push('--dotnet-isolated-debug');
             }
-
-            funcExecution = execution;
-            extensionLogOutputChannel.info(`Captured func host task for runId ${debugConfiguration.runId}: ${execution.task.name}`);
-            taskExecutionsByRunId.set(debugConfiguration.runId, execution);
-        };
-        const taskStartSubscription = vscode.tasks.onDidStartTaskProcess(event => {
-            if (isFuncHostTaskForBuildPath(event.execution.task, buildOutputPath)) {
-                captureFuncExecution(event.execution);
+            if (!hasFlag(rawArgs, '--enable-json-output')) {
+                rawArgs.push('--enable-json-output');
             }
-        });
-        const taskEndSubscription = launchOptions.debug ? undefined : vscode.tasks.onDidEndTaskProcess(event => {
-            if (event.execution !== funcExecution) {
-                return;
+            if (!getJsonOutputFileArgument(rawArgs)) {
+                rawArgs.push('--json-output-file', jsonOutputFile);
             }
+        }
 
-            let exitCode = event.exitCode ?? 0;
-            // Exit code 143 is SIGTERM on macOS and Linux, matching the normal
-            // debug-adapter termination path in adapterTracker.
-            if ((process.platform === 'darwin' || process.platform === 'linux') && exitCode === 143) {
-                exitCode = 0;
-            }
-
-            if (completeFuncSession) {
-                completeFuncSession(exitCode);
-            } else {
-                // startFuncProcess waits for readiness. Preserve an exit that races with
-                // its return so the already-started session still terminates correctly.
-                pendingFuncExitCode = exitCode;
-            }
-        });
-
-        let result: StartFuncProcessResult;
+        let quotedArgs: string[];
         try {
-            result = await api.startFuncProcess(buildOutputPath, quoteFuncHostArguments(args), dcpEnv);
+            quotedArgs = quoteFuncHostArguments(rawArgs);
         } catch (error) {
-            taskEndSubscription?.dispose();
+            cleanupRun(runId);
             throw error;
-        } finally {
-            taskStartSubscription.dispose();
         }
 
-        if (!result.success) {
-            taskEndSubscription?.dispose();
-            throw new Error(`Azure Functions extension failed to start func host: ${result.error ?? 'unknown error'}`);
-        }
+        let funcTask: vscode.Task;
+        let funcExecution: vscode.TaskExecution | undefined;
+        let taskProcessId: number | undefined;
+        let resolveTaskStarted: (() => void) | undefined;
+        const taskStarted = new Promise<void>(resolve => resolveTaskStarted = resolve);
+        let taskExitCode: number | undefined;
+        let resolveTaskExited: ((exitCode: number) => void) | undefined;
+        const taskExited = new Promise<number>(resolve => resolveTaskExited = resolve);
+        let completeSession: ((exitCode: number) => void) | undefined;
+        let completed = false;
+        const complete = (exitCode: number): void => {
+            if (completed) {
+                return;
+            }
 
-        const workerPid = result.processId;
-        extensionLogOutputChannel.info(`Azure Functions worker process started (PID: ${workerPid})`);
+            completed = true;
+            cleanupRun(runId);
+            completeSession?.(exitCode);
+        };
 
-        // Track the worker PID for cleanup
-        const workerPidNumber = parseInt(workerPid, 10);
-        workerPidsByRunId.set(debugConfiguration.runId, workerPidNumber);
+        // Register both process listeners before executeTask so a fast task start or
+        // exit cannot race listener registration. Before executeTask resolves, task
+        // object identity identifies this launch; afterward only its exact execution
+        // is accepted.
+        const taskStartSubscription = vscode.tasks.onDidStartTaskProcess(event => {
+            if (funcExecution && event.execution !== funcExecution) {
+                return;
+            }
+            if (!funcExecution && event.execution.task !== funcTask) {
+                return;
+            }
 
-        if (!launchOptions.debug) {
-            const runId = debugConfiguration.runId;
-            let completeSession: (exitCode: number) => void;
-            const termination = new Promise<number>(resolve => {
-                completeSession = resolve;
+            funcExecution = event.execution;
+            taskProcessId = event.processId;
+            taskExecutionsByRunId.set(runId, event.execution);
+            resolveTaskStarted?.();
+        });
+        const taskEndSubscription = vscode.tasks.onDidEndTaskProcess(event => {
+            if (funcExecution && event.execution !== funcExecution) {
+                return;
+            }
+            if (!funcExecution && event.execution.task !== funcTask) {
+                return;
+            }
+
+            funcExecution ??= event.execution;
+            taskExitCode = event.exitCode ?? 0;
+            resolveTaskExited?.(taskExitCode);
+            if (!launchOptions.debug && completeSession) {
+                let normalizedExitCode = taskExitCode;
+                // Exit code 143 is SIGTERM on macOS and Linux, matching the normal
+                // debug-adapter termination path in adapterTracker.
+                if ((process.platform === 'darwin' || process.platform === 'linux') && normalizedExitCode === 143) {
+                    normalizedExitCode = 0;
+                }
+                complete(normalizedExitCode);
+            }
+        });
+
+        funcTask = createFuncTask(rawArgs, quotedArgs, buildOutputPath, dcpEnv);
+        let startupTimeout: NodeJS.Timeout | undefined;
+        try {
+            const timeoutSeconds = getPickProcessTimeoutSeconds();
+            const startupDeadline = Date.now() + timeoutSeconds * 1_000;
+            const startupTimedOut = new Promise<never>((_, reject) => {
+                startupTimeout = setTimeout(() => reject(new Error(launchOptions.debug
+                    ? azureFunctionsWorkerStartupTimedOut(timeoutSeconds)
+                    : azureFunctionsHostStartupTimedOut(timeoutSeconds, getFuncHostPort(rawArgs)))), timeoutSeconds * 1_000);
             });
-            let completed = false;
-            const complete = (exitCode: number): void => {
-                if (completed) {
-                    return;
+            funcExecution = await vscode.tasks.executeTask(funcTask);
+            taskExecutionsByRunId.set(runId, funcExecution);
+            if (!taskProcessId) {
+                await Promise.race([
+                    taskStarted,
+                    taskExited.then(exitCode => Promise.reject(createTaskExitError(exitCode))),
+                    startupTimedOut
+                ]);
+            }
+
+            const readiness = launchOptions.debug
+                ? waitForWorkerProcessId(jsonOutputFile!, startupDeadline, timeoutSeconds)
+                : waitForFuncHostRunning(getFuncHostPort(rawArgs), startupDeadline, timeoutSeconds).then(() => taskProcessId!);
+            const processId = await Promise.race([
+                readiness,
+                taskExited.then(exitCode => Promise.reject(createTaskExitError(exitCode))),
+                startupTimedOut
+            ]);
+            if (launchOptions.debug && taskExitCode !== undefined) {
+                throw createTaskExitError(taskExitCode);
+            }
+            if (launchOptions.debug) {
+                workerPidsByRunId.set(runId, processId);
+            }
+            extensionLogOutputChannel.info(`Azure Functions process started for runId ${runId} (PID: ${processId})`);
+
+            if (!launchOptions.debug) {
+                const termination = new Promise<number>(resolve => completeSession = resolve);
+                if (taskExitCode !== undefined) {
+                    let normalizedExitCode = taskExitCode;
+                    if ((process.platform === 'darwin' || process.platform === 'linux') && normalizedExitCode === 143) {
+                        normalizedExitCode = 0;
+                    }
+                    complete(normalizedExitCode);
                 }
 
-                completed = true;
-                taskEndSubscription?.dispose();
-                cleanupRun(runId);
-                completeSession(exitCode);
-            };
-            completeFuncSession = complete;
-            if (pendingFuncExitCode !== undefined) {
-                complete(pendingFuncExitCode);
+                return {
+                    id: runId,
+                    processId,
+                    session: { id: runId } as vscode.DebugSession,
+                    stopSession: async () => {
+                        complete(-1);
+                    },
+                    termination
+                };
             }
 
-            return {
-                id: runId,
-                processId: workerPidNumber,
-                session: { id: runId } as vscode.DebugSession,
-                stopSession: async () => {
-                    complete(-1);
-                },
-                termination
-            };
+            debugConfiguration.type = 'coreclr';
+            debugConfiguration.request = 'attach';
+            debugConfiguration.processId = String(processId);
+
+            delete debugConfiguration.program;
+            delete debugConfiguration.args;
+            delete debugConfiguration.cwd;
+            delete debugConfiguration.console;
+            delete debugConfiguration.env;
+        } catch (error) {
+            cleanupRun(runId);
+            throw error;
+        } finally {
+            if (startupTimeout) {
+                clearTimeout(startupTimeout);
+            }
+            taskStartSubscription.dispose();
+            if (launchOptions.debug || completed) {
+                taskEndSubscription.dispose();
+            } else {
+                registerRunCleanup(runId, () => taskEndSubscription.dispose());
+            }
         }
-
-        // Configure coreclr attach to the worker process
-        debugConfiguration.type = 'coreclr';
-        debugConfiguration.request = 'attach';
-        debugConfiguration.processId = String(workerPidNumber);
-
-        // Remove launch-mode properties that don't apply to attach
-        delete debugConfiguration.program;
-        delete debugConfiguration.args;
-        delete debugConfiguration.cwd;
-        delete debugConfiguration.console;
-        delete debugConfiguration.env;
     }
 };
