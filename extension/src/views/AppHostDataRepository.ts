@@ -291,8 +291,9 @@ export class AppHostDataRepository {
         this._appHostDiscoveryService = appHostDiscoveryService ?? new AppHostDiscoveryService(_terminalProvider, this._configInfoProvider);
         this._ownsAppHostDiscoveryService = appHostDiscoveryService === undefined;
         this._appHostDiscoveryChangeDisposable = this._appHostDiscoveryService.onDidChangeCandidates(workspaceFolder => {
-            const rootFolder = vscode.workspace.workspaceFolders?.[0];
-            if (rootFolder?.uri.toString() === workspaceFolder.uri.toString()) {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (workspaceFolders?.some(currentWorkspaceFolder =>
+                currentWorkspaceFolder.uri.toString() === workspaceFolder.uri.toString())) {
                 this._markWorkspaceAppHostDiscoveryPending();
                 this._fetchWorkspaceAppHost();
             }
@@ -2076,10 +2077,10 @@ function combineWorkspaceAppHostCandidates(workspaceFolderCandidates: readonly W
     for (const folderCandidates of workspaceFolderCandidates) {
         const result = getWorkspaceAppHostProjectSearchResult(folderCandidates.workspaceFolder, folderCandidates.candidates);
         for (const candidate of result.app_host_candidates) {
-            appHostCandidatesByPath.set(getComparisonKey(candidate.path), candidate);
+            appHostCandidatesByPath.set(getPathComparisonKey(candidate.path), candidate);
         }
         if (result.selected_project_file) {
-            selectedAppHostPaths.set(getComparisonKey(result.selected_project_file), result.selected_project_file);
+            selectedAppHostPaths.set(getPathComparisonKey(result.selected_project_file), result.selected_project_file);
         }
     }
 
@@ -2134,6 +2135,13 @@ export function shortenPaths(filePaths: readonly string[]): string[] {
     }
 
     return filePaths.map(filePath => stateByPath.get(getComparisonKey(filePath))?.label ?? filePath);
+}
+
+function getPathComparisonKey(filePath: string): string {
+    const resolvedPath = path.resolve(filePath);
+    return process.platform === 'win32' || process.platform === 'darwin'
+        ? resolvedPath.toLowerCase()
+        : resolvedPath;
 }
 
 interface ShortenedPathState {
@@ -2361,15 +2369,12 @@ function parseCliJsonOutput<T>(stdout: string): T {
 }
 
 function isPathInWorkspace(filePath: string): boolean {
-    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-    if (!workspaceFolder) {
-        return false;
-    }
-
-    const relativePath = path.relative(workspaceFolder.uri.fsPath, filePath);
-    return relativePath !== ''
-        && !relativePath.startsWith('..')
-        && !path.isAbsolute(relativePath);
+    return vscode.workspace.workspaceFolders?.some(workspaceFolder => {
+        const relativePath = path.relative(workspaceFolder.uri.fsPath, filePath);
+        return relativePath !== ''
+            && !relativePath.startsWith('..')
+            && !path.isAbsolute(relativePath);
+    }) ?? false;
 }
 
 function isDescribeUnsupportedOutput(nonJsonLines: readonly string[], stderr: string): boolean {

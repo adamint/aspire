@@ -313,6 +313,219 @@ suite('AppHostDataRepository', () => {
         }
     });
 
+    test('workspace discovery deduplicates equivalent AppHost paths across folders', async () => {
+        const workspaceFolders = [
+            {
+                uri: vscode.Uri.file('/workspace'),
+                name: 'workspace',
+                index: 0,
+            },
+            {
+                uri: vscode.Uri.file('/workspace/nested'),
+                name: 'nested',
+                index: 1,
+            },
+        ];
+        const workspaceFoldersStub = stubWorkspaceFolders(workspaceFolders);
+        const candidateChangeEmitter = new vscode.EventEmitter<vscode.WorkspaceFolder>();
+        const canonicalAppHostPath = path.join(workspaceFolders[1].uri.fsPath, 'apphost.mts');
+        const equivalentAppHostPath = `${workspaceFolders[0].uri.fsPath}${path.sep}nested${path.sep}..${path.sep}nested${path.sep}apphost.mts`;
+        const discover = sinon.stub().callsFake(async (workspaceFolder: vscode.WorkspaceFolder) => [{
+            path: workspaceFolder === workspaceFolders[0] ? equivalentAppHostPath : canonicalAppHostPath,
+            language: 'typescript',
+            status: 'buildable',
+            selected: true,
+        }]);
+        const discoveryService = {
+            discover,
+            onDidChangeCandidates: candidateChangeEmitter.event,
+            dispose: () => { },
+        } as unknown as AppHostDiscoveryService;
+        const repository = new AppHostDataRepository(terminalProvider, discoveryService);
+
+        try {
+            await waitForCondition(
+                () => repository.isWorkspaceAppHostDiscoveryComplete,
+                'workspace AppHost discovery did not complete');
+
+            assert.deepStrictEqual(repository.workspaceAppHostCandidatePaths, [canonicalAppHostPath]);
+            assert.strictEqual(repository.workspaceAppHostPath, canonicalAppHostPath);
+        } finally {
+            repository.dispose();
+            candidateChangeEmitter.dispose();
+            workspaceFoldersStub.restore();
+        }
+    });
+
+    test('workspace discovery failure cancels sibling folders and clears partial candidates', async () => {
+        const workspaceFolders = [
+            {
+                uri: vscode.Uri.file('/workspace/typescript'),
+                name: 'typescript',
+                index: 0,
+            },
+            {
+                uri: vscode.Uri.file('/workspace/python'),
+                name: 'python',
+                index: 1,
+            },
+        ];
+        const workspaceFoldersStub = stubWorkspaceFolders(workspaceFolders);
+        const candidateChangeEmitter = new vscode.EventEmitter<vscode.WorkspaceFolder>();
+        let rejectPrimaryDiscovery: ((reason?: unknown) => void) | undefined;
+        let reportSiblingCandidate: ((candidate: CandidateAppHostDisplayInfo) => void) | undefined;
+        let siblingCancelled = false;
+        const discover = sinon.stub().callsFake((
+            workspaceFolder: vscode.WorkspaceFolder,
+            _forceRefresh?: boolean,
+            cancellationToken?: vscode.CancellationToken,
+            onIncrementalCandidate: (candidate: CandidateAppHostDisplayInfo) => void = () => { }
+        ) => {
+            if (workspaceFolder === workspaceFolders[0]) {
+                return new Promise<CandidateAppHostDisplayInfo[]>((_resolve, reject) => {
+                    rejectPrimaryDiscovery = reject;
+                });
+            }
+
+            reportSiblingCandidate = onIncrementalCandidate;
+            return new Promise<CandidateAppHostDisplayInfo[]>(resolve => {
+                cancellationToken?.onCancellationRequested(() => {
+                    siblingCancelled = true;
+                    resolve([]);
+                });
+            });
+        });
+        const discoveryService = {
+            discover,
+            onDidChangeCandidates: candidateChangeEmitter.event,
+            dispose: () => { },
+        } as unknown as AppHostDiscoveryService;
+        const repository = new AppHostDataRepository(terminalProvider, discoveryService);
+
+        try {
+            await waitForCondition(() => discover.callCount === 2, 'multi-root discovery did not start');
+            assert.ok(reportSiblingCandidate);
+            const siblingAppHostPath = path.join(workspaceFolders[1].uri.fsPath, 'apphost.mts');
+            reportSiblingCandidate({
+                path: siblingAppHostPath,
+                language: 'typescript',
+                status: 'buildable',
+            });
+            await waitForCondition(
+                () => repository.workspaceAppHostCandidatePaths.length === 1,
+                'incremental sibling candidate was not applied');
+
+            assert.ok(rejectPrimaryDiscovery);
+            rejectPrimaryDiscovery(new Error('typescript discovery failed'));
+
+            await waitForCondition(() => repository.hasError, 'workspace discovery error was not surfaced');
+            assert.strictEqual(siblingCancelled, true);
+            assert.deepStrictEqual(repository.workspaceAppHostCandidatePaths, []);
+            assert.ok(repository.errorMessage?.includes('typescript discovery failed'), repository.errorMessage);
+
+            reportSiblingCandidate({
+                path: siblingAppHostPath,
+                language: 'typescript',
+                status: 'buildable',
+            });
+            await waitForMicrotasks();
+            assert.deepStrictEqual(repository.workspaceAppHostCandidatePaths, []);
+        } finally {
+            repository.dispose();
+            candidateChangeEmitter.dispose();
+            workspaceFoldersStub.restore();
+        }
+    });
+
+    test('candidate changes in any workspace folder refresh workspace discovery', async () => {
+        const workspaceFolders = [
+            {
+                uri: vscode.Uri.file('/workspace/typescript'),
+                name: 'typescript',
+                index: 0,
+            },
+            {
+                uri: vscode.Uri.file('/workspace/python'),
+                name: 'python',
+                index: 1,
+            },
+        ];
+        const workspaceFoldersStub = stubWorkspaceFolders(workspaceFolders);
+        const candidateChangeEmitter = new vscode.EventEmitter<vscode.WorkspaceFolder>();
+        const discover = sinon.stub().callsFake(async (workspaceFolder: vscode.WorkspaceFolder) => [{
+            path: path.join(workspaceFolder.uri.fsPath, 'apphost.mts'),
+            language: 'typescript',
+            status: 'buildable',
+        }]);
+        const discoveryService = {
+            discover,
+            onDidChangeCandidates: candidateChangeEmitter.event,
+            dispose: () => { },
+        } as unknown as AppHostDiscoveryService;
+        const repository = new AppHostDataRepository(terminalProvider, discoveryService);
+
+        try {
+            await waitForCondition(() => discover.callCount === 2, 'initial multi-root discovery did not start');
+
+            candidateChangeEmitter.fire(workspaceFolders[1]);
+
+            await waitForCondition(() => discover.callCount === 4, 'second-root change did not refresh discovery');
+            assert.strictEqual(discover.getCalls().filter(call =>
+                (call.args[0] as vscode.WorkspaceFolder).uri.toString() === workspaceFolders[1].uri.toString()).length, 2);
+        } finally {
+            repository.dispose();
+            candidateChangeEmitter.dispose();
+            workspaceFoldersStub.restore();
+        }
+    });
+
+    test('workspace ps shows running AppHosts from every folder before discovery completes', async () => {
+        const workspaceFolders = [
+            {
+                uri: vscode.Uri.file('/workspace/typescript'),
+                name: 'typescript',
+                index: 0,
+            },
+            {
+                uri: vscode.Uri.file('/workspace/python'),
+                name: 'python',
+                index: 1,
+            },
+        ];
+        const workspaceFoldersStub = stubWorkspaceFolders(workspaceFolders);
+        const candidateChangeEmitter = new vscode.EventEmitter<vscode.WorkspaceFolder>();
+        const discoveryService = {
+            discover: () => new Promise<CandidateAppHostDisplayInfo[]>(() => { }),
+            onDidChangeCandidates: candidateChangeEmitter.event,
+            dispose: () => { },
+        } as unknown as AppHostDiscoveryService;
+        const repository = new AppHostDataRepository(terminalProvider, discoveryService);
+
+        try {
+            repository.activate();
+            repository.setPanelVisible(true);
+            await waitForCondition(
+                () => spawnStub.getCalls().some(call => (call.args[2] as string[])[0] === 'ps'),
+                'workspace ps did not start');
+            const psCall = spawnStub.getCalls().find(call =>
+                (call.args[2] as string[])[0] === 'ps' && (call.args[2] as string[]).includes('--follow'));
+            assert.ok(psCall);
+            const appHostPath = path.join(workspaceFolders[1].uri.fsPath, 'apphost.py');
+
+            psCall.args[3].lineCallback(JSON.stringify([{
+                appHostPath,
+                appHostPid: 1,
+            }]));
+            await waitForMicrotasks();
+
+            assert.deepStrictEqual(repository.appHosts.map(appHost => appHost.appHostPath), [appHostPath]);
+        } finally {
+            repository.dispose();
+            candidateChangeEmitter.dispose();
+            workspaceFoldersStub.restore();
+        }
+    });
+
     test('visible workspace panel starts a describe for a running AppHost', async () => {
         const repository = new AppHostDataRepository(terminalProvider);
 
