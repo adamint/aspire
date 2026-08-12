@@ -398,6 +398,35 @@ suite('AppHost discovery', () => {
             }
         });
 
+        test('forgetting one workspace folder preserves other folder caches', async () => {
+            stubFileSystemWatchers(sandbox);
+            const spawnStub = sandbox.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, _args, options) => {
+                emitLsOutput(options, []);
+                return { kill: () => { } } as any;
+            });
+            const service = new AppHostDiscoveryService(makeTerminalProvider());
+            const rootA = makeWorkspaceFolder(buildPath('workspace', 'root-a'));
+            const rootB = makeWorkspaceFolder(buildPath('workspace', 'root-b'));
+
+            try {
+                await service.discover(rootA);
+                await service.discover(rootB);
+                assert.strictEqual(spawnStub.callCount, 2);
+
+                service.forgetWorkspaceFolder(rootB);
+
+                await service.discover(rootA);
+                assert.strictEqual(spawnStub.callCount, 2);
+
+                await service.discover(rootB);
+                assert.strictEqual(spawnStub.callCount, 3);
+                assert.strictEqual(spawnStub.thirdCall.args[3]?.workingDirectory, rootB.uri.fsPath);
+            }
+            finally {
+                service.dispose();
+            }
+        });
+
         test('watches Node module AppHost filenames', async () => {
             const watchedPatterns: string[] = [];
             sandbox.stub(vscode.workspace, 'createFileSystemWatcher').callsFake((pattern) => {

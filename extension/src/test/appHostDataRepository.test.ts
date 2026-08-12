@@ -245,6 +245,75 @@ suite('AppHostDataRepository', () => {
         }
     });
 
+    test('workspace-folder changes prune removed-root candidates while rediscovery is stuck', async () => {
+        const rootA: vscode.WorkspaceFolder = {
+            uri: vscode.Uri.file('/workspace/root-a'),
+            name: 'root-a',
+            index: 0,
+        };
+        const rootB: vscode.WorkspaceFolder = {
+            uri: vscode.Uri.file('/workspace/root-b'),
+            name: 'root-b',
+            index: 1,
+        };
+        const rootC: vscode.WorkspaceFolder = {
+            uri: vscode.Uri.file('/workspace/root-c'),
+            name: 'root-c',
+            index: 1,
+        };
+        const rootAAppHostPath = path.join(rootA.uri.fsPath, 'apphost.mts');
+        const rootBAppHostPath = path.join(rootB.uri.fsPath, 'apphost.mts');
+        defaultWorkspaceFoldersStub.restore();
+        let currentWorkspaceFolders: readonly vscode.WorkspaceFolder[] = [rootA, rootB];
+        const workspaceFoldersStub = sinon.stub(vscode.workspace, 'workspaceFolders').get(() => currentWorkspaceFolders);
+        defaultWorkspaceFoldersStub = { restore: () => { } } as sinon.SinonStub;
+        let folderChangeListener: ((event: vscode.WorkspaceFoldersChangeEvent) => void) | undefined;
+        const onDidChangeWorkspaceFoldersStub = sinon.stub(vscode.workspace, 'onDidChangeWorkspaceFolders')
+            .callsFake((listener: any) => {
+                folderChangeListener = listener;
+                return { dispose: () => { } };
+            });
+        const candidateChangeEmitter = new vscode.EventEmitter<vscode.WorkspaceFolder>();
+        const discover = sinon.stub().callsFake((workspaceFolder: vscode.WorkspaceFolder) => {
+            if (workspaceFolder === rootC) {
+                return new Promise<CandidateAppHostDisplayInfo[]>(() => { });
+            }
+
+            return Promise.resolve([{
+                path: workspaceFolder === rootA ? rootAAppHostPath : rootBAppHostPath,
+                language: 'typescript',
+                status: 'buildable',
+            }]);
+        });
+        const discoveryService = {
+            discover,
+            forgetWorkspaceFolder: () => { },
+            onDidChangeCandidates: candidateChangeEmitter.event,
+            dispose: () => { },
+        } as unknown as AppHostDiscoveryService;
+        const repository = new AppHostDataRepository(terminalProvider, discoveryService);
+
+        try {
+            await waitForCondition(
+                () => repository.isWorkspaceAppHostDiscoveryComplete,
+                'initial workspace discovery did not complete');
+            assert.deepStrictEqual(repository.workspaceAppHostCandidatePaths, [rootAAppHostPath, rootBAppHostPath]);
+
+            currentWorkspaceFolders = [rootA, rootC];
+            assert.ok(folderChangeListener);
+            folderChangeListener({ added: [rootC], removed: [rootB] });
+            await waitForMicrotasks();
+
+            assert.deepStrictEqual(repository.workspaceAppHostCandidatePaths, [rootAAppHostPath]);
+            assert.strictEqual(repository.isWorkspaceAppHostDiscoveryComplete, false);
+        } finally {
+            repository.dispose();
+            candidateChangeEmitter.dispose();
+            onDidChangeWorkspaceFoldersStub.restore();
+            workspaceFoldersStub.restore();
+        }
+    });
+
     test('workspace-folder changes preserve a queued forced refresh', async () => {
         const workspaceFoldersStub = stubWorkspaceFolders([{
             uri: vscode.Uri.file('/workspace'),
@@ -595,6 +664,52 @@ suite('AppHostDataRepository', () => {
 
             assert.strictEqual(repository.hasError, false);
             assert.deepStrictEqual(repository.workspaceAppHostCandidatePaths, [siblingAppHostPath]);
+        } finally {
+            repository.dispose();
+            candidateChangeEmitter.dispose();
+            workspaceFoldersStub.restore();
+        }
+    });
+
+    test('workspace discovery reports all-root failures in workspace-folder order', async () => {
+        const workspaceFolders = [
+            {
+                uri: vscode.Uri.file('/workspace/root-a'),
+                name: 'root-a',
+                index: 0,
+            },
+            {
+                uri: vscode.Uri.file('/workspace/root-b'),
+                name: 'root-b',
+                index: 1,
+            },
+        ];
+        const workspaceFoldersStub = stubWorkspaceFolders(workspaceFolders);
+        const candidateChangeEmitter = new vscode.EventEmitter<vscode.WorkspaceFolder>();
+        let rejectFirstDiscovery: ((reason?: unknown) => void) | undefined;
+        const firstDiscovery = new Promise<CandidateAppHostDisplayInfo[]>((_resolve, reject) => {
+            rejectFirstDiscovery = reject;
+        });
+        const discover = sinon.stub().callsFake((workspaceFolder: vscode.WorkspaceFolder) =>
+            workspaceFolder === workspaceFolders[0]
+                ? firstDiscovery
+                : Promise.reject(new Error('root-b discovery failed')));
+        const discoveryService = {
+            discover,
+            onDidChangeCandidates: candidateChangeEmitter.event,
+            dispose: () => { },
+        } as unknown as AppHostDiscoveryService;
+        const repository = new AppHostDataRepository(terminalProvider, discoveryService);
+
+        try {
+            await waitForCondition(() => discover.callCount === 2, 'multi-root discovery did not start');
+            await waitForMicrotasks();
+            assert.ok(rejectFirstDiscovery);
+            rejectFirstDiscovery(new Error('root-a discovery failed'));
+
+            await waitForCondition(() => repository.hasError, 'workspace discovery error was not surfaced');
+            assert.ok(repository.errorMessage?.includes(workspaceFolders[0].uri.fsPath), repository.errorMessage);
+            assert.ok(repository.errorMessage?.includes('root-a discovery failed'), repository.errorMessage);
         } finally {
             repository.dispose();
             candidateChangeEmitter.dispose();

@@ -103,6 +103,11 @@ interface WorkspaceFolderAppHostCandidates {
     candidates: CandidateAppHostDisplayInfo[];
 }
 
+interface WorkspaceFolderDiscoveryError {
+    readonly workspaceFolder: vscode.WorkspaceFolder;
+    readonly error: unknown;
+}
+
 interface CombinedWorkspaceAppHostCandidates {
     appHostCandidates: AppHostCandidate[];
     selectedAppHostPath: string | null;
@@ -300,6 +305,7 @@ export class AppHostDataRepository {
             }
         });
         this._workspaceFoldersChangeDisposable = vscode.workspace.onDidChangeWorkspaceFolders(event => {
+            this._removeWorkspaceFolderCandidates(event.removed);
             for (const workspaceFolder of event.removed) {
                 this._appHostDiscoveryService.forgetWorkspaceFolder?.(workspaceFolder);
             }
@@ -789,12 +795,13 @@ export class AppHostDataRepository {
             incrementalCandidateUpdateTimer = setTimeout(applyIncrementalCandidateUpdates, AppHostDataRepository._streamedCandidateUpdateDebounceMs);
         };
 
-        const discoverWorkspaceFolders = async (): Promise<unknown[]> => {
-            const errors: unknown[] = [];
+        const discoverWorkspaceFolders = async (): Promise<WorkspaceFolderDiscoveryError[]> => {
+            const errors: Array<WorkspaceFolderDiscoveryError | undefined> = new Array(workspaceFolderCandidates.length);
             let nextWorkspaceFolderIndex = 0;
             const discoverNextWorkspaceFolder = async (): Promise<void> => {
                 while (nextWorkspaceFolderIndex < workspaceFolderCandidates.length) {
-                    const folderCandidates = workspaceFolderCandidates[nextWorkspaceFolderIndex++];
+                    const workspaceFolderIndex = nextWorkspaceFolderIndex++;
+                    const folderCandidates = workspaceFolderCandidates[workspaceFolderIndex];
                     try {
                         folderCandidates.candidates = await this._appHostDiscoveryService.discover(
                             folderCandidates.workspaceFolder,
@@ -803,7 +810,10 @@ export class AppHostDataRepository {
                             candidate => onIncrementalCandidate(folderCandidates, candidate));
                     } catch (error) {
                         folderCandidates.candidates = [];
-                        errors.push(error);
+                        errors[workspaceFolderIndex] = {
+                            workspaceFolder: folderCandidates.workspaceFolder,
+                            error,
+                        };
                     }
                 }
             };
@@ -811,7 +821,7 @@ export class AppHostDataRepository {
                 AppHostDataRepository._workspaceAppHostDiscoveryConcurrency,
                 workspaceFolderCandidates.length);
             await Promise.all(Array.from({ length: workerCount }, () => discoverNextWorkspaceFolder()));
-            return errors;
+            return errors.filter((error): error is WorkspaceFolderDiscoveryError => error !== undefined);
         };
 
         discoverWorkspaceFolders().then(errors => {
@@ -823,10 +833,10 @@ export class AppHostDataRepository {
             const result = combineWorkspaceAppHostCandidates(workspaceFolderCandidates);
             const buildableAppHostCandidates = result.appHostCandidates.filter(isBuildableAppHostCandidate);
             if (errors.length > 0 && buildableAppHostCandidates.length === 0) {
-                throw errors[0];
+                throw new Error(formatWorkspaceFolderDiscoveryError(errors[0]));
             }
             for (const error of errors) {
-                extensionLogOutputChannel.warn(`Failed to fetch workspace apphost from one workspace folder: ${error}`);
+                extensionLogOutputChannel.warn(`Failed to fetch workspace apphost from one workspace folder: ${formatWorkspaceFolderDiscoveryError(error)}`);
             }
             this._workspaceAppHostDiscoveryComplete = true;
             this._handleWorkspaceAppHostCandidates(result.appHostCandidates, result.selectedAppHostPath);
@@ -1027,6 +1037,24 @@ export class AppHostDataRepository {
         this._clearWorkspaceAppHostSelection();
         this._workspaceAppHostCandidatePaths = [];
         this._workspaceAppHostDescription = undefined;
+    }
+
+    private _removeWorkspaceFolderCandidates(removedWorkspaceFolders: readonly vscode.WorkspaceFolder[]): void {
+        if (removedWorkspaceFolders.length === 0) {
+            return;
+        }
+
+        const belongsToRemovedWorkspaceFolder = (appHostPath: string): boolean =>
+            removedWorkspaceFolders.some(workspaceFolder =>
+                isAppHostPathUnderFolder(appHostPath, workspaceFolder.uri.fsPath));
+        this._workspaceAppHostCandidatePaths = this._workspaceAppHostCandidatePaths.filter(
+            appHostPath => !belongsToRemovedWorkspaceFolder(appHostPath));
+        if (this._workspaceAppHostPath && belongsToRemovedWorkspaceFolder(this._workspaceAppHostPath)) {
+            this._clearWorkspaceAppHostSelection();
+        }
+        this._workspaceAppHostDescription = this._workspaceAppHostCandidatePaths.length > 1
+            ? workspaceViewSelectedMultipleAppHosts(this._workspaceAppHostCandidatePaths.length)
+            : undefined;
     }
 
     // ── describe --follow ──
@@ -2100,6 +2128,10 @@ export class AppHostDataRepository {
 
 export function shortenPath(filePath: string): string {
     return shortenPaths([filePath])[0] ?? filePath;
+}
+
+function formatWorkspaceFolderDiscoveryError(error: WorkspaceFolderDiscoveryError): string {
+    return `${error.workspaceFolder.uri.fsPath}: ${String(error.error)}`;
 }
 
 function combineWorkspaceAppHostCandidates(workspaceFolderCandidates: readonly WorkspaceFolderAppHostCandidates[]): CombinedWorkspaceAppHostCandidates {
