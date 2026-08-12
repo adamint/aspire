@@ -44,6 +44,7 @@ import { ResourceCommandJson } from './views/AppHostDataRepository';
 import { AppHostDiscoveryService } from './utils/appHostDiscovery';
 import { ConfigInfoProvider } from './utils/configInfoProvider';
 import { AppHostLaunchService } from './services/AppHostLaunchService';
+import { stopExternalAppHost } from './services/AppHostStopper';
 import { cloneAppHostState, createStateSnapshot, getDashboardUrl } from './extensionState';
 import { createE2eStateFileBridge, isE2eBridgeEnabled } from './testing/e2eStateFileBridge';
 import type { AspireAppHostState, AspireExtensionApi, AspireExtensionStateSnapshot, WaitForStateOptions } from './types/extensionApi';
@@ -177,6 +178,13 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Aspire panel - running app hosts tree view
   const dataRepository = new AppHostDataRepository(terminalProvider, appHostDiscoveryService, configInfoProvider);
+  appHostLaunchService.setEditorSessionProvider(() => aspireExtensionContext.aspireDebugSessions);
+  appHostLaunchService.setRunningAppHostProvider(async _token => {
+    const appHosts = await dataRepository.fetchAppHostsOnce();
+    return appHosts.map(appHost => ({ appHostPath: appHost.appHostPath }));
+  });
+  appHostLaunchService.setExternalAppHostStopper((appHostPath, token) =>
+    stopExternalAppHost(terminalProvider, appHostPath, token));
   const appHostTreeProvider = new AspireAppHostTreeProvider(dataRepository, terminalProvider, appHostLaunchService, context.globalState);
   const appHostTreeView = vscode.window.createTreeView('aspire-vscode.appHosts', {
     treeDataProvider: appHostTreeProvider,
@@ -346,8 +354,8 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(cliUpdateCommandRegistration, cliUpdateSelfCommandRegistration, settingsCommandRegistration, openLocalSettingsCommandRegistration, openGlobalSettingsCommandRegistration, runAppHostCommandRegistration, debugAppHostCommandRegistration);
   context.subscriptions.push(installCliRegistration, verifyCliInstalledRegistration);
 
-  const dynamicDebugConfigProvider = new AspireDebugConfigurationProvider(appHostDiscoveryService, vscode.DebugConfigurationProviderTriggerKind.Dynamic);
-  const initialDebugConfigProvider = new AspireDebugConfigurationProvider(appHostDiscoveryService, vscode.DebugConfigurationProviderTriggerKind.Initial);
+  const dynamicDebugConfigProvider = new AspireDebugConfigurationProvider(appHostDiscoveryService, appHostLaunchService, vscode.DebugConfigurationProviderTriggerKind.Dynamic);
+  const initialDebugConfigProvider = new AspireDebugConfigurationProvider(appHostDiscoveryService, appHostLaunchService, vscode.DebugConfigurationProviderTriggerKind.Initial);
   context.subscriptions.push(
     vscode.debug.registerDebugConfigurationProvider('aspire', dynamicDebugConfigProvider, vscode.DebugConfigurationProviderTriggerKind.Dynamic)
   );
@@ -355,7 +363,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.debug.registerDebugConfigurationProvider('aspire', initialDebugConfigProvider, vscode.DebugConfigurationProviderTriggerKind.Initial)
   );
 
-  context.subscriptions.push(vscode.debug.registerDebugAdapterDescriptorFactory('aspire', new AspireDebugAdapterDescriptorFactory(rpcServer, dcpServer, terminalProvider, aspireExtensionContext.addAspireDebugSession.bind(aspireExtensionContext), aspireExtensionContext.removeAspireDebugSession.bind(aspireExtensionContext))));
+  context.subscriptions.push(vscode.debug.registerDebugAdapterDescriptorFactory('aspire', new AspireDebugAdapterDescriptorFactory(rpcServer, dcpServer, terminalProvider, aspireExtensionContext.addAspireDebugSession.bind(aspireExtensionContext), aspireExtensionContext.removeAspireDebugSession.bind(aspireExtensionContext), appHostLaunchService.trackAppHostDebugSession.bind(appHostLaunchService))));
   context.subscriptions.push(testRunSessionManager.listenForLeasedDebugSessions({
     rpcServer,
     dcpServer,
@@ -376,17 +384,11 @@ export async function activate(context: vscode.ExtensionContext) {
     mcpProvider.refresh();
   }
 
-  // Language model tools that let an agent start and stop an AppHost through the same
-  // editor-owned debug lifecycle the user drives, instead of spawning a detached CLI
-  // process the editor cannot observe or shut down cleanly.
+  // Language model tools that let an agent use the same AppHost lifecycle service as the
+  // editor and Aspire tree instead of maintaining a separate start/stop policy.
   const appHostLifecycleToolService = new AppHostLifecycleToolService({
     launchService: appHostLaunchService,
     discoveryService: appHostDiscoveryService,
-    getEditorSessions: () => aspireExtensionContext.aspireDebugSessions,
-    getRunningAppHosts: async token => {
-      const appHosts = await dataRepository.fetchRunningAppHostsOnce(token);
-      return appHosts.map(appHost => ({ appHostPath: appHost.appHostPath }));
-    },
   });
   context.subscriptions.push(appHostLifecycleToolService);
   const appHostLifecycleToolRegistration = registerAppHostLifecycleTools(appHostLifecycleToolService);
@@ -432,7 +434,7 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(appHostLaunchService.onDidChangeLaunchingState(fireStateChanged));
   context.subscriptions.push(appHostTreeProvider.onDidChangeStoppingState(fireStateChanged));
   context.subscriptions.push(aspireExtensionContext.onDidChangeDebugSessions(fireStateChanged));
-  const e2eStateFileBridge = createE2eStateFileBridge(context, aspireExtensionContext, dataRepository, appHostLaunchService, appHostTreeProvider, terminalProvider, onDidChangeStateEmitter.event);
+  const e2eStateFileBridge = createE2eStateFileBridge(context, aspireExtensionContext, dataRepository, appHostLaunchService, appHostTreeProvider, terminalProvider, onDidChangeStateEmitter.event, appHostLifecycleToolRegistration.tools);
   context.subscriptions.push(e2eStateFileBridge);
 
   await cliPathEnvironmentInitialization;

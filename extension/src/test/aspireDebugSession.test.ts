@@ -743,6 +743,45 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(stopDebuggingStub.secondCall.args[0], parentDebugSession);
     });
 
+    test('tracks the extension-created AppHost child for lifecycle recovery', async () => {
+        const appHostPath = join(makeTempDir(), 'apphost.mts');
+        writeFileSync(appHostPath, '');
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: appHostPath,
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const childDebugSession = {
+            id: 'apphost-session',
+            session: { id: 'apphost-session', configuration: { noDebug: false } } as unknown as vscode.DebugSession,
+            stopSession: sinon.stub().resolves(),
+        };
+        const trackAppHostDebugSession = sinon.spy();
+        const aspireDebugSession = new AspireDebugSession(
+            parentDebugSession as unknown as vscode.DebugSession,
+            {} as any,
+            {} as any,
+            {} as any,
+            () => { },
+            trackAppHostDebugSession);
+        sinon.stub(aspireDebugSession, 'createDebugAdapterTrackerCore');
+        sinon.stub(aspireDebugSession, 'startAndGetDebugSession').resolves(childDebugSession);
+
+        await aspireDebugSession.startAppHost(appHostPath, [], [], true, { forceBuild: false });
+
+        assert.strictEqual(trackAppHostDebugSession.calledOnceWithExactly(aspireDebugSession, appHostPath, childDebugSession), true);
+    });
+
     test('reports AppHost target version in end telemetry', async () => {
         const fake = new FakeTelemetryReporter();
         const restoreReporter = __setReporterForTests(fake as unknown as TelemetryReporter);
@@ -1083,6 +1122,41 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
                     },
                 },
             ]);
+        }
+        finally {
+            subscription.dispose();
+        }
+    });
+
+    test('responds to disconnect without reentering the Aspire parent stop', () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = {
+            isCliDebugLoggingEnabled: () => false,
+        };
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        const messages: any[] = [];
+        const stopDebuggingStub = sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const subscription = aspireDebugSession.onDidSendMessage(message => messages.push(message));
+
+        try {
+            aspireDebugSession.handleMessage({ command: 'disconnect', seq: 7 });
+
+            assert.strictEqual(messages.some(message => message.command === 'disconnect'), true);
+            assert.strictEqual(stopDebuggingStub.called, false);
         }
         finally {
             subscription.dispose();

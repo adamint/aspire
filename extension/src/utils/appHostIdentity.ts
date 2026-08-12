@@ -1,71 +1,153 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+/** Whether two paths name the same AppHost. */
 export type AppHostIdentityRelation = 'same' | 'different' | 'ambiguous';
 
-export function canonicalizeAppHostPath(value: string): string {
-    const resolvedPath = path.resolve(value);
-    try {
-        return fs.realpathSync.native(resolvedPath);
-    }
-    catch {
-        return resolvedPath;
-    }
+export interface AppHostIdentityKeyInfo {
+    readonly key: string;
+    readonly pathKeys: readonly string[];
 }
 
+const appHostProjectFileExtensions = ['.csproj'];
+const appHostSourceFileNames = ['apphost.cs', 'program.cs'];
+const appHostAliasKeySuffix = '\u0000apphost';
+
 export function getAppHostPathComparisonKey(value: string): string {
-    const canonicalPath = canonicalizeAppHostPath(value);
-    return process.platform === 'win32' ? canonicalPath.toLowerCase() : canonicalPath;
+    const resolved = canonicalize(path.normalize(path.resolve(value)));
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
 /**
- * Compares the two path shapes the extension can receive for one C# AppHost:
- * the project from discovery and its Program.cs entry point from a running session.
- * The alias is accepted only when the directory has one C# project, because otherwise
- * selecting a project for Program.cs would be a guess.
+ * Exact paths match. A project and sibling AppHost source match only when the directory
+ * contains exactly one candidate of each shape; otherwise their relationship is ambiguous.
  */
 export function compareAppHostIdentity(left: string | undefined, right: string | undefined): AppHostIdentityRelation {
     if (!left || !right) {
         return 'different';
     }
 
-    const leftKey = getAppHostPathComparisonKey(left);
-    const rightKey = getAppHostPathComparisonKey(right);
-    if (leftKey === rightKey) {
+    const leftPath = canonicalize(path.normalize(path.resolve(left)));
+    const rightPath = canonicalize(path.normalize(path.resolve(right)));
+    if (getAppHostPathComparisonKey(leftPath) === getAppHostPathComparisonKey(rightPath)) {
         return 'same';
     }
 
-    const leftDirectory = path.dirname(canonicalizeAppHostPath(left));
-    const rightDirectory = path.dirname(canonicalizeAppHostPath(right));
-    if (getAppHostPathComparisonKey(leftDirectory) !== getAppHostPathComparisonKey(rightDirectory) ||
-        !isProjectAndSourcePair(left, right)) {
+    const directory = path.dirname(leftPath);
+    if (getAppHostPathComparisonKey(directory) !== getAppHostPathComparisonKey(path.dirname(rightPath))) {
         return 'different';
     }
 
-    try {
-        const projectCount = fs.readdirSync(leftDirectory, { withFileTypes: true })
-            .filter(entry => entry.isFile() && path.extname(entry.name).toLowerCase() === '.csproj')
-            .length;
-        return projectCount === 1 ? 'same' : 'ambiguous';
+    const projectFile = isAppHostProjectFile(leftPath)
+        ? leftPath
+        : isAppHostProjectFile(rightPath) ? rightPath : undefined;
+    const sourceFile = isAppHostSourceFile(leftPath)
+        ? leftPath
+        : isAppHostSourceFile(rightPath) ? rightPath : undefined;
+    if (!projectFile || !sourceFile) {
+        return 'different';
     }
-    catch {
+
+    const shapes = readDirectoryAppHostShapes(directory);
+    if (!shapes.enumerated) {
         return 'ambiguous';
     }
+
+    if (!containsPath(shapes.projectFiles, projectFile) || !containsPath(shapes.sourceFiles, sourceFile)) {
+        return 'different';
+    }
+
+    return shapes.projectFiles.length === 1 && shapes.sourceFiles.length === 1 ? 'same' : 'ambiguous';
 }
 
-export function isSameAppHost(left: string | undefined, right: string | undefined): boolean {
-    return compareAppHostIdentity(left, right) === 'same';
+export function getAppHostIdentityKey(appHostPath: string): string {
+    return getAppHostIdentityKeyInfo(appHostPath).key;
 }
 
-function isProjectAndSourcePair(left: string, right: string): boolean {
-    return (isCSharpProject(left) && isCSharpProjectSource(right)) ||
-        (isCSharpProjectSource(left) && isCSharpProject(right));
+export function getAppHostIdentityKeyInfo(appHostPath: string): AppHostIdentityKeyInfo {
+    const resolvedPath = canonicalize(path.normalize(path.resolve(appHostPath)));
+    if (!isAppHostProjectFile(resolvedPath) && !isAppHostSourceFile(resolvedPath)) {
+        const key = getAppHostPathComparisonKey(resolvedPath);
+        return { key, pathKeys: [key] };
+    }
+
+    const directory = path.dirname(resolvedPath);
+    const shapes = readDirectoryAppHostShapes(directory);
+    const isAliasedPair = shapes.enumerated &&
+        shapes.projectFiles.length === 1 &&
+        shapes.sourceFiles.length === 1 &&
+        (containsPath(shapes.projectFiles, resolvedPath) || containsPath(shapes.sourceFiles, resolvedPath));
+
+    if (isAliasedPair) {
+        return {
+            key: `${getAppHostPathComparisonKey(directory)}${appHostAliasKeySuffix}`,
+            pathKeys: [
+                getAppHostPathComparisonKey(shapes.projectFiles[0]),
+                getAppHostPathComparisonKey(shapes.sourceFiles[0]),
+            ],
+        };
+    }
+
+    const key = getAppHostPathComparisonKey(resolvedPath);
+    return { key, pathKeys: [key] };
 }
 
-function isCSharpProject(value: string): boolean {
-    return path.extname(value).toLowerCase() === '.csproj';
+export function isAppHostProjectFile(value: string): boolean {
+    return appHostProjectFileExtensions.includes(path.extname(value).toLowerCase());
 }
 
-function isCSharpProjectSource(value: string): boolean {
-    return path.basename(value).toLowerCase() === 'program.cs';
+export function isAppHostSourceFile(value: string): boolean {
+    return appHostSourceFileNames.includes(path.basename(value).toLowerCase());
+}
+
+interface DirectoryAppHostShapes {
+    readonly projectFiles: readonly string[];
+    readonly sourceFiles: readonly string[];
+    readonly enumerated: boolean;
+}
+
+function readDirectoryAppHostShapes(directoryPath: string): DirectoryAppHostShapes {
+    let entries: fs.Dirent[];
+    try {
+        entries = fs.readdirSync(directoryPath, { withFileTypes: true });
+    }
+    catch {
+        return { projectFiles: [], sourceFiles: [], enumerated: false };
+    }
+
+    const projectFiles: string[] = [];
+    const sourceFiles: string[] = [];
+    for (const entry of entries) {
+        if (!entry.isFile() && !entry.isSymbolicLink()) {
+            continue;
+        }
+
+        const entryPath = path.join(directoryPath, entry.name);
+        if (isAppHostProjectFile(entry.name)) {
+            projectFiles.push(entryPath);
+        }
+        else if (isAppHostSourceFile(entry.name)) {
+            sourceFiles.push(entryPath);
+        }
+    }
+
+    return { projectFiles, sourceFiles, enumerated: true };
+}
+
+function containsPath(paths: readonly string[], candidate: string): boolean {
+    const candidateKey = getAppHostPathComparisonKey(candidate);
+    return paths.some(value => getAppHostPathComparisonKey(value) === candidateKey);
+}
+
+export function canonicalizeAppHostPath(resolvedPath: string): string {
+    return canonicalize(resolvedPath);
+}
+
+function canonicalize(resolvedPath: string): string {
+    try {
+        return fs.realpathSync(resolvedPath);
+    }
+    catch {
+        return resolvedPath;
+    }
 }

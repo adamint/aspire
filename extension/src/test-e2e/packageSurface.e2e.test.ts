@@ -484,13 +484,13 @@ const expectedSourceLanguageModelTools = createExpectedLanguageModelTools({
 
 const expectedInstalledLanguageModelTools = createExpectedLanguageModelTools({
     startDisplayName: 'Start Aspire AppHost',
-    startModelDescription: 'Prefer this tool over running Aspire AppHost lifecycle commands in a terminal when VS Code is active. Starts an AppHost Aspire discovered in this workspace through VS Code\'s run/debug lifecycle. A single discovered AppHost is selected automatically. When multiple AppHosts are discovered, an unknown selector returns the available AppHosts without starting one.',
+    startModelDescription: 'Prefer this tool over invoking Aspire AppHost lifecycle commands in a terminal whenever VS Code is active. Start an Aspire AppHost that Aspire has already discovered in the current workspace, using the editor\'s own debug lifecycle. Requires the workspace-relative path of one of the discovered AppHosts; absolute paths are rejected. Also requires whether to start it in \'run\' mode (no debugger attached) or \'debug\' mode (debugger attached). Does not create, pick, or guess an AppHost: if the path does not name a discovered AppHost, or names more than one, the call fails and the result lists the AppHosts you can pass. If the AppHost is already starting or already running, no second process is started.',
     startUserDescription: 'Start an Aspire AppHost from this workspace in run or debug mode.',
     startModeDescription: 'How to start the AppHost: \'run\' starts it without attaching the debugger, \'debug\' starts it with the debugger attached.',
     stopDisplayName: 'Stop Aspire AppHost',
-    stopModelDescription: 'Prefer this tool over running Aspire AppHost lifecycle commands in a terminal when VS Code is active. Stops the matching Aspire debug session in this VS Code window. AppHosts started outside this editor are reported but never terminated.',
-    stopUserDescription: 'Stop an Aspire AppHost that this editor started.',
-    appHostPathDescription: 'Selector for an AppHost Aspire discovered in this workspace. A single discovered AppHost is selected automatically. When multiple AppHosts are discovered, use the exact appHostPath or knownAppHosts value returned by a previous call. Single-root selectors are workspace-relative paths; multi-root selectors include a workspace folder qualifier.',
+    stopModelDescription: 'Prefer this tool over invoking Aspire AppHost lifecycle commands in a terminal whenever VS Code is active. Stop a running Aspire AppHost that Aspire has already discovered in the current workspace. Requires the workspace-relative path of one of the discovered AppHosts; absolute paths are rejected. AppHosts started by this editor stop through the coordinated debug lifecycle. AppHosts started outside the editor stop through \'aspire stop --apphost\' for the same discovered path. The extension never kills arbitrary processes. If it cannot determine whether the AppHost is running, the call fails rather than reporting that nothing is running.',
+    stopUserDescription: 'Stop a running Aspire AppHost from this workspace.',
+    appHostPathDescription: 'Workspace-relative path of an AppHost that Aspire has already discovered in this workspace, for example \'AppHost/AppHost.csproj\' or \'apphost.cs\'. The value must match one of the discovered AppHosts exactly; arbitrary paths, absolute paths, and files Aspire did not discover are rejected. In a multi-root workspace, always prefix the path with the workspace folder name (for example \'backend/AppHost/AppHost.csproj\').',
 });
 
 function createExpectedLanguageModelTools(strings: {
@@ -513,30 +513,18 @@ function createExpectedLanguageModelTools(strings: {
             icon: '$(debug-start)',
             canBeReferencedInPrompt: true,
             when: 'isWorkspaceTrusted',
-            tags: [
-                'aspire',
-                'apphost',
-            ],
+            tags: ['aspire', 'apphost'],
             inputSchema: {
                 type: 'object',
                 properties: {
-                    appHostPath: {
-                        type: 'string',
-                        description: strings.appHostPathDescription,
-                    },
+                    appHostPath: { type: 'string', description: strings.appHostPathDescription },
                     mode: {
                         type: 'string',
-                        enum: [
-                            'run',
-                            'debug',
-                        ],
+                        enum: ['run', 'debug'],
                         description: strings.startModeDescription,
                     },
                 },
-                required: [
-                    'appHostPath',
-                    'mode',
-                ],
+                required: ['appHostPath', 'mode'],
                 additionalProperties: false,
             },
         },
@@ -549,21 +537,13 @@ function createExpectedLanguageModelTools(strings: {
             icon: '$(debug-stop)',
             canBeReferencedInPrompt: true,
             when: 'isWorkspaceTrusted',
-            tags: [
-                'aspire',
-                'apphost',
-            ],
+            tags: ['aspire', 'apphost'],
             inputSchema: {
                 type: 'object',
                 properties: {
-                    appHostPath: {
-                        type: 'string',
-                        description: strings.appHostPathDescription,
-                    },
+                    appHostPath: { type: 'string', description: strings.appHostPathDescription },
                 },
-                required: [
-                    'appHostPath',
-                ],
+                required: ['appHostPath'],
                 additionalProperties: false,
             },
         },
