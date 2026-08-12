@@ -109,9 +109,10 @@ export function spawnCliProcess(terminalProvider: AspireTerminalProvider, comman
     return child;
 }
 
-export function terminateCliProcess(childProcess: ChildProcessWithoutNullStreams, description: string, options?: { suppressTimeoutWarning?: boolean }): Promise<void> {
+export function terminateCliProcess(childProcess: ChildProcessWithoutNullStreams, description: string, options?: { suppressTimeoutWarning?: boolean; force?: boolean }): Promise<void> {
     return new Promise(resolve => {
-        const processGroupPid = process.platform !== 'win32' && managedPosixProcessGroups.has(childProcess)
+        const isWindows = process.platform === 'win32';
+        const processGroupPid = !isWindows && managedPosixProcessGroups.has(childProcess)
             ? childProcess.pid
             : undefined;
         let exited = childProcess.exitCode !== null || childProcess.signalCode !== null;
@@ -180,6 +181,24 @@ export function terminateCliProcess(childProcess: ChildProcessWithoutNullStreams
                 managedPosixProcessGroups.delete(childProcess);
             }
             stopTracking();
+            return;
+        }
+
+        if (options?.force) {
+            if (!forceTermination()) {
+                stopTracking();
+                return;
+            }
+
+            confirmationTimer = setTimeout(() => {
+                confirmationTimer = undefined;
+                if (!options.suppressTimeoutWarning) {
+                    extensionLogOutputChannel.warn(`${description} did not report exit after forced termination; stopping process tracking.`);
+                }
+                managedPosixProcessGroups.delete(childProcess);
+                stopTracking();
+            }, processShutdownGracePeriodMs);
+            confirmationTimer.unref();
             return;
         }
 

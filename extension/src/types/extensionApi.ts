@@ -199,6 +199,7 @@ export type AspireExtensionE2EControlCommand =
     | { name: 'getRegisteredLanguageModelTools' }
     | { name: 'prepareLanguageModelToolInvocation'; toolName: string; input: Record<string, unknown> }
     | { name: 'invokeLanguageModelTool'; toolName: string; input: Record<string, unknown>; times?: number }
+    | { name: 'getDebugSessionProcessInfo'; appHostPath?: string }
     | { name: 'getExtensionPackageJson' }
     | { name: 'getExtensionFileStatus'; relativePaths: readonly string[] }
     | { name: 'getDiagnostics'; filePath: string }
@@ -208,6 +209,7 @@ export type AspireExtensionE2EControlCommand =
     | { name: 'assertClipboardMatchesLastExpectation' }
     | { name: 'openFile'; filePath: string }
     | { name: 'openWorkspaceFolder'; folderPath: string }
+    | { name: 'stopOwnedDebugSessionProcesses'; appHostPath?: string }
     | { name: 'getWorkspaceFolders' }
     | { name: 'getActiveEditor' }
     | { name: 'getResourceDebuggerExtensions' }

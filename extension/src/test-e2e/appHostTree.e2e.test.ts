@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import { findRunningAppHost, getCommandInvocationCount, getResources, getTerminalCommandCount, getTreeAppHostLabel, isSamePath, waitForCommandOutcome, waitForDashboardUrl, waitForExtensionState, waitForNoDebugSessions, waitForNoRunningAppHost, waitForRepositoryIdle, waitForResource, waitForRunningAppHost, waitForTerminalCommand, waitForWorkspaceAppHost } from './helpers/assertions';
 import { assertClipboardMatchesLastExpectationForE2E, captureWorkspaceAppHostPathClipboardExpectationForE2E, executeE2eControlCommand, getCliWrapperInvocationCount, getCliWrapperInvocations, restoreClipboardSnapshotForE2E, restoreE2eCliPathForE2E, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, setE2eCliPathForE2E, setTerminalCommandExecutionSuppressedForE2E, snapshotClipboardForE2E, stopAppHostIfRunning, stopPrimaryAppHostIfRunning, touchPrimaryAppHostProject, writeDelayedPsCliWrapper, writeGatedStreamingDiscoveryCliWrapper, writeStreamingDiscoveryCliWrapper, writeTrackedDelayedPsCliWrapper, writeTrackedStreamingDiscoveryCliWrapper } from './helpers/fixtures';
 import { getPrimaryAppHostProjectPath } from './helpers/paths';
-import { cancelActiveInput, clickTreeItem, executeCommandFromPalette, openAspireView, waitForChildTreeItem, waitForNotificationMessage, waitForTreeItem, waitForWorkbenchText } from './helpers/vscode';
+import { cancelActiveInput, clickTreeItem, executeCommandFromPalette, getNotificationMessages, openAspireView, waitForChildTreeItem, waitForNotificationMessage, waitForTreeItem, waitForWorkbenchText } from './helpers/vscode';
 
 suite('Aspire AppHost tree E2E', function () {
     this.timeout(240000);
@@ -52,6 +52,14 @@ suite('Aspire AppHost tree E2E', function () {
         const partialItem = await waitForTreeItem(partialSection, getTreeAppHostLabel(partialState.state));
         assert.strictEqual(await partialItem.getLabel(), getTreeAppHostLabel(partialState.state));
         await waitForWorkbenchText('Discovering AppHosts...');
+        // Discovery progress must render in the status bar. A progress notification stays on screen
+        // for as long as discovery runs and cannot be dismissed
+        // (https://github.com/microsoft/aspire/issues/19036).
+        const notificationMessages = await getNotificationMessages();
+        assert.deepStrictEqual(
+            notificationMessages.filter(message => message.includes('Discovering AppHosts')),
+            [],
+            `AppHost discovery progress must not use a notification. Notifications: ${JSON.stringify(notificationMessages)}`);
 
         await waitForCommandOutcome('aspire-vscode.refreshAppHosts', 'success', 30000, invocationCountBefore);
         const finalState = await waitForRepositoryIdle();
@@ -186,23 +194,21 @@ suite('Aspire AppHost tree E2E', function () {
         await waitForCommandOutcome('aspire-vscode.runAppHost', 'success');
         await waitForRunningAppHost();
 
-        // The loading welcome text is transient. Gate both ps and ls so the test
-        // observes loading before any runtime snapshot can restore the running AppHost.
+        // Gate both refresh paths so the running AppHost can be asserted before workspace
+        // discovery produces a candidate, without depending on the transient loading state.
         const discoveryGate = writeGatedStreamingDiscoveryCliWrapper();
         await setE2eCliPathForE2E(discoveryGate.cliPath);
         const invocationCountBefore = getCommandInvocationCount('aspire-vscode.refreshAppHosts');
         try {
             await executeE2eControlCommand({ name: 'refreshAppHosts' }, { waitFor: 'started' });
 
-            await waitForWorkspaceRediscoveryLoading('workspace AppHost refresh loading state before running AppHost refresh');
-
-            discoveryGate.releasePsSnapshot();
+            await discoveryGate.waitForPsSnapshotRequest();
+            await discoveryGate.waitForLsCandidateRequest();
             const runningBeforeDiscovery = await waitForExtensionState(
-                file => !file.state.isRepositoryLoading
-                    && file.state.isWorkspaceAppHostDiscoveryComplete === false
+                file => file.state.isWorkspaceAppHostDiscoveryComplete === false
                     && file.state.workspaceAppHostCandidatePaths.length === 0
                     && findRunningAppHost(file.state) !== undefined,
-                'running AppHost to clear loading before workspace discovery produces a candidate',
+                'running AppHost before workspace discovery produces a candidate',
                 30000);
             assert.ok(findRunningAppHost(runningBeforeDiscovery.state));
 
@@ -210,6 +216,7 @@ suite('Aspire AppHost tree E2E', function () {
             const runningItem = await waitForTreeItem(section, appHostLabel);
             assert.strictEqual(await runningItem.getLabel(), appHostLabel);
 
+            discoveryGate.releasePsSnapshot();
             discoveryGate.releaseLsCandidate();
             const candidateAfterRunning = await waitForExtensionState(
                 file => file.state.isWorkspaceAppHostDiscoveryComplete === false
