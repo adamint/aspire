@@ -10,14 +10,24 @@ class E2eProcessError extends Error {
       throw new TypeError(`Unsupported E2E process failure reason '${reason}'.`);
     }
 
-    const { exitCode = null, signal = null, cause } = options;
-    super(createMessage(reason, command, args, exitCode, signal, cause), cause === undefined ? undefined : { cause });
+    const {
+      exitCode = null,
+      signal = null,
+      timeout = null,
+      didNotExit = false,
+      diagnosticsSuffix = '',
+      cause,
+    } = options;
+    super(createMessage(reason, command, args, exitCode, signal, timeout, didNotExit, diagnosticsSuffix, cause), cause === undefined ? undefined : { cause });
     this.name = 'E2eProcessError';
     this.reason = reason;
     this.command = command;
     this.args = [...args];
     this.exitCode = exitCode;
     this.signal = signal;
+    this.timeout = timeout;
+    this.didNotExit = didNotExit;
+    this.diagnosticsSuffix = diagnosticsSuffix;
   }
 }
 
@@ -28,15 +38,15 @@ function shouldAllowAdvisoryTestFailure(error, results, cleanupFailed) {
     && !cleanupFailed;
 }
 
-function createMessage(reason, command, args, exitCode, signal, cause) {
+function createMessage(reason, command, args, exitCode, signal, timeout, didNotExit, diagnosticsSuffix, cause) {
   const commandLine = formatCommand(command, args);
   switch (reason) {
     case 'exit-code':
-      return `${commandLine} exited with code ${exitCode ?? 'unknown'}.`;
+      return `${commandLine} exited with code ${exitCode ?? 'unknown'}.${diagnosticsSuffix}`;
     case 'timeout':
-      return `${commandLine} timed out.`;
+      return `${commandLine} timed out${timeout === null ? '' : ` after ${timeout}ms`}${didNotExit ? ' and did not exit after process-tree termination' : ''}.${diagnosticsSuffix}`;
     case 'signal':
-      return `${commandLine} exited due to signal ${signal ?? 'unknown'}.`;
+      return `${commandLine} exited due to signal ${signal ?? 'unknown'}.${diagnosticsSuffix}`;
     case 'spawn':
       return `Failed to start ${commandLine}: ${cause instanceof Error ? cause.message : String(cause ?? 'unknown error')}`;
     default:

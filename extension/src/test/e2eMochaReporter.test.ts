@@ -103,33 +103,51 @@ suite('E2E Mocha reporter', () => {
         false);
     });
 
-    test('does not allow timeout, signal, or spawn failures and retains diagnostics details', () => {
+    test('does not allow timeout, signal, or spawn failures and preserves complete timeout diagnostics', () => {
         const { E2eProcessError, shouldAllowAdvisoryTestFailure } = require(getProcessFailureModulePath());
         const results = {
             tests: [{ fullTitle: 'Aspire E2E starts an AppHost' }],
             failures: [{ fullTitle: 'Aspire E2E starts an AppHost' }],
         };
-        const timeoutError = new E2eProcessError('timeout', 'node', ['run-tests']);
+        const diagnosticsSuffix = ' Diagnostics are under out/test-e2e-results and out/test-e2e-storage-diagnostics.';
+        const timeoutError = new E2eProcessError('timeout', 'node', ['run-tests'], {
+            timeout: 60000,
+            diagnosticsSuffix,
+        });
+        const forcedTimeoutError = new E2eProcessError('timeout', 'node', ['run-tests'], {
+            timeout: 60000,
+            didNotExit: true,
+            diagnosticsSuffix,
+        });
         const signalError = new E2eProcessError('signal', 'node', ['run-tests'], { signal: 'SIGTERM' });
         const spawnCause = new Error('spawn EPERM');
         const spawnError = new E2eProcessError('spawn', 'node', ['run-tests'], { cause: spawnCause });
 
         assert.strictEqual(shouldAllowAdvisoryTestFailure(timeoutError, results, false), false);
+        assert.strictEqual(shouldAllowAdvisoryTestFailure(forcedTimeoutError, results, false), false);
         assert.strictEqual(shouldAllowAdvisoryTestFailure(signalError, results, false), false);
         assert.strictEqual(shouldAllowAdvisoryTestFailure(spawnError, results, false), false);
 
         const exitCodeError = new E2eProcessError('exit-code', 'node', ['run-tests'], { exitCode: 1 });
         assert.strictEqual(exitCodeError.reason, 'exit-code');
         assert.strictEqual(exitCodeError.exitCode, 1);
-        assert.match(exitCodeError.message, /node run-tests exited with code 1/);
+        assert.strictEqual(exitCodeError.message, 'node run-tests exited with code 1.');
         assert.strictEqual(timeoutError.reason, 'timeout');
-        assert.match(timeoutError.message, /node run-tests timed out/);
+        assert.strictEqual(timeoutError.timeout, 60000);
+        assert.strictEqual(timeoutError.didNotExit, false);
+        assert.strictEqual(timeoutError.diagnosticsSuffix, diagnosticsSuffix);
+        assert.strictEqual(timeoutError.message, 'node run-tests timed out after 60000ms. Diagnostics are under out/test-e2e-results and out/test-e2e-storage-diagnostics.');
+        assert.strictEqual(forcedTimeoutError.reason, 'timeout');
+        assert.strictEqual(forcedTimeoutError.timeout, 60000);
+        assert.strictEqual(forcedTimeoutError.didNotExit, true);
+        assert.strictEqual(forcedTimeoutError.diagnosticsSuffix, diagnosticsSuffix);
+        assert.strictEqual(forcedTimeoutError.message, 'node run-tests timed out after 60000ms and did not exit after process-tree termination. Diagnostics are under out/test-e2e-results and out/test-e2e-storage-diagnostics.');
         assert.strictEqual(signalError.reason, 'signal');
         assert.strictEqual(signalError.signal, 'SIGTERM');
-        assert.match(signalError.message, /node run-tests exited due to signal SIGTERM/);
+        assert.strictEqual(signalError.message, 'node run-tests exited due to signal SIGTERM.');
         assert.strictEqual(spawnError.reason, 'spawn');
         assert.strictEqual(spawnError.cause, spawnCause);
-        assert.match(spawnError.message, /Failed to start node run-tests/);
+        assert.strictEqual(spawnError.message, 'Failed to start node run-tests: spawn EPERM');
     });
 });
 
