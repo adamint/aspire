@@ -36,10 +36,10 @@ function getLiteralText(expression: ts.Expression | undefined): string | undefin
         : undefined;
 }
 
-function getSuiteStatements(sourceFile: ts.SourceFile, suiteName: string): readonly ts.Statement[] {
+function getSuiteStatements(sourceFile: ts.SourceFile): readonly ts.Statement[] {
     for (const statement of sourceFile.statements) {
         const suiteCall = getDirectCallExpression(statement, 'suite');
-        if (suiteCall === undefined || getLiteralText(suiteCall.arguments[0]) !== suiteName) {
+        if (suiteCall === undefined) {
             continue;
         }
 
@@ -53,8 +53,8 @@ function getSuiteStatements(sourceFile: ts.SourceFile, suiteName: string): reado
 }
 
 function getTestBlock(source: string, testName: string): string {
-    const sourceFile = ts.createSourceFile('debugDashboard.e2e.test.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-    const suiteStatements = getSuiteStatements(sourceFile, 'Aspire debug dashboard E2E');
+    const sourceFile = ts.createSourceFile('e2e.test.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const suiteStatements = getSuiteStatements(sourceFile);
 
     // Walk the parsed suite body instead of scanning raw text so comments, nested template
     // literals, and regular expressions like `/\)/` cannot masquerade as structure.
@@ -359,9 +359,14 @@ suite('E2E launch profile', () => {
         const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
         const resourceGroupsInstallIndex = runner.indexOf("displayName: 'Azure Resource Groups'");
         const functionsInstallIndex = runner.indexOf("displayName: 'Azure Functions'");
+        const skipNoticeIndex = workflow.indexOf('Note skipped Azure Functions E2E shard');
+        const runStepIndex = workflow.indexOf('- name: Run extension E2E tests');
+        const uploadStepIndex = workflow.indexOf('- name: Upload E2E diagnostics');
+        const runStep = workflow.slice(runStepIndex, uploadStepIndex);
 
         assert.ok(workflow.includes('shardName: azure-functions'));
         assert.ok(workflow.includes('installAzureFunctions: true'));
+        assert.ok(workflow.includes("disabledIssue: 'https://github.com/microsoft/aspire/issues/19151'"));
         assert.ok(workflow.includes("core_tools_version='4.12.1'"));
         assert.ok(workflow.includes('faf8fb8d50b5293df338bec70594b12f45730e9fe251805298859b2238cf627e'));
         assert.ok(workflow.includes('vscode-azureresourcegroups/0.12.7/vspackage'));
@@ -373,6 +378,9 @@ suite('E2E launch profile', () => {
         assert.ok(functionsInstallIndex > resourceGroupsInstallIndex);
         assert.ok(runner.includes("path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_AZURE_RESOURCE_GROUPS_VSIX')"));
         assert.ok(runner.includes("path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_AZURE_FUNCTIONS_VSIX')"));
+        assert.ok(skipNoticeIndex >= 0);
+        assert.ok(runStepIndex > skipNoticeIndex);
+        assert.ok(runStep.includes('if: ${{ !matrix.disabledIssue }}'));
     });
 
     test('keeps Linux E2E recordings for successful runs by default', () => {
@@ -646,6 +654,30 @@ suite('E2E launch profile', () => {
         assert.ok(debugDashboard.includes('const beforeStoppingPathEvent = getStoppingPathEventCount();'));
         assert.ok(debugDashboard.includes("await waitForStoppingPathEvent(appHostPath, 'entered', beforeStoppingPathEvent, 120000);"));
         assert.ok(!debugDashboard.includes("file => file.state.stoppingPaths.some(stoppingPath => isSamePath(stoppingPath, appHostPath))"));
+    });
+
+    test('gates slow AppHost discovery before asserting transient loading UI', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const fixtures = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'helpers', 'fixtures.ts'), 'utf8');
+        const appHostTree = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'appHostTree.e2e.test.ts'), 'utf8');
+        const runningBeforeDiscoveryTest = getTestBlock(appHostTree, 'running AppHosts appear before slow discovery results');
+
+        assert.ok(fixtures.includes('writeGatedStreamingDiscoveryCliWrapper'));
+        assert.ok(fixtures.includes('function waitForReleaseFile'));
+        assert.ok(appHostTree.includes('writeGatedStreamingDiscoveryCliWrapper'));
+        assert.ok(appHostTree.includes('discoveryGate.releasePsSnapshot();'));
+        assert.ok(appHostTree.includes('discoveryGate.releaseLsCandidate();'));
+
+        const cleanupIndex = runningBeforeDiscoveryTest.indexOf('finally {');
+        assert.ok(cleanupIndex >= 0, 'Expected the E2E to keep cleanup releases in a finally block.');
+        const testBeforeCleanup = runningBeforeDiscoveryTest.slice(0, cleanupIndex);
+        const loadingIndex = testBeforeCleanup.indexOf('await waitForWorkspaceRediscoveryLoading');
+        const releasePsIndex = testBeforeCleanup.indexOf('discoveryGate.releasePsSnapshot();');
+        const releaseLsIndex = testBeforeCleanup.indexOf('discoveryGate.releaseLsCandidate();');
+
+        assert.ok(loadingIndex >= 0, 'The E2E must wait for the transient loading UI before releasing the running AppHost snapshot.');
+        assert.ok(releasePsIndex > loadingIndex, 'The running AppHost snapshot must be released after the loading UI has been observed.');
+        assert.ok(releaseLsIndex > releasePsIndex, 'The slow workspace candidate must be released after the running AppHost snapshot.');
     });
 
     test('patches ExTester launch arguments without replacement-token expansion', () => {

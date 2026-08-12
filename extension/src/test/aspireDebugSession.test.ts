@@ -97,6 +97,38 @@ suite('AspireDebugSession tests', () => {
         ]);
     });
 
+    test('forwards explicit launch configuration provenance to the Aspire CLI', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+                __aspireAppHostSelectionOrigin: 'explicit-launch-configuration',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = {
+            isCliDebugLoggingEnabled: () => false,
+        };
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        const spawnStub = sinon.stub(aspireDebugSession, 'spawnAspireCommand').resolves();
+
+        aspireDebugSession.handleMessage({ command: 'launch', seq: 1, arguments: { noDebug: false } });
+
+        await waitFor(() => spawnStub.calledOnce);
+        assert.deepStrictEqual(spawnStub.firstCall.args[4], [{
+            name: 'ASPIRE_CLI_APPHOST_SELECTION_ORIGIN',
+            value: 'explicit-launch-configuration',
+        }]);
+    });
+
     test('describes a no-debug launch as an Aspire run session', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
@@ -1388,6 +1420,77 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(startDebuggingStub.firstCall.args[2], undefined);
     });
 
+    test('resource stopSession deduplicates concurrent stops and retries after rejection', async () => {
+        let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        const firstStop = createDeferred<void>();
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/AppHost/AppHost.csproj',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = {
+            isDebugConfigEnvironmentLoggingEnabled: () => false,
+        };
+        const debugConfig = {
+            runId: 'run-1',
+            debugSessionId: 'debug-1',
+            type: 'coreclr',
+            name: 'Project',
+            request: 'launch',
+            program: '/workspace/App/bin/App.dll',
+        } as AspireResourceExtendedDebugConfiguration;
+        const resourceSession = {
+            id: 'resource-session',
+            type: 'coreclr',
+            name: 'Project',
+            configuration: debugConfig,
+        } as unknown as vscode.DebugSession;
+        sinon.stub(vscode.workspace, 'getWorkspaceFolder').returns(undefined);
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            startSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.debug, 'startDebugging').callsFake(async () => {
+            startSessionCallback?.(resourceSession);
+            return true;
+        });
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging');
+        stopDebugging.onFirstCall().returns(firstStop.promise);
+        stopDebugging.onSecondCall().resolves();
+        const aspireDebugSession = new AspireDebugSession(
+            parentDebugSession as unknown as vscode.DebugSession,
+            {} as any,
+            {} as any,
+            terminalProvider as any,
+            () => { });
+        sinon.stub(aspireDebugSession as any, 'createDebugAdapterTrackerCore');
+
+        const resource = await aspireDebugSession.startAndGetDebugSession(debugConfig);
+        assert.ok(resource);
+
+        const first = resource.stopSession();
+        const concurrent = resource.stopSession();
+        assert.strictEqual(concurrent, first);
+        assert.strictEqual(stopDebugging.calledOnce, true);
+
+        firstStop.reject(new Error('stop failed'));
+        await assert.rejects(Promise.resolve(first), /stop failed/);
+
+        await resource.stopSession();
+        assert.strictEqual(stopDebugging.callCount, 2);
+
+        aspireDebugSession.dispose();
+    });
+
     test('stops MAUI resource debug sessions that start after Aspire session disposal', async () => {
         let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
         let resolveStart: ((value: boolean) => void) | undefined;
@@ -1460,6 +1563,20 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             assert.deepStrictEqual(args, ['run', '--isolated', '--apphost', '/workspace/AppHost.csproj', '--', '--custom-arg', 'value']);
         });
     });
+
+    function createDeferred<T>(): {
+        promise: Promise<T>;
+        reject(reason?: unknown): void;
+        resolve(value: T | PromiseLike<T>): void;
+    } {
+        let resolve!: (value: T | PromiseLike<T>) => void;
+        let reject!: (reason?: unknown) => void;
+        const promise = new Promise<T>((promiseResolve, promiseReject) => {
+            resolve = promiseResolve;
+            reject = promiseReject;
+        });
+        return { promise, reject, resolve };
+    }
 
     async function waitFor(predicate: () => boolean): Promise<void> {
         const start = Date.now();
