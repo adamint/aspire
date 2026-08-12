@@ -6,7 +6,7 @@ import { AspireResourceExtendedDebugConfiguration, AspireResourceDebugSession, E
 import { extensionLogOutputChannel } from "../utils/logging";
 import AspireDcpServer, { generateDcpIdPrefix } from "../dcp/AspireDcpServer";
 import { spawnCliProcess, terminateCliProcess } from "./languages/cli";
-import { disconnectingFromSession, launchingWithAppHost, launchingWithDirectory, processExceptionOccurred, processExitedWithCode, aspireDashboard, appHostSessionTerminated, debugSessionsFailedToStop, debugSessionStopTimedOut } from "../loc/strings";
+import { disconnectingFromSession, launchingWithAppHost, launchingWithDirectory, processExceptionOccurred, processExitedWithCode, aspireDashboard, appHostSessionTerminated, debugSessionsFailedToStop, debugSessionStartTimedOut, debugSessionStopTimedOut } from "../loc/strings";
 import { projectDebuggerExtension } from "./languages/dotnet";
 import { AnsiColors } from "../utils/AspireTerminalProvider";
 import { applyTextStyle } from "../utils/strings";
@@ -115,7 +115,10 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   // Publish resource start ownership before invoking VS Code. The start event can arrive after the
   // ordinary session snapshot, so shutdown must wait for every accepted start to either register
   // normally or enqueue its late stop before the final drain can complete.
-  private readonly _pendingResourceDebugSessionStarts = new Set<Promise<void>>();
+  private readonly _pendingResourceDebugSessionStarts = new Set<{
+    name: string;
+    completion: Promise<void>;
+  }>();
   // Set once the AppHost stop has been confirmed, so a retry after a failed shutdown does not stop
   // it a second time. Kept separate from _appHostDebugSession, which the terminate handler still
   // needs to identify the session.
@@ -325,7 +328,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     this._resourceDebugSessions = this._resourceDebugSessions.filter(
       session => unstoppedResourceSessions.has(session) || session.id === this._appHostDebugSession?.id);
 
-    await this.drainPendingResourceDebugSessionStarts();
+    let pendingStartBudgetExhausted = await this.drainPendingResourceDebugSessionStarts(deadline, stopFailures);
     await this.drainLateResourceStops(deadline, stopFailures);
 
     // Global/E2E stop requests target the synthetic Aspire session. Stop the real AppHost session
@@ -347,7 +350,9 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       }
     }
 
-    await this.drainPendingResourceDebugSessionStarts();
+    if (!pendingStartBudgetExhausted) {
+      pendingStartBudgetExhausted = await this.drainPendingResourceDebugSessionStarts(deadline, stopFailures);
+    }
     await this.drainLateResourceStops(deadline, stopFailures);
 
     if (!this._parentStopped) {
@@ -359,16 +364,35 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       }
     }
 
-    await this.drainPendingResourceDebugSessionStarts();
+    if (!pendingStartBudgetExhausted) {
+      await this.drainPendingResourceDebugSessionStarts(deadline, stopFailures);
+    }
     await this.drainLateResourceStops(deadline, stopFailures);
 
     return stopFailures;
   }
 
-  private async drainPendingResourceDebugSessionStarts(): Promise<void> {
+  private async drainPendingResourceDebugSessionStarts(deadline: number, stopFailures: unknown[]): Promise<boolean> {
     while (this._pendingResourceDebugSessionStarts.size > 0) {
-      await Promise.allSettled([...this._pendingResourceDebugSessionStarts]);
+      const pendingStarts = [...this._pendingResourceDebugSessionStarts];
+      const results = await Promise.allSettled(pendingStarts.map(
+        pendingStart => this.waitWithinBudget(
+          pendingStart.completion,
+          pendingStart.name,
+          deadline,
+          undefined,
+          debugSessionStartTimedOut)));
+      const failures = results
+        .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+        .map(result => result.reason);
+      stopFailures.push(...failures);
+
+      if (failures.length > 0) {
+        return true;
+      }
     }
+
+    return false;
   }
 
   private stopLateResourceSession(session: AspireResourceDebugSession): void {
@@ -585,7 +609,8 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     stop: PromiseLike<void>,
     sessionName: string,
     deadline: number,
-    onTimeout?: () => void): Promise<void> {
+    onTimeout?: () => void,
+    timeoutMessage: (sessionName: string, seconds: number) => string = debugSessionStopTimedOut): Promise<void> {
     const remainingMs = Math.max(0, deadline - Date.now());
     const remainingSeconds = Math.ceil(remainingMs / 1000);
 
@@ -593,7 +618,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       const timer = setTimeout(
         () => {
           onTimeout?.();
-          reject(new Error(debugSessionStopTimedOut(sessionName, remainingSeconds)));
+          reject(new Error(timeoutMessage(sessionName, remainingSeconds)));
         },
         remainingMs);
 
@@ -1196,9 +1221,12 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
   startAndGetDebugSession(debugConfig: AspireResourceExtendedDebugConfiguration): Promise<AspireResourceDebugSession | undefined> {
     let completePendingStart!: () => void;
-    const pendingStart = new Promise<void>(resolve => {
-      completePendingStart = resolve;
-    });
+    const pendingStart = {
+      name: debugConfig.name,
+      completion: new Promise<void>(resolve => {
+        completePendingStart = resolve;
+      }),
+    };
     this._pendingResourceDebugSessionStarts.add(pendingStart);
 
     const start = this.startAndGetDebugSessionCore(debugConfig);

@@ -60,6 +60,7 @@ export const failedToStartProject = (errorMessage: string) => vscode.l10n.t('Fai
 export const dcpServerNotInitialized = vscode.l10n.t('DCP server not initialized - cannot forward debug output.');
 export const appHostSessionTerminated = vscode.l10n.t('The AppHost process has terminated. To view console output, select the AppHost session from the debug console dropdown.');
 export const debugSessionsFailedToStop = (count: number, reasons: string) => vscode.l10n.t('{0} debug sessions failed to stop: {1}', count, reasons);
+export const debugSessionStartTimedOut = (sessionName: string, seconds: number) => vscode.l10n.t("Timed out after {1} seconds waiting for debug session '{0}' to start.", sessionName, seconds);
 export const debugSessionStopTimedOut = (sessionName: string, seconds: number) => vscode.l10n.t("Timed out after {1} seconds waiting for debug session '{0}' to stop.", sessionName, seconds);
 export const invalidTokenProvided = vscode.l10n.t('Invalid token provided.');
 export const noWorkspaceFolder = vscode.l10n.t('No workspace folder found.');

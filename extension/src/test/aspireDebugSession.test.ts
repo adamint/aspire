@@ -1422,6 +1422,75 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         await assert.rejects(shutdown, error => error === lateStopFailure);
     });
 
+    test('stopDebugging bounds a wedged resource start and stops the session if it later starts', async () => {
+        let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        let resolveStart: ((started: boolean) => void) | undefined;
+        const startRequest = new Promise<boolean>(resolve => {
+            resolveStart = resolve;
+        });
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const resourceDebugSession = {
+            id: 'resource-session',
+            type: 'node',
+            name: 'Resource',
+            configuration: {
+                runId: 'resource-run',
+            },
+        };
+        const debugConfig = {
+            runId: 'resource-run',
+            debugSessionId: 'debug-1',
+            type: 'node',
+            name: 'Resource',
+            request: 'launch',
+            program: '/workspace/app.js',
+            cwd: '/workspace',
+        } as AspireResourceExtendedDebugConfiguration;
+        const terminalProvider = { isDebugConfigEnvironmentLoggingEnabled: () => false };
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        sinon.stub(vscode.workspace, 'getWorkspaceFolder').returns(undefined);
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            startSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').returns({ dispose: sinon.stub() });
+        sinon.stub(vscode.debug, 'startDebugging').returns(startRequest);
+        const stopDebuggingStub = sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+
+        const resourceStart = aspireDebugSession.startAndGetDebugSession(debugConfig);
+        await Promise.resolve();
+        const shutdown = aspireDebugSession.stopDebugging();
+        await clock.tickAsync(10_001);
+
+        await assert.rejects(shutdown, /Timed out after 10 seconds waiting for debug session 'Resource' to start/);
+
+        resolveStart!(true);
+        startSessionCallback?.(resourceDebugSession as unknown as vscode.DebugSession);
+        await resourceStart;
+        await Promise.resolve();
+
+        assert.strictEqual(
+            stopDebuggingStub.calledWith(resourceDebugSession as unknown as vscode.DebugSession),
+            true,
+            'A resource accepted after the shutdown deadline must still be stopped immediately');
+        clock.restore();
+    });
+
     // The AppHost process exiting disposes this session, so a disposal can land while the CLI's
     // ordered shutdown is still in flight. Disposal must not fire the owned-session stop callbacks
     // behind its back: that stops every resource a second time and lets the AppHost stop start
