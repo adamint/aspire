@@ -48,7 +48,7 @@ function createMessage(reason, command, args, exitCode, signal, timeout, didNotE
     case 'signal':
       return `${commandLine} exited due to signal ${signal ?? 'unknown'}.${diagnosticsSuffix}`;
     case 'spawn':
-      return `Failed to start ${commandLine}: ${cause instanceof Error ? cause.message : String(cause ?? 'unknown error')}`;
+      return `Failed to start ${commandLine}: ${cause instanceof Error ? cause.message : String(cause ?? 'unknown error')}.${diagnosticsSuffix}`;
     default:
       throw new TypeError(`Unsupported E2E process failure reason '${reason}'.`);
   }

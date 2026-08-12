@@ -76,40 +76,21 @@ suite('E2E Mocha reporter', () => {
         }), false);
     });
 
-    test('only allows ordinary exit-code failures with completed Mocha failures and no cleanup failure', () => {
-        const { E2eProcessError, shouldAllowAdvisoryTestFailure } = require(getProcessFailureModulePath());
-        const results = {
-            tests: [{ fullTitle: 'Aspire E2E starts an AppHost' }],
-            failures: [{ fullTitle: 'Aspire E2E starts an AppHost' }],
-        };
+    test('process failure: exit code includes visible diagnostics', () => {
+        const { E2eProcessError } = require(getProcessFailureModulePath());
+        const exitCodeError = new E2eProcessError('exit-code', 'node', ['run-tests'], {
+            exitCode: 1,
+            diagnosticsSuffix,
+        });
 
-        assert.strictEqual(shouldAllowAdvisoryTestFailure(
-            new E2eProcessError('exit-code', 'node', ['run-tests'], { exitCode: 1 }),
-            results,
-            false),
-        true);
-        assert.strictEqual(shouldAllowAdvisoryTestFailure(
-            new E2eProcessError('exit-code', 'node', ['run-tests'], { exitCode: 1 }),
-            results,
-            true),
-        false);
-        assert.strictEqual(shouldAllowAdvisoryTestFailure(
-            new E2eProcessError('exit-code', 'node', ['run-tests'], { exitCode: 1 }),
-            {
-                tests: [],
-                failures: [{ fullTitle: 'Aspire E2E "before all" hook' }],
-            },
-            false),
-        false);
+        assert.strictEqual(exitCodeError.reason, 'exit-code');
+        assert.strictEqual(exitCodeError.exitCode, 1);
+        assert.strictEqual(exitCodeError.diagnosticsSuffix, diagnosticsSuffix);
+        assert.strictEqual(exitCodeError.message, `node run-tests exited with code 1.${diagnosticsSuffix}`);
     });
 
-    test('does not allow timeout, signal, or spawn failures and preserves complete timeout diagnostics', () => {
+    test('process failure: timeout includes visible diagnostics', () => {
         const { E2eProcessError, shouldAllowAdvisoryTestFailure } = require(getProcessFailureModulePath());
-        const results = {
-            tests: [{ fullTitle: 'Aspire E2E starts an AppHost' }],
-            failures: [{ fullTitle: 'Aspire E2E starts an AppHost' }],
-        };
-        const diagnosticsSuffix = ' Diagnostics are under out/test-e2e-results and out/test-e2e-storage-diagnostics.';
         const timeoutError = new E2eProcessError('timeout', 'node', ['run-tests'], {
             timeout: 60000,
             diagnosticsSuffix,
@@ -119,37 +100,72 @@ suite('E2E Mocha reporter', () => {
             didNotExit: true,
             diagnosticsSuffix,
         });
-        const signalError = new E2eProcessError('signal', 'node', ['run-tests'], { signal: 'SIGTERM' });
-        const spawnCause = new Error('spawn EPERM');
-        const spawnError = new E2eProcessError('spawn', 'node', ['run-tests'], { cause: spawnCause });
 
-        assert.strictEqual(shouldAllowAdvisoryTestFailure(timeoutError, results, false), false);
-        assert.strictEqual(shouldAllowAdvisoryTestFailure(forcedTimeoutError, results, false), false);
-        assert.strictEqual(shouldAllowAdvisoryTestFailure(signalError, results, false), false);
-        assert.strictEqual(shouldAllowAdvisoryTestFailure(spawnError, results, false), false);
-
-        const exitCodeError = new E2eProcessError('exit-code', 'node', ['run-tests'], { exitCode: 1 });
-        assert.strictEqual(exitCodeError.reason, 'exit-code');
-        assert.strictEqual(exitCodeError.exitCode, 1);
-        assert.strictEqual(exitCodeError.message, 'node run-tests exited with code 1.');
+        assert.strictEqual(shouldAllowAdvisoryTestFailure(timeoutError, createCompletedMochaResults(), false), false);
+        assert.strictEqual(shouldAllowAdvisoryTestFailure(forcedTimeoutError, createCompletedMochaResults(), false), false);
         assert.strictEqual(timeoutError.reason, 'timeout');
         assert.strictEqual(timeoutError.timeout, 60000);
         assert.strictEqual(timeoutError.didNotExit, false);
         assert.strictEqual(timeoutError.diagnosticsSuffix, diagnosticsSuffix);
-        assert.strictEqual(timeoutError.message, 'node run-tests timed out after 60000ms. Diagnostics are under out/test-e2e-results and out/test-e2e-storage-diagnostics.');
+        assert.strictEqual(timeoutError.message, `node run-tests timed out after 60000ms.${diagnosticsSuffix}`);
         assert.strictEqual(forcedTimeoutError.reason, 'timeout');
         assert.strictEqual(forcedTimeoutError.timeout, 60000);
         assert.strictEqual(forcedTimeoutError.didNotExit, true);
         assert.strictEqual(forcedTimeoutError.diagnosticsSuffix, diagnosticsSuffix);
-        assert.strictEqual(forcedTimeoutError.message, 'node run-tests timed out after 60000ms and did not exit after process-tree termination. Diagnostics are under out/test-e2e-results and out/test-e2e-storage-diagnostics.');
+        assert.strictEqual(forcedTimeoutError.message, `node run-tests timed out after 60000ms and did not exit after process-tree termination.${diagnosticsSuffix}`);
+    });
+
+    test('process failure: signal includes visible diagnostics', () => {
+        const { E2eProcessError, shouldAllowAdvisoryTestFailure } = require(getProcessFailureModulePath());
+        const signalError = new E2eProcessError('signal', 'node', ['run-tests'], {
+            signal: 'SIGTERM',
+            diagnosticsSuffix,
+        });
+
+        assert.strictEqual(shouldAllowAdvisoryTestFailure(signalError, createCompletedMochaResults(), false), false);
         assert.strictEqual(signalError.reason, 'signal');
         assert.strictEqual(signalError.signal, 'SIGTERM');
-        assert.strictEqual(signalError.message, 'node run-tests exited due to signal SIGTERM.');
+        assert.strictEqual(signalError.diagnosticsSuffix, diagnosticsSuffix);
+        assert.strictEqual(signalError.message, `node run-tests exited due to signal SIGTERM.${diagnosticsSuffix}`);
+    });
+
+    test('process failure: spawn includes visible diagnostics', () => {
+        const { E2eProcessError, shouldAllowAdvisoryTestFailure } = require(getProcessFailureModulePath());
+        const spawnCause = new Error('spawn EPERM');
+        const spawnError = new E2eProcessError('spawn', 'node', ['run-tests'], {
+            cause: spawnCause,
+            diagnosticsSuffix,
+        });
+
+        assert.strictEqual(shouldAllowAdvisoryTestFailure(spawnError, createCompletedMochaResults(), false), false);
         assert.strictEqual(spawnError.reason, 'spawn');
         assert.strictEqual(spawnError.cause, spawnCause);
-        assert.strictEqual(spawnError.message, 'Failed to start node run-tests: spawn EPERM');
+        assert.strictEqual(spawnError.diagnosticsSuffix, diagnosticsSuffix);
+        assert.strictEqual(spawnError.message, `Failed to start node run-tests: spawn EPERM.${diagnosticsSuffix}`);
+    });
+
+    test('process failure: completed Mocha exit-code failure is advisory', () => {
+        const { E2eProcessError, shouldAllowAdvisoryTestFailure } = require(getProcessFailureModulePath());
+        const exitCodeError = new E2eProcessError('exit-code', 'node', ['run-tests'], {
+            exitCode: 1,
+            diagnosticsSuffix,
+        });
+
+        assert.strictEqual(shouldAllowAdvisoryTestFailure(exitCodeError, createCompletedMochaResults(), false), true);
+    });
+
+    test('process failure: cleanup failure keeps completed Mocha failure blocking', () => {
+        const { E2eProcessError, shouldAllowAdvisoryTestFailure } = require(getProcessFailureModulePath());
+        const exitCodeError = new E2eProcessError('exit-code', 'node', ['run-tests'], {
+            exitCode: 1,
+            diagnosticsSuffix,
+        });
+
+        assert.strictEqual(shouldAllowAdvisoryTestFailure(exitCodeError, createCompletedMochaResults(), true), false);
     });
 });
+
+const diagnosticsSuffix = ' Diagnostics are under out/test-e2e-results and out/test-e2e-storage-diagnostics.';
 
 function createReporterTest(title: string) {
     return {
@@ -165,4 +181,12 @@ function createReporterTest(title: string) {
 
 function getProcessFailureModulePath() {
     return path.join(__dirname, '..', '..', 'scripts', 'e2e-process-failure.cjs');
+}
+
+function createCompletedMochaResults() {
+    const failedTest = { fullTitle: 'Aspire E2E starts an AppHost' };
+    return {
+        tests: [failedTest],
+        failures: [failedTest],
+    };
 }
