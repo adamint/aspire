@@ -2779,6 +2779,87 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task NewCommandInExtensionModeRetriesFolderPickerAfterProjectSubdirectoryCollision()
+    {
+        const string projectName = "aspire-starter";
+
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var collidingParent = workspace.CreateDirectory("colliding-parent");
+        var collidingProject = Directory.CreateDirectory(Path.Combine(collidingParent.FullName, projectName));
+        File.WriteAllText(Path.Combine(collidingProject.FullName, "existing.txt"), "existing content");
+        var validParent = workspace.CreateDirectory("valid-parent");
+        var selectedParents = new Queue<string?>([collidingParent.FullName, validParent.FullName]);
+        var displayedErrors = new List<string>();
+        var promptCount = 0;
+        string? capturedOutputPath = null;
+
+        var backchannel = new TestExtensionBackchannel
+        {
+            HasCapabilityAsyncCallback = (capability, _) => Task.FromResult(
+                capability is KnownCapabilities.Baseline or KnownCapabilities.FilePickers),
+            PromptForFilePathAsyncCallback = (_, _, _) =>
+            {
+                promptCount++;
+                return Task.FromResult(selectedParents.Dequeue());
+            },
+            DisplayErrorAsyncCallback = error =>
+            {
+                displayedErrors.Add(error);
+                return Task.CompletedTask;
+            }
+        };
+
+        var services = CreateServiceCollection(workspace, options =>
+        {
+            options.CliHostEnvironmentFactory = _ => TestHelpers.CreateInteractiveHostEnvironment();
+            options.ExtensionBackchannelFactory = _ => backchannel;
+            options.InteractionServiceFactory = sp =>
+            {
+                var consoleInteractionService = new ConsoleInteractionService(
+                    sp.GetRequiredService<ConsoleEnvironment>(),
+                    sp.GetRequiredService<CliExecutionContext>(),
+                    sp.GetRequiredService<ICliHostEnvironment>(),
+                    sp.GetRequiredService<IProcessPathProvider>(),
+                    NullLoggerFactory.Instance,
+                    sp.GetRequiredService<ConsoleLogBufferContext>());
+
+                return new ExtensionInteractionService(
+                    consoleInteractionService,
+                    backchannel,
+                    extensionPromptEnabled: true,
+                    logger: NullLogger<ExtensionInteractionService>.Instance);
+            };
+            options.DotNetCliRunnerFactory = _ =>
+            {
+                var runner = CreateTestRunnerWithStandardPackages();
+                runner.InstallTemplateAsyncCallback = (_, version, _, _, _, _, _) => (0, version);
+                runner.NewProjectAsyncCallback = (_, _, outputPath, _, _) =>
+                {
+                    capturedOutputPath = outputPath;
+                    return 0;
+                };
+                return runner;
+            };
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse(
+            $"new aspire-starter --name {projectName} --version 9.2.0 --use-redis-cache --test-framework None --suppress-agent-init");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Equal(2, promptCount);
+        Assert.Equal(Path.Combine(validParent.FullName, projectName), capturedOutputPath);
+        var expectedError = string.Format(
+            CultureInfo.CurrentCulture,
+            NewCommandStrings.OutputDirectoryNotEmptyInteractive,
+            collidingProject.FullName);
+        Assert.Equal([expectedError], displayedErrors);
+    }
+
+    [Fact]
     public async Task NewCommandInExtensionModePromptsBeforeFolderPickerForCliTemplateSubdirectory()
     {
         const string projectName = "MyFirstApp";
