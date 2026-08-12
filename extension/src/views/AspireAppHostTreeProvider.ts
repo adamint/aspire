@@ -1404,12 +1404,14 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         }
     }
 
-    notifyAppHostStopping(appHostPath: string): void {
+    notifyAppHostStopping(appHostPath: string, markStopping = true): void {
         if (!appHostPath) {
             return;
         }
 
-        this._markAppHostStopping(appHostPath);
+        if (markStopping) {
+            this._markAppHostStopping(appHostPath);
+        }
         this._repository.requestAppHostStopRefresh?.(appHostPath);
     }
 

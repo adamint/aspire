@@ -514,6 +514,34 @@ suite('AspireAppHostTreeProvider', () => {
         provider.dispose();
     });
 
+    test('global stop notification can refresh without marking a surviving apphost as stopping', () => {
+        const appHostPath = path.resolve('workspace', 'apps', 'Store', 'AppHost.csproj');
+        const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
+        const requestAppHostStopRefresh = sandbox.stub();
+        const repository = {
+            viewMode: 'global' as ViewMode,
+            appHosts: [makeAppHost({ appHostPath })],
+            workspaceResources: [],
+            workspaceAppHostPath: undefined,
+            workspaceAppHostCandidatePaths: [],
+            workspaceAppHostName: undefined,
+            workspaceAppHostDescription: undefined,
+            requestAppHostStopRefresh,
+            onDidChangeData,
+        } as unknown as AppHostDataRepository;
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+
+        provider.notifyAppHostStopping(appHostPath, false);
+
+        const [appHostItem] = provider.getChildren();
+        assert.strictEqual(appHostItem.contextValue, 'appHost');
+        assert.notStrictEqual(appHostItem.description, 'Stopping...');
+        assert.strictEqual(provider.stoppingPaths.length, 0);
+        assert.strictEqual(requestAppHostStopRefresh.callCount, 1);
+        assert.deepStrictEqual(requestAppHostStopRefresh.firstCall.args, [appHostPath]);
+        provider.dispose();
+    });
+
     test('global stop state preserves case-distinct Windows AppHosts', () => {
         const platformStub = sinon.stub(process, 'platform').value('win32');
         const statStub = sinon.stub(fs, 'statSync').callsFake((filePath: fs.PathLike) => ({

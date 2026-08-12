@@ -26,7 +26,7 @@ import { classifyAppHostPath, classifyAppHostDirectory } from "../utils/appHostL
 import { bucketAspireCommand } from "../utils/telemetryBuckets";
 import { getAppHostTargetVersion } from "../utils/appHostTargetVersion";
 import type { AspireDebugConsoleOutputEvent } from "../types/extensionApi";
-import { appHostSelectionOriginConfigKey, appHostTelemetryTargetPathConfigKey } from "./AspireDebugConfigurationMetadata";
+import { appHostRestartSourceSessionIdConfigKey, appHostSelectionOriginConfigKey, appHostTelemetryTargetPathConfigKey } from "./AspireDebugConfigurationMetadata";
 
 export type DashboardLaunchBehavior = 'none' | 'notification' | DashboardBrowserType;
 export type DashboardBrowserType = 'openExternalBrowser' | 'integratedBrowser' | 'debugChrome' | 'debugEdge' | 'debugFirefox';
@@ -673,6 +673,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
         (debugSessionId) => {
           if (debugSessionId === this.debugSessionId) {
             this._appHostRestartRequested = true;
+            this.configuration[appHostRestartSourceSessionIdConfigKey] = this._session.id;
             return true; // suppress VS Code's child restart
           }
           return false;
@@ -734,7 +735,12 @@ export class AspireDebugSession implements vscode.DebugAdapter {
           // All other cases (user stop, process crash/exit) just dispose.
           const shouldRestart = this._appHostRestartRequested;
           const config = this.configuration;
-          this.dispose();
+          if (shouldRestart) {
+            this.disposeForRestart();
+          }
+          else {
+            this.dispose();
+          }
 
           if (shouldRestart) {
             extensionLogOutputChannel.info('AppHost restart requested, restarting Aspire debug session');
@@ -1010,10 +1016,21 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   }
 
   dispose(): void {
+    this.disposeCore(false);
+  }
+
+  private disposeForRestart(): void {
+    this.disposeCore(true);
+  }
+
+  private disposeCore(preserveRestartSourceSessionId: boolean): void {
     if (this._disposed) {
       return;
     }
     this._disposed = true;
+    if (!preserveRestartSourceSessionId) {
+      delete this.configuration[appHostRestartSourceSessionIdConfigKey];
+    }
     extensionLogOutputChannel.info('Stopping the Aspire debug session');
     this._onDidChangeState.fire();
 
