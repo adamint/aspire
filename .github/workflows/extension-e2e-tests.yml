@@ -151,7 +151,6 @@ jobs:
             useXvfb: false
           - name: Linux
             shardName: apphost-lifecycle-tools
-            allowFailure: true
             spec: out/test-e2e/test-e2e/appHostLifecycleTools.e2e.test.js
             runner: ubuntu-latest
             rid: linux-x64
@@ -160,7 +159,6 @@ jobs:
             useXvfb: true
           - name: Windows
             shardName: apphost-lifecycle-tools
-            allowFailure: true
             spec: out/test-e2e/test-e2e/appHostLifecycleTools.e2e.test.js
             runner: windows-latest
             rid: win-x64
