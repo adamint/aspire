@@ -26,8 +26,10 @@ const DEFAULT_PICK_PROCESS_TIMEOUT_SECONDS = 30;
 const FUNC_HOST_DEFAULT_PORT = 7071;
 const POLL_INTERVAL_MS = 100;
 const REQUEST_TIMEOUT_MS = 1_000;
-const TEMP_DIRECTORY_CLEANUP_MAX_ATTEMPTS = 5;
+const TEMP_DIRECTORY_CLEANUP_TIMEOUT_MS = 30_000;
 const TEMP_DIRECTORY_CLEANUP_RETRY_DELAY_MS = 100;
+const TEMP_DIRECTORY_CLEANUP_MAX_ATTEMPTS =
+    TEMP_DIRECTORY_CLEANUP_TIMEOUT_MS / TEMP_DIRECTORY_CLEANUP_RETRY_DELAY_MS;
 
 type FuncHostTaskShell = 'cmd' | 'fish' | 'powershell' | 'posix';
 
@@ -61,8 +63,8 @@ function removeTempDirectory(runId: string, attempt = 1): void {
         tempDirectoriesByRunId.delete(runId);
     } catch (error) {
         if (attempt < TEMP_DIRECTORY_CLEANUP_MAX_ATTEMPTS) {
-            // TaskExecution.terminate() only requests termination. Retry briefly so
-            // Windows can release Core Tools files before the directory is removed.
+            // TaskExecution.terminate() only requests termination. Keep retrying for
+            // a bounded shutdown period so Windows can release Core Tools files.
             setTimeout(
                 () => removeTempDirectory(runId, attempt + 1),
                 TEMP_DIRECTORY_CLEANUP_RETRY_DELAY_MS).unref();
@@ -442,7 +444,6 @@ export const azureFunctionsDebuggerExtension: ResourceDebuggerExtension = {
         const dcpEnv = Object.fromEntries(
             (env ?? []).filter(e => e.value !== undefined).map(e => [e.name, e.value])
         );
-        await activateAzureFunctionsExtension();
         await activateAzureFunctionsExtension();
         const rawArgs = [...(args ?? [])];
         const jsonOutputFileArgument = getJsonOutputFileArgument(rawArgs);

@@ -612,6 +612,37 @@ suite('Azure Functions Debugger Extension Tests', () => {
         sinon.assert.calledTwice(fsRmSync);
     });
 
+    test('retries debug temp directory cleanup for the bounded task termination period', async () => {
+        const projectPath = path.join('/workspace', 'FunctionsApp', 'FunctionsApp.csproj');
+        const targetPath = path.join('/workspace', 'FunctionsApp', 'bin', 'Debug', 'net10.0', 'FunctionsApp.dll');
+        const secureTempPath = path.join(path.parse(projectPath).root, 'secure-temp');
+        const debugTempPath = path.join(secureTempPath, 'aspire-functions-worker-busy');
+        const workerPidPath = path.join(debugTempPath, 'worker-startup.json');
+        sinon.stub(DotNetService.prototype, 'getDotNetTargetPath').resolves(targetPath);
+        sinon.stub(DotNetService.prototype, 'buildDotNetProject').resolves();
+        fsRealpathSync.withArgs(os.tmpdir()).returns(secureTempPath);
+        fsMkdtempSync.returns(debugTempPath);
+        fsReadFileSync
+            .withArgs(workerPidPath, 'utf8')
+            .returns(`${JSON.stringify({ name: 'dotnet-worker-startup', workerProcessId: 4646 })}\n`);
+        fsRmSync.throws(Object.assign(new Error('directory is busy'), { code: 'EBUSY' }));
+        const debugConfiguration = createDebugConfiguration(projectPath);
+
+        await azureFunctionsDebuggerExtension.createDebugSessionConfigurationCallback!(
+            createLaunchConfiguration(projectPath),
+            [],
+            [],
+            createLaunchOptions(true),
+            debugConfiguration);
+
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        cleanupRun('azure-functions-test-run');
+        sinon.assert.calledOnce(fsRmSync);
+
+        await clock.tickAsync(30_000);
+        assert.strictEqual(fsRmSync.callCount, 300);
+    });
+
     test('does not duplicate existing Core Tools debug flags', async () => {
         const projectPath = path.join('/workspace', 'FunctionsApp', 'FunctionsApp.csproj');
         const targetPath = path.join('/workspace', 'FunctionsApp', 'bin', 'Debug', 'net10.0', 'FunctionsApp.dll');
