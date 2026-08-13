@@ -157,6 +157,10 @@ public static class DebugSupportExtensions
     /// This method never resolves environment variables. Aspire creates <paramref name="context"/>
     /// when the active debug-support annotation is producing a launch configuration for an executable creation.
     /// </para>
+    /// <para>
+    /// This overload is internal because only Aspire constructs callback contexts containing resolved environment
+    /// variables. Use the public overload when inspecting a launch configuration outside executable creation.
+    /// </para>
     /// </remarks>
     internal static Task<object> CreateLaunchConfigurationAsync(
         this IResource resource,
