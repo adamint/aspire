@@ -3,7 +3,9 @@ import * as sinon from 'sinon';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { execFileSync } from 'child_process';
 import {
+    findCliAtDefaultPath,
     findCliOnPath,
     getDefaultCliInstallPaths,
     resolveCliPath,
@@ -129,6 +131,79 @@ suite('utils/cliPath tests', () => {
     });
 
     suite('findCliOnPath', () => {
+        test('discovers and executes Aspire installed as a real Windows global .NET tool', async function () {
+            if (process.platform !== 'win32') {
+                this.skip();
+            }
+
+            this.timeout(180000);
+            const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-global-tool-proof-'));
+            const originalDotnetCliHome = process.env.DOTNET_CLI_HOME;
+            const nugetConfigPath = path.join(tempDirectory, 'NuGet.config');
+            const packagesPath = path.join(tempDirectory, '.nuget', 'packages');
+
+            try {
+                // Use the exact CLI version from #17417 and isolate the global-tool home so
+                // the test exercises the extension's default discovery without changing the runner.
+                fs.writeFileSync(nugetConfigPath, `<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+  </packageSources>
+</configuration>
+`);
+                process.env.DOTNET_CLI_HOME = tempDirectory;
+                const installOutput = execFileSync('dotnet', [
+                    'tool',
+                    'install',
+                    '--global',
+                    'Aspire.Cli',
+                    '--version',
+                    '13.3.5',
+                    '--configfile',
+                    nugetConfigPath,
+                ], {
+                    encoding: 'utf8',
+                    env: {
+                        ...process.env,
+                        DOTNET_CLI_HOME: tempDirectory,
+                        DOTNET_CLI_TELEMETRY_OPTOUT: '1',
+                        NUGET_PACKAGES: packagesPath,
+                    },
+                });
+
+                const toolDirectory = path.join(tempDirectory, '.dotnet', 'tools');
+                const installedCandidates = ['aspire.exe', 'aspire.cmd', 'aspire.bat', 'aspire']
+                    .map(fileName => path.join(toolDirectory, fileName))
+                    .filter(candidate => fs.existsSync(candidate));
+                console.log(`[issue-17417] ${installOutput.trim()}`);
+                console.log(`[issue-17417] installed candidates: ${installedCandidates.join(', ')}`);
+
+                assert.ok(installedCandidates.length > 0, 'dotnet tool install should create an Aspire command');
+
+                const pathResult = await findCliOnPath({
+                    platform: 'win32',
+                    pathValue: toolDirectory,
+                });
+                assert.strictEqual(pathResult, installedCandidates[0]);
+                assert.strictEqual(await tryExecuteCli(pathResult), true);
+
+                const defaultPathResult = await findCliAtDefaultPath();
+                assert.strictEqual(defaultPathResult, installedCandidates[0]);
+            }
+            finally {
+                if (originalDotnetCliHome === undefined) {
+                    delete process.env.DOTNET_CLI_HOME;
+                }
+                else {
+                    process.env.DOTNET_CLI_HOME = originalDotnetCliHome;
+                }
+
+                fs.rmSync(tempDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+            }
+        });
+
         test('returns a concrete Windows command shim from PATH', async () => {
             const commandShim = 'C:\\npm\\aspire.cmd';
             const result = await findCliOnPath({
