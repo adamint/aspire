@@ -18,56 +18,18 @@ export function getNugetSourceArgs(): string[] | undefined {
 }
 
 function hasHttpCredentialMaterial(value: string): boolean {
-    const parsedSource = tryParseHttpUrl(value);
-    if (parsedSource) {
-        return parsedSource.username !== '' ||
-            parsedSource.password !== '' ||
-            value.includes('?') ||
-            value.includes('#');
-    }
-
-    return hasUnparseableScopedIpv6CredentialMaterial(value);
-}
-
-function hasUnparseableScopedIpv6CredentialMaterial(value: string): boolean {
-    const authority = /^https?:\/\/([^/?#\\]+)(?:[/?#]|$)/i.exec(value)?.[1];
-    if (!authority) {
+    const httpPrefix = /^https?:\/\//i.exec(value)?.[0];
+    if (!httpPrefix) {
         return false;
     }
 
-    // .NET accepts both raw and RFC 6874-encoded scoped IPv6 sources, including an empty port:
-    //   https://account:credential@[fe80::1%eth0]:
-    //   https://[fe80::1%25eth0]:8443/v3/index.json?sig=token
-    // WHATWG URL rejects the zone identifier. Remove only the scope to verify that the remaining
-    // URL is valid, then inspect the original delimiters. This keeps malformed authorities such as
-    // an invalid port aligned with Uri.TryCreate. See https://www.rfc-editor.org/rfc/rfc6874.html.
-    const scopedHost = /(\[[0-9a-f:.]+)%(?:25)?[^\]]*(\](?::\d*)?)$/i.exec(authority);
-    if (!scopedHost) {
-        return false;
-    }
-
-    const unscopedAuthority = authority.slice(0, scopedHost.index) + scopedHost[1] + scopedHost[2];
-    const unscopedValue = value.replace(authority, () => unscopedAuthority);
-    if (!tryParseHttpUrl(unscopedValue)) {
-        return false;
-    }
-
-    const userInfo = authority.slice(0, scopedHost.index);
-    return userInfo.includes('@') || value.includes('?') || value.includes('#');
-}
-
-function tryParseHttpUrl(value: string): URL | undefined {
-    // WHATWG URL normalizes malformed values such as `https:feed?sig=token` and
-    // `http:\\feed?sig=token`, while the CLI's Uri.TryCreate check rejects their shape.
-    // Require the absolute HTTP(S) authority form before using URL for userinfo parsing.
-    if (!/^https?:\/\/([^/?#\\]+)(?:[/?#]|$)/i.test(value)) {
-        return undefined;
-    }
-
-    try {
-        return new URL(value);
-    }
-    catch {
-        return undefined;
-    }
+    // Check the original delimiters before parsing so malformed HTTP-shaped sources fail closed.
+    // URL parsers reject values such as an invalid port, but the extension must not forward a
+    // query token or userinfo from those values into terminal history and logs.
+    const authorityAndPath = value.slice(httpPrefix.length);
+    const authorityEnd = authorityAndPath.search(/[/?#\\]/);
+    const authority = authorityEnd === -1
+        ? authorityAndPath
+        : authorityAndPath.slice(0, authorityEnd);
+    return authority.includes('@') || value.includes('?') || value.includes('#');
 }

@@ -109,6 +109,7 @@ suite('nuget source command forwarding', () => {
 
     for (const [description, source] of [
         ['an IPv6 URL', 'https://[2001:db8::1]/v3/index.json'],
+        ['an HTTPS URL with an at sign in its path', 'https://example.com/packages/user@example'],
         ['a scoped IPv6 URL without credential material', 'https://[fe80::1%25eth0]/v3/index.json'],
         ['a raw scoped IPv6 URL without credential material', 'https://[fe80::1%eth0]/v3/index.json'],
         ['a scoped IPv6 URL with a numeric port', 'https://[fe80::1%25eth0]:8443/v3/index.json'],
@@ -158,6 +159,10 @@ suite('nuget source command forwarding', () => {
         ['an HTTP fragment', 'http://example.com/v3/index.json#token'],
         ['an empty HTTP fragment', 'http://example.com/v3/index.json#'],
         ['HTTP userinfo', 'http://user@example.com/v3/index.json'],
+        ['a query string on a scoped IPv6 URL with an invalid port', 'https://[fe80::1%25eth0]:invalid/v3/index.json?sig=token'],
+        ['a query string on a scoped IPv6 URL with an out-of-range port', 'https://[fe80::1%eth0]:65536/v3/index.json?sig=token'],
+        ['a query string on a malformed host', 'https://example host/v3/index.json?sig=token'],
+        ['userinfo on a malformed host', 'https://user@example host/v3/index.json'],
         ['HTTPS userinfo with a password', 'https://user:password@example.com/v3/index.json'],
     ]) {
         test(`new rejects a configured nuget source with ${description}`, async () => {
@@ -213,13 +218,11 @@ suite('nuget source command forwarding', () => {
     for (const source of [
         'https:example.com/v3/index.json?sig=token',
         'http:\\\\example.com\\v3\\index.json?sig=token',
-        'https://[fe80::1%25eth0]:invalid/v3/index.json?sig=token',
-        'https://[fe80::1%eth0]:invalid/v3/index.json?sig=token',
-        'https://[fe80::1%25eth0]:65536/v3/index.json?sig=token',
-        'https://[fe80::1%eth0]:65536/v3/index.json?sig=token',
-        'https://example host/v3/index.json?sig=token',
+        'https://[fe80::1%25eth0]:invalid/v3/index.json',
+        'https://[fe80::1%eth0]:65536/v3/index.json',
+        'https://example host/v3/index.json',
     ]) {
-        test(`new allows malformed HTTP-shaped source "${source}" to match the CLI policy`, async () => {
+        test(`new allows malformed source without credential material "${source}"`, async () => {
             configuredNugetSource = source;
 
             await newCommand(createTerminalProvider());
