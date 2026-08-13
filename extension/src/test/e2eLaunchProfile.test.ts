@@ -2347,7 +2347,8 @@ suite('E2E launch profile', () => {
     test('gives resource debugger shards enough runner time for their bounded suite budget', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const resourceDebugger = readResourceDebuggerSource(extensionRoot);
-        const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
+        const workflow = normalizeLineEndings(
+            fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8'));
         const proofTimeoutMatch = /const resourceDebuggerDeadlineTimeoutMs = (\d+);/.exec(resourceDebugger);
         const teardownTimeoutMatch = /const resourceDebuggerTeardownTimeoutMs = (\d+);/.exec(resourceDebugger);
         assert.ok(proofTimeoutMatch);
