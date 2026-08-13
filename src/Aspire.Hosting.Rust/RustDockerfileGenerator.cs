@@ -6,6 +6,7 @@
 using System.Collections.ObjectModel;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.ApplicationModel.Docker;
+using Aspire.Hosting.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -70,7 +71,7 @@ internal static class RustDockerfileGenerator
             ? cargoOptions
             : new RustCargoOptionsAnnotation();
 
-        ValidateManifestPath(options.ManifestPath, workingDirectory, resource.Name);
+        var containerManifestPath = ValidateManifestPath(options.ManifestPath, workingDirectory, resource.Name);
 
         var metadata = await context.Services.GetRequiredService<ICargoMetadataReader>()
             // Empty environment: the resource's environment applies to the process the container runs, not to
@@ -88,12 +89,9 @@ internal static class RustDockerfileGenerator
         // PublishAsDockerFile substitutes in, which does not carry the Rust annotations.
         var cargoArgs = await ResolvePublishCargoArgsAsync(resource, context.CancellationToken).ConfigureAwait(false);
 
-        if (options.ManifestPath is { } path)
+        if (options.ManifestPath is { } path && containerManifestPath is { } containerPath)
         {
-            // Cargo runs from /app with the app directory copied in, so a relative path already points at the
-            // right file. Only the separators need swapping, since a backslash is an ordinary filename
-            // character on Linux rather than a separator.
-            RewriteManifestPath(cargoArgs, path, path.Replace('\\', '/'));
+            RewriteManifestPath(cargoArgs, path, containerPath);
         }
 
         // Images are used exactly as given and nothing is installed into either: a name is free-form, so an
@@ -117,11 +115,13 @@ internal static class RustDockerfileGenerator
             // RUSTUP_HOME cannot be cache mounted: mounts start empty and shadow what they cover, so one over
             // /usr/local/rustup hides the toolchains the image ships. The target directory is safe because the
             // selected binary is copied to ContainerArtifactDirectory while the mount is still live, and that
-            // is what COPY --from reads.
+            // is what COPY --from reads. Lock the target cache because clearing stale candidates, building,
+            // and collecting the current artifact must be atomic across concurrent BuildKit builds.
             .RunWithMounts(
-                $"{installTarget}{BuildCargoCommand(cargoArgs)}{CommandContinuation}{BuildCollectArtifactCommand(target)}",
+                $"{installTarget}{BuildClearArtifactCommand(target)}{CommandContinuation}" +
+                $"{BuildCargoCommand(cargoArgs)}{CommandContinuation}{BuildCollectArtifactCommand(target)}",
                 "type=cache,target=/usr/local/cargo/registry",
-                $"type=cache,target={ContainerTargetDirectory}");
+                $"type=cache,target={ContainerTargetDirectory},sharing=locked");
 
         // Add intermediate FROM stages for any container files sources (e.g. FROM frontend AS frontend_stage).
         context.Builder.AddContainerFilesStages(context.Resource, logger);
@@ -179,11 +179,11 @@ internal static class RustDockerfileGenerator
 
     // Only the app directory is copied into the image, so the manifest has to sit inside it. Paths are
     // required to be relative because an absolute one can spell that same directory differently to us.
-    private static void ValidateManifestPath(string? manifestPath, string workingDirectory, string resourceName)
+    private static string? ValidateManifestPath(string? manifestPath, string workingDirectory, string resourceName)
     {
         if (manifestPath is null)
         {
-            return;
+            return null;
         }
 
         if (Path.IsPathRooted(manifestPath))
@@ -193,20 +193,36 @@ internal static class RustDockerfileGenerator
                 $"relative to its app directory '{workingDirectory}'.");
         }
 
-        // Trailing separators on both sides stop /work/app matching a sibling /work/app2.
-        var fullyQualifiedWorkingDirectory = Path.GetFullPath(workingDirectory + Path.DirectorySeparatorChar);
-        var fullyQualifiedManifest = Path.GetFullPath(manifestPath, workingDirectory) + Path.DirectorySeparatorChar;
+        var platformManifestPath = manifestPath
+            .Replace('\\', Path.DirectorySeparatorChar)
+            .Replace('/', Path.DirectorySeparatorChar);
+        var canonicalWorkingDirectory = PathNormalizer.ResolveSymlinks(Path.GetFullPath(workingDirectory));
+        var canonicalManifest = PathNormalizer.ResolveSymlinks(Path.GetFullPath(platformManifestPath, workingDirectory));
+        var relativeManifest = Path.GetRelativePath(canonicalWorkingDirectory, canonicalManifest);
 
-        if (!fullyQualifiedManifest.StartsWith(fullyQualifiedWorkingDirectory, StringComparison.Ordinal))
+        if (Path.IsPathRooted(relativeManifest)
+            || relativeManifest == ".."
+            || relativeManifest.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+            || relativeManifest.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal))
         {
             throw new DistributedApplicationException(
                 $"The Rust app '{resourceName}' builds from '{manifestPath}', which resolves outside its app directory " +
                 $"'{workingDirectory}'. Only the app directory is copied into the image.");
         }
+
+        // Rebase canonical-equivalent spellings (for example /var and /private/var on macOS) to the path
+        // below the build context. The container only receives that relative layout.
+        return relativeManifest.Replace('\\', '/');
     }
 
     private static string BuildCargoCommand(List<string> cargoArgs)
         => string.Join(" ", new[] { "cargo", "build" }.Concat(cargoArgs.Select(ShellQuote)));
+
+    // The target directory is cache mounted, so remove every path that could satisfy the collector before
+    // cargo runs. Deleting only the final executable preserves dependency and incremental build caches while
+    // ensuring the current invocation has to materialize the one artifact the runtime stage will copy.
+    private static string BuildClearArtifactCommand(RustCargoTarget target)
+        => $"for candidate in {BuildArtifactCandidates(target)}; do if [ -f \"$candidate\" ]; then rm -f \"$candidate\"; fi; done";
 
     // Collects the binary to a fixed path so the runtime stage's COPY --from need not know whether cargo
     // inserted a target-triple directory. `--target` is only one way a triple is selected — `[build] target`
@@ -214,16 +230,10 @@ internal static class RustDockerfileGenerator
     // resource environment — so both layouts are searched:
     //   /build/target/release/api            (no target selected)
     //   /build/target/x86_64-.../release/api (some target selected, by whatever means)
-    // The target directory is cache mounted, so a triple change between builds leaves both layouts populated
-    // with nothing on disk to say which belongs to this build. Failing beats shipping the stale one.
-    //
-    // Only shell builtins plus mkdir and cp are used, because the build image is overridable and ls, head,
-    // grep and sed may not be there. That also rules out reading the path out of `cargo --message-format=json`.
+    // Only shell builtins plus the POSIX mkdir, cp, and rm utilities are used because the build image is
+    // overridable. In particular, the generated build does not assume jq, grep, sed, or find are installed.
     private static string BuildCollectArtifactCommand(RustCargoTarget target)
     {
-        // Quoting only the suffix keeps the wildcard live: quoting the whole path would make the `*` literal.
-        var suffix = ShellQuote(target.RelativePathWithoutTarget);
-        var candidates = $"{ContainerTargetDirectory}/{suffix} {ContainerTargetDirectory}/*/{suffix}";
         var destination = $"{ContainerArtifactDirectory}/{ShellQuote(target.Name)}";
 
         return string.Join(
@@ -231,14 +241,22 @@ internal static class RustDockerfileGenerator
             [
                 "count=0",
                 // An unmatched glob stays literal, so each candidate is tested rather than counted.
-                $"for candidate in {candidates}; do if [ -f \"$candidate\" ]; then bin=\"$candidate\"; count=$((count+1)); fi; done",
+                $"for candidate in {BuildArtifactCandidates(target)}; do if [ -f \"$candidate\" ]; then bin=\"$candidate\"; count=$((count+1)); fi; done",
                 // `if` rather than `[ ... ] || { ... }`: && and || share precedence and associate left to right,
                 // so a trailing || catches the whole preceding chain and reports this on top of cargo's own error.
                 $"if [ \"$count\" = 0 ]; then echo \"no {ShellQuote(target.Name)} under {ContainerTargetDirectory}\" >&2; exit 1; fi",
-                $"if [ \"$count\" != 1 ]; then echo \"found $count {ShellQuote(target.Name)} under {ContainerTargetDirectory}; rebuild with --no-cache\" >&2; exit 1; fi",
+                $"if [ \"$count\" != 1 ]; then echo \"found $count {ShellQuote(target.Name)} under {ContainerTargetDirectory} after cargo build\" >&2; exit 1; fi",
                 $"mkdir -p {ContainerArtifactDirectory}",
                 $"cp \"$bin\" {destination}"
             ]);
+    }
+
+    private static string BuildArtifactCandidates(RustCargoTarget target)
+    {
+        // Quoting only the suffix keeps the wildcard live: quoting the whole path would make the `*` literal.
+        var suffix = ShellQuote(target.RelativePathWithoutTarget);
+
+        return $"{ContainerTargetDirectory}/{suffix} {ContainerTargetDirectory}/*/{suffix}";
     }
 
     // An explicit LF rather than Environment.NewLine: a CR after the backslash stops the shell treating the

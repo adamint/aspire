@@ -81,6 +81,18 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task VerifyPublish_ClearsStaleArtifactsBeforeACustomTargetProfileBuild()
+    {
+        var content = await PublishDockerfileAsync(
+            configureResource: app => app
+                .WithCargoExample("demo")
+                .WithCargoProfile("dist")
+                .WithCargoTarget("aarch64-unknown-linux-musl"));
+
+        await Verify(content);
+    }
+
+    [Fact]
     public async Task VerifyPublish_HonoursWithDockerfileBaseImage()
     {
         var content = await PublishDockerfileAsync(
@@ -158,6 +170,40 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         // authored on Windows would name a file that does not exist in the image.
         var content = await PublishDockerfileAsync(
             configureResource: app => app.WithCargoManifestPath(@"crates\api\Cargo.toml"));
+
+        await Verify(content);
+    }
+
+    [Fact]
+    public async Task VerifyPublish_CanonicalizesMacOSAliasesWhenValidatingTheManifestPath()
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            Assert.Skip("macOS filesystem alias regression test.");
+        }
+
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var sourceDir = workspace.CreateDirectory("source");
+        var outputDir = workspace.CreateDirectory("output");
+        var canonicalSourceDir = PathNormalizer.ResolveSymlinks(sourceDir.FullName);
+
+        if (string.Equals(sourceDir.FullName, canonicalSourceDir, StringComparison.Ordinal))
+        {
+            Assert.Skip("The test temporary directory does not traverse a macOS filesystem alias.");
+        }
+
+        // Cargo reports realpath-resolved paths such as /private/var/..., while the app directory can retain
+        // the equivalent /var/... spelling. Express the canonical manifest as a relative path from the
+        // lexical app directory to reproduce that mismatch without depending on /tmp.
+        var canonicalManifest = Path.Combine(canonicalSourceDir, "crates", "api", "Cargo.toml");
+        var manifestPath = Path.GetRelativePath(sourceDir.FullName, canonicalManifest);
+
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
+        builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
+        builder.AddRustApp("api", sourceDir.FullName).WithCargoManifestPath(manifestPath);
+        builder.Build().Run();
+
+        var content = await File.ReadAllTextAsync(Path.Combine(outputDir.FullName, "api.Dockerfile"), TestContext.Current.CancellationToken);
 
         await Verify(content);
     }

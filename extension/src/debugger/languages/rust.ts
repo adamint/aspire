@@ -26,7 +26,7 @@ export class RustService implements IRustService {
 
     build(workingDirectory: string, cargoArgs: string[], env: EnvVar[]): Promise<void> {
         return new Promise<void>((resolve, reject) => {
-            extensionLogOutputChannel.info(`Building Rust application in ${workingDirectory} using: cargo ${cargoArgs.join(' ')}`);
+            extensionLogOutputChannel.info(`Building Rust application in ${workingDirectory} using cargo.`);
 
             // Build with the resource's environment so settings the app host injects (RUSTFLAGS,
             // CARGO_*, proxy variables, and anything set with WithEnvironment) apply to the debug

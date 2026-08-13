@@ -1,12 +1,16 @@
 import * as assert from 'assert';
+import nodeChildProcess = require('child_process');
+import { EventEmitter } from 'events';
+import { PassThrough } from 'stream';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { getSupportedCapabilities } from '../capabilities';
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
 import { getResourceDebuggerExtensions } from '../debugger/debuggerExtensions';
-import { createRustDebuggerExtension, IRustService } from '../debugger/languages/rust';
+import { createRustDebuggerExtension, IRustService, RustService } from '../debugger/languages/rust';
 import { AspireResourceExtendedDebugConfiguration, EnvVar, RustLaunchConfiguration } from '../dcp/types';
 import { ResourceDebuggerExtension } from '../debugger/debuggerExtensions';
+import { extensionLogOutputChannel } from '../utils/logging';
 
 class TestRustService implements IRustService {
     public buildStub: sinon.SinonStub;
@@ -141,6 +145,29 @@ suite('Rust Debugger Extension Tests', () => {
 
         assert.ok(rustService.buildStub.notCalled);
     });
+
+    test('does not persist user-provided Cargo argument values in build diagnostics', async () => {
+        const childProcess = createTestChildProcess();
+        sinon.stub(nodeChildProcess, 'spawn').returns(childProcess);
+        const info = sinon.stub(extensionLogOutputChannel, 'info');
+        const debugSession = {
+            sendMessage: sinon.stub(),
+            registerDisposable: (disposable: vscode.Disposable) => disposable,
+        } as unknown as AspireDebugSession;
+
+        const build = new RustService(debugSession).build(
+            '/workspace/api',
+            ['build', '--config', 'registries.private.token=credential-value'],
+            []);
+
+        childProcess.emit('close', 0, null);
+        await build;
+
+        const diagnostic = String(info.firstCall.args[0]);
+        assert.ok(diagnostic.includes('Building Rust application'));
+        assert.ok(diagnostic.includes('/workspace/api'));
+        assert.strictEqual(diagnostic.includes('credential-value'), false);
+    });
 });
 
 function createLaunchConfig(args: string[], executablePath: string | undefined): RustLaunchConfiguration {
@@ -162,4 +189,17 @@ function createDebugConfig(): AspireResourceExtendedDebugConfiguration {
         args: [],
         env: {}
     };
+}
+
+function createTestChildProcess(): nodeChildProcess.ChildProcessWithoutNullStreams {
+    return Object.assign(new EventEmitter(), {
+        stdin: new PassThrough(),
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        killed: false,
+        exitCode: 0,
+        signalCode: null,
+        pid: 4242,
+        kill: sinon.stub().returns(true),
+    }) as unknown as nodeChildProcess.ChildProcessWithoutNullStreams;
 }

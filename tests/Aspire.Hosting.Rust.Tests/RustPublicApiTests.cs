@@ -283,6 +283,42 @@ public class RustPublicApiTests
     }
 
     [Fact]
+    public async Task LaunchConfigurationCachesOnlySuccessfulCargoMetadataResolution()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var app = builder.AddRustApp("api", builder.AppHostDirectory);
+
+        var attempts = 0;
+        var reader = new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service"))
+        {
+            OnRead = _ =>
+            {
+                if (Interlocked.Increment(ref attempts) == 1)
+                {
+                    throw new InvalidOperationException("Transient cargo metadata failure.");
+                }
+
+                return Task.CompletedTask;
+            }
+        };
+
+        builder.Services.AddSingleton<ICargoMetadataReader>(reader);
+
+        await using var built = builder.Build();
+        await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
+
+        var callbackContext = LaunchConfigurationTestHelpers.CreateCallbackContext(app.Resource);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => LaunchConfigurationTestHelpers.InvokeLaunchConfigurationProducerAsync(app.Resource, callbackContext));
+
+        await LaunchConfigurationTestHelpers.InvokeLaunchConfigurationProducerAsync(app.Resource, callbackContext);
+        await LaunchConfigurationTestHelpers.InvokeLaunchConfigurationProducerAsync(app.Resource, callbackContext);
+
+        Assert.Equal(2, reader.ReadCount);
+    }
+
+    [Fact]
     public async Task LaunchConfigurationCancelsCargoMetadataWhenCancellationIsRequested()
     {
         var builder = DistributedApplication.CreateBuilder();
