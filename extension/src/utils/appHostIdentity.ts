@@ -144,9 +144,10 @@ export function canonicalizeAppHostPath(resolvedPath: string): string {
 
 function canonicalize(resolvedPath: string): string {
     try {
-        return process.platform === 'darwin'
-            ? fs.realpathSync.native(resolvedPath)
-            : fs.realpathSync(resolvedPath);
+        // Native realpath returns the filesystem's canonical casing on Windows. That keeps
+        // differently-cased references to one file on one key without collapsing distinct
+        // files in a case-sensitive Windows directory.
+        return fs.realpathSync.native(resolvedPath);
     }
     catch {
         return resolvedPath;

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { appHostLifecycleLaunchAlreadyClaimed, defaultConfigurationName } from '../loc/strings';
+import { appHostLifecycleLaunchAlreadyClaimed, appHostLifecycleSelectionRequired, defaultConfigurationName } from '../loc/strings';
 import type { AspireExtendedDebugConfiguration } from '../dcp/types';
 import { AppHostDiscoveryService, getDebugTargetForCandidate, isSamePath } from '../utils/appHostDiscovery';
 import type { CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
@@ -121,7 +121,8 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
 
         if (typeof config.program === 'string') {
             const program = config.program;
-            if (aspireConfig[appHostSelectionOriginConfigKey] === 'explicit-launch-configuration' && this.isWorkspaceFolderRoot(program, folder)) {
+            const isWorkspaceFolderLaunch = this.isWorkspaceFolderRoot(program, folder);
+            if (aspireConfig[appHostSelectionOriginConfigKey] === 'explicit-launch-configuration' && isWorkspaceFolderLaunch) {
                 aspireConfig[appHostSelectionOriginConfigKey] = 'default-discovery';
             }
 
@@ -146,9 +147,15 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
             // the directory, and a directory is not the same identity as the AppHost inside
             // it, so claiming the directory would leave the tool free to start a duplicate.
             if (!launchedByExtension && getAspireDebugConfigurationCommand(aspireConfig) === 'run') {
-                const claimedPath = telemetryTarget?.path ?? (typeof config.program === 'string' ? config.program : undefined);
+                const claimedPath = telemetryTarget?.path ??
+                    (!isWorkspaceFolderLaunch && typeof config.program === 'string' ? config.program : undefined);
                 if (!claimedPath) {
-                    return config;
+                    // A workspace-root launch can defer AppHost selection until after this
+                    // resolver. Reserving the directory would not block a tool from starting
+                    // whichever concrete AppHost is selected, so cancel until discovery has
+                    // one default target that both launch paths can reserve.
+                    void vscode.window.showInformationMessage(appHostLifecycleSelectionRequired);
+                    return undefined;
                 }
 
                 let reservationPath = claimedPath;

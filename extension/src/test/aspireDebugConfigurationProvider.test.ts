@@ -171,6 +171,25 @@ suite('AspireDebugConfigurationProvider', () => {
         assert.deepStrictEqual(launchReservation.reserved, [projectPath]);
     });
 
+    test('cancels a workspace-folder launch when default discovery cannot select one AppHost', async () => {
+        const folder = createWorkspaceFolder(path.join(tempDir, 'workspace'));
+        const message = sandbox.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+        const provider = new AspireDebugConfigurationProvider(
+            createAppHostDiscoveryService(folder.uri.fsPath, null),
+            launchReservation);
+
+        const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, {
+            name: 'Debug AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: folder.uri.fsPath,
+        });
+
+        assert.strictEqual(config, undefined);
+        assert.deepStrictEqual(launchReservation.reserved, []);
+        assert.strictEqual(message.calledOnce, true);
+    });
+
     test('cancels a launch.json run when a lifecycle-owned launch already claimed the AppHost', async () => {
         // The lifecycle caller has already passed its own check by this point and cannot be
         // called back, so letting this session proceed would start a second AppHost for the
