@@ -176,7 +176,7 @@ function assertShardResultGuardWiring(
     const { sourceFile, checker } = createRunnerProgram(source);
     assertUniqueProtectedDeclarations(sourceFile);
     assert.strictEqual(
-        getProtectedRunnerSyntax(sourceFile),
+        getProtectedRunnerSyntax(sourceFile).replace(/\r\n/g, '\n'),
         expectedSyntax.replace(/\r\n/g, '\n'),
         'The protected runner syntax allowlist must match the normalized production skeleton.');
 
@@ -1279,9 +1279,10 @@ suite('E2E launch profile', () => {
         assertShardResultGuardWiring(runner);
     });
 
-    test('accepts the runner wiring snapshot with Windows line endings', () => {
+    test('accepts the runner and wiring snapshot with Windows line endings', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+            .replace(/\r?\n/g, '\r\n');
         const expectedSyntax = fs.readFileSync(
             path.join(extensionRoot, 'src', 'test', 'e2eLaunchProfile.runner-wiring.txt'),
             'utf8')
