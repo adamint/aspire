@@ -8,6 +8,8 @@ import { chooseActiveQuickPick, executeCommandFromPalette, openAspireView, waitF
 
 suite('Aspire command palette E2E', function () {
     this.timeout(420000);
+    const sourceValidationMessage = 'The aspire.nugetSource setting cannot contain credentials, a query string, or a fragment in an HTTP(S) source. Use a NuGet credential provider instead.';
+    const shellMetacharacterSource = 'named source "quoted value" \'$(touch no);|$HOME\' & marker';
 
     teardown(async () => {
         await runE2eTeardown([
@@ -75,9 +77,23 @@ suite('Aspire command palette E2E', function () {
         assert.strictEqual(terminalCommand.executionSuppressed, true);
     });
 
+    test('rejects an HTTP NuGet source query through the registered new command', async () => {
+        writeWorkspaceSetting('aspire.nugetSource', 'https://example.invalid/v3/index.json?sig=token');
+
+        await openAspireView();
+        await waitForRepositoryIdle();
+
+        const beforeInvocation = getCommandInvocationCount('aspire-vscode.new');
+        const beforeTerminalCommand = getTerminalCommandCount();
+        await executeE2eControlCommand({ name: 'executeAspireCommand', commandId: 'aspire-vscode.new' });
+        await waitForNotificationMessage(sourceValidationMessage);
+        await waitForCommandOutcome('aspire-vscode.new', 'canceled', 60000, beforeInvocation);
+
+        assert.strictEqual(getTerminalCommandCount(), beforeTerminalCommand);
+    });
+
     test('routes the configured NuGet source through the registered new and add commands', async () => {
-        const source = 'https://example.invalid/v3/index.json?feed="quoted value"&marker=\'$(touch no);|$HOME\'';
-        writeWorkspaceSetting('aspire.nugetSource', source);
+        writeWorkspaceSetting('aspire.nugetSource', shellMetacharacterSource);
 
         await openAspireView();
         await waitForRepositoryIdle();
@@ -98,9 +114,9 @@ suite('Aspire command palette E2E', function () {
             beforeTerminalCommand);
         assert.strictEqual(newTerminalCommand.executionSuppressed, true);
         assert.strictEqual(newTerminalCommand.subcommand, 'new');
-        assert.deepStrictEqual(newTerminalCommand.additionalArgs, ['--source', source]);
+        assert.deepStrictEqual(newTerminalCommand.additionalArgs, ['--source', shellMetacharacterSource]);
         assert.ok(
-            newTerminalCommand.commandLine.includes(getQuotedShellArgumentPair('--source', source)),
+            newTerminalCommand.commandLine.includes(getQuotedShellArgumentPair('--source', shellMetacharacterSource)),
             `Expected new command line to quote the configured NuGet source once. Command line: ${newTerminalCommand.commandLine}`);
 
         beforeInvocation = getCommandInvocationCount('aspire-vscode.add');
@@ -114,9 +130,9 @@ suite('Aspire command palette E2E', function () {
             beforeTerminalCommand);
         assert.strictEqual(addTerminalCommand.executionSuppressed, true);
         assert.strictEqual(addTerminalCommand.subcommand, 'add');
-        assert.deepStrictEqual(addTerminalCommand.additionalArgs, ['--apphost', expectedAppHostPath, '--source', source]);
+        assert.deepStrictEqual(addTerminalCommand.additionalArgs, ['--apphost', expectedAppHostPath, '--source', shellMetacharacterSource]);
         assert.ok(
-            addTerminalCommand.commandLine.includes(getQuotedShellArgumentPair('--source', source)),
+            addTerminalCommand.commandLine.includes(getQuotedShellArgumentPair('--source', shellMetacharacterSource)),
             `Expected add command line to quote the configured NuGet source once. Command line: ${addTerminalCommand.commandLine}`);
     });
 

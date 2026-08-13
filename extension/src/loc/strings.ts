@@ -21,7 +21,7 @@ export const aspireCliVersion = (version: string) => vscode.l10n.t('Aspire CLI V
 export const requiredCapability = (capability: string) => vscode.l10n.t('Required capability: {0}.', capability);
 export const aspireTerminalName = vscode.l10n.t('Aspire terminal');
 export const aspireCliPathEnvironmentDescription = vscode.l10n.t('Forwards aspire.aspireCliExecutablePath as AspireCliPath so MSBuild bundle resolution and integrated terminals use the configured Aspire CLI.');
-export const nugetSourceContainsCredentials = vscode.l10n.t('The aspire.nugetSource setting cannot contain credentials. Use a NuGet credential provider instead.');
+export const nugetSourceContainsCredentials = vscode.l10n.t('The aspire.nugetSource setting cannot contain credentials, a query string, or a fragment in an HTTP(S) source. Use a NuGet credential provider instead.');
 export const installCliPlaceholder = vscode.l10n.t('Select how to install the Aspire CLI');
 export const installCliViewAllOptions = vscode.l10n.t('View all installation options');
 export const installCliViewAllOptionsDescription = vscode.l10n.t('Open the installation guide (includes the install script)');

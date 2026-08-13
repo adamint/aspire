@@ -12,8 +12,10 @@ type SentCommand = {
 };
 
 suite('nuget source command forwarding', () => {
+    const invalidSourceMessage = 'The aspire.nugetSource setting cannot contain credentials, a query string, or a fragment in an HTTP(S) source. Use a NuGet credential provider instead.';
     let configuredNugetSource: string;
     let appHostPath: string | undefined;
+    let getAppHostPathCallCount: number;
     let sentCommands: SentCommand[];
     let getConfigurationStub: sinon.SinonStub;
     let showErrorMessageStub: sinon.SinonStub;
@@ -21,6 +23,7 @@ suite('nuget source command forwarding', () => {
     setup(() => {
         configuredNugetSource = '';
         appHostPath = '/workspace/AppHost/AppHost.csproj';
+        getAppHostPathCallCount = 0;
         sentCommands = [];
 
         getConfigurationStub = sinon.stub(vscode.workspace, 'getConfiguration').callsFake((section?: string) => {
@@ -52,7 +55,10 @@ suite('nuget source command forwarding', () => {
 
     function createEditorCommandProvider(): AspireEditorCommandProvider {
         return {
-            getAppHostPath: async () => appHostPath
+            getAppHostPath: async () => {
+                getAppHostPathCallCount++;
+                return appHostPath;
+            }
         } as unknown as AspireEditorCommandProvider;
     }
 
@@ -123,14 +129,62 @@ suite('nuget source command forwarding', () => {
         }]);
     });
 
-    test('new rejects a configured nuget source that contains URL credentials', async () => {
-        configuredNugetSource = 'https://user@example.com/v3/index.json';
+    for (const [description, source] of [
+        ['an HTTPS query string', 'https://example.com/v3/index.json?sig=token'],
+        ['an empty HTTPS query string', 'https://example.com/v3/index.json?'],
+        ['an HTTP fragment', 'http://example.com/v3/index.json#token'],
+        ['an empty HTTP fragment', 'http://example.com/v3/index.json#'],
+        ['HTTP userinfo', 'http://user@example.com/v3/index.json'],
+        ['HTTPS userinfo with a password', 'https://user:password@example.com/v3/index.json'],
+    ]) {
+        test(`new rejects a configured nuget source with ${description}`, async () => {
+            configuredNugetSource = source;
 
-        await assert.rejects(() => newCommand(createTerminalProvider()), vscode.CancellationError);
+            await assert.rejects(() => newCommand(createTerminalProvider()), vscode.CancellationError);
 
+            assert.deepStrictEqual(sentCommands, []);
+            assert.deepStrictEqual(showErrorMessageStub.firstCall.args, [invalidSourceMessage]);
+        });
+    }
+
+    test('new allows credential material on non-HTTP sources to match the CLI policy', async () => {
+        configuredNugetSource = 'ftp://user:password@example.com/v3/index.json?query#fragment';
+
+        await newCommand(createTerminalProvider());
+
+        assert.deepStrictEqual(sentCommands, [{
+            subcommand: 'new',
+            additionalArgs: ['--source', configuredNugetSource]
+        }]);
+        assert.strictEqual(showErrorMessageStub.called, false);
+    });
+
+    for (const source of [
+        'https:example.com/v3/index.json?sig=token',
+        'http:\\\\example.com\\v3\\index.json?sig=token',
+    ]) {
+        test(`new allows malformed HTTP-shaped source "${source}" to match the CLI policy`, async () => {
+            configuredNugetSource = source;
+
+            await newCommand(createTerminalProvider());
+
+            assert.deepStrictEqual(sentCommands, [{
+                subcommand: 'new',
+                additionalArgs: ['--source', configuredNugetSource]
+            }]);
+            assert.strictEqual(showErrorMessageStub.called, false);
+        });
+    }
+
+    test('add rejects an invalid nuget source before resolving the apphost', async () => {
+        configuredNugetSource = 'https://example.com/v3/index.json?sig=token';
+
+        await assert.rejects(
+            () => addCommand(createTerminalProvider(), createEditorCommandProvider()),
+            vscode.CancellationError);
+
+        assert.strictEqual(getAppHostPathCallCount, 0);
         assert.deepStrictEqual(sentCommands, []);
-        assert.deepStrictEqual(showErrorMessageStub.firstCall.args, [
-            'The aspire.nugetSource setting cannot contain credentials. Use a NuGet credential provider instead.'
-        ]);
+        assert.deepStrictEqual(showErrorMessageStub.firstCall.args, [invalidSourceMessage]);
     });
 });

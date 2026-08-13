@@ -188,6 +188,8 @@ suite('extension/package.json', () => {
     test('nuget source setting is machine-overridable and localized', () => {
         const manifest = readManifest();
         const properties = manifest.contributes.configuration?.properties;
+        const packageNlsPath = path.resolve(__dirname, '../../package.nls.json');
+        const packageNls = JSON.parse(fs.readFileSync(packageNlsPath, 'utf8')) as Record<string, string>;
 
         assert.ok(properties, 'Expected Aspire settings to declare configuration properties');
         const nugetSource = properties['aspire.nugetSource'];
@@ -196,6 +198,9 @@ suite('extension/package.json', () => {
         assert.strictEqual(nugetSource.default, '');
         assert.strictEqual(nugetSource.scope, 'machine-overridable');
         assert.strictEqual(nugetSource.description, '%configuration.aspire.nugetSource%');
+        assert.strictEqual(
+            packageNls['configuration.aspire.nugetSource'],
+            'Optional NuGet source to pass to aspire new and aspire add. HTTP(S) sources cannot include credentials, query strings, or fragments.');
     });
 
     test('Explorer AppHost commands include Node module filenames', () => {

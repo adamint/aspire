@@ -7,9 +7,14 @@ export function getNugetSourceArgs(): string[] | undefined {
         return undefined;
     }
 
-    const parsedSource = tryParseUrl(source);
-    if (parsedSource && (parsedSource.username !== '' || parsedSource.password !== '')) {
-        // Reject inline credentials here so they never reach terminal history or process arguments.
+    const parsedSource = tryParseHttpUrl(source);
+    if (parsedSource &&
+        (parsedSource.username !== '' ||
+            parsedSource.password !== '' ||
+            source.includes('?') ||
+            source.includes('#'))) {
+        // Match the CLI persistence policy so credential material never reaches terminal history,
+        // extension logs, shell history, or process arguments.
         void vscode.window.showErrorMessage(nugetSourceContainsCredentials);
         throw new vscode.CancellationError();
     }
@@ -17,7 +22,14 @@ export function getNugetSourceArgs(): string[] | undefined {
     return ['--source', source];
 }
 
-function tryParseUrl(value: string): URL | undefined {
+function tryParseHttpUrl(value: string): URL | undefined {
+    // WHATWG URL normalizes malformed values such as `https:feed?sig=token` and
+    // `http:\\feed?sig=token`, while the CLI's Uri.TryCreate check rejects their shape.
+    // Require the absolute HTTP(S) authority form before using URL for userinfo parsing.
+    if (!/^https?:\/\/([^/?#\\]+)(?:[/?#]|$)/i.test(value)) {
+        return undefined;
+    }
+
     try {
         return new URL(value);
     }
