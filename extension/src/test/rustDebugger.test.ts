@@ -547,6 +547,28 @@ suite('Rust Debugger Extension Tests', () => {
         assert.strictEqual(harness.getDebugOutput('stderr'), stderr);
     });
 
+    test('redacts credential-bearing URL resource environment values from retained cargo errors', async () => {
+        const harness = createRustProcessHarness();
+        const secret = 'postgresql://user:password@database.internal/app';
+        const stderr = `error: database connection failed for ${secret}\n`;
+        const build = harness.rustService.build(
+            '/workspace/api',
+            ['build'],
+            [{ name: 'DATABASE_URL', value: secret }],
+            '/workspace/api/target/debug/api');
+
+        harness.childProcess.stderr.write(Buffer.from(stderr));
+        harness.childProcess.emit('close', 101, null);
+
+        await assert.rejects(build, error => {
+            assert.ok(error instanceof Error);
+            assert.ok(!error.message.includes(secret));
+            assert.ok(error.message.includes('[redacted]'));
+            return true;
+        });
+        assert.strictEqual(harness.getDebugOutput('stderr'), stderr);
+    });
+
     test('preserves ordinary environment values in retained cargo diagnostics', async () => {
         const harness = createRustProcessHarness();
         const stderr = 'debug assertion failed at src/main.rs:12 due to 1 previous error\n';

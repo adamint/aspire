@@ -553,6 +553,7 @@ function getSensitiveEnvironmentValues(environment: Record<string, string | unde
 function isSensitiveArgumentName(argument: string): boolean {
     const normalizedArgument = argument.trim().replace(/^-+/, '');
     return /(?:^|[._-])(?:PGPASSWORD|MYSQL_PWD)(?:$|[._-])/i.test(normalizedArgument)
+        || /(?:^|[._-])(?:url|uri)(?:$|[._-])/i.test(normalizedArgument)
         || /(?:^|[._-])(?:token|password|passwd|secret|credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|connection[_-]?strings?)(?:$|[._-])/i
             .test(normalizedArgument);
 }
