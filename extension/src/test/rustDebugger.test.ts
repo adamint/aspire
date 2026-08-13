@@ -290,6 +290,40 @@ suite('Rust Debugger Extension Tests', () => {
         }
     });
 
+    test('does not forcefully terminate a Cargo host probe that closes during the cancellation grace period', async () => {
+        const clock = sinon.useFakeTimers({
+            shouldClearNativeTimers: true,
+            toFake: ['setTimeout', 'clearTimeout'],
+        });
+        const harness = createRustProcessHarness();
+
+        try {
+            const probe = harness.rustService.getCargoHostTarget('/workspace/api', []);
+            const cancellation = assert.rejects(probe, error => error instanceof vscode.CancellationError);
+
+            harness.disposeSession();
+
+            assert.deepStrictEqual(harness.childProcess.kill.firstCall.args, [undefined]);
+            assert.strictEqual(clock.countTimers(), 1);
+
+            harness.childProcess.emit('close', null, 'SIGTERM');
+            await cancellation;
+            await clock.tickAsync(0);
+
+            assert.strictEqual(harness.childProcess.listenerCount('close'), 0);
+            assert.strictEqual(harness.childProcess.listenerCount('error'), 0);
+            assert.strictEqual(clock.countTimers(), 0);
+
+            await clock.tickAsync(5_000);
+
+            assert.strictEqual(harness.childProcess.kill.callCount, 1);
+            assert.strictEqual(clock.countTimers(), 0);
+        } finally {
+            harness.childProcess.emit('close', null, 'SIGTERM');
+            clock.restore();
+        }
+    });
+
     test('times out a Cargo host probe that never closes', async () => {
         const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
         const harness = createRustProcessHarness();
