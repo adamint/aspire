@@ -74,6 +74,25 @@ suite('nuget source command forwarding', () => {
         assert.strictEqual(showErrorMessageStub.called, false);
     });
 
+    test('add forwards a configured nuget source when no apphost is resolved', async () => {
+        configuredNugetSource = 'https://pkgs.dev.azure.com/dnceng/_packaging/dotnet-public/nuget/v3/index.json';
+        appHostPath = undefined;
+
+        await addCommand(createTerminalProvider(), createEditorCommandProvider());
+
+        assert.deepStrictEqual(sentCommands, [{ subcommand: 'add', additionalArgs: ['--source', configuredNugetSource] }]);
+    });
+
+    test('add keeps existing behavior for an empty nuget source when no apphost is resolved', async () => {
+        configuredNugetSource = '';
+        appHostPath = undefined;
+
+        await addCommand(createTerminalProvider(), createEditorCommandProvider());
+
+        assert.deepStrictEqual(sentCommands, [{ subcommand: 'add', additionalArgs: undefined }]);
+        assert.strictEqual(showErrorMessageStub.called, false);
+    });
+
     test('new forwards a configured nuget source', async () => {
         configuredNugetSource = 'https://pkgs.dev.azure.com/dnceng/_packaging/dotnet-public/nuget/v3/index.json';
 
