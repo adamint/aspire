@@ -6,6 +6,7 @@
 using System.Collections.ObjectModel;
 using System.IO.Hashing;
 using System.Text;
+using System.Text.RegularExpressions;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.ApplicationModel.Docker;
 using Aspire.Hosting.Utils;
@@ -20,7 +21,7 @@ namespace Aspire.Hosting.Rust;
 /// <remarks>
 /// The container build is the only build: nothing here compiles the crate on the host.
 /// </remarks>
-internal static class RustDockerfileGenerator
+internal static partial class RustDockerfileGenerator
 {
     // Fully qualified release-line tags avoid Podman's short-name resolution while still picking up patch
     // and security updates. rustup remains available to install whatever a rust-toolchain.toml pins.
@@ -103,6 +104,8 @@ internal static class RustDockerfileGenerator
         {
             RewriteManifestPath(cargoArgs, path, containerPath);
         }
+
+        ValidateCargoArgumentsDoNotContainCredentials(cargoArgs, resource.Name);
 
         foreach (var cargoArg in cargoArgs)
         {
@@ -322,6 +325,46 @@ internal static class RustDockerfileGenerator
 
     private static string BuildCargoCommand(List<string> cargoArgs)
         => string.Join(" ", new[] { "cargo", "build" }.Concat(cargoArgs.Select(ShellQuote)));
+
+    private static void ValidateCargoArgumentsDoNotContainCredentials(IReadOnlyList<string> cargoArgs, string resourceName)
+    {
+        for (var i = 0; i < cargoArgs.Count; i++)
+        {
+            string? configuration = null;
+            if (cargoArgs[i] == "--config" && i + 1 < cargoArgs.Count)
+            {
+                configuration = cargoArgs[++i];
+            }
+            else if (cargoArgs[i].StartsWith("--config=", StringComparison.Ordinal))
+            {
+                configuration = cargoArgs[i]["--config=".Length..];
+            }
+
+            if (configuration is not null
+                && (SensitiveCargoConfigAssignmentPattern().IsMatch(configuration)
+                    || CredentialBearingUrlPattern().IsMatch(configuration)))
+            {
+                throw new DistributedApplicationException(
+                    $"The Rust app '{resourceName}' has a Cargo --config argument that may contain credentials. " +
+                    "Generated Dockerfiles cannot embed credentials; use a hand-written Dockerfile with a BuildKit secret mount instead.");
+            }
+        }
+    }
+
+    // Cargo accepts configuration as either:
+    //   --config registries.private.token="secret"
+    //   --config=env.PGPASSWORD="secret"
+    // Match only credential-named assignment keys so safe settings such as
+    // `net.git-fetch-with-cli=true` and `registry.credential-provider=...` remain supported.
+    [GeneratedRegex(
+        """(?:^|[.{,\s"'])(?:PGPASSWORD|MYSQL_PWD|token|password|passwd|secret|credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|connection[_-]?strings?)(?:["']?\s*=)""",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex SensitiveCargoConfigAssignmentPattern();
+
+    // A URL with user information, in the shape `scheme://userinfo@host/path`, persists
+    // credentials even when the configuration key itself has an ordinary name.
+    [GeneratedRegex("""://[^\s"']+@""", RegexOptions.CultureInvariant)]
+    private static partial Regex CredentialBearingUrlPattern();
 
     private static void ValidateDockerfileValue(string? value, string valueDescription, string resourceName)
     {

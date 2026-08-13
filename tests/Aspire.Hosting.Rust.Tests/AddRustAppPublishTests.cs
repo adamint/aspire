@@ -336,6 +336,34 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
     }
 
     [Theory]
+    [InlineData("--config", "registries.private.token=\"private-registry-token\"")]
+    [InlineData("--config=env.PGPASSWORD=\"database-password\"", null)]
+    [InlineData("--config", "registries.private.index=\"https://user:registry-password@example.invalid/index\"")]
+    public async Task PublishRejectsCredentialBearingCargoConfigArguments(string argument, string? value)
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var sourceDir = workspace.CreateDirectory("source");
+        var outputDir = workspace.CreateDirectory("output");
+
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
+        var reporter = new TestPipelineActivityReporter(outputHelper);
+        builder.Services.AddSingleton<IPipelineActivityReporter>(reporter);
+        builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
+        var rust = builder.AddRustApp("api", sourceDir.FullName);
+        rust.WithCargoArgs(value is null ? [argument] : [argument, value]);
+
+        using var app = builder.Build();
+        await app.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(CompletionState.CompletedWithError, reporter.ResultCompletionState);
+        Assert.Equal(
+            "The Rust app 'api' has a Cargo --config argument that may contain credentials. " +
+            "Generated Dockerfiles cannot embed credentials; use a hand-written Dockerfile with a BuildKit secret mount instead.",
+            reporter.CompletionMessage);
+        Assert.False(File.Exists(Path.Combine(outputDir.FullName, "api.Dockerfile")));
+    }
+
+    [Theory]
     [InlineData("raw-argument", "cargo argument", "U+000A")]
     [InlineData("nul-argument", "cargo argument", "U+0000")]
     [InlineData("feature", "cargo argument", "U+000D")]
