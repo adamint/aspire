@@ -344,6 +344,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
     [InlineData("build-image", "Dockerfile build image", "U+000A")]
     [InlineData("runtime-image", "Dockerfile runtime image", "U+000D")]
     [InlineData("resolved-executable", "resolved Cargo target executable name", "U+000A")]
+    [InlineData("profile-directory-after-args-replaced", "resolved Cargo profile directory", "U+000D")]
     public async Task PublishRejectsDockerfileValuesContainingControlCharacters(
         string valueKind,
         string valueDescription,
@@ -372,6 +373,9 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
             "build-image" => rust.WithDockerfileBaseImage(buildImage: "rust:1.97\nFROM scratch"),
             "runtime-image" => rust.WithDockerfileBaseImage(runtimeImage: "alpine:3.24\rRUN echo injected"),
             "resolved-executable" => rust,
+            "profile-directory-after-args-replaced" => rust
+                .WithCargoProfile("dist\r\nRUN echo injected")
+                .WithCargoArgs(context => context.Args.Clear()),
             _ => throw new ArgumentOutOfRangeException(nameof(valueKind))
         };
 

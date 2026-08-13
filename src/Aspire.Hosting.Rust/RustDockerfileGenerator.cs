@@ -89,7 +89,11 @@ internal static class RustDockerfileGenerator
             context.Services.GetRequiredService<DistributedApplicationExecutionContext>(),
             resource.Name);
 
+        // Cargo argument callbacks can replace the flags that normally carry these values, but the resolved
+        // target still controls Dockerfile artifact paths and target installation.
         ValidateDockerfileValue(target.Name, "resolved Cargo target executable name", resource.Name);
+        ValidateDockerfileValue(target.ProfileDirectory, "resolved Cargo profile directory", resource.Name);
+        ValidateDockerfileValue(target.Target, "resolved Cargo target triple directory", resource.Name);
 
         // Read from `resource` rather than context.Resource because the latter is the ContainerResource that
         // PublishAsDockerFile substitutes in, which does not carry the Rust annotations.
