@@ -26,8 +26,8 @@ internal sealed class FakeCargoMetadataReader(string metadataJson) : ICargoMetad
     /// How many times the reader has been asked for metadata.
     /// </summary>
     /// <remarks>
-    /// The debug launch configuration is produced more than once per resource, and a real <c>cargo metadata</c>
-    /// is slow, so tests assert that the query is not repeated.
+    /// Each launch request reads current metadata once, so tests use this count to catch duplicate reads
+    /// inside one request without hiding manifest or environment changes from later executable creations.
     /// </remarks>
     public int ReadCount => _readCount;
 

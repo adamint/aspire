@@ -73,6 +73,7 @@ internal static class RustDockerfileGenerator
             ? cargoOptions
             : new RustCargoOptionsAnnotation();
 
+        ValidateDockerfileValue(options.ManifestPath, "cargo manifest path", resource.Name);
         var containerManifestPath = ValidateManifestPath(options.ManifestPath, workingDirectory, resource.Name);
         var targetCacheId = BuildTargetCacheId(resource.Name, containerManifestPath);
 
@@ -88,6 +89,8 @@ internal static class RustDockerfileGenerator
             context.Services.GetRequiredService<DistributedApplicationExecutionContext>(),
             resource.Name);
 
+        ValidateDockerfileValue(target.Name, "resolved Cargo target executable name", resource.Name);
+
         // Read from `resource` rather than context.Resource because the latter is the ContainerResource that
         // PublishAsDockerFile substitutes in, which does not carry the Rust annotations.
         var cargoArgs = await ResolvePublishCargoArgsAsync(resource, context.CancellationToken).ConfigureAwait(false);
@@ -97,15 +100,23 @@ internal static class RustDockerfileGenerator
             RewriteManifestPath(cargoArgs, path, containerPath);
         }
 
-        ValidateDockerfileCargoArgs(cargoArgs, resource.Name);
+        foreach (var cargoArg in cargoArgs)
+        {
+            ValidateDockerfileValue(cargoArg, "cargo argument", resource.Name);
+        }
 
         // Images are used exactly as given and nothing is installed into either: a name is free-form, so an
         // image can be musl or glibc based regardless of what it is called. Pairing images that can run what
         // they build, including against any --target, belongs to whoever overrides them.
         var baseImageAnnotation = ResolveBaseImageAnnotation(resource, context);
+        var buildImage = baseImageAnnotation?.BuildImage ?? DefaultBuildImage;
+        var runtimeImage = baseImageAnnotation?.RuntimeImage ?? DefaultRuntimeImage;
+
+        ValidateDockerfileValue(buildImage, "Dockerfile build image", resource.Name);
+        ValidateDockerfileValue(runtimeImage, "Dockerfile runtime image", resource.Name);
 
         var buildStage = context.Builder
-            .From(baseImageAnnotation?.BuildImage ?? DefaultBuildImage, "build")
+            .From(buildImage, "build")
             .WorkDir("/app");
 
         // A cross target's standard library is not present in the base image. This has to run after the source
@@ -134,7 +145,7 @@ internal static class RustDockerfileGenerator
         // Add intermediate FROM stages for any container files sources (e.g. FROM frontend AS frontend_stage).
         context.Builder.AddContainerFilesStages(context.Resource, logger);
 
-        var runtimeStage = context.Builder.From(baseImageAnnotation?.RuntimeImage ?? DefaultRuntimeImage);
+        var runtimeStage = context.Builder.From(runtimeImage);
 
         // BusyBox and shadow-utils disagree on both command names and flags and the image may ship either, so
         // try one and fall back to the other. Ids are left to the tool to allocate because none is free on
@@ -308,16 +319,18 @@ internal static class RustDockerfileGenerator
     private static string BuildCargoCommand(List<string> cargoArgs)
         => string.Join(" ", new[] { "cargo", "build" }.Concat(cargoArgs.Select(ShellQuote)));
 
-    private static void ValidateDockerfileCargoArgs(IEnumerable<string> cargoArgs, string resourceName)
+    private static void ValidateDockerfileValue(string? value, string valueDescription, string resourceName)
     {
-        foreach (var cargoArg in cargoArgs)
+        if (value is null)
         {
-            foreach (var controlCharacter in cargoArg.Where(char.IsControl))
-            {
-                throw new DistributedApplicationException(
-                    $"The Rust app '{resourceName}' has a cargo value containing the control character " +
-                    $"U+{(int)controlCharacter:X4}. Control characters cannot be written to a generated Dockerfile.");
-            }
+            return;
+        }
+
+        foreach (var controlCharacter in value.Where(char.IsControl))
+        {
+            throw new DistributedApplicationException(
+                $"The Rust app '{resourceName}' has a {valueDescription} containing the control character " +
+                $"U+{(int)controlCharacter:X4}. Control characters cannot be written to a generated Dockerfile.");
         }
     }
 

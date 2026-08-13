@@ -39,5 +39,9 @@ public class RustReadmeTests
             readme);
         Assert.Contains(".WithReference(rustApi)", readme);
         Assert.Contains(".withReference(rustApi)", readme);
+        Assert.Contains("32-bit ARM targets map to Docker's `linux/arm` platform", readme);
+        Assert.Contains("custom build image but can keep the default runtime image", readme);
+        Assert.Contains("set both images in a single `WithDockerfileBaseImage` call", readme);
+        Assert.Contains("does not bypass target-platform validation", readme);
     }
 }

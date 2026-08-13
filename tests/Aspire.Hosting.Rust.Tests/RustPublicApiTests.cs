@@ -272,31 +272,11 @@ public class RustPublicApiTests
     }
 
     [Fact]
-    public async Task LaunchConfigurationQueriesCargoMetadataOnlyOncePerExecutableCreation()
-    {
-        var builder = DistributedApplication.CreateBuilder();
-        var app = builder.AddRustApp("api", builder.AppHostDirectory);
-
-        var reader = new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service"));
-        builder.Services.AddSingleton<ICargoMetadataReader>(reader);
-
-        await using var built = builder.Build();
-        await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
-
-        var callbackContext = LaunchConfigurationTestHelpers.CreateCallbackContext(app.Resource);
-
-        // Aspire asks for the launch configuration more than once per resource, and cargo metadata is slow
-        // enough on a cold machine to matter, so the resolved path has to be reused.
-        await LaunchConfigurationTestHelpers.InvokeLaunchConfigurationProducerAsync(app.Resource, callbackContext);
-        await LaunchConfigurationTestHelpers.InvokeLaunchConfigurationProducerAsync(app.Resource, callbackContext);
-
-        Assert.Equal(1, reader.ReadCount);
-    }
-
-    [Fact]
     [RequiresTools(["cargo"])]
-    public async Task LaunchConfigurationCacheTracksRealCargoMetadataPerExecutableCreation()
+    public async Task LaunchConfigurationReadsCurrentRealCargoMetadataForEachRequest()
     {
+        CargoTestHelpers.SkipIfUnavailable();
+
         using var crate = new TempCrateDirectory();
         crate.Write("Cargo.toml", CreateManifest("first"));
         Directory.CreateDirectory(Path.Combine(crate.Path, "src"));
@@ -308,23 +288,24 @@ public class RustPublicApiTests
         await using var built = builder.Build();
         await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
 
-        var firstContext = LaunchConfigurationTestHelpers.CreateCallbackContext(app.Resource);
         var first = Assert.IsType<RustLaunchConfiguration>(
-            await LaunchConfigurationTestHelpers.InvokeLaunchConfigurationProducerAsync(app.Resource, firstContext));
-        var firstPath = Assert.IsType<RustCargoLaunchTarget>(first.Cargo).ExecutablePath;
+            await app.Resource.CreateLaunchConfigurationAsync(
+                ExecutableLaunchMode.Debug,
+                TestContext.Current.CancellationToken));
 
         crate.Write("Cargo.toml", CreateManifest("second"));
 
-        var cached = Assert.IsType<RustLaunchConfiguration>(
-            await LaunchConfigurationTestHelpers.InvokeLaunchConfigurationProducerAsync(app.Resource, firstContext));
-        Assert.Equal(firstPath, Assert.IsType<RustCargoLaunchTarget>(cached.Cargo).ExecutablePath);
+        var second = Assert.IsType<RustLaunchConfiguration>(
+            await app.Resource.CreateLaunchConfigurationAsync(
+                ExecutableLaunchMode.Debug,
+                TestContext.Current.CancellationToken));
 
-        var secondContext = LaunchConfigurationTestHelpers.CreateCallbackContext(app.Resource);
-        var refreshed = Assert.IsType<RustLaunchConfiguration>(
-            await LaunchConfigurationTestHelpers.InvokeLaunchConfigurationProducerAsync(app.Resource, secondContext));
+        Assert.EndsWith(
+            Path.Combine("debug", OperatingSystem.IsWindows() ? "first.exe" : "first"),
+            Assert.IsType<RustCargoLaunchTarget>(first.Cargo).ExecutablePath);
         Assert.EndsWith(
             Path.Combine("debug", OperatingSystem.IsWindows() ? "second.exe" : "second"),
-            Assert.IsType<RustCargoLaunchTarget>(refreshed.Cargo).ExecutablePath);
+            Assert.IsType<RustCargoLaunchTarget>(second.Cargo).ExecutablePath);
 
         static string CreateManifest(string packageName) => $"""
             [package]
@@ -364,7 +345,7 @@ public class RustPublicApiTests
     }
 
     [Fact]
-    public async Task LaunchConfigurationUsesCurrentCargoMetadataForEachExecutableCreation()
+    public async Task LaunchConfigurationQueriesCurrentCargoMetadataOncePerRequest()
     {
         var builder = DistributedApplication.CreateBuilder();
         var app = builder.AddRustApp("api", builder.AppHostDirectory);
@@ -378,13 +359,14 @@ public class RustPublicApiTests
         await using var built = builder.Build();
         await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
 
-        var firstContext = LaunchConfigurationTestHelpers.CreateCallbackContext(app.Resource);
-        var secondContext = LaunchConfigurationTestHelpers.CreateCallbackContext(app.Resource);
-
         var first = Assert.IsType<RustLaunchConfiguration>(
-            await LaunchConfigurationTestHelpers.InvokeLaunchConfigurationProducerAsync(app.Resource, firstContext));
+            await app.Resource.CreateLaunchConfigurationAsync(
+                ExecutableLaunchMode.Debug,
+                TestContext.Current.CancellationToken));
         var second = Assert.IsType<RustLaunchConfiguration>(
-            await LaunchConfigurationTestHelpers.InvokeLaunchConfigurationProducerAsync(app.Resource, secondContext));
+            await app.Resource.CreateLaunchConfigurationAsync(
+                ExecutableLaunchMode.Debug,
+                TestContext.Current.CancellationToken));
 
         Assert.EndsWith(Path.Combine("debug", OperatingSystem.IsWindows() ? "first.exe" : "first"), Assert.IsType<RustCargoLaunchTarget>(first.Cargo).ExecutablePath);
         Assert.EndsWith(Path.Combine("debug", OperatingSystem.IsWindows() ? "second.exe" : "second"), Assert.IsType<RustCargoLaunchTarget>(second.Cargo).ExecutablePath);
@@ -392,7 +374,7 @@ public class RustPublicApiTests
     }
 
     [Fact]
-    public async Task LaunchConfigurationCachesOnlySuccessfulCargoMetadataResolution()
+    public async Task LaunchConfigurationRetriesCargoMetadataOnTheNextRequest()
     {
         var builder = DistributedApplication.CreateBuilder();
         var app = builder.AddRustApp("api", builder.AppHostDirectory);
@@ -416,13 +398,14 @@ public class RustPublicApiTests
         await using var built = builder.Build();
         await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
 
-        var callbackContext = LaunchConfigurationTestHelpers.CreateCallbackContext(app.Resource);
-
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => LaunchConfigurationTestHelpers.InvokeLaunchConfigurationProducerAsync(app.Resource, callbackContext));
+            () => app.Resource.CreateLaunchConfigurationAsync(
+                ExecutableLaunchMode.Debug,
+                TestContext.Current.CancellationToken));
 
-        await LaunchConfigurationTestHelpers.InvokeLaunchConfigurationProducerAsync(app.Resource, callbackContext);
-        await LaunchConfigurationTestHelpers.InvokeLaunchConfigurationProducerAsync(app.Resource, callbackContext);
+        await app.Resource.CreateLaunchConfigurationAsync(
+            ExecutableLaunchMode.Debug,
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(2, reader.ReadCount);
     }

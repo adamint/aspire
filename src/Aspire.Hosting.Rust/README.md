@@ -81,7 +81,7 @@ builder.AddRustApp("api", "../rust-api")
 | `WithCargoBinTarget(string binName)` | Adds `--bin` to select one of several `[[bin]]` targets |
 | `WithCargoExample(string exampleName)` | Adds `--example` to run an example instead of a binary |
 | `WithCargoPackage(string packageName)` | Adds `--package` to select a workspace member |
-| `WithCargoTarget(string target)` | Adds `--target`. Generated Dockerfiles support the `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `x86_64-unknown-linux-gnu`, and `aarch64-unknown-linux-gnu` triples |
+| `WithCargoTarget(string target)` | Adds `--target`. Generated Dockerfiles map native Linux x86_64, aarch64, 32-bit ARM, and 32-bit x86 targets to Docker platforms |
 | `WithCargoManifestPath(string manifestPath)` | Adds `--manifest-path`. Only needed when the manifest is not the one cargo finds from the app directory. Publishing requires a path relative to the app directory so the manifest can be copied into the image |
 | `WithCargoProfile(string profileName)` | Adds `--profile`. Takes precedence over `WithCargoReleaseBuild()`, which cargo rejects alongside `--profile` |
 
@@ -108,14 +108,32 @@ workspace root and select the crate with `WithCargoPackage("<name>")`.
 | Build | `docker.io/library/rust:1.97-alpine3.24` (a `rust-toolchain.toml` pin is installed by rustup inside the image) |
 | Runtime | `docker.io/library/alpine:3.24` |
 
-If you change either image with `WithDockerfileBaseImage`, or name an explicit target with
-`WithCargoTarget`, it is on you to keep the libc compatible across the three — the defaults are all
-musl.
+Each `WithDockerfileBaseImage` call replaces the previous image configuration. When a target needs a
+custom pair, set both images in a single `WithDockerfileBaseImage` call:
 
-The generated Dockerfile maps `x86_64` targets to a Linux AMD64 image and `aarch64` targets to a
-Linux ARM64 image. GNU targets require custom build and runtime images because the defaults use
-musl. `WithCargoTarget` does not install a linker or cross-compilation toolchain, so the selected
-build image must already support the target. Other target triples require an authored Dockerfile.
+```csharp
+builder.AddRustApp("api", "../rust-api")
+    .WithCargoTarget("armv7-unknown-linux-gnueabihf")
+    .WithDockerfileBaseImage(
+        buildImage: "example/rust-armv7-build:latest",
+        runtimeImage: "example/armv7-runtime:latest");
+```
+
+The generated Dockerfile maps `x86_64` to `linux/amd64`, `aarch64` to `linux/arm64`, and 32-bit x86
+to `linux/386`. 32-bit ARM targets map to Docker's `linux/arm` platform, which Docker normalizes to
+the ARMv7 variant.
+
+The default Rust build image publishes only AMD64 and ARM64 variants, while the default Alpine
+runtime image also publishes ARM and 386 variants. Both defaults use musl. 32-bit musl targets need
+a custom build image but can keep the default runtime image. Other ABIs require custom build and
+runtime images configured together in one call.
+
+A custom image pair does not bypass target-platform validation: non-Linux targets and architectures
+without a `ContainerTargetPlatform` mapping still require an authored Dockerfile.
+
+`WithCargoTarget` installs the Rust standard library but does not install a linker or other
+cross-compilation tooling, so the selected build image must already support the target. It is also
+on you to keep the build image, target ABI, and runtime image compatible.
 
 ## Additional documentation
 

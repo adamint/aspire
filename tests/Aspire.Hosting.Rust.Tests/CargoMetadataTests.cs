@@ -97,6 +97,8 @@ public class CargoMetadataTests
     [RequiresTools(["cargo"])]
     public async Task ReadingMetadataDoesNotCompileTheCrate()
     {
+        CargoTestHelpers.SkipIfUnavailable();
+
         using var crate = new TempCrateDirectory();
         crate.Write("Cargo.toml", """
             [package]
@@ -136,6 +138,8 @@ public class CargoMetadataTests
     [RequiresTools(["cargo"])]
     public async Task MissingManifestSurfacesCargosOwnError()
     {
+        CargoTestHelpers.SkipIfUnavailable();
+
         using var crate = new TempCrateDirectory();
 
         var exception = await Assert.ThrowsAsync<DistributedApplicationException>(

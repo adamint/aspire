@@ -91,14 +91,23 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
     }
 
     [Theory]
-    [InlineData("x86_64-unknown-linux-musl", ContainerTargetPlatform.LinuxAmd64, false)]
-    [InlineData("aarch64-unknown-linux-musl", ContainerTargetPlatform.LinuxArm64, false)]
-    [InlineData("x86_64-unknown-linux-gnu", ContainerTargetPlatform.LinuxAmd64, true)]
-    [InlineData("aarch64-unknown-linux-gnu", ContainerTargetPlatform.LinuxArm64, true)]
+    [InlineData("x86_64-unknown-linux-musl", ContainerTargetPlatform.LinuxAmd64, false, false)]
+    [InlineData("aarch64-unknown-linux-musl", ContainerTargetPlatform.LinuxArm64, false, false)]
+    [InlineData("x86_64-unknown-linux-gnu", ContainerTargetPlatform.LinuxAmd64, true, true)]
+    [InlineData("aarch64-unknown-linux-gnu", ContainerTargetPlatform.LinuxArm64, true, true)]
+    [InlineData("arm-unknown-linux-musleabi", ContainerTargetPlatform.LinuxArm, true, false)]
+    [InlineData("arm-unknown-linux-musleabihf", ContainerTargetPlatform.LinuxArm, true, false)]
+    [InlineData("armv7-unknown-linux-musleabi", ContainerTargetPlatform.LinuxArm, true, false)]
+    [InlineData("armv7-unknown-linux-musleabihf", ContainerTargetPlatform.LinuxArm, true, false)]
+    [InlineData("armv7-unknown-linux-gnueabi", ContainerTargetPlatform.LinuxArm, true, true)]
+    [InlineData("armv7-unknown-linux-gnueabihf", ContainerTargetPlatform.LinuxArm, true, true)]
+    [InlineData("i686-unknown-linux-musl", ContainerTargetPlatform.Linux386, true, false)]
+    [InlineData("i686-unknown-linux-gnu", ContainerTargetPlatform.Linux386, true, true)]
     public async Task PublishMapsSupportedCargoTargetsToTheContainerPlatform(
         string target,
         ContainerTargetPlatform expectedPlatform,
-        bool useGnuImages)
+        bool useCustomBuildImage,
+        bool useCustomRuntimeImage)
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         var sourceDir = workspace.CreateDirectory("source");
@@ -107,11 +116,11 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
         builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
         var rust = builder.AddRustApp("api", sourceDir.FullName).WithCargoTarget(target);
-        if (useGnuImages)
+        if (useCustomBuildImage || useCustomRuntimeImage)
         {
             rust.WithDockerfileBaseImage(
-                buildImage: "docker.io/library/rust:1.97.1-bookworm",
-                runtimeImage: "docker.io/library/debian:bookworm-slim");
+                buildImage: useCustomBuildImage ? "example.invalid/rust-cross-build:latest" : null,
+                runtimeImage: useCustomRuntimeImage ? "example.invalid/cross-runtime:latest" : null);
         }
 
         using var app = builder.Build();
@@ -127,8 +136,11 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         Assert.Equal(expectedPlatform, buildOptions.TargetPlatform);
     }
 
-    [Fact]
-    public async Task PublishRejectsAGnuTargetWithTheDefaultMuslImages()
+    [Theory]
+    [InlineData("x86_64-unknown-linux-gnu")]
+    [InlineData("armv7-unknown-linux-gnueabihf")]
+    [InlineData("i686-unknown-linux-gnu")]
+    public async Task PublishRejectsATargetThatNeedsBothCustomImages(string target)
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         var sourceDir = workspace.CreateDirectory("source");
@@ -136,20 +148,47 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
 
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
         builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
-        builder.AddRustApp("api", sourceDir.FullName).WithCargoTarget("x86_64-unknown-linux-gnu");
+        builder.AddRustApp("api", sourceDir.FullName).WithCargoTarget(target);
         using var app = builder.Build();
 
         var exception = await Assert.ThrowsAsync<DistributedApplicationException>(
             () => app.RunAsync(TestContext.Current.CancellationToken));
 
         Assert.Equal(
-            "The Rust app 'api' targets 'x86_64-unknown-linux-gnu', which requires GNU libc build and runtime images. " +
-            "Configure both images with WithDockerfileBaseImage before publishing.",
+            $"The Rust app 'api' targets '{target}', which is not compatible with the default " +
+            "musl build and runtime images. Configure both images in a single " +
+            "WithDockerfileBaseImage(buildImage: ..., runtimeImage: ...) call before publishing; later calls replace " +
+            "the previous configuration.",
+            exception.Message);
+    }
+
+    [Theory]
+    [InlineData("armv7-unknown-linux-musleabihf", ContainerTargetPlatform.LinuxArm)]
+    [InlineData("i686-unknown-linux-musl", ContainerTargetPlatform.Linux386)]
+    public async Task PublishRejectsA32BitTargetWithoutACustomBuildImage(
+        string target,
+        ContainerTargetPlatform targetPlatform)
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var sourceDir = workspace.CreateDirectory("source");
+        var outputDir = workspace.CreateDirectory("output");
+
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
+        builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
+        builder.AddRustApp("api", sourceDir.FullName).WithCargoTarget(target);
+        using var app = builder.Build();
+
+        var exception = await Assert.ThrowsAsync<DistributedApplicationException>(
+            () => app.RunAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(
+            $"The Rust app 'api' targets '{target}', but the default Rust build image does not support container " +
+            $"target platform '{targetPlatform}'. Configure buildImage with WithDockerfileBaseImage before publishing.",
             exception.Message);
     }
 
     [Fact]
-    public async Task PublishRejectsATargetThatCannotRunInTheGeneratedLinuxContainer()
+    public async Task PublishRejectsSplitBaseImageCallsForANonMuslTarget()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         var sourceDir = workspace.CreateDirectory("source");
@@ -157,16 +196,46 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
 
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
         builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
-        builder.AddRustApp("api", sourceDir.FullName).WithCargoTarget("wasm32-wasip1");
+        builder.AddRustApp("api", sourceDir.FullName)
+            .WithCargoTarget("x86_64-unknown-linux-gnu")
+            .WithDockerfileBaseImage(buildImage: "docker.io/library/rust:1.97.1-bookworm")
+            .WithDockerfileBaseImage(runtimeImage: "docker.io/library/debian:bookworm-slim");
         using var app = builder.Build();
 
         var exception = await Assert.ThrowsAsync<DistributedApplicationException>(
             () => app.RunAsync(TestContext.Current.CancellationToken));
 
         Assert.Equal(
-            "The Rust app 'api' targets 'wasm32-wasip1', but generated Rust containers support only " +
-            "x86_64-unknown-linux-musl, aarch64-unknown-linux-musl, x86_64-unknown-linux-gnu, and " +
-            "aarch64-unknown-linux-gnu.",
+            "The Rust app 'api' targets 'x86_64-unknown-linux-gnu', which is not compatible with the default " +
+            "musl build and runtime images. Configure both images in a single " +
+            "WithDockerfileBaseImage(buildImage: ..., runtimeImage: ...) call before publishing; later calls replace " +
+            "the previous configuration.",
+            exception.Message);
+    }
+
+    [Fact]
+    public async Task PublishRejectsATargetThatCannotMapToAContainerPlatformEvenWithCustomImages()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var sourceDir = workspace.CreateDirectory("source");
+        var outputDir = workspace.CreateDirectory("output");
+
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
+        builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
+        builder.AddRustApp("api", sourceDir.FullName)
+            .WithCargoTarget("wasm32-wasip1")
+            .WithDockerfileBaseImage(
+                buildImage: "example.invalid/custom-rust-build:latest",
+                runtimeImage: "example.invalid/custom-runtime:latest");
+        using var app = builder.Build();
+
+        var exception = await Assert.ThrowsAsync<DistributedApplicationException>(
+            () => app.RunAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(
+            "The Rust app 'api' targets 'wasm32-wasip1', which cannot be mapped to a supported Docker Linux " +
+            "container platform. Generated Rust containers support native Linux x86_64, aarch64, 32-bit ARM, " +
+            "and 32-bit x86 targets. Use an authored Dockerfile to publish this target.",
             exception.Message);
     }
 
@@ -267,19 +336,30 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
     }
 
     [Theory]
-    [InlineData("raw-argument")]
-    [InlineData("nul-argument")]
-    [InlineData("feature")]
-    [InlineData("manifest-path")]
-    [InlineData("binary-path")]
-    public async Task PublishDoesNotEmitADockerfileWhenCargoValuesContainControlCharacters(string valueKind)
+    [InlineData("raw-argument", "cargo argument", "U+000A")]
+    [InlineData("nul-argument", "cargo argument", "U+0000")]
+    [InlineData("feature", "cargo argument", "U+000D")]
+    [InlineData("manifest-path", "cargo manifest path", "U+000A")]
+    [InlineData("binary-path", "resolved Cargo target executable name", "U+001B")]
+    [InlineData("build-image", "Dockerfile build image", "U+000A")]
+    [InlineData("runtime-image", "Dockerfile runtime image", "U+000D")]
+    [InlineData("resolved-executable", "resolved Cargo target executable name", "U+000A")]
+    public async Task PublishRejectsDockerfileValuesContainingControlCharacters(
+        string valueKind,
+        string valueDescription,
+        string codePoint)
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         var sourceDir = workspace.CreateDirectory("source");
         var outputDir = workspace.CreateDirectory("output");
 
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
-        builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
+        var reporter = new TestPipelineActivityReporter(outputHelper);
+        builder.Services.AddSingleton<IPipelineActivityReporter>(reporter);
+        var metadata = valueKind == "resolved-executable"
+            ? CargoMetadataFactory.SinglePackage("my\\u000aservice")
+            : CargoMetadataFactory.SinglePackage("my-service");
+        builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(metadata));
         var rust = builder.AddRustApp("api", sourceDir.FullName);
 
         _ = valueKind switch
@@ -289,12 +369,20 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
             "feature" => rust.WithCargoFeatures("safe\rRUN echo injected"),
             "manifest-path" => rust.WithCargoManifestPath("Cargo.toml\nFROM scratch"),
             "binary-path" => rust.WithCargoBinTarget("api\u001b"),
+            "build-image" => rust.WithDockerfileBaseImage(buildImage: "rust:1.97\nFROM scratch"),
+            "runtime-image" => rust.WithDockerfileBaseImage(runtimeImage: "alpine:3.24\rRUN echo injected"),
+            "resolved-executable" => rust,
             _ => throw new ArgumentOutOfRangeException(nameof(valueKind))
         };
 
         using var app = builder.Build();
         await app.RunAsync(TestContext.Current.CancellationToken);
 
+        Assert.Equal(CompletionState.CompletedWithError, reporter.ResultCompletionState);
+        Assert.Equal(
+            $"The Rust app 'api' has a {valueDescription} containing the control character {codePoint}. " +
+            "Control characters cannot be written to a generated Dockerfile.",
+            reporter.CompletionMessage);
         Assert.False(File.Exists(Path.Combine(outputDir.FullName, "api.Dockerfile")));
     }
 

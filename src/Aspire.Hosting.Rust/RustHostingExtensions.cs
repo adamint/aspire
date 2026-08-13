@@ -7,7 +7,6 @@
 #pragma warning disable ASPIREPIPELINES003
 
 using System.Diagnostics.CodeAnalysis;
-using System.Runtime.CompilerServices;
 using System.Text;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.ApplicationModel.Docker;
@@ -51,8 +50,8 @@ public static class RustHostingExtensions
     /// <para>
     /// When publishing, a multi-stage Dockerfile is generated that builds the crate inside the container;
     /// the crate is never compiled on the host. If the app directory already contains a <c>Dockerfile</c>,
-    /// that file is used instead. Call <c>WithDockerfileBaseImage</c> to override the build and runtime
-    /// base images.
+    /// that file is used instead. Call <c>WithDockerfileBaseImage</c> once with both arguments to override
+    /// the build and runtime base images together; each call replaces the previous image configuration.
     /// </para>
     /// </remarks>
     /// <example>
@@ -375,11 +374,18 @@ public static class RustHostingExtensions
     /// <c>target/&lt;triple&gt;/&lt;profile&gt;/</c>, and the generated Dockerfile follows that layout and adds
     /// the target's standard library to the build image with <c>rustup target add</c>.
     /// <para>
-    /// Aspire-generated Dockerfiles support the x86_64 and aarch64 Linux musl and GNU triples. The selected
-    /// architecture becomes the container build platform, musl uses the default images, and GNU requires
-    /// custom build and runtime images. A custom build image must already contain any linker or native
-    /// dependencies the target needs; <c>WithDockerfileBaseImage</c> changes images but does not install
-    /// cross-compilation tooling. Other triples require an authored Dockerfile for publishing.
+    /// Aspire-generated Dockerfiles map native Linux x86_64, aarch64, 32-bit ARM, and 32-bit x86 targets to
+    /// Docker Linux platforms. Docker's <c>linux/arm</c> platform represents the ARMv7 variant. The default
+    /// build and runtime images support x86_64 and aarch64 musl targets. A 32-bit musl target needs a custom
+    /// build image but can use the default runtime image. Other ABIs require custom build and runtime images
+    /// configured together in one <c>WithDockerfileBaseImage</c> call because later calls replace the previous
+    /// image configuration.
+    /// </para>
+    /// <para>
+    /// Custom images opt out of default-image compatibility checks, but the target must still map to a
+    /// supported native Docker Linux platform. A custom build image must already contain any linker or
+    /// native dependencies the target needs; <c>WithDockerfileBaseImage</c> changes images but does not
+    /// install cross-compilation tooling. Other targets require an authored Dockerfile for publishing.
     /// </para>
     /// </remarks>
     [AspireExport]
@@ -589,8 +595,6 @@ public static class RustHostingExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        var debugExecutablePathCache = new ConditionalWeakTable<LaunchConfigurationCallbackContext, DebugExecutablePathCache>();
-
         return builder.WithDebugSupport(
             async context =>
             {
@@ -606,8 +610,6 @@ public static class RustHostingExtensions
 
                 var workingDirectory = Path.GetFullPath(resource.WorkingDirectory);
                 var executablePath = await ResolveDebugExecutablePathAsync(
-                    debugExecutablePathCache,
-                    context,
                     resource,
                     workingDirectory,
                     builder.ApplicationBuilder.ExecutionContext,
@@ -639,40 +641,6 @@ public static class RustHostingExtensions
     // artifacts: `cargo build` ignores `default-run` and therefore reports every binary in the package,
     // whereas metadata reports `default-run` itself and so matches what `cargo run` launches.
     private static async Task<string> ResolveDebugExecutablePathAsync(
-        ConditionalWeakTable<LaunchConfigurationCallbackContext, DebugExecutablePathCache> caches,
-        LaunchConfigurationCallbackContext callbackContext,
-        RustAppResource resource,
-        string workingDirectory,
-        DistributedApplicationExecutionContext executionContext,
-        IReadOnlyDictionary<string, string> environment,
-        CancellationToken cancellationToken)
-    {
-        // A launch callback context represents one executable creation, including its resolved environment.
-        // Reuse metadata work only inside that creation: restarts and replicas get a new context because
-        // Cargo.toml, CARGO_TARGET_DIR, or CARGO_BUILD_TARGET may have changed since the previous process.
-        var cache = caches.GetValue(callbackContext, static _ => new DebugExecutablePathCache());
-
-        try
-        {
-            return await cache.GetOrCreateAsync(
-                ct => ResolveDebugExecutablePathCoreAsync(
-                    resource,
-                    workingDirectory,
-                    executionContext,
-                    environment,
-                    ct),
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            // Missing toolchains and transient metadata failures are retryable even when Aspire invokes the
-            // producer again with the same executable-creation context.
-            caches.Remove(callbackContext);
-            throw;
-        }
-    }
-
-    private static async Task<string> ResolveDebugExecutablePathCoreAsync(
         RustAppResource resource,
         string workingDirectory,
         DistributedApplicationExecutionContext executionContext,
@@ -851,57 +819,76 @@ public static class RustHostingExtensions
             return null;
         }
 
-        var platform = target switch
+        // Built-in Rust Linux targets use <architecture>-<vendor>-linux-<environment>, for example
+        // armv7-unknown-linux-musleabihf. Custom target JSON paths and non-Linux targets do not carry enough
+        // information to choose a native Docker platform and therefore need an authored Dockerfile.
+        var targetParts = target.Split('-');
+        if (targetParts.Length < 4 || !string.Equals(targetParts[2], "linux", StringComparison.Ordinal))
         {
-            "x86_64-unknown-linux-musl" or "x86_64-unknown-linux-gnu" => ContainerTargetPlatform.LinuxAmd64,
-            "aarch64-unknown-linux-musl" or "aarch64-unknown-linux-gnu" => ContainerTargetPlatform.LinuxArm64,
-            _ => throw new DistributedApplicationException(
-                $"The Rust app '{resource.Name}' targets '{target}', but generated Rust containers support only " +
-                "x86_64-unknown-linux-musl, aarch64-unknown-linux-musl, x86_64-unknown-linux-gnu, and " +
-                "aarch64-unknown-linux-gnu.")
+            throw CreateUnsupportedContainerTargetException(resource, target);
+        }
+
+        var architecture = targetParts[0];
+        // ContainerTargetPlatform.LinuxArm emits Docker's canonical linux/arm platform, which containerd
+        // normalizes to the v7 variant. See https://github.com/containerd/platforms/blob/main/platforms.go.
+        var platform = architecture switch
+        {
+            "x86_64" => ContainerTargetPlatform.LinuxAmd64,
+            "aarch64" => ContainerTargetPlatform.LinuxArm64,
+            "i386" or "i486" or "i586" or "i686" => ContainerTargetPlatform.Linux386,
+            "arm" or "armv4t" or "armv5te" or "armv7" or "thumbv7neon" => ContainerTargetPlatform.LinuxArm,
+            _ => throw CreateUnsupportedContainerTargetException(resource, target)
         };
 
-        if (target.EndsWith("-gnu", StringComparison.Ordinal))
+        var targetEnvironment = targetParts[3];
+        // The official Rust image index used by the default build stage publishes amd64 and arm64 images,
+        // but not Docker's 32-bit arm or 386 platforms. Those architectures therefore need a custom build
+        // image even when the default Alpine runtime image already supports the target platform.
+        var defaultBuildImageCompatible = platform is ContainerTargetPlatform.LinuxAmd64 or ContainerTargetPlatform.LinuxArm64
+            && string.Equals(targetEnvironment, "musl", StringComparison.Ordinal);
+        var defaultRuntimeImageCompatible = platform == ContainerTargetPlatform.LinuxArm
+            ? targetEnvironment is "musleabi" or "musleabihf"
+            : string.Equals(targetEnvironment, "musl", StringComparison.Ordinal);
+
+        var baseImages = container.Annotations.OfType<DockerfileBaseImageAnnotation>().LastOrDefault()
+            ?? resource.Annotations.OfType<DockerfileBaseImageAnnotation>().LastOrDefault();
+        var customBuildImageConfigured = baseImages?.BuildImage is not null;
+        var customRuntimeImageConfigured = baseImages?.RuntimeImage is not null;
+
+        if (!defaultBuildImageCompatible && !defaultRuntimeImageCompatible
+            && (!customBuildImageConfigured || !customRuntimeImageConfigured))
         {
-            var baseImages = container.Annotations.OfType<DockerfileBaseImageAnnotation>().LastOrDefault();
-            if (baseImages?.BuildImage is null || baseImages.RuntimeImage is null)
-            {
-                throw new DistributedApplicationException(
-                    $"The Rust app '{resource.Name}' targets '{target}', which requires GNU libc build and runtime images. " +
-                    "Configure both images with WithDockerfileBaseImage before publishing.");
-            }
+            throw new DistributedApplicationException(
+                $"The Rust app '{resource.Name}' targets '{target}', which is not compatible with the default " +
+                "musl build and runtime images. Configure both images in a single " +
+                "WithDockerfileBaseImage(buildImage: ..., runtimeImage: ...) call before publishing; later calls replace " +
+                "the previous configuration.");
+        }
+
+        if (!defaultBuildImageCompatible && !customBuildImageConfigured)
+        {
+            throw new DistributedApplicationException(
+                $"The Rust app '{resource.Name}' targets '{target}', but the default Rust build image does not support " +
+                $"container target platform '{platform}'. Configure buildImage with WithDockerfileBaseImage before publishing.");
+        }
+
+        if (!defaultRuntimeImageCompatible && !customRuntimeImageConfigured)
+        {
+            throw new DistributedApplicationException(
+                $"The Rust app '{resource.Name}' targets '{target}', but the default Rust runtime image is not compatible " +
+                "with its target ABI. Configure runtimeImage with WithDockerfileBaseImage before publishing.");
         }
 
         return platform;
     }
 
-    private sealed class DebugExecutablePathCache
-    {
-        private readonly SemaphoreSlim _gate = new(1, 1);
-        private string? _executablePath;
-
-        public async Task<string> GetOrCreateAsync(
-            Func<CancellationToken, Task<string>> factory,
-            CancellationToken cancellationToken)
-        {
-            if (_executablePath is { } cached)
-            {
-                return cached;
-            }
-
-            await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try
-            {
-                _executablePath ??= await factory(cancellationToken).ConfigureAwait(false);
-
-                return _executablePath;
-            }
-            finally
-            {
-                _gate.Release();
-            }
-        }
-    }
+    private static DistributedApplicationException CreateUnsupportedContainerTargetException(
+        RustAppResource resource,
+        string target)
+        => new(
+            $"The Rust app '{resource.Name}' targets '{target}', which cannot be mapped to a supported Docker Linux " +
+            "container platform. Generated Rust containers support native Linux x86_64, aarch64, 32-bit ARM, " +
+            "and 32-bit x86 targets. Use an authored Dockerfile to publish this target.");
 
     private sealed class RustPublishState
     {
