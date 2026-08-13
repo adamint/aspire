@@ -107,6 +107,24 @@ suite('nuget source command forwarding', () => {
         assert.deepStrictEqual(sentCommands, [{ subcommand: 'new', additionalArgs: ['--source', configuredNugetSource] }]);
     });
 
+    for (const [description, source] of [
+        ['an IPv6 URL', 'https://[2001:db8::1]/v3/index.json'],
+        ['a scoped IPv6 URL without credential material', 'https://[fe80::1%25eth0]/v3/index.json'],
+        ['a local path', '/workspace/packages'],
+    ]) {
+        test(`new forwards ${description}`, async () => {
+            configuredNugetSource = source;
+
+            await newCommand(createTerminalProvider());
+
+            assert.deepStrictEqual(sentCommands, [{
+                subcommand: 'new',
+                additionalArgs: ['--source', configuredNugetSource]
+            }]);
+            assert.strictEqual(showErrorMessageStub.called, false);
+        });
+    }
+
     test('add appends a configured nuget source after the apphost arguments', async () => {
         configuredNugetSource = 'https://pkgs.dev.azure.com/dnceng/_packaging/dotnet-public/nuget/v3/index.json';
 
@@ -147,6 +165,24 @@ suite('nuget source command forwarding', () => {
         });
     }
 
+    for (const [description, source] of [
+        ['userinfo and a query string', 'https://user:pass@[fe80::1%25eth0]/v3/index.json?sig=token'],
+        ['userinfo', 'https://user:pass@[fe80::1%25eth0]/v3/index.json'],
+        ['a query string', 'https://[fe80::1%25eth0]/v3/index.json?sig=token'],
+        ['a fragment', 'https://[fe80::1%25eth0]/v3/index.json#token'],
+        ['an empty query string', 'https://[fe80::1%25eth0]/v3/index.json?'],
+        ['an empty fragment', 'https://[fe80::1%25eth0]/v3/index.json#'],
+    ]) {
+        test(`new rejects a scoped IPv6 nuget source with ${description}`, async () => {
+            configuredNugetSource = source;
+
+            await assert.rejects(() => newCommand(createTerminalProvider()), vscode.CancellationError);
+
+            assert.deepStrictEqual(sentCommands, []);
+            assert.deepStrictEqual(showErrorMessageStub.firstCall.args, [invalidSourceMessage]);
+        });
+    }
+
     test('new allows credential material on non-HTTP sources to match the CLI policy', async () => {
         configuredNugetSource = 'ftp://user:password@example.com/v3/index.json?query#fragment';
 
@@ -162,6 +198,8 @@ suite('nuget source command forwarding', () => {
     for (const source of [
         'https:example.com/v3/index.json?sig=token',
         'http:\\\\example.com\\v3\\index.json?sig=token',
+        'https://[fe80::1%25eth0]:invalid/v3/index.json?sig=token',
+        'https://example host/v3/index.json?sig=token',
     ]) {
         test(`new allows malformed HTTP-shaped source "${source}" to match the CLI policy`, async () => {
             configuredNugetSource = source;
