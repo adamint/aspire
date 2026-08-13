@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { isSamePath, waitForNoDebugSessions, waitForNoRunningAppHost, waitForRepositoryIdle, waitForWorkspaceAppHost } from './helpers/assertions';
+import { isSamePath, waitForNoDebugSessions, waitForRepositoryIdle, waitForWorkspaceAppHost } from './helpers/assertions';
 import { clearBreakpoints, executeE2eControlCommand, getAppHostPidFromState, getNodeAppBreakpointLine, isProcessRunning, runE2eTeardown, stopPrimaryAppHostIfRunning, waitForProcessExit } from './helpers/fixtures';
 import { getNodeAppScriptPath, getPrimaryAppHostProjectPath } from './helpers/paths';
 import { openAspireView } from './helpers/vscode';
@@ -41,7 +41,9 @@ interface ResourceDebugProof {
 
 const nodeResourceName = 'e2e-node';
 const resourceDebuggerDeadlineTimeoutMs = 900000;
-const mochaTeardownSlackMs = 30000;
+// Teardown has four ordered phases with independent ceilings. Their sum bounds cleanup while
+// ensuring an expired proof deadline cannot prevent later cleanup callbacks from running.
+const resourceDebuggerTeardownTimeoutMs = 480000;
 const resourceDebuggerProofControlSlackMs = 60000;
 const resourceDebuggerPhaseTimeoutMs = {
     openAspireView: 60000,
@@ -59,10 +61,9 @@ const resourceDebuggerPhaseTimeoutMs = {
 let resourceDebuggerDeadline = 0;
 
 suite('Aspire resource debugger E2E', function () {
-    // Every phase shares one deadline so adding another setup or teardown wait cannot silently
-    // extend the test. Mocha gets only enough extra time to report the deadline failure and run
-    // the teardown hook rather than an independent sum of every phase's maximum.
-    this.timeout(resourceDebuggerDeadlineTimeoutMs + mochaTeardownSlackMs);
+    // Proof phases share one deadline so adding another setup or assertion cannot silently extend
+    // the test. Teardown gets a separate bounded budget so cleanup still runs after that deadline.
+    this.timeout(resourceDebuggerDeadlineTimeoutMs + resourceDebuggerTeardownTimeoutMs);
 
     setup(() => {
         resourceDebuggerDeadline = Date.now() + resourceDebuggerDeadlineTimeoutMs;
@@ -70,31 +71,22 @@ suite('Aspire resource debugger E2E', function () {
 
     teardown(async () => {
         await runE2eTeardown([
-            () => runResourceDebuggerPhase(
+            () => runResourceDebuggerCleanupPhase(
                 'resource debugger teardown stop control',
-                resourceDebuggerDeadline,
                 resourceDebuggerPhaseTimeoutMs.stopDebuggingControl,
                 timeoutMs => executeE2eControlCommand({ name: 'stopDebugging' }, { timeoutMs })),
-            () => runResourceDebuggerPhase(
+            () => runResourceDebuggerCleanupPhase(
                 'resource debugger teardown breakpoint cleanup',
-                resourceDebuggerDeadline,
                 resourceDebuggerPhaseTimeoutMs.debugSessions,
                 () => clearBreakpoints()),
-            () => runResourceDebuggerPhase(
+            () => runResourceDebuggerCleanupPhase(
                 'resource debugger teardown AppHost stop',
-                resourceDebuggerDeadline,
                 resourceDebuggerPhaseTimeoutMs.appHostStop,
                 () => stopPrimaryAppHostIfRunning()),
-            () => runResourceDebuggerPhase(
+            () => runResourceDebuggerCleanupPhase(
                 'resource debugger teardown debug sessions',
-                resourceDebuggerDeadline,
                 resourceDebuggerPhaseTimeoutMs.debugSessions,
-                timeoutMs => waitForNoDebugSessions(timeoutMs).catch(() => undefined)),
-            () => runResourceDebuggerPhase(
-                'resource debugger teardown AppHost state',
-                resourceDebuggerDeadline,
-                resourceDebuggerPhaseTimeoutMs.appHostExit,
-                timeoutMs => waitForNoRunningAppHost(timeoutMs).catch(() => undefined)),
+                timeoutMs => waitForNoDebugSessions(timeoutMs)),
         ], 'Resource debugger E2E teardown failed.');
     });
 
@@ -225,9 +217,10 @@ suite('Aspire resource debugger E2E', function () {
 
         // Assert on the AppHost process rather than on `waitForNoRunningAppHost`. The state file's
         // AppHost list is a mirror that lags a stop and can still name a dead pid long afterwards
-        // (documented in `waitForNoRunningAppHostPathOrStopKnownProcess`, and why the teardown above
-        // tolerates that wait failing). Process liveness is the stronger claim and the one this test
-        // is actually making: stopping the debugger must leave no part of the tree running.
+        // (documented in `waitForNoRunningAppHostPathOrStopKnownProcess`, and why teardown relies on
+        // process-aware stopping instead of that mirror). Process liveness is the stronger claim and
+        // the one this test is actually making: stopping the debugger must leave no part of the tree
+        // running.
         await runResourceDebuggerPhase(
             'resource debugger AppHost process exit',
             resourceDebuggerDeadline,
@@ -303,6 +296,16 @@ async function runResourceDebuggerPhase<T>(
     const phaseDeadline = Math.min(deadline, Date.now() + timeoutMs);
 
     return await runWithE2eDeadline(description, phaseDeadline, () => operation(timeoutMs));
+}
+
+async function runResourceDebuggerCleanupPhase<T>(
+    description: string,
+    phaseCeilingMs: number,
+    operation: (timeoutMs: number) => PromiseLike<T>,
+): Promise<T> {
+    const deadline = Date.now() + phaseCeilingMs;
+
+    return await runResourceDebuggerPhase(description, deadline, phaseCeilingMs, operation);
 }
 
 function toSessionSummary(session: ResourceDebugSessionSnapshot): { id: string; type: string; name: string } {

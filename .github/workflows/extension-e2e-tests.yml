@@ -262,6 +262,8 @@ jobs:
           # needs node on PATH and nothing else: both hosted runners ship it. Adding a language whose
           # debugger lives in a marketplace extension (Python, Go, Rust, MAUI) would need that
           # extension installed into the E2E VS Code instance first, which this matrix does not do.
+          # Its two bounded proof runs and three bounded teardowns can total 54 minutes in the worst
+          # case, so leave six minutes for Mocha/browser shutdown and 15 minutes for job diagnostics.
           - name: Linux
             shardName: resource-debugger
             spec: out/test-e2e/test-e2e/resourceDebugger.e2e.test.js
@@ -270,6 +272,7 @@ jobs:
             archivePattern: aspire-cli-linux-x64*.tar.gz
             cliBinary: aspire
             useXvfb: true
+            runTestsTimeoutMs: 3600000
           - name: Windows
             shardName: resource-debugger
             spec: out/test-e2e/test-e2e/resourceDebugger.e2e.test.js
@@ -278,6 +281,7 @@ jobs:
             archivePattern: aspire-cli-win-x64*.zip
             cliBinary: aspire.exe
             useXvfb: false
+            runTestsTimeoutMs: 3600000
     defaults:
       run:
         shell: pwsh
@@ -511,6 +515,7 @@ jobs:
           ASPIRE_EXTENSION_E2E_SHARD: ${{ matrix.shardName }}
           ASPIRE_EXTENSION_E2E_SPEC: ${{ matrix.spec }}
           ASPIRE_EXTENSION_E2E_ADVISORY_ISSUE: ${{ matrix.advisoryIssue }}
+          ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS: ${{ matrix.runTestsTimeoutMs || 2400000 }}
           ASPIRE_EXTENSION_E2E_UNSET_CLI_START_TIMEOUT: ${{ matrix.unsetCliStartTimeout }}
           # Linux E2E jobs run under Xvfb, where ffmpeg recordings are compact
           # and useful for diagnosing timing-sensitive flakes after the fact.

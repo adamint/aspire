@@ -11,13 +11,18 @@ function readSourcePattern(source: string, name: string): RegExp {
     return new RegExp(declaration[1]);
 }
 
-function normalizeRunnerSource(source: string): string {
+function normalizeLineEndings(source: string): string {
     return source.replace(/\r\n/g, '\n');
 }
 
 function readRunnerSource(extensionRoot: string): string {
-    return normalizeRunnerSource(
+    return normalizeLineEndings(
         fs.readFileSync(path.resolve(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8'));
+}
+
+function readResourceDebuggerSource(extensionRoot: string): string {
+    return normalizeLineEndings(
+        fs.readFileSync(path.resolve(extensionRoot, 'src', 'test-e2e', 'resourceDebugger.e2e.test.ts'), 'utf8'));
 }
 
 /**
@@ -50,12 +55,16 @@ const resourceDebuggerCallsRequiringTimeoutArgument = new Set([
     'waitForWorkspaceAppHost',
 ]);
 
-function assertResourceDebuggerUsesSharedDeadline(source: string): void {
+function assertResourceDebuggerUsesBoundedDeadlines(source: string): void {
     const sourceFile = ts.createSourceFile('resourceDebugger.e2e.test.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
     const wrapperDeclaration = sourceFile.statements.find(statement =>
         ts.isFunctionDeclaration(statement) && statement.name?.text === 'runResourceDebuggerPhase');
     assert.ok(wrapperDeclaration && ts.isFunctionDeclaration(wrapperDeclaration) && wrapperDeclaration.body,
         'Expected the resource debugger to define its shared-deadline phase wrapper.');
+    const cleanupWrapperDeclaration = sourceFile.statements.find(statement =>
+        ts.isFunctionDeclaration(statement) && statement.name?.text === 'runResourceDebuggerCleanupPhase');
+    assert.ok(cleanupWrapperDeclaration && ts.isFunctionDeclaration(cleanupWrapperDeclaration) && cleanupWrapperDeclaration.body,
+        'Expected the resource debugger to define its independent cleanup phase wrapper.');
 
     const wrapperText = wrapperDeclaration.getText(sourceFile);
     assert.ok(wrapperText.includes('getRemainingE2eDeadlineMs('), 'The phase wrapper must derive its timeout from the shared deadline.');
@@ -65,6 +74,46 @@ function assertResourceDebuggerUsesSharedDeadline(source: string): void {
     assert.ok(
         wrapperText.includes('runWithE2eDeadline(description, phaseDeadline,'),
         'The phase wrapper must bound operations that do not accept a timeout argument by the derived phase deadline.');
+    const cleanupWrapperText = cleanupWrapperDeclaration.getText(sourceFile);
+    assert.ok(
+        cleanupWrapperText.includes('const deadline = Date.now() + phaseCeilingMs;'),
+        'Each cleanup phase must receive a fresh deadline after the proof deadline expires.');
+    assert.ok(
+        cleanupWrapperText.includes('runResourceDebuggerPhase(description, deadline, phaseCeilingMs, operation)'),
+        'Cleanup phases must retain the same per-operation timeout enforcement as proof phases.');
+    let teardownCallback: ts.ArrowFunction | undefined;
+    const findTeardownCallback = (node: ts.Node): void => {
+        if (ts.isCallExpression(node)
+            && ts.isIdentifier(node.expression)
+            && node.expression.text === 'teardown'
+            && ts.isArrowFunction(node.arguments[0])) {
+            teardownCallback = node.arguments[0];
+            return;
+        }
+
+        ts.forEachChild(node, findTeardownCallback);
+    };
+    findTeardownCallback(sourceFile);
+    assert.ok(teardownCallback, 'Expected the resource debugger suite to register teardown cleanup.');
+    const teardownText = teardownCallback.getText(sourceFile);
+    assert.ok(teardownText.includes('runResourceDebuggerCleanupPhase('),
+        'Teardown cleanup must run through the independent cleanup phase wrapper.');
+    assert.ok(!teardownText.includes('resourceDebuggerDeadline'),
+        'Teardown cleanup must not reuse the proof deadline.');
+    let waitsOnAppHostStateMirror = false;
+    const findAppHostStateWait = (node: ts.Node): void => {
+        if (ts.isCallExpression(node)
+            && ts.isIdentifier(node.expression)
+            && node.expression.text === 'waitForNoRunningAppHost') {
+            waitsOnAppHostStateMirror = true;
+            return;
+        }
+
+        ts.forEachChild(node, findAppHostStateWait);
+    };
+    findAppHostStateWait(teardownCallback);
+    assert.ok(!waitsOnAppHostStateMirror,
+        'Teardown must not wait on the extension state AppHost mirror after process-aware stopping has completed.');
 
     const requiredPhaseCeilings = [
         'openAspireView',
@@ -83,14 +132,14 @@ function assertResourceDebuggerUsesSharedDeadline(source: string): void {
     }
 
     assert.ok(
-        source.includes('this.timeout(resourceDebuggerDeadlineTimeoutMs + mochaTeardownSlackMs);'),
-        'The Mocha timeout must leave teardown slack above the shared resource debugger deadline.');
+        source.includes('this.timeout(resourceDebuggerDeadlineTimeoutMs + resourceDebuggerTeardownTimeoutMs);'),
+        'The Mocha timeout must include the independently bounded teardown budget.');
     const deadlineTimeoutMatch = /const resourceDebuggerDeadlineTimeoutMs = (\d+);/.exec(source);
-    const teardownSlackMatch = /const mochaTeardownSlackMs = (\d+);/.exec(source);
+    const teardownTimeoutMatch = /const resourceDebuggerTeardownTimeoutMs = (\d+);/.exec(source);
     assert.ok(deadlineTimeoutMatch, 'Expected a numeric shared resource debugger deadline.');
-    assert.ok(teardownSlackMatch, 'Expected numeric Mocha teardown slack.');
-    assert.ok(Number(teardownSlackMatch[1]) > 0, 'The Mocha timeout must exceed the shared resource debugger deadline.');
-    assert.ok(Number(teardownSlackMatch[1]) <= 60000, 'The Mocha teardown slack must not become another long independent timeout.');
+    assert.ok(teardownTimeoutMatch, 'Expected a numeric resource debugger teardown timeout.');
+    assert.ok(Number(teardownTimeoutMatch[1]) > 0, 'The Mocha timeout must exceed the shared resource debugger deadline.');
+    assert.ok(Number(teardownTimeoutMatch[1]) <= 600000, 'The teardown timeout must remain bounded below the workflow timeout.');
 
     let protectedCallCount = 0;
     const visit = (node: ts.Node): void => {
@@ -103,11 +152,16 @@ function assertResourceDebuggerUsesSharedDeadline(source: string): void {
                 if (ts.isArrowFunction(current) || ts.isFunctionExpression(current)) {
                     const parent: ts.Node = current.parent;
                     if (ts.isCallExpression(parent)
-                        && ts.isIdentifier(parent.expression)
-                        && parent.expression.text === 'runResourceDebuggerPhase'
-                        && parent.arguments[3] === current) {
-                        callback = current;
-                        break;
+                        && ts.isIdentifier(parent.expression)) {
+                        const callbackIndex = parent.expression.text === 'runResourceDebuggerPhase'
+                            ? 3
+                            : parent.expression.text === 'runResourceDebuggerCleanupPhase'
+                                ? 2
+                                : -1;
+                        if (parent.arguments[callbackIndex] === current) {
+                            callback = current;
+                            break;
+                        }
                     }
                 }
                 current = current.parent;
@@ -1302,7 +1356,7 @@ suite('E2E launch profile', () => {
 
     test('applies protected runner mutations with Windows line endings', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = normalizeRunnerSource(
+        const runner = normalizeLineEndings(
             readRunnerSource(extensionRoot)
                 .replace(/\r?\n/g, '\r\n'))
             .replace(
@@ -2274,7 +2328,7 @@ suite('E2E launch profile', () => {
 
     test('waits for resource debugger child processes in parallel', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const resourceDebugger = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'resourceDebugger.e2e.test.ts'), 'utf8');
+        const resourceDebugger = readResourceDebuggerSource(extensionRoot);
         const nodeProofTest = getTestBlock(resourceDebugger, 'stopping debugging tears down the Node resource process tree');
 
         assert.ok(nodeProofTest.includes('await Promise.all(['), 'The two process-exit waits must share the same wall-clock budget.');
@@ -2283,38 +2337,100 @@ suite('E2E launch profile', () => {
         assert.ok(nodeProofTest.indexOf(']);') > nodeProofTest.indexOf('waitForProcessExit(childPid'));
     });
 
-    test('uses one shared deadline for every resource debugger phase', () => {
+    test('uses bounded operation and cleanup deadlines for every resource debugger phase', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const resourceDebugger = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'resourceDebugger.e2e.test.ts'), 'utf8');
+        const resourceDebugger = readResourceDebuggerSource(extensionRoot);
 
-        assertResourceDebuggerUsesSharedDeadline(resourceDebugger);
+        assertResourceDebuggerUsesBoundedDeadlines(resourceDebugger);
+    });
+
+    test('gives resource debugger shards enough runner time for their bounded suite budget', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const resourceDebugger = readResourceDebuggerSource(extensionRoot);
+        const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
+        const proofTimeoutMatch = /const resourceDebuggerDeadlineTimeoutMs = (\d+);/.exec(resourceDebugger);
+        const teardownTimeoutMatch = /const resourceDebuggerTeardownTimeoutMs = (\d+);/.exec(resourceDebugger);
+        assert.ok(proofTimeoutMatch);
+        assert.ok(teardownTimeoutMatch);
+
+        // The first two tests share one proof, the third test runs another proof, and every test
+        // executes teardown. Keep additional process-runner time for Mocha and browser shutdown.
+        const worstCaseSuiteTimeoutMs = (2 * Number(proofTimeoutMatch[1])) + (3 * Number(teardownTimeoutMatch[1]));
+        const resourceShardBlocks = workflow
+            .split('\n          - name: ')
+            .filter(block => block.includes('\n            shardName: resource-debugger\n'));
+        assert.strictEqual(resourceShardBlocks.length, 2, 'Expected Linux and Windows resource debugger matrix entries.');
+        for (const block of resourceShardBlocks) {
+            const runnerTimeoutMatch = /\n            runTestsTimeoutMs: (\d+)(?:\n|$)/.exec(block);
+            assert.ok(runnerTimeoutMatch, 'Expected the resource debugger matrix entry to override the process-runner timeout.');
+            assert.ok(
+                Number(runnerTimeoutMatch[1]) >= worstCaseSuiteTimeoutMs + 300000,
+                'The resource debugger process-runner timeout must exceed its worst-case Mocha budget by at least five minutes.');
+        }
+        assert.ok(
+            workflow.includes('ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS: ${{ matrix.runTestsTimeoutMs || 2400000 }}'),
+            'The workflow must pass the per-shard process-runner timeout override.');
+    });
+
+    test('applies resource debugger mutations with Windows line endings', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const resourceDebugger = normalizeLineEndings(
+            readResourceDebuggerSource(extensionRoot)
+                .replace(/\r?\n/g, '\r\n'));
+        const mutation = resourceDebugger.replace(
+            "() => runResourceDebuggerCleanupPhase(\n                'resource debugger teardown stop control',\n                resourceDebuggerPhaseTimeoutMs.stopDebuggingControl,",
+            "() => runResourceDebuggerPhase(\n                'resource debugger teardown stop control',\n                resourceDebuggerDeadline,\n                resourceDebuggerPhaseTimeoutMs.stopDebuggingControl,");
+
+        assert.notStrictEqual(mutation, resourceDebugger, 'Expected to apply the shared teardown deadline mutation.');
     });
 
     test('rejects a resource debugger setup wait omitted from the shared deadline', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const resourceDebugger = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'resourceDebugger.e2e.test.ts'), 'utf8');
+        const resourceDebugger = readResourceDebuggerSource(extensionRoot);
         const mutation = resourceDebugger.replace(
             "await runResourceDebuggerPhase('repository idle setup', deadline, resourceDebuggerPhaseTimeoutMs.repositoryIdle, timeoutMs => waitForRepositoryIdle(timeoutMs));",
             'await waitForRepositoryIdle();');
 
         assert.notStrictEqual(mutation, resourceDebugger, 'Expected to apply the omitted setup deadline mutation.');
-        assert.throws(() => assertResourceDebuggerUsesSharedDeadline(mutation), /waitForRepositoryIdle to execute through runResourceDebuggerPhase/);
+        assert.throws(() => assertResourceDebuggerUsesBoundedDeadlines(mutation), /waitForRepositoryIdle to execute through runResourceDebuggerPhase/);
     });
 
     test('rejects a resource debugger control wait omitted from the shared deadline', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const resourceDebugger = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'resourceDebugger.e2e.test.ts'), 'utf8');
+        const resourceDebugger = readResourceDebuggerSource(extensionRoot);
         const mutation = resourceDebugger.replace(
             "{ waitFor: 'started', timeoutMs }",
             "{ waitFor: 'started' }");
 
         assert.notStrictEqual(mutation, resourceDebugger, 'Expected to apply the omitted control deadline mutation.');
-        assert.throws(() => assertResourceDebuggerUsesSharedDeadline(mutation), /executeE2eControlCommand to use the remaining timeout/);
+        assert.throws(() => assertResourceDebuggerUsesBoundedDeadlines(mutation), /executeE2eControlCommand to use the remaining timeout/);
+    });
+
+    test('rejects resource debugger teardown that reuses the proof deadline', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const resourceDebugger = readResourceDebuggerSource(extensionRoot);
+        const mutation = resourceDebugger.replace(
+            "() => runResourceDebuggerCleanupPhase(\n                'resource debugger teardown stop control',\n                resourceDebuggerPhaseTimeoutMs.stopDebuggingControl,",
+            "() => runResourceDebuggerPhase(\n                'resource debugger teardown stop control',\n                resourceDebuggerDeadline,\n                resourceDebuggerPhaseTimeoutMs.stopDebuggingControl,");
+
+        assert.notStrictEqual(mutation, resourceDebugger, 'Expected to apply the shared teardown deadline mutation.');
+        assert.throws(() => assertResourceDebuggerUsesBoundedDeadlines(mutation), /Teardown cleanup must not reuse the proof deadline/);
+    });
+
+    test('rejects resource debugger teardown that waits on the AppHost state mirror', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const resourceDebugger = readResourceDebuggerSource(extensionRoot);
+        const mutation = resourceDebugger.replace(
+            '                timeoutMs => waitForNoDebugSessions(timeoutMs)),',
+            "                timeoutMs => waitForNoDebugSessions(timeoutMs)),\n            () => runResourceDebuggerCleanupPhase(\n                'renamed lagging state wait',\n                resourceDebuggerPhaseTimeoutMs.appHostExit,\n                timeoutMs => waitForNoRunningAppHost(timeoutMs)),");
+
+        assert.notStrictEqual(mutation, resourceDebugger, 'Expected to add the lagging AppHost state wait.');
+        assert.throws(() => assertResourceDebuggerUsesBoundedDeadlines(mutation), /Teardown must not wait on the extension state AppHost mirror/);
     });
 
     test('requires the captured AppHost process to be running before stopping debugging', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const resourceDebugger = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'resourceDebugger.e2e.test.ts'), 'utf8');
+        const resourceDebugger = readResourceDebuggerSource(extensionRoot);
         const nodeProofTest = getTestBlock(resourceDebugger, 'stopping debugging tears down the Node resource process tree');
         const capturedPidAssertion = "assert.ok(appHostPid !== undefined, 'Expected the extension state to report an AppHost pid while the AppHost is running.');";
         const livePidAssertion = 'assert.ok(isProcessRunning(appHostPid)';
