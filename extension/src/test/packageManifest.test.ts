@@ -13,6 +13,13 @@ type ManifestCommand = {
     icon?: string;
 };
 
+type ManifestConfigurationProperty = {
+    type?: string;
+    default?: unknown;
+    description?: string;
+    scope?: string;
+};
+
 type DebuggerProperty = {
     type?: string | string[];
     description?: string;
@@ -35,6 +42,10 @@ type DebuggerContribution = {
 type ExtensionManifest = {
     activationEvents?: string[];
     contributes: {
+        configuration?: {
+            title?: string;
+            properties?: { [key: string]: ManifestConfigurationProperty };
+        };
         commands?: ManifestCommand[];
         viewsWelcome?: Array<{ view?: string; contents?: string; when?: string }>;
         menus?: {
@@ -172,6 +183,19 @@ suite('extension/package.json', () => {
 
         assert.ok(activationEvents.includes('workspaceContains:**/*.fsproj'));
         assert.ok(activationEvents.includes('workspaceContains:**/*.vbproj'));
+    });
+
+    test('nuget source setting is machine-overridable and localized', () => {
+        const manifest = readManifest();
+        const properties = manifest.contributes.configuration?.properties;
+
+        assert.ok(properties, 'Expected Aspire settings to declare configuration properties');
+        const nugetSource = properties['aspire.nugetSource'];
+        assert.ok(nugetSource, 'Expected aspire.nugetSource to be declared');
+        assert.strictEqual(nugetSource.type, 'string');
+        assert.strictEqual(nugetSource.default, '');
+        assert.strictEqual(nugetSource.scope, 'machine-overridable');
+        assert.strictEqual(nugetSource.description, '%configuration.aspire.nugetSource%');
     });
 
     test('Explorer AppHost commands include Node module filenames', () => {

@@ -60,6 +60,19 @@ suite('utils/strings tests', () => {
             assert.strictEqual(packageNls[`aspire-vscode.strings.${name}`], value);
         }
     });
+
+    test('nuget source credential validation string has a package nls entry', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const stringsSource = fs.readFileSync(path.join(extensionRoot, 'src', 'loc', 'strings.ts'), 'utf8');
+        const packageNls = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.nls.json'), 'utf8')) as Record<string, string>;
+        const expectedValue = 'The aspire.nugetSource setting cannot contain credentials. Use a NuGet credential provider instead.';
+        const escapedValue = expectedValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const declaration = new RegExp(
+            `export\\s+const\\s+nugetSourceContainsCredentials\\s*=\\s*vscode\\.l10n\\.t\\(\\s*(['"\`])${escapedValue}\\1\\s*\\)`);
+
+        assert.match(stringsSource, declaration, `Expected nugetSourceContainsCredentials to be registered in strings.ts with the value "${expectedValue}".`);
+        assert.strictEqual(packageNls['aspire-vscode.strings.nugetSourceContainsCredentials'], expectedValue);
+    });
 });
 
 suite('loc/strings tests', () => {

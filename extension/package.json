@@ -896,6 +896,12 @@
           "description": "%configuration.aspire.aspireCliExecutablePath%",
           "scope": "machine-overridable"
         },
+        "aspire.nugetSource": {
+          "type": "string",
+          "default": "",
+          "description": "%configuration.aspire.nugetSource%",
+          "scope": "machine-overridable"
+        },
         "aspire.enableAspireCliDebugLogging": {
           "type": "boolean",
           "default": false,
