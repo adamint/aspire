@@ -18,15 +18,15 @@ export function getNugetSourceArgs(): string[] | undefined {
 }
 
 function hasHttpCredentialMaterial(value: string): boolean {
-    const httpPrefix = /^https?:\/\//i.exec(value)?.[0];
-    if (!httpPrefix) {
+    const httpScheme = /^https?:/i.exec(value)?.[0];
+    if (!httpScheme) {
         return false;
     }
 
     // Check the original delimiters before parsing so malformed HTTP-shaped sources fail closed.
     // URL parsers reject values such as an invalid port, but the extension must not forward a
     // query token or userinfo from those values into terminal history and logs.
-    const authorityAndPath = value.slice(httpPrefix.length);
+    const authorityAndPath = value.slice(httpScheme.length).replace(/^[\\/]+/, '');
     const authorityEnd = authorityAndPath.search(/[/?#\\]/);
     const authority = authorityEnd === -1
         ? authorityAndPath

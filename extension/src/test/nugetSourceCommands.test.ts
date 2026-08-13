@@ -163,6 +163,9 @@ suite('nuget source command forwarding', () => {
         ['a query string on a scoped IPv6 URL with an out-of-range port', 'https://[fe80::1%eth0]:65536/v3/index.json?sig=token'],
         ['a query string on a malformed host', 'https://example host/v3/index.json?sig=token'],
         ['userinfo on a malformed host', 'https://user@example host/v3/index.json'],
+        ['a query string on an HTTPS scheme-form source', 'https:example.com/v3/index.json?sig=token'],
+        ['a query string on an HTTP backslash-form source', 'http:\\\\example.com\\v3\\index.json?sig=token'],
+        ['userinfo on an HTTPS scheme-form source', 'https:user@example.com/v3/index.json'],
         ['HTTPS userinfo with a password', 'https://user:password@example.com/v3/index.json'],
     ]) {
         test(`new rejects a configured nuget source with ${description}`, async () => {
@@ -216,8 +219,8 @@ suite('nuget source command forwarding', () => {
     });
 
     for (const source of [
-        'https:example.com/v3/index.json?sig=token',
-        'http:\\\\example.com\\v3\\index.json?sig=token',
+        'https:example.com/v3/index.json',
+        'http:\\\\example.com\\v3\\index.json',
         'https://[fe80::1%25eth0]:invalid/v3/index.json',
         'https://[fe80::1%eth0]:65536/v3/index.json',
         'https://example host/v3/index.json',
