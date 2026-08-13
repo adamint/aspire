@@ -261,6 +261,35 @@ suite('Rust Debugger Extension Tests', () => {
         await assert.rejects(probe, error => error instanceof vscode.CancellationError);
     });
 
+    test('forcefully terminates a Cargo host probe that ignores session cancellation', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const harness = createRustProcessHarness();
+
+        try {
+            const probe = harness.rustService.getCargoHostTarget('/workspace/api', []);
+            const cancellation = assert.rejects(probe, error => error instanceof vscode.CancellationError);
+
+            harness.disposeSession();
+
+            assert.deepStrictEqual(harness.childProcess.kill.firstCall.args, [undefined]);
+            await cancellation;
+
+            await clock.tickAsync(5_000);
+
+            assert.strictEqual(harness.childProcess.kill.callCount, 2);
+            assert.deepStrictEqual(harness.childProcess.kill.secondCall.args, ['SIGKILL']);
+            assert.strictEqual(clock.countTimers(), 0);
+
+            harness.childProcess.emit('close', null, 'SIGKILL');
+            assert.strictEqual(harness.childProcess.listenerCount('close'), 0);
+            assert.strictEqual(harness.childProcess.listenerCount('error'), 0);
+            assert.strictEqual(clock.countTimers(), 0);
+        } finally {
+            harness.childProcess.emit('close', null, 'SIGKILL');
+            clock.restore();
+        }
+    });
+
     test('times out a Cargo host probe that never closes', async () => {
         const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
         const harness = createRustProcessHarness();
@@ -280,8 +309,8 @@ suite('Rust Debugger Extension Tests', () => {
 
             assert.strictEqual(result, undefined);
             assert.ok(harness.childProcess.kill.calledOnceWithExactly('SIGKILL'));
-            assert.strictEqual(harness.childProcess.listenerCount('close'), 0);
-            assert.strictEqual(harness.childProcess.listenerCount('error'), 0);
+            assert.strictEqual(harness.childProcess.listenerCount('close'), 1);
+            assert.strictEqual(harness.childProcess.listenerCount('error'), 1);
             assert.strictEqual(harness.childProcess.stdout.listenerCount('data'), 0);
             assert.strictEqual(clock.countTimers(), 0);
 
@@ -290,6 +319,42 @@ suite('Rust Debugger Extension Tests', () => {
             assert.ok(persistentLogs.some(message => message.includes('Cargo host target probe timed out')));
             assert.ok(persistentLogs.every(message => !message.includes(secret)));
             assert.ok(persistentLogs.every(message => !message.includes('launch_failed')));
+
+            harness.childProcess.emit('close', null, 'SIGKILL');
+            assert.strictEqual(harness.childProcess.listenerCount('close'), 0);
+            assert.strictEqual(harness.childProcess.listenerCount('error'), 0);
+        } finally {
+            harness.childProcess.emit('close', null, 'SIGKILL');
+            clock.restore();
+        }
+    });
+
+    test('sinks delayed Cargo host probe kill errors until close', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const harness = createRustProcessHarness();
+        const info = sinon.stub(extensionLogOutputChannel, 'info');
+        const warning = sinon.stub(extensionLogOutputChannel, 'warn');
+        const errorLog = sinon.stub(extensionLogOutputChannel, 'error');
+        const secret = 'private-delayed-kill-error';
+
+        try {
+            const probe = harness.rustService.getCargoHostTarget('/workspace/api', []);
+
+            await clock.tickAsync(5_000);
+
+            assert.strictEqual(await probe, undefined);
+            const delayedKillError = new Error(secret);
+            delayedKillError.name = secret;
+            assert.doesNotThrow(() => harness.childProcess.emit('error', delayedKillError));
+
+            const persistentLogs = [...info.getCalls(), ...warning.getCalls(), ...errorLog.getCalls()]
+                .map(call => String(call.args[0]));
+            assert.ok(persistentLogs.every(message => !message.includes(secret)));
+
+            harness.childProcess.emit('close', null, 'SIGKILL');
+            assert.strictEqual(harness.childProcess.listenerCount('close'), 0);
+            assert.strictEqual(harness.childProcess.listenerCount('error'), 0);
+            assert.strictEqual(clock.countTimers(), 0);
         } finally {
             harness.childProcess.emit('close', null, 'SIGKILL');
             clock.restore();

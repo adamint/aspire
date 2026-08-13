@@ -12,6 +12,7 @@ import { processGroupSpawnOptions, terminateProcessTree } from "../../utils/proc
 
 const rustBuildStderrTailLimit = 8 * 1024;
 const cargoHostProbeOutputLimit = 16 * 1024;
+const cargoHostProbeShutdownGracePeriodMs = 5_000;
 const cargoHostProbeTimeoutMs = 5_000;
 const cargoExecutable = 'cargo';
 
@@ -74,6 +75,7 @@ export class RustService implements IRustService {
 
             let settled = false;
             let cancellation: vscode.Disposable | undefined;
+            let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
             let timeout: ReturnType<typeof setTimeout> | undefined;
             let stdout = '';
 
@@ -95,9 +97,16 @@ export class RustService implements IRustService {
                 }
                 cancellation?.dispose();
                 probeProcess.stdout.off('data', onStdout);
+                complete();
+            };
+
+            const stopTracking = (): void => {
+                if (forceKillTimer) {
+                    clearTimeout(forceKillTimer);
+                    forceKillTimer = undefined;
+                }
                 probeProcess.off('error', onError);
                 probeProcess.off('close', onClose);
-                complete();
             };
 
             const terminateProbe = (force: boolean): void => {
@@ -110,7 +119,28 @@ export class RustService implements IRustService {
                 }
             };
 
+            const terminateProbeAfterGracePeriod = (): void => {
+                // Install the escalation timer before signalling the process so a synchronous close
+                // can clear it through stopTracking instead of leaving a stale timer behind.
+                forceKillTimer = setTimeout(() => {
+                    forceKillTimer = undefined;
+                    if (probeProcess.exitCode === null && probeProcess.signalCode === null) {
+                        terminateProbe(true);
+                    }
+                }, cargoHostProbeShutdownGracePeriodMs);
+                forceKillTimer.unref();
+                terminateProbe(false);
+            };
+
             const onError = (err: Error): void => {
+                if (settled) {
+                    // Process-tree termination can report an asynchronous kill failure after the probe
+                    // promise has settled. Keep consuming errors until close so EventEmitter does not
+                    // treat them as unhandled exceptions.
+                    return;
+                }
+
+                stopTracking();
                 settle(() => {
                     const errorCode = (err as NodeJS.ErrnoException).code ?? 'unknown error';
                     extensionLogOutputChannel.error(`Cargo host target probe failed to start in ${workingDirectory} (${errorCode}).`);
@@ -119,6 +149,7 @@ export class RustService implements IRustService {
             };
 
             const onClose = (code: number | null, signal: NodeJS.Signals | null): void => {
+                stopTracking();
                 settle(() => {
                     if (code !== 0) {
                         const exitDescription = code !== null ? `${code}` : `${signal}`;
@@ -148,7 +179,7 @@ export class RustService implements IRustService {
                     if (probeProcess.exitCode === null && probeProcess.signalCode === null) {
                         settle(() => {
                             extensionLogOutputChannel.info(`Debug session ended; stopping Cargo host target probe in ${workingDirectory}.`);
-                            terminateProbe(false);
+                            terminateProbeAfterGracePeriod();
                             reject(new vscode.CancellationError());
                         });
                     }
