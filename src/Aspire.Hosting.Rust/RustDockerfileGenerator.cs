@@ -430,8 +430,8 @@ internal static partial class RustDockerfileGenerator
                 $"for candidate in {BuildArtifactCandidates(target, targetDirectory)}; do if [ -f \"$candidate\" ]; then bin=\"$candidate\"; count=$((count+1)); fi; done",
                 // `if` rather than `[ ... ] || { ... }`: && and || share precedence and associate left to right,
                 // so a trailing || catches the whole preceding chain and reports this on top of cargo's own error.
-                $"if [ \"$count\" = 0 ]; then echo \"no {ShellQuote(target.Name)} under {targetDirectory}\" >&2; exit 1; fi",
-                $"if [ \"$count\" != 1 ]; then echo \"found $count {ShellQuote(target.Name)} under {targetDirectory} after cargo build\" >&2; exit 1; fi",
+                $"if [ \"$count\" = 0 ]; then echo \"no\" {ShellQuote($"{target.Name} under {targetDirectory}")} >&2; exit 1; fi",
+                $"if [ \"$count\" != 1 ]; then echo \"found $count\" {ShellQuote($"{target.Name} under {targetDirectory} after cargo build")} >&2; exit 1; fi",
                 $"mkdir -p {ShellQuote(artifactDirectory)}",
                 $"cp \"$bin\" {destination}"
             ]);

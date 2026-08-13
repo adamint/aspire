@@ -87,6 +87,28 @@ public class RustDockerfileShellTests(ITestOutputHelper outputHelper)
         Assert.Equal("current", File.ReadAllText(Path.Combine(artifactDirectory, "api")));
     }
 
+    [Fact]
+    public async Task MissingArtifactDiagnosticDoesNotExecuteTheTargetName()
+    {
+        SkipWithoutPosixShell();
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var targetDirectory = workspace.CreateDirectory("target").FullName;
+        var artifactDirectory = workspace.CreateDirectory("artifacts").FullName;
+        var markerPath = Path.Combine(workspace.WorkspaceRoot.FullName, "command-substitution-ran");
+        var targetName = $"$(touch${{IFS}}{markerPath})";
+        var command = RustDockerfileGenerator.BuildArtifactCommand(
+            new RustCargoTarget(targetName, "release", Target: null, IsExample: false),
+            "true",
+            targetDirectory,
+            artifactDirectory);
+
+        var result = await RunShellAsync(command);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal($"no {targetName} under {targetDirectory}\n", result.StandardError);
+        Assert.False(File.Exists(markerPath));
+    }
+
     private static void SkipWithoutPosixShell()
     {
         if (OperatingSystem.IsWindows())
