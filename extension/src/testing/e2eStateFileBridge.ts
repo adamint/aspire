@@ -10,7 +10,7 @@ import { cleanupRun } from '../debugger/runCleanupRegistry';
 import type { AspireResourceExtendedDebugConfiguration, EnvVar, ExecutableLaunchConfiguration } from '../dcp/types';
 import { createStateSnapshot, getSensitiveDashboardUrl, isSamePath } from '../extensionState';
 import { AppHostLaunchRequestedEvent, AppHostLaunchService } from '../services/AppHostLaunchService';
-import type { AspireDebugConsoleOutputEvent, AspireExtensionE2ECommandInvocation, AspireExtensionE2EControlCommand, AspireExtensionE2EControlPayload, AspireExtensionE2EControlStatus, AspireExtensionE2EDebugConsoleOutput, AspireExtensionE2EDebugLaunch, AspireExtensionE2EStoppingPathEvent, AspireExtensionE2ETerminalCommand, AspireExtensionStateSnapshot } from '../types/extensionApi';
+import type { AspireDebugConsoleOutputEvent, AspireExtensionE2EBrowserDebugSession, AspireExtensionE2ECommandInvocation, AspireExtensionE2EControlCommand, AspireExtensionE2EControlPayload, AspireExtensionE2EControlStatus, AspireExtensionE2EDebugConsoleOutput, AspireExtensionE2EDebugLaunch, AspireExtensionE2EStoppingPathEvent, AspireExtensionE2ETaskProcessEvent, AspireExtensionE2ETerminalCommand, AspireExtensionStateSnapshot } from '../types/extensionApi';
 import { AspireTerminalCommandEvent, AspireTerminalProvider } from '../utils/AspireTerminalProvider';
 import { dashboardDefaultChangedNotificationKey } from '../utils/dashboardNotificationState';
 import { extensionLogOutputChannel } from '../utils/logging';
@@ -40,6 +40,12 @@ export function createE2eStateFileBridge(
   const debugLaunches: AspireExtensionE2EDebugLaunch[] = [];
   const debugConsoleOutputs: AspireExtensionE2EDebugConsoleOutput[] = [];
   const stoppingPathEvents: AspireExtensionE2EStoppingPathEvent[] = [];
+  const taskProcessEvents: AspireExtensionE2ETaskProcessEvent[] = [];
+  // VS Code's browser debug sessions are not part of the extension's state snapshot, so they are
+  // tracked here. Tests need this to tell "the extension thinks it stopped" apart from "the
+  // browser session actually terminated" — the two diverged in
+  // https://github.com/microsoft/aspire/issues/19289.
+  const browserDebugSessions: AspireExtensionE2EBrowserDebugSession[] = [];
   const clipboardSnapshot: E2eClipboardSnapshot = { hasSnapshot: false };
   const clipboardExpectation: E2eClipboardExpectation = {};
   let commandInvocationSequence = 0;
@@ -47,7 +53,10 @@ export function createE2eStateFileBridge(
   let debugLaunchSequence = 0;
   let debugConsoleOutputSequence = 0;
   let stoppingPathSequence = 0;
+  let taskProcessSequence = 0;
+  let taskExecutionSequence = 0;
   let previousStoppingPaths: readonly string[] | undefined;
+  const taskExecutionIds = new WeakMap<vscode.TaskExecution, number>();
   let controlStatus: AspireExtensionE2EControlStatus | undefined;
   let lastControlRevision = -1;
   const writeStateFile = () => {
@@ -63,6 +72,8 @@ export function createE2eStateFileBridge(
       debugLaunches,
       debugConsoleOutputs,
       stoppingPathEvents,
+      taskProcessEvents,
+      browserDebugSessions,
       control: controlStatus,
     });
   };
@@ -127,8 +138,60 @@ export function createE2eStateFileBridge(
     }
     writeStateFile();
   });
+  const taskStartSubscription = vscode.tasks.onDidStartTaskProcess(event => {
+    const executionId = ++taskExecutionSequence;
+    taskExecutionIds.set(event.execution, executionId);
+    taskProcessEvents.push({
+      sequence: ++taskProcessSequence,
+      executionId,
+      state: 'started',
+      taskName: event.execution.task.name,
+      taskSource: event.execution.task.source,
+      taskDefinitionType: event.execution.task.definition.type,
+      processId: event.processId,
+    });
+    trimTaskProcessEvents(taskProcessEvents);
+    writeStateFile();
+  });
+  const taskEndSubscription = vscode.tasks.onDidEndTaskProcess(event => {
+    const executionId = taskExecutionIds.get(event.execution) ?? ++taskExecutionSequence;
+    taskProcessEvents.push({
+      sequence: ++taskProcessSequence,
+      executionId,
+      state: 'ended',
+      taskName: event.execution.task.name,
+      taskSource: event.execution.task.source,
+      taskDefinitionType: event.execution.task.definition.type,
+      exitCode: event.exitCode,
+    });
+    trimTaskProcessEvents(taskProcessEvents);
+    writeStateFile();
+  });
 
   let controlProcessing: Promise<void> | undefined;
+  const browserDebugSessionStartSubscription = vscode.debug.onDidStartDebugSession(session => {
+    if (!isBrowserDebugSessionType(session.type)) {
+      return;
+    }
+
+    browserDebugSessions.push({
+      id: session.id,
+      type: session.type,
+      name: session.name,
+      parentSessionId: session.parentSession?.id,
+      parentSessionType: session.parentSession?.type,
+    });
+    writeStateFile();
+  });
+  const browserDebugSessionEndSubscription = vscode.debug.onDidTerminateDebugSession(session => {
+    const index = browserDebugSessions.findIndex(tracked => tracked.id === session.id);
+    if (index < 0) {
+      return;
+    }
+
+    browserDebugSessions.splice(index, 1);
+    writeStateFile();
+  });
   const controlInterval = controlFile
     ? setInterval(() => {
       if (controlProcessing) {
@@ -203,7 +266,17 @@ export function createE2eStateFileBridge(
     }
   });
 
-  return vscode.Disposable.from(stateSubscription, commandSubscription, terminalCommandSubscription, debugLaunchSubscription, debugConsoleOutputSubscription, controlSubscription);
+  return vscode.Disposable.from(stateSubscription, commandSubscription, terminalCommandSubscription, debugLaunchSubscription, debugConsoleOutputSubscription, taskStartSubscription, taskEndSubscription, browserDebugSessionStartSubscription, browserDebugSessionEndSubscription, controlSubscription);
+}
+
+function isBrowserDebugSessionType(type: string): boolean {
+  return type === 'pwa-chrome' || type === 'pwa-msedge' || type === 'firefox';
+}
+
+function trimTaskProcessEvents(events: AspireExtensionE2ETaskProcessEvent[]): void {
+  if (events.length > 100) {
+    events.splice(0, events.length - 100);
+  }
 }
 
 function writeJsonFileAtomic(filePath: string, value: unknown): void {
@@ -502,6 +575,25 @@ async function executeE2eControlCommand(
       const commands = await vscode.commands.getCommands(true);
       return commands.filter(commandId => commandId.startsWith('aspire-vscode.')).sort();
     }
+    case 'getDebugSessionProcessInfo': {
+      markStarted();
+      const state = createStateSnapshot(dataRepository, appHostLaunchService, appHostTreeProvider, aspireContext, true);
+      const appHostPath = command.appHostPath;
+      const debugSession = aspireContext.aspireDebugSessions.find(session =>
+        appHostPath === undefined ||
+        (typeof session.appHostPath === 'string' && isSamePath(session.appHostPath, appHostPath)));
+      const appHost = state.appHosts.find(candidate =>
+        appHostPath === undefined || isSamePath(candidate.appHostPath, appHostPath)) ??
+        (state.workspaceAppHost && (appHostPath === undefined || isSamePath(state.workspaceAppHost.appHostPath, appHostPath))
+          ? state.workspaceAppHost
+          : undefined);
+
+      return {
+        appHostPath: debugSession?.appHostPath ?? appHost?.appHostPath,
+        cliPid: debugSession?.cliProcessId,
+        appHostPid: appHost?.appHostPid,
+      };
+    }
     case 'getResourceDebuggerExtensions': {
       markStarted();
       return getResourceDebuggerExtensions().map(extension => ({
@@ -601,6 +693,22 @@ async function executeE2eControlCommand(
       markStarted();
       clearPendingE2eControlFile();
       await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(folderPath), false);
+      return undefined;
+    }
+    case 'stopOwnedDebugSessionProcesses': {
+      markStarted();
+      const appHostPath = command.appHostPath;
+      const debugSessions = aspireContext.aspireDebugSessions.filter(session =>
+        appHostPath === undefined ||
+        (typeof session.appHostPath === 'string' && isSamePath(session.appHostPath, appHostPath)));
+      await Promise.race([
+        Promise.allSettled(debugSessions.map(session => session.requestCliStopForExtensionShutdown())),
+        delay(5000),
+      ]);
+      for (const session of debugSessions) {
+        session.terminateCliProcessTree({ force: true });
+      }
+
       return undefined;
     }
     case 'getWorkspaceFolders': {

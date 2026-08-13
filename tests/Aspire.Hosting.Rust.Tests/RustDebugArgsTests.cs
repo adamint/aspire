@@ -14,10 +14,9 @@ namespace Aspire.Hosting.Rust.Tests;
 public class RustDebugArgsTests
 {
     /// <summary>
-    /// Builds a Rust app in run mode with an IDE attached that advertises support for the "rust"
-    /// launch configuration, then returns the argument list DCP would hand to the debugged binary.
+    /// Builds a Rust app in run mode with an IDE attached, then returns the resource and its app-model arguments.
     /// </summary>
-    private static async Task<List<string>> GetDebugArgsAsync(
+    private static async Task<(List<string> Args, RustAppResource Resource)> GetArgsAsync(
         Action<IResourceBuilder<RustAppResource>> configure,
         string[]? supportedLaunchConfigurations = null)
     {
@@ -37,60 +36,65 @@ public class RustDebugArgsTests
 
         using var app = builder.Build();
 
-        return await ArgumentEvaluator.GetArgumentListAsync(rust.Resource, app.Services);
+        var args = await ArgumentEvaluator.GetArgumentListAsync(rust.Resource, app.Services);
+
+        return (args, rust.Resource);
     }
 
     [Fact]
-    public async Task DebugArgsExcludeCargoArgumentsWhenUserSuppliesArgs()
+    public async Task DebugSessionKeepsCargoToolArgumentsInTheAppModel()
     {
-        // The debugged binary is launched directly, so it must receive only the program arguments.
-        // Leaking "run" (and the cargo/program "--" separator) into that list made the binary fail
-        // to parse its own command line.
-        var args = await GetDebugArgsAsync(rust => rust.WithArgs("--login", "user", "--output", "out.yaml"));
+        // The `cargo run ... --` prefix stays in the app model and dashboard. DCP withholds it from the
+        // debugged binary because the "rust" launch configuration owns the tool invocation.
+        var (args, resource) = await GetArgsAsync(
+            rust => rust.WithArgs("--login", "user", "--output", "out.yaml"));
 
-        Assert.Equal(["--login", "user", "--output", "out.yaml"], args);
+        Assert.Equal(["run", "--", "--login", "user", "--output", "out.yaml"], args);
+
+        var debugAnnotation = resource.Annotations.OfType<SupportsDebuggingAnnotation>().Last();
+        Assert.True(resource.HasLaunchToolArgsOwnedBy(debugAnnotation));
     }
 
     [Fact]
-    public async Task DebugArgsExcludeCargoArgumentsWhenUserSuppliesLeadingSeparator()
+    public async Task ProgramArgumentsCanStartWithSeparator()
     {
-        // Passing an explicit "--" is a natural thing to try when arguments are being mangled.
-        // It must not be mistaken for the separator the integration itself appends.
-        var args = await GetDebugArgsAsync(rust => rust.WithArgs("--", "--login", "user"));
+        // The user's leading separator is a program argument and stays after the separator the integration owns.
+        var (args, _) = await GetArgsAsync(rust => rust.WithArgs("--", "--login", "user"));
 
-        Assert.Equal(["--", "--login", "user"], args);
+        Assert.Equal(["run", "--", "--", "--login", "user"], args);
     }
 
     [Fact]
-    public async Task DebugArgsExcludeCargoBuildOptions()
+    public async Task CargoBuildOptionsLeadProgramArguments()
     {
-        var args = await GetDebugArgsAsync(rust => rust
+        var (args, _) = await GetArgsAsync(rust => rust
             .WithCargoReleaseBuild()
             .WithCargoFeatures("tls-ring")
             .WithCargoArgs("--bin", "server")
             .WithCargoArgs("--locked")
             .WithArgs("--port", "8080"));
 
-        Assert.Equal(["--port", "8080"], args);
+        Assert.Equal(
+            ["run", "--features", "tls-ring", "--release", "--bin", "server", "--locked", "--", "--port", "8080"],
+            args);
     }
 
     [Fact]
-    public async Task DebugArgsAreEmptyWhenNoProgramArgumentsSupplied()
+    public async Task NoProgramArgumentsStillIncludeCargoSeparator()
     {
-        var args = await GetDebugArgsAsync(static _ => { });
+        var (args, _) = await GetArgsAsync(static _ => { });
 
-        Assert.Empty(args);
+        Assert.Equal(["run", "--"], args);
     }
 
     [Fact]
     public async Task CargoArgumentsRegisteredAfterProgramArgumentsAreStillApplied()
     {
         // Cargo arguments are held in annotations enumerated when arguments are evaluated rather
-        // than when AddRustApp runs, so registration position does not matter for them — unlike the
-        // two command-line arg callbacks, which mutate one shared list in sequence. Options-derived
+        // than when AddRustApp runs, so registration position does not matter for them. Options-derived
         // arguments such as --release are emitted before explicit WithCargoArgs values because the
         // callback that reads those options is registered by AddRustApp.
-        var args = await GetDebugArgsAsync(
+        var (args, _) = await GetArgsAsync(
             rust => rust.WithArgs("--port", "8080").WithCargoArgs("--locked").WithCargoReleaseBuild(),
             supportedLaunchConfigurations: ["project"]);
 
@@ -98,12 +102,15 @@ public class RustDebugArgsTests
     }
 
     [Fact]
-    public async Task CargoArgumentsRegisteredAfterProgramArgumentsAreStillStrippedWhenDebugging()
+    public async Task CargoToolArgumentsRemainOwnedWhenRegisteredAfterProgramArguments()
     {
-        var args = await GetDebugArgsAsync(
+        var (args, resource) = await GetArgsAsync(
             rust => rust.WithArgs("--port", "8080").WithCargoArgs("--locked").WithCargoReleaseBuild());
 
-        Assert.Equal(["--port", "8080"], args);
+        Assert.Equal(["run", "--release", "--locked", "--", "--port", "8080"], args);
+
+        var debugAnnotation = resource.Annotations.OfType<SupportsDebuggingAnnotation>().Last();
+        Assert.True(resource.HasLaunchToolArgsOwnedBy(debugAnnotation));
     }
 
     [Fact]
@@ -111,7 +118,7 @@ public class RustDebugArgsTests
     {
         // Without an IDE that supports the "rust" launch configuration the resource runs as
         // `cargo run ... -- <program args>`, so the cargo prefix must survive.
-        var args = await GetDebugArgsAsync(
+        var (args, _) = await GetArgsAsync(
             rust => rust.WithCargoReleaseBuild().WithArgs("--port", "8080"),
             supportedLaunchConfigurations: ["project"]);
 

@@ -4,7 +4,6 @@
 #pragma warning disable ASPIREEXTENSION001
 
 using Aspire.Hosting.ApplicationModel;
-using Aspire.Hosting.Dcp.Model;
 using Aspire.Hosting.Tests.Utils;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -149,7 +148,7 @@ public class RustPublicApiTests
             .WithCargoFeatures("tls-ring")
             .WithCargoReleaseBuild();
 
-        var launchConfig = await InvokeLaunchConfigurationAnnotatorAsync(builder, app.Resource);
+        var launchConfig = await InvokeLaunchConfigurationProducerAsync(builder, app.Resource);
 
         Assert.Equal("rust", launchConfig.Type);
         Assert.Equal(Path.GetFullPath(builder.AppHostDirectory), launchConfig.WorkingDirectory);
@@ -167,7 +166,7 @@ public class RustPublicApiTests
         var app = builder.AddRustApp("api", builder.AppHostDirectory)
             .WithCargoArgs("--bin", "worker");
 
-        var launchConfig = await InvokeLaunchConfigurationAnnotatorAsync(builder, app.Resource);
+        var launchConfig = await InvokeLaunchConfigurationProducerAsync(builder, app.Resource);
 
         var cargo = Assert.IsType<RustCargoLaunchTarget>(launchConfig.Cargo);
         Assert.Equal(["build", "--bin", "worker"], cargo.Args);
@@ -188,7 +187,7 @@ public class RustPublicApiTests
                 context.Args.Add($"--config=build.jobs={invocations}");
             });
 
-        var launchConfig = await InvokeLaunchConfigurationAnnotatorAsync(builder, app.Resource);
+        var launchConfig = await InvokeLaunchConfigurationProducerAsync(builder, app.Resource);
 
         Assert.Equal(1, invocations);
         var cargo = Assert.IsType<RustCargoLaunchTarget>(launchConfig.Cargo);
@@ -203,7 +202,7 @@ public class RustPublicApiTests
         var builder = DistributedApplication.CreateBuilder();
         var app = builder.AddRustApp("api", builder.AppHostDirectory);
 
-        var launchConfig = await InvokeLaunchConfigurationAnnotatorAsync(builder, app.Resource);
+        var launchConfig = await InvokeLaunchConfigurationProducerAsync(builder, app.Resource);
 
         var cargo = Assert.IsType<RustCargoLaunchTarget>(launchConfig.Cargo);
         var expected = Path.Combine("/app/target", "debug", OperatingSystem.IsWindows() ? "my-service.exe" : "my-service");
@@ -212,17 +211,29 @@ public class RustPublicApiTests
     }
 
     [Fact]
-    public async Task LaunchConfigurationHonoursCargoEnvironmentVariables()
+    public async Task LaunchConfigurationUsesResolvedCargoEnvironmentWithoutReevaluatingCallbacks()
     {
         // cargo metadata is queried with the resource's resolved environment, so CARGO_TARGET_DIR moves the
         // reported target directory, and CARGO_BUILD_TARGET adds the triple directory that cargo does not
         // report at all. Without both, the debugger would be pointed at a file the build never wrote.
+        var environmentCallbackInvocations = 0;
         var builder = DistributedApplication.CreateBuilder();
         var app = builder.AddRustApp("api", builder.AppHostDirectory)
-            .WithEnvironment("CARGO_TARGET_DIR", "/elsewhere")
-            .WithEnvironment("CARGO_BUILD_TARGET", "aarch64-unknown-linux-musl");
+            .WithEnvironment(context =>
+            {
+                environmentCallbackInvocations++;
+                context.EnvironmentVariables["CARGO_TARGET_DIR"] = "/wrong";
+                context.EnvironmentVariables["CARGO_BUILD_TARGET"] = "wrong-target";
+            });
 
-        var launchConfig = await InvokeLaunchConfigurationAnnotatorAsync(builder, app.Resource);
+        var launchConfig = await InvokeLaunchConfigurationProducerAsync(
+            builder,
+            app.Resource,
+            new Dictionary<string, string>
+            {
+                ["CARGO_TARGET_DIR"] = "/elsewhere",
+                ["CARGO_BUILD_TARGET"] = "aarch64-unknown-linux-musl"
+            });
 
         var cargo = Assert.IsType<RustCargoLaunchTarget>(launchConfig.Cargo);
         var expected = Path.Combine(
@@ -232,6 +243,7 @@ public class RustPublicApiTests
             OperatingSystem.IsWindows() ? "my-service.exe" : "my-service");
 
         Assert.Equal(expected, cargo.ExecutablePath);
+        Assert.Equal(0, environmentCallbackInvocations);
     }
 
     [Fact]
@@ -240,10 +252,10 @@ public class RustPublicApiTests
         var builder = DistributedApplication.CreateBuilder();
         var app = builder.AddRustApp("api", builder.AppHostDirectory);
 
-        Assert.True(app.Resource.TryGetLastAnnotation<SupportsDebuggingAnnotation>(out var supportsDebugging));
+        var callbackContext = LaunchConfigurationTestHelpers.CreateCallbackContext(app.Resource);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => supportsDebugging.LaunchConfigurationAnnotator(Executable.Create("test", "cargo"), ExecutableLaunchMode.Debug, CancellationToken.None));
+            () => LaunchConfigurationTestHelpers.InvokeLaunchConfigurationProducerAsync(app.Resource, callbackContext));
 
         Assert.Contains("have not been resolved", exception.Message);
     }
@@ -260,12 +272,12 @@ public class RustPublicApiTests
         await using var built = builder.Build();
         await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
 
-        Assert.True(app.Resource.TryGetLastAnnotation<SupportsDebuggingAnnotation>(out var supportsDebugging));
+        var callbackContext = LaunchConfigurationTestHelpers.CreateCallbackContext(app.Resource);
 
         // Aspire asks for the launch configuration more than once per resource, and cargo metadata is slow
         // enough on a cold machine to matter, so the resolved path has to be reused.
-        await supportsDebugging.LaunchConfigurationAnnotator(Executable.Create("test", "cargo"), ExecutableLaunchMode.Debug, CancellationToken.None);
-        await supportsDebugging.LaunchConfigurationAnnotator(Executable.Create("test", "cargo"), ExecutableLaunchMode.Debug, CancellationToken.None);
+        await LaunchConfigurationTestHelpers.InvokeLaunchConfigurationProducerAsync(app.Resource, callbackContext);
+        await LaunchConfigurationTestHelpers.InvokeLaunchConfigurationProducerAsync(app.Resource, callbackContext);
 
         Assert.Equal(1, reader.ReadCount);
     }
@@ -293,10 +305,9 @@ public class RustPublicApiTests
         await using var built = builder.Build();
         await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
 
-        Assert.True(app.Resource.TryGetLastAnnotation<SupportsDebuggingAnnotation>(out var supportsDebugging));
-
         using var cts = new CancellationTokenSource();
-        var launchTask = supportsDebugging.LaunchConfigurationAnnotator(Executable.Create("test", "cargo"), ExecutableLaunchMode.Debug, cts.Token);
+        var callbackContext = LaunchConfigurationTestHelpers.CreateCallbackContext(app.Resource, cancellationToken: cts.Token);
+        var launchTask = LaunchConfigurationTestHelpers.InvokeLaunchConfigurationProducerAsync(app.Resource, callbackContext);
 
         await cargoStarted.WaitAsync(TimeSpan.FromSeconds(30));
         await cts.CancelAsync();
@@ -304,10 +315,11 @@ public class RustPublicApiTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => launchTask);
     }
 
-    private static async Task<RustLaunchConfiguration> InvokeLaunchConfigurationAnnotatorAsync(IDistributedApplicationBuilder builder, RustAppResource resource)
+    private static async Task<RustLaunchConfiguration> InvokeLaunchConfigurationProducerAsync(
+        IDistributedApplicationBuilder builder,
+        RustAppResource resource,
+        IReadOnlyDictionary<string, string>? environmentVariables = null)
     {
-        Assert.True(resource.TryGetLastAnnotation<SupportsDebuggingAnnotation>(out var supportsDebugging));
-
         // The debug launch configuration resolves the executable cargo will produce from the crate's
         // metadata, so answer that from a canned document rather than requiring a Rust toolchain. The app
         // has to be built for the resolved reader to be reachable through the execution context.
@@ -320,13 +332,13 @@ public class RustPublicApiTests
         // configuration reuses them, so evaluate them first.
         await ArgumentEvaluator.GetArgumentListAsync(resource);
 
-        var exe = Executable.Create("test", "cargo");
-        await supportsDebugging.LaunchConfigurationAnnotator(exe, ExecutableLaunchMode.Debug, CancellationToken.None);
+        var callbackContext = LaunchConfigurationTestHelpers.CreateCallbackContext(
+            resource,
+            environmentVariables: environmentVariables);
+        var launchConfiguration = await LaunchConfigurationTestHelpers.InvokeLaunchConfigurationProducerAsync(
+            resource,
+            callbackContext);
 
-        Assert.True(exe.TryGetAnnotationAsObjectList<RustLaunchConfiguration>(
-            Executable.LaunchConfigurationsAnnotation,
-            out var launchConfigs));
-
-        return Assert.Single(launchConfigs);
+        return Assert.IsType<RustLaunchConfiguration>(launchConfiguration);
     }
 }
