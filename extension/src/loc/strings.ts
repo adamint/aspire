@@ -31,6 +31,9 @@ export const terminalCommandUnsafeLiteral = vscode.l10n.t('Aspire terminal comma
 export const azureFunctionsUnsupportedTaskShell = vscode.l10n.t('The configured VS Code task shell is not supported for Azure Functions launch arguments. Configure terminal.integrated.automationProfile to use PowerShell, Command Prompt, bash, zsh, fish, or WSL.');
 export const azureFunctionsCmdPercentArgument = vscode.l10n.t('Azure Functions launch arguments containing "%" are not supported by cmd.exe. Configure terminal.integrated.automationProfile.windows to use PowerShell and try again.');
 export const azureFunctionsCmdDelayedExpansion = vscode.l10n.t('Azure Functions launch arguments containing "!" are not supported by cmd.exe because delayed environment variable expansion may change them. Configure terminal.integrated.automationProfile.windows to use PowerShell and try again.');
+export const azureFunctionsTaskExitedBeforeStartup = (exitCode: number) => vscode.l10n.t('Azure Functions task exited with code {0} before startup completed.', exitCode);
+export const azureFunctionsHostStartupTimedOut = (timeoutSeconds: number, port: number) => vscode.l10n.t('Timed out after {0} seconds waiting for the Azure Functions host to start on port {1}.', timeoutSeconds, port);
+export const azureFunctionsWorkerStartupTimedOut = (timeoutSeconds: number) => vscode.l10n.t('Timed out after {0} seconds waiting for the Azure Functions worker process to start.', timeoutSeconds);
 export const aspireOutputChannelName = vscode.l10n.t('Aspire Extension');
 export const fieldRequired = vscode.l10n.t('This field is required.');
 export const runProject = (projectName: string) => vscode.l10n.t('Run {0}', projectName);
@@ -59,6 +62,9 @@ export const csharpSupportNotEnabled = vscode.l10n.t('C# support is not enabled 
 export const failedToStartProject = (errorMessage: string) => vscode.l10n.t('Failed to start project: {0}.', errorMessage);
 export const dcpServerNotInitialized = vscode.l10n.t('DCP server not initialized - cannot forward debug output.');
 export const appHostSessionTerminated = vscode.l10n.t('The AppHost process has terminated. To view console output, select the AppHost session from the debug console dropdown.');
+export const debugSessionsFailedToStop = (count: number, reasons: string) => vscode.l10n.t('{0} debug sessions failed to stop: {1}', count, reasons);
+export const debugSessionStartTimedOut = (sessionName: string, seconds: number) => vscode.l10n.t("Timed out after {1} seconds waiting for debug session '{0}' to start.", sessionName, seconds);
+export const debugSessionStopTimedOut = (sessionName: string, seconds: number) => vscode.l10n.t("Timed out after {1} seconds waiting for debug session '{0}' to stop.", sessionName, seconds);
 export const invalidTokenProvided = vscode.l10n.t('Invalid token provided.');
 export const noWorkspaceFolder = vscode.l10n.t('No workspace folder found.');
 export const aspireConfigExists = vscode.l10n.t('Aspire launch configuration already exists in launch.json.');
@@ -157,6 +163,8 @@ export const configInfoTimedOut = (seconds: number) => vscode.l10n.t('Aspire con
 export const invalidLaunchConfiguration = (projectPath: string) => vscode.l10n.t('Invalid launch configuration for {0}.', projectPath);
 export const browserDisplayName = (url: string) => vscode.l10n.t('Browser: {0}', url);
 export const browserLabel = vscode.l10n.t('Browser');
+export const unsupportedBrowserDebugTarget = (browser: string, url: string, supportedBrowsers: string) => vscode.l10n.t("Browser '{0}' cannot be debugged for '{1}'. Supported browsers are: {2}.", browser, url, supportedBrowsers);
+export const unsupportedBrowserDebugTargetWithoutUrl = (browser: string, supportedBrowsers: string) => vscode.l10n.t("Browser '{0}' cannot be debugged. Supported browsers are: {1}.", browser, supportedBrowsers);
 export const goDisplayName = (program: string) => `Go: ${program}`;
 export const goLabel = 'Go';
 export const bunDisplayName = (script: string) => `Bun: ${script}`;
@@ -184,6 +192,8 @@ export const dotNetRunFileBasedExecutableProfileFallback = (profileName: string,
 export const executableLaunchProfileMissingExecutablePath = (profileName: string) => vscode.l10n.t('Launch profile \'{0}\' uses commandName \'Executable\' but does not specify an executablePath. Add an executablePath to the launch profile.', profileName);
 export const lookingForDevkitBuildTask = vscode.l10n.t('C# Dev Kit is installed, looking for C# Dev Kit build task...');
 export const csharpDevKitNotInstalled = vscode.l10n.t('C# Dev Kit is not installed, building using dotnet CLI...');
+export const hotReloadDisabledNotice = vscode.l10n.t('C# Dev Kit Hot Reload is disabled. When enabled, it can apply .NET code edits while debugging where supported.');
+export const openSettingsLabel = vscode.l10n.t('Open Settings');
 export const dismissLabel = vscode.l10n.t('Dismiss');
 export const openCliInstallInstructions = vscode.l10n.t('See CLI installation instructions');
 export const cliNotAvailable = vscode.l10n.t('Aspire CLI is not available on PATH. Please install it and restart VS Code.');

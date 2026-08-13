@@ -7,6 +7,8 @@ const { spawn, spawnSync } = require('child_process');
 const { ensureDownloadCache, projectDownloadCache, removePathWithoutFollowingLinks, resolveDownloadCacheRoot, } = require('./e2e-download-cache');
 const { markErrorNonRetryable, runWithRetries, terminateOrphanedDescendants, } = require('./e2e-download-retry');
 const { assertShardExecutedTests } = require('./e2e-shard-results');
+const { shouldAllowAdvisoryTestFailure } = require('./e2e-process-failure.cjs');
+const { runWithProcessTreeTimeout } = require('./e2e-process-runner.cjs');
 const extensionRoot = path.resolve(__dirname, '..');
 const extensionPackageJson = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.json'), 'utf8'));
 const repoRoot = path.resolve(extensionRoot, '..');
@@ -24,7 +26,8 @@ if (!extesterVersion) {
     throw new Error('vscode-extension-tester must be pinned in extension/package.json devDependencies.');
 }
 const downloadCacheRoot = verifyExtesterFeedOnly ? '' : resolveDownloadCacheRoot(repoRoot);
-const vscodeVersion = resolveCachedVsCodeVersion(process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '1.122.1');
+const vscodeVersion = resolveCachedVsCodeVersion(process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '1.130.0');
+assertVsCodeVersionCompatibleWithExtester(vscodeVersion, extesterVersion);
 if (!verifyExtesterFeedOnly) {
     fs.mkdirSync(requestedTempRoot, { recursive: true });
 }
@@ -59,6 +62,7 @@ const nodeAppScript = path.join(workspaceRoot, nodeAppProjectName, 'app.js');
 const includeNodeResourceFixture = matchedTestSpecs.some(file => path.basename(file) === 'resourceDebugger.e2e.test.js');
 const workspaceNuGetConfigPath = path.join(workspaceRoot, 'NuGet.config');
 const enableAzureFunctionsE2E = process.env.ASPIRE_EXTENSION_E2E_ENABLE_AZURE_FUNCTIONS === 'true';
+const advisoryIssue = process.env.ASPIRE_EXTENSION_E2E_ADVISORY_ISSUE || '';
 let cliPathForCleanup;
 const csharpFileHeader = `// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
@@ -73,7 +77,7 @@ main().catch(error => {
 async function main() {
     let recording;
     let testFailure;
-    let completedTests = false;
+    let cleanupFailed = false;
     try {
         if (verifyExtesterFeedOnly) {
             verifyExtesterFeed();
@@ -154,13 +158,26 @@ async function main() {
         recording = startRecording();
         try {
             logStep('Running VS Code extension E2E tests');
-            await runWithProcessTreeTimeout(process.execPath, [extesterCli, 'run-tests', testSpec, '--storage', storageDir, '--extensions_dir', extensionsDir, '--code_version', vscodeVersion, '--code_settings', path.join(extensionRoot, 'test-e2e', 'settings.json'), '--mocha_config', path.join(extensionRoot, '.mocharc.e2e.js'), '--offline'], extestEnv, getRunTestsTimeoutMs());
+            const runTestsArgs = [extesterCli, 'run-tests', testSpec, '--storage', storageDir, '--extensions_dir', extensionsDir, '--code_version', vscodeVersion, '--code_settings', path.join(extensionRoot, 'test-e2e', 'settings.json'), '--mocha_config', path.join(extensionRoot, '.mocharc.e2e.js'), '--offline'];
+            await runWithProcessTreeTimeout(process.execPath, runTestsArgs, {
+                diagnosticsSuffix: ` Diagnostics are under ${path.relative(extensionRoot, resultsDir)} and ${path.relative(extensionRoot, storageDiagnosticsDir)}.`,
+                quoteShellArgument: quoteWindowsShellArgument,
+                spawn,
+                spawnOptions: {
+                    cwd: extensionRoot,
+                    env: { ...process.env, ...extestEnv },
+                    stdio: 'inherit',
+                    detached: process.platform !== 'win32',
+                },
+                terminateProcessTree,
+                timeout: getRunTestsTimeoutMs(),
+                useShell: shouldUseShellForCommand(process.execPath),
+            });
             assertShardExecutedTests({ shardName, results: readMochaResults() });
         }
         catch (error) {
             testFailure = error;
         }
-        completedTests = true;
     }
     finally {
         const cleanupErrors = [];
@@ -172,6 +189,7 @@ async function main() {
         await runCleanupStep('copy workspace diagnostics', copyWorkspaceDiagnostics, cleanupErrors);
         await runCleanupStep('cleanup temporary run root', cleanupTemporaryRunRoot, cleanupErrors);
         if (cleanupErrors.length > 0) {
+            cleanupFailed = true;
             const cleanupFailure = new AggregateError(cleanupErrors, 'One or more E2E cleanup steps failed.');
             if (testFailure) {
                 console.error(cleanupFailure);
@@ -183,79 +201,13 @@ async function main() {
     }
     if (testFailure) {
         printFailureDiagnosticsSummary();
+        if (advisoryIssue && shouldAllowAdvisoryTestFailure(testFailure, readMochaResults(), cleanupFailed)) {
+            console.warn(`::warning title=VS Code extension E2E test failure advisory::${shardName} has completed test failures tracked by ${advisoryIssue}. Diagnostics were uploaded for investigation.`);
+            return;
+        }
         throw testFailure;
     }
-    if (completedTests) {
-        printSuccessDiagnosticsSummary();
-    }
-}
-
-[function runWithProcessTreeTimeout]
-function runWithProcessTreeTimeout(command, args, extraEnv, timeout) {
-    return new Promise((resolve, reject) => {
-        const useShell = shouldUseShellForCommand(command);
-        const child = useShell
-            ? spawn([command, ...args].map(quoteWindowsShellArgument).join(' '), [], {
-                cwd: extensionRoot,
-                env: { ...process.env, ...extraEnv },
-                shell: true,
-                stdio: 'inherit',
-                detached: process.platform !== 'win32',
-            })
-            : spawn(command, args, {
-                cwd: extensionRoot,
-                env: { ...process.env, ...extraEnv },
-                shell: false,
-                stdio: 'inherit',
-                detached: process.platform !== 'win32',
-            });
-        let timedOut = false;
-        let settled = false;
-        let forceTimeout;
-        const timer = setTimeout(() => {
-            timedOut = true;
-            terminateProcessTree(child.pid, 'SIGTERM');
-            forceTimeout = setTimeout(() => {
-                if (settled) {
-                    return;
-                }
-                terminateProcessTree(child.pid, 'SIGKILL');
-                child.removeAllListeners();
-                child.unref();
-                settle();
-                reject(new Error(`${command} ${args.join(' ')} timed out after ${timeout}ms and did not exit after process-tree termination. Diagnostics are under ${path.relative(extensionRoot, resultsDir)} and ${path.relative(extensionRoot, storageDiagnosticsDir)}.`));
-            }, 15000);
-        }, timeout);
-        child.on('error', error => {
-            if (settled) {
-                return;
-            }
-            settle();
-            reject(error);
-        });
-        child.on('close', (exitCode, signal) => {
-            if (settled) {
-                return;
-            }
-            settle();
-            if (timedOut) {
-                reject(new Error(`${command} ${args.join(' ')} timed out after ${timeout}ms. Diagnostics are under ${path.relative(extensionRoot, resultsDir)} and ${path.relative(extensionRoot, storageDiagnosticsDir)}.`));
-                return;
-            }
-            if (exitCode !== 0) {
-                reject(new Error(`${command} ${args.join(' ')} exited with code ${exitCode ?? `signal ${signal ?? 'unknown'}`}. Diagnostics are under ${path.relative(extensionRoot, resultsDir)} and ${path.relative(extensionRoot, storageDiagnosticsDir)}.`));
-                return;
-            }
-            resolve();
-        });
-        function settle() {
-            settled = true;
-            clearTimeout(timer);
-            if (forceTimeout) {
-                clearTimeout(forceTimeout);
-            }
-        }
-    });
+    printSuccessDiagnosticsSummary();
 }
 
 [function getRunTestsTimeoutMs]

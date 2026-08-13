@@ -2,8 +2,8 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import * as ts from 'typescript';
 import { spawnSync } from 'child_process';
+import * as ts from 'typescript';
 
 function readSourcePattern(source: string, name: string): RegExp {
     const declaration = new RegExp(`const ${name} = /(.+)/;`).exec(source);
@@ -18,18 +18,6 @@ function readSourcePattern(source: string, name: string): RegExp {
  */
 function stripComments(source: string): string {
     return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-}
-
-function getTestBlock(source: string, testName: string): string {
-    const testStart = source.indexOf(`test('${testName}'`);
-    assert.ok(testStart >= 0, `Expected to find test '${testName}'.`);
-
-    const nextTestStart = source.indexOf('\n    test(', testStart + 1);
-    const suiteEnd = source.indexOf('\n});', testStart + 1);
-    const testEnd = nextTestStart >= 0 && nextTestStart < suiteEnd ? nextTestStart : suiteEnd;
-    assert.ok(testEnd > testStart, `Expected to find the end of test '${testName}'.`);
-
-    return source.slice(testStart, testEnd);
 }
 
 const resourceDebuggerDeadlineProtectedCalls = new Set([
@@ -144,6 +132,7 @@ function assertResourceDebuggerUsesSharedDeadline(source: string): void {
 interface ExTesterAwait {
     runWithProcessTreeTimeout: ts.Identifier;
     process: ts.Identifier;
+    runTestsArgs: ts.Identifier;
     extesterCli: ts.Identifier;
     testSpec: ts.Identifier;
     extestEnv: ts.Identifier;
@@ -157,7 +146,6 @@ interface MainInvocation {
 
 const protectedFunctionNames = [
     'main',
-    'runWithProcessTreeTimeout',
     'getRunTestsTimeoutMs',
     'readMochaResults',
     'readJsonIfExists',
@@ -167,14 +155,16 @@ const protectedFunctionNames = [
 const protectedTopLevelBindingNames = [
     'assertShardExecutedTests',
     'extesterCli',
+    'runWithProcessTreeTimeout',
     'shardName',
     'testSpec',
 ] as const;
 
 const protectedMainBindingNames = [
-    'completedTests',
+    'cleanupFailed',
     'extestEnv',
     'recording',
+    'runTestsArgs',
     'testFailure',
 ] as const;
 
@@ -236,7 +226,7 @@ function assertShardResultGuardWiring(source: string): void {
         mainTryIndex === 3 &&
         isSingleVariableStatement(main.body.statements[0], 'recording', ts.NodeFlags.Let) &&
         isSingleVariableStatement(main.body.statements[1], 'testFailure', ts.NodeFlags.Let) &&
-        isSingleVariableStatement(main.body.statements[2], 'completedTests', ts.NodeFlags.Let),
+        isSingleVariableStatement(main.body.statements[2], 'cleanupFailed', ts.NodeFlags.Let),
         'The production main function must preserve the expected top-level control-flow skeleton.');
 
     const testFailureDeclaration = getSingleVariableDeclaration(main.body.statements[1], 'testFailure');
@@ -244,12 +234,11 @@ function assertShardResultGuardWiring(source: string): void {
     assert.ok(testFailureSymbol, 'The production testFailure binding must resolve to a symbol.');
 
     const mainTryBody = mainTry.tryBlock.statements;
-    const runTestsTryIndex = mainTryBody.length - 2;
+    const runTestsTryIndex = mainTryBody.length - 1;
     const runTestsTry = mainTryBody[runTestsTryIndex];
     assert.ok(
         ts.isTryStatement(runTestsTry) &&
-        isRecordingStartStatement(mainTryBody[runTestsTryIndex - 1]) &&
-        isCompletedTestsAssignment(mainTryBody[runTestsTryIndex + 1]),
+        isRecordingStartStatement(mainTryBody[runTestsTryIndex - 1]),
         'The expected reachable main try path must contain exactly one exact ExTester run-tests command.');
 
     const runTestsStatements = runTestsTry.tryBlock.statements;
@@ -288,16 +277,20 @@ function assertShardResultGuardWiring(source: string): void {
         checker.getSymbolAtLocation(guardCall.expression) === guardBindingSymbol,
         'The shard result guard call must resolve to the top-level shard result guard binding.');
 
-    const runWithProcessTreeTimeoutDeclaration = findTopLevelFunctionDeclaration(sourceFile, 'runWithProcessTreeTimeout');
-    const runWithProcessTreeTimeoutSymbol = runWithProcessTreeTimeoutDeclaration?.name &&
-        checker.getSymbolAtLocation(runWithProcessTreeTimeoutDeclaration.name);
+    const runWithProcessTreeTimeoutBinding = findTopLevelRequiredBinding(
+        sourceFile,
+        './e2e-process-runner.cjs',
+        'runWithProcessTreeTimeout');
+    const runWithProcessTreeTimeoutSymbol = runWithProcessTreeTimeoutBinding &&
+        checker.getSymbolAtLocation(runWithProcessTreeTimeoutBinding.name);
     assert.ok(
         runWithProcessTreeTimeoutSymbol &&
         checker.getSymbolAtLocation(exTesterAwait.runWithProcessTreeTimeout) === runWithProcessTreeTimeoutSymbol,
-        'The ExTester await must resolve to the production runWithProcessTreeTimeout declaration.');
+        'The ExTester await must resolve to the production runWithProcessTreeTimeout binding.');
 
     const extesterCliDeclaration = findConstVariableDeclaration(sourceFile.statements, 'extesterCli');
     const extestEnvDeclaration = findConstVariableDeclaration(mainTry.tryBlock.statements, 'extestEnv');
+    const runTestsArgsDeclaration = findConstVariableDeclaration(runTestsStatements, 'runTestsArgs');
     const getRunTestsTimeoutMsDeclaration = findTopLevelFunctionDeclaration(sourceFile, 'getRunTestsTimeoutMs');
     const testSpecInitializer = testSpecDeclaration && getExpectedTestSpecInitializer(testSpecDeclaration);
     assert.ok(
@@ -307,14 +300,17 @@ function assertShardResultGuardWiring(source: string): void {
     const extesterCliSymbol = extesterCliDeclaration && checker.getSymbolAtLocation(extesterCliDeclaration.name);
     const testSpecSymbol = testSpecDeclaration && checker.getSymbolAtLocation(testSpecDeclaration.name);
     const extestEnvSymbol = extestEnvDeclaration && checker.getSymbolAtLocation(extestEnvDeclaration.name);
+    const runTestsArgsSymbol = runTestsArgsDeclaration && checker.getSymbolAtLocation(runTestsArgsDeclaration.name);
     const getRunTestsTimeoutMsSymbol = getRunTestsTimeoutMsDeclaration?.name &&
         checker.getSymbolAtLocation(getRunTestsTimeoutMsDeclaration.name);
     assert.ok(
         extesterCliSymbol &&
         testSpecSymbol &&
         extestEnvSymbol &&
+        runTestsArgsSymbol &&
         getRunTestsTimeoutMsSymbol &&
         checker.getSymbolAtLocation(exTesterAwait.process) === undefined &&
+        checker.getSymbolAtLocation(exTesterAwait.runTestsArgs) === runTestsArgsSymbol &&
         checker.getSymbolAtLocation(exTesterAwait.extesterCli) === extesterCliSymbol &&
         checker.getSymbolAtLocation(exTesterAwait.testSpec) === testSpecSymbol &&
         checker.getSymbolAtLocation(exTesterAwait.extestEnv) === extestEnvSymbol &&
@@ -347,8 +343,8 @@ function assertShardResultGuardWiring(source: string): void {
         'The top-level shardName binding must use the intended shardName initializer expression.');
 
     assert.ok(
-        runTestsStatements.length === 3 &&
-        awaitIndex === 1 &&
+        runTestsStatements.length === 4 &&
+        awaitIndex === 2 &&
         isCallStatement(runTestsStatements[0], 'logStep', 'Running VS Code extension E2E tests'),
         'The production run-tests try must preserve the expected direct control-flow skeleton.');
 }
@@ -499,6 +495,35 @@ function findTopLevelShardResultGuardBinding(sourceFile: ts.SourceFile): {
     return undefined;
 }
 
+function findTopLevelRequiredBinding(
+    sourceFile: ts.SourceFile,
+    modulePath: string,
+    bindingName: string): ts.BindingElement | undefined {
+    for (const statement of sourceFile.statements) {
+        if (!ts.isVariableStatement(statement)) {
+            continue;
+        }
+
+        for (const declaration of statement.declarationList.declarations) {
+            if (!declaration.initializer ||
+                !isCallTo(declaration.initializer, 'require') ||
+                declaration.initializer.arguments.length !== 1 ||
+                !ts.isStringLiteral(declaration.initializer.arguments[0]) ||
+                declaration.initializer.arguments[0].text !== modulePath ||
+                !ts.isObjectBindingPattern(declaration.name)) {
+                continue;
+            }
+
+            return declaration.name.elements.find(element =>
+                element.propertyName === undefined &&
+                ts.isIdentifier(element.name) &&
+                element.name.text === bindingName);
+        }
+    }
+
+    return undefined;
+}
+
 function findTopLevelShardNameDeclaration(sourceFile: ts.SourceFile): ts.VariableDeclaration | undefined {
     return findConstVariableDeclaration(sourceFile.statements, 'shardName');
 }
@@ -532,39 +557,89 @@ function getSuccessfulExTesterAwait(statement: ts.Statement): ExTesterAwait | un
     }
 
     const call = statement.expression.expression;
-    if (call.arguments.length !== 4 ||
+    if (call.arguments.length !== 3 ||
         !ts.isPropertyAccessExpression(call.arguments[0]) ||
         !ts.isIdentifier(call.arguments[0].expression) ||
         call.arguments[0].expression.text !== 'process' ||
         call.arguments[0].name.text !== 'execPath' ||
-        !ts.isArrayLiteralExpression(call.arguments[1]) ||
-        !ts.isIdentifier(call.arguments[2]) ||
-        call.arguments[2].text !== 'extestEnv' ||
-        !isCallTo(call.arguments[3], 'getRunTestsTimeoutMs') ||
-        call.arguments[3].arguments.length !== 0) {
+        !ts.isIdentifier(call.arguments[1]) ||
+        call.arguments[1].text !== 'runTestsArgs' ||
+        !ts.isObjectLiteralExpression(call.arguments[2])) {
         return undefined;
     }
 
-    const commandArguments = call.arguments[1].elements;
+    const options = call.arguments[2];
+    const spawnOptionsProperty = options.properties.find(property =>
+        ts.isPropertyAssignment(property) &&
+        ts.isIdentifier(property.name) &&
+        property.name.text === 'spawnOptions' &&
+        ts.isObjectLiteralExpression(property.initializer));
+    const timeoutProperty = options.properties.find(property =>
+        ts.isPropertyAssignment(property) &&
+        ts.isIdentifier(property.name) &&
+        property.name.text === 'timeout' &&
+        isCallTo(property.initializer, 'getRunTestsTimeoutMs') &&
+        property.initializer.arguments.length === 0);
+    if (!spawnOptionsProperty ||
+        !ts.isPropertyAssignment(spawnOptionsProperty) ||
+        !ts.isObjectLiteralExpression(spawnOptionsProperty.initializer) ||
+        !timeoutProperty ||
+        !ts.isPropertyAssignment(timeoutProperty) ||
+        !ts.isCallExpression(timeoutProperty.initializer) ||
+        !ts.isIdentifier(timeoutProperty.initializer.expression)) {
+        return undefined;
+    }
+
+    const environmentProperty = spawnOptionsProperty.initializer.properties.find(property =>
+        ts.isPropertyAssignment(property) &&
+        ts.isIdentifier(property.name) &&
+        property.name.text === 'env' &&
+        ts.isObjectLiteralExpression(property.initializer));
+    if (!environmentProperty ||
+        !ts.isPropertyAssignment(environmentProperty) ||
+        !ts.isObjectLiteralExpression(environmentProperty.initializer)) {
+        return undefined;
+    }
+
+    const extestEnvSpread = environmentProperty.initializer.properties.find(property =>
+        ts.isSpreadAssignment(property) &&
+        ts.isIdentifier(property.expression) &&
+        property.expression.text === 'extestEnv');
+    if (!extestEnvSpread ||
+        !ts.isSpreadAssignment(extestEnvSpread) ||
+        !ts.isIdentifier(extestEnvSpread.expression) ||
+        !ts.isIdentifier(call.expression)) {
+        return undefined;
+    }
+
+    const runTestsArgsDeclaration = findConstVariableDeclaration(
+        statement.parent && ts.isBlock(statement.parent) ? statement.parent.statements : [],
+        'runTestsArgs');
+    if (!runTestsArgsDeclaration ||
+        !runTestsArgsDeclaration.initializer ||
+        !ts.isArrayLiteralExpression(runTestsArgsDeclaration.initializer)) {
+        return undefined;
+    }
+
+    const commandArguments = runTestsArgsDeclaration.initializer.elements;
     if (commandArguments.length < 3 ||
         !ts.isIdentifier(commandArguments[0]) ||
         commandArguments[0].text !== 'extesterCli' ||
         !ts.isStringLiteral(commandArguments[1]) ||
         commandArguments[1].text !== 'run-tests' ||
         !ts.isIdentifier(commandArguments[2]) ||
-        commandArguments[2].text !== 'testSpec' ||
-        !ts.isIdentifier(call.expression) ||
-        !ts.isIdentifier(call.arguments[3].expression)) {
+        commandArguments[2].text !== 'testSpec') {
         return undefined;
     }
 
     return {
         runWithProcessTreeTimeout: call.expression,
         process: call.arguments[0].expression,
+        runTestsArgs: call.arguments[1],
         extesterCli: commandArguments[0],
         testSpec: commandArguments[2],
-        extestEnv: call.arguments[2],
-        getRunTestsTimeoutMs: call.arguments[3].expression,
+        extestEnv: extestEnvSpread.expression,
+        getRunTestsTimeoutMs: timeoutProperty.initializer.expression,
     };
 }
 
@@ -742,16 +817,6 @@ function isRecordingStartStatement(statement: ts.Statement | undefined): boolean
         statement.expression.right.arguments.length === 0;
 }
 
-function isCompletedTestsAssignment(statement: ts.Statement | undefined): boolean {
-    return !!statement &&
-        ts.isExpressionStatement(statement) &&
-        ts.isBinaryExpression(statement.expression) &&
-        statement.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-        ts.isIdentifier(statement.expression.left) &&
-        statement.expression.left.text === 'completedTests' &&
-        statement.expression.right.kind === ts.SyntaxKind.TrueKeyword;
-}
-
 function isCallStatement(statement: ts.Statement, functionName: string, stringArgument: string): boolean {
     return ts.isExpressionStatement(statement) &&
         isCallTo(statement.expression, functionName) &&
@@ -787,16 +852,16 @@ function hasExpectedCleanupFailurePropagation(
         !ts.isIfStatement(cleanupFailureIf) ||
         cleanupFailureIf.elseStatement ||
         !ts.isBlock(cleanupFailureIf.thenStatement) ||
-        cleanupFailureIf.thenStatement.statements.length !== 2) {
+        cleanupFailureIf.thenStatement.statements.length !== 3) {
         return false;
     }
 
     const cleanupFailureDeclaration = getSingleVariableDeclaration(
-        cleanupFailureIf.thenStatement.statements[0],
+        cleanupFailureIf.thenStatement.statements[1],
         'cleanupFailure');
     const cleanupFailureSymbol = cleanupFailureDeclaration &&
         checker.getSymbolAtLocation(cleanupFailureDeclaration.name);
-    const preserveExistingFailure = cleanupFailureIf.thenStatement.statements[1];
+    const preserveExistingFailure = cleanupFailureIf.thenStatement.statements[2];
     if (!cleanupFailureSymbol ||
         !ts.isIfStatement(preserveExistingFailure) ||
         !ts.isIdentifier(preserveExistingFailure.expression) ||
@@ -829,14 +894,16 @@ function hasExpectedTestFailureRethrow(
         !ts.isIdentifier(statement.expression) ||
         checker.getSymbolAtLocation(statement.expression) !== testFailureSymbol ||
         !ts.isBlock(statement.thenStatement) ||
-        statement.thenStatement.statements.length !== 2) {
+        statement.thenStatement.statements.length < 2) {
         return false;
     }
 
-    const [printDiagnostics, rethrow] = statement.thenStatement.statements;
+    const printDiagnostics = statement.thenStatement.statements[0];
+    const rethrow = statement.thenStatement.statements.at(-1);
     return ts.isExpressionStatement(printDiagnostics) &&
         isCallTo(printDiagnostics.expression, 'printFailureDiagnosticsSummary') &&
         printDiagnostics.expression.arguments.length === 0 &&
+        !!rethrow &&
         ts.isThrowStatement(rethrow) &&
         !!rethrow.expression &&
         ts.isIdentifier(rethrow.expression) &&
@@ -875,7 +942,170 @@ function isConsoleErrorOfSymbol(
     return checker.getSymbolAtLocation(statement.expression.arguments[0]) === argumentSymbol;
 }
 
+function getDirectCallExpression(statement: ts.Statement, name: string): ts.CallExpression | undefined {
+    if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) {
+        return undefined;
+    }
+
+    return ts.isIdentifier(statement.expression.expression) && statement.expression.expression.text === name
+        ? statement.expression
+        : undefined;
+}
+
+function getLiteralText(expression: ts.Expression | undefined): string | undefined {
+    return expression !== undefined && ts.isStringLiteralLike(expression)
+        ? expression.text
+        : undefined;
+}
+
+function getSuiteStatements(sourceFile: ts.SourceFile): readonly ts.Statement[] {
+    for (const statement of sourceFile.statements) {
+        const suiteCall = getDirectCallExpression(statement, 'suite');
+        if (suiteCall === undefined) {
+            continue;
+        }
+
+        const callback = suiteCall.arguments[1];
+        if (callback !== undefined && (ts.isFunctionExpression(callback) || ts.isArrowFunction(callback)) && ts.isBlock(callback.body)) {
+            return callback.body.statements;
+        }
+    }
+
+    return [];
+}
+
+function compareVersionStrings(left: string, right: string): number {
+    const leftParts = left.split('.').map(Number);
+    const rightParts = right.split('.').map(Number);
+
+    for (let i = 0; i < Math.max(leftParts.length, rightParts.length); i++) {
+        const difference = (leftParts[i] ?? 0) - (rightParts[i] ?? 0);
+        if (difference !== 0) {
+            return difference;
+        }
+    }
+
+    return 0;
+}
+
+function runE2eRunnerAsPlatform(extensionRoot: string, platform: 'darwin' | 'linux' | 'win32', environment: NodeJS.ProcessEnv) {
+    const runnerPath = path.join(extensionRoot, 'scripts', 'run-e2e.js');
+    const bootstrap = `Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} }); require(${JSON.stringify(runnerPath)});`;
+    return spawnSync(process.execPath, ['-e', bootstrap], {
+        encoding: 'utf8',
+        timeout: 120000,
+        env: environment,
+    });
+}
+
+function getTestBlock(source: string, testName: string): string {
+    const sourceFile = ts.createSourceFile('e2e.test.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const suiteStatements = getSuiteStatements(sourceFile);
+
+    // Walk the parsed suite body instead of scanning raw text so comments, nested template
+    // literals, and regular expressions like `/\)/` cannot masquerade as structure.
+    for (const statement of suiteStatements) {
+        const testCall = getDirectCallExpression(statement, 'test');
+        if (testCall !== undefined && getLiteralText(testCall.arguments[0]) === testName) {
+            return source.slice(statement.getStart(sourceFile), statement.getEnd());
+        }
+    }
+
+    assert.fail(`Expected to find test '${testName}'.`);
+}
+
 suite('E2E launch profile', () => {
+    test('finds test blocks when the test name uses double quotes', () => {
+        const source = [
+            "suite('Aspire debug dashboard E2E', function () {",
+            '  test("keeps long-running CLI run status out of notifications", async () => {',
+            '    await waitForAnyWorkbenchText(cliRunStatusTexts, 120000);',
+            '    const notificationMessages = await getNotificationMessages();',
+            '  });',
+            "  test('another test', async () => {",
+            "    throw new Error('should not be included');",
+            '  });',
+            '});',
+        ].join('\n');
+
+        const block = getTestBlock(source, 'keeps long-running CLI run status out of notifications');
+
+        assert.ok(block.includes('waitForAnyWorkbenchText(cliRunStatusTexts, 120000);'));
+        assert.ok(block.includes('const notificationMessages = await getNotificationMessages();'));
+        assert.ok(!block.includes("test('another test'"));
+    });
+
+    test('finds test blocks when whitespace changes around the test declaration', () => {
+        const source = [
+            "suite('Aspire debug dashboard E2E', function () {",
+            "\ttest ( 'keeps long-running CLI run status out of notifications' , async () => {",
+            '        const observedStatuses = cliRunStatusTexts.map(status => `(${status})`);',
+            "        assert.ok(observedStatuses.some(status => status.includes('Building AppHost...')));",
+            '    });',
+            "\ttest('another test', async () => {",
+            '        assert.fail("should not be included");',
+            '    });',
+            '});',
+        ].join('\n');
+
+        const block = getTestBlock(source, 'keeps long-running CLI run status out of notifications');
+
+        assert.ok(block.includes('const observedStatuses = cliRunStatusTexts.map(status => `(${status})`);'));
+        assert.ok(block.includes("assert.ok(observedStatuses.some(status => status.includes('Building AppHost...')));"));
+        assert.ok(!block.includes("assert.fail(\"should not be included\");"));
+    });
+
+    test('finds test blocks when the body contains a regex literal with a closing parenthesis', () => {
+        const source = [
+            "suite('Aspire debug dashboard E2E', function () {",
+            "  test('keeps long-running CLI run status out of notifications', async () => {",
+            "    assert.ok(/\\)/.test(')'));",
+            '    const notificationMessages = await getNotificationMessages();',
+            '  });',
+            '});',
+        ].join('\n');
+
+        const block = getTestBlock(source, 'keeps long-running CLI run status out of notifications');
+
+        assert.ok(block.includes("assert.ok(/\\)/.test(')'));"));
+        assert.ok(block.includes('const notificationMessages = await getNotificationMessages();'));
+    });
+
+    test('finds test blocks when the body contains nested template literals with closing parentheses', () => {
+        const source = [
+            "suite('Aspire debug dashboard E2E', function () {",
+            "  test('keeps long-running CLI run status out of notifications', async () => {",
+            "    const shape = `outer ${`inner )`}`;",
+            "    assert.ok(shape.includes('inner )'));",
+            '  });',
+            '});',
+        ].join('\n');
+
+        const block = getTestBlock(source, 'keeps long-running CLI run status out of notifications');
+
+        assert.ok(block.includes("const shape = `outer ${`inner )`}`;"));
+        assert.ok(block.includes("assert.ok(shape.includes('inner )'));"));
+    });
+
+    test('ignores block-commented target declarations', () => {
+        const source = [
+            "suite('Aspire debug dashboard E2E', function () {",
+            '  /*',
+            "  test('keeps long-running CLI run status out of notifications', async () => {",
+            "    throw new Error('comment only');",
+            '  });',
+            '  */',
+            "  test('another test', async () => {",
+            '    assert.ok(true);',
+            '  });',
+            '});',
+        ].join('\n');
+
+        assert.throws(
+            () => getTestBlock(source, 'keeps long-running CLI run status out of notifications'),
+            /Expected to find test 'keeps long-running CLI run status out of notifications'\./);
+    });
+
     test('creates nothing in the per-run root that a later module-scope throw could strand', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
@@ -926,6 +1156,56 @@ suite('E2E launch profile', () => {
         }
         finally {
             fs.rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    test('rejects VS Code overrides whose macOS executable the pinned ExTester cannot launch', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const testArtifactsRoot = path.join(extensionRoot, '.test-artifacts', 'unit');
+        fs.mkdirSync(testArtifactsRoot, { recursive: true });
+        const tempRoot = fs.mkdtempSync(path.join(testArtifactsRoot, 'aev-version-guard-'));
+        try {
+            const result = runE2eRunnerAsPlatform(extensionRoot, 'darwin', {
+                ...process.env,
+                ASPIRE_EXTENSION_E2E_CLI_PATH: path.join(tempRoot, 'missing-aspire'),
+                ASPIRE_EXTENSION_E2E_SPEC: 'out/test/e2eLaunchProfile.test.js',
+                ASPIRE_EXTENSION_E2E_TEMP_ROOT: tempRoot,
+                ASPIRE_EXTENSION_E2E_VSCODE_VERSION: '1.131.0',
+            });
+
+            assert.notStrictEqual(result.status, 0);
+            assert.match(result.stderr, /VS Code 1\.131\.0.*ExTester 8\.23\.0 on macOS.*Contents\/MacOS\/Electron/);
+            assert.deepStrictEqual(fs.readdirSync(tempRoot), []);
+        }
+        finally {
+            fs.rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    test('allows VS Code 1.131 overrides where ExTester uses the current executable path', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const testArtifactsRoot = path.join(extensionRoot, '.test-artifacts', 'unit');
+        fs.mkdirSync(testArtifactsRoot, { recursive: true });
+
+        for (const platform of ['linux', 'win32'] as const) {
+            const tempRoot = fs.mkdtempSync(path.join(testArtifactsRoot, `aev-version-${platform}-`));
+            try {
+                const missingCliPath = path.join(tempRoot, 'missing-aspire');
+                const result = runE2eRunnerAsPlatform(extensionRoot, platform, {
+                    ...process.env,
+                    ASPIRE_EXTENSION_E2E_CLI_PATH: missingCliPath,
+                    ASPIRE_EXTENSION_E2E_SPEC: 'out/test/e2eLaunchProfile.test.js',
+                    ASPIRE_EXTENSION_E2E_TEMP_ROOT: tempRoot,
+                    ASPIRE_EXTENSION_E2E_VSCODE_VERSION: '1.131.0',
+                });
+
+                assert.notStrictEqual(result.status, 0);
+                assert.ok(result.stderr.includes(`ASPIRE_EXTENSION_E2E_CLI_PATH points to a missing file: ${missingCliPath}`), result.stderr);
+                assert.deepStrictEqual(fs.readdirSync(tempRoot), []);
+            }
+            finally {
+                fs.rmSync(tempRoot, { recursive: true, force: true });
+            }
         }
     });
 
@@ -982,15 +1262,12 @@ suite('E2E launch profile', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
 
+        assert.ok(runner.includes("const { runWithProcessTreeTimeout } = require('./e2e-process-runner.cjs');"));
         assert.ok(runner.includes('ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS'));
         assert.ok(runner.includes('await runWithProcessTreeTimeout(process.execPath'));
         assert.ok(runner.includes('getRunTestsTimeoutMs()'));
         assert.ok(runner.includes('2400000'));
-        assert.ok(runner.includes('did not exit after process-tree termination'));
-        assert.ok(runner.includes('child.unref()'));
         assert.ok(runner.includes("spawnSync('taskkill'"));
-        assert.ok(runner.includes("terminateProcessTree(child.pid, 'SIGTERM')"));
-        assert.ok(runner.includes("terminateProcessTree(child.pid, 'SIGKILL')"));
         assert.ok(runner.includes('process.kill(-pid, signal)'));
     });
 
@@ -1068,8 +1345,8 @@ suite('E2E launch profile', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
             .replace(
-                '  let completedTests = false;',
-                '  let completedTests = false;\n  return;');
+                '  let cleanupFailed = false;',
+                '  let cleanupFailed = false;\n  return;');
 
         assert.throws(
             () => assertShardResultGuardWiring(runner),
@@ -1140,8 +1417,8 @@ suite('E2E launch profile', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
             .replace(
-                /^      await runWithProcessTreeTimeout\(process\.execPath, \[extesterCli, 'run-tests'.*$/m,
-                '      await runWithProcessTreeTimeout();');
+                '      await runWithProcessTreeTimeout(process.execPath, runTestsArgs, {',
+                '      await Promise.resolve(process.execPath, runTestsArgs, {');
 
         assert.throws(
             () => assertShardResultGuardWiring(runner),
@@ -1523,6 +1800,21 @@ suite('E2E launch profile', () => {
             /protected runner syntax allowlist/);
     });
 
+    test('wires the ExTester process lifecycle into the extracted runner', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const invocationStart = runner.indexOf('await runWithProcessTreeTimeout(process.execPath');
+        const invocationEnd = runner.indexOf('\n      });', invocationStart);
+        const runnerOptions = runner.slice(invocationStart, invocationEnd);
+
+        assert.ok(invocationStart >= 0);
+        assert.ok(invocationEnd > invocationStart);
+        assert.ok(runnerOptions.includes('quoteShellArgument: quoteWindowsShellArgument,'));
+        assert.ok(runnerOptions.includes("stdio: 'inherit',"));
+        assert.ok(runnerOptions.includes("detached: process.platform !== 'win32',"));
+        assert.ok(runnerOptions.includes('terminateProcessTree,'));
+    });
+
     test('bounds retryable runner setup steps so setup failures still collect diagnostics', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
@@ -1579,6 +1871,37 @@ suite('E2E launch profile', () => {
         assert.ok(!workflow.includes('registry=https://'));
     });
 
+    test('defaults to the newest VS Code with the legacy macOS executable path while the internal feed lacks newer ExTester', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const installedPackageJson = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'node_modules', 'vscode-extension-tester', 'package.json'), 'utf8'));
+        const extester = require(path.join(extensionRoot, 'node_modules', 'vscode-extension-tester', 'out', 'extester.js')) as {
+            loadCodeVersion(version: string): string;
+        };
+        const previousCodeVersion = process.env.CODE_VERSION;
+        const defaultVsCodeVersion = '1.130.0';
+        const macOsLegacyExecutableRemovalVersion = '1.131.0';
+        const extesterMacOsExecutableFallbackVersion = '8.24.0';
+
+        assert.ok(runner.includes(`process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '${defaultVsCodeVersion}'`));
+        assert.strictEqual(installedPackageJson.version, '8.23.0');
+        assert.ok(compareVersionStrings(defaultVsCodeVersion, macOsLegacyExecutableRemovalVersion) < 0);
+        assert.ok(compareVersionStrings(installedPackageJson.version, extesterMacOsExecutableFallbackVersion) < 0);
+
+        try {
+            delete process.env.CODE_VERSION;
+            assert.strictEqual(extester.loadCodeVersion(defaultVsCodeVersion), defaultVsCodeVersion);
+        }
+        finally {
+            if (previousCodeVersion === undefined) {
+                delete process.env.CODE_VERSION;
+            }
+            else {
+                process.env.CODE_VERSION = previousCodeVersion;
+            }
+        }
+    });
+
     test('preflights locked ExTester dependency graph before starting the E2E matrix', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
@@ -1604,6 +1927,9 @@ suite('E2E launch profile', () => {
         const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
         const resourceGroupsInstallIndex = runner.indexOf("displayName: 'Azure Resource Groups'");
         const functionsInstallIndex = runner.indexOf("displayName: 'Azure Functions'");
+        const runStepIndex = workflow.indexOf('- name: Run extension E2E tests');
+        const uploadStepIndex = workflow.indexOf('- name: Upload E2E diagnostics');
+        const runStep = workflow.slice(runStepIndex, uploadStepIndex);
 
         assert.ok(workflow.includes('shardName: azure-functions'));
         assert.ok(workflow.includes('installAzureFunctions: true'));
@@ -1618,6 +1944,22 @@ suite('E2E launch profile', () => {
         assert.ok(functionsInstallIndex > resourceGroupsInstallIndex);
         assert.ok(runner.includes("path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_AZURE_RESOURCE_GROUPS_VSIX')"));
         assert.ok(runner.includes("path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_AZURE_FUNCTIONS_VSIX')"));
+        assert.ok(runStep.includes('ASPIRE_EXTENSION_E2E_ADVISORY_ISSUE: ${{ matrix.advisoryIssue }}'));
+        assert.strictEqual(runStep.includes('continue-on-error:'), false);
+    });
+
+    test('wires structured E2E harness failures into advisory handling', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+
+        assert.ok(runner.includes("const { shouldAllowAdvisoryTestFailure } = require('./e2e-process-failure.cjs');"));
+        assert.ok(runner.includes("const advisoryIssue = process.env.ASPIRE_EXTENSION_E2E_ADVISORY_ISSUE || '';"));
+        assert.ok(runner.includes('let cleanupFailed = false;'));
+        assert.ok(runner.includes('cleanupFailed = true;'));
+        assert.ok(runner.includes('shouldAllowAdvisoryTestFailure(testFailure, readMochaResults(), cleanupFailed)'));
+        assert.ok(runner.includes('completed test failures tracked by ${advisoryIssue}. Diagnostics were uploaded for investigation.'));
+        assert.strictEqual(runner.includes('ASPIRE_EXTENSION_E2E_ALLOW_TEST_FAILURE'), false);
+        assert.strictEqual(runner.includes('completedTests'), false);
     });
 
     test('keeps Linux E2E recordings for successful runs by default', () => {
@@ -1720,6 +2062,19 @@ suite('E2E launch profile', () => {
         assert.ok(e2eStateFileBridge.includes("context.globalState.update(dashboardDefaultChangedNotificationKey, undefined)"));
         assert.ok(fixtures.includes('resetDashboardDefaultChangedNotificationForE2E'));
         assert.ok(debugDashboard.includes('await resetDashboardDefaultChangedNotificationForE2E();'));
+    });
+
+    test('keeps CLI status surface coverage in the deterministic ProgressNotifier unit test', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const debugDashboard = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'debugDashboard.e2e.test.ts'), 'utf8');
+        const progressNotifierTests = fs.readFileSync(path.join(extensionRoot, 'src', 'test', 'progressNotifier.test.ts'), 'utf8');
+        const statusSurfaceTest = getTestBlock(progressNotifierTests, 'CLI status is reported as dismissible window progress rather than a notification');
+
+        assert.ok(statusSurfaceTest.includes('vscode.ProgressLocation.Window'));
+        assert.ok(statusSurfaceTest.includes('vscode.ProgressLocation.Notification'));
+        assert.ok(
+            !debugDashboard.includes("test('keeps long-running CLI run status out of notifications'"),
+            'Workbench-wide text includes persistent Debug Console output, so it cannot prove status-bar progress is active.');
     });
 
     test('uses known AppHost PID when E2E teardown CLI status probes time out', () => {
@@ -1948,12 +2303,75 @@ suite('E2E launch profile', () => {
         assert.ok(paths.includes('Any E2E run that includes the resource debugger spec gets this fixture'));
     });
 
-    test('patches ExTester launch arguments without replacement-token expansion', () => {
+    test('waits for durable AppHost discovery gates before asserting running state', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const fixtures = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'helpers', 'fixtures.ts'), 'utf8');
+        const vscodeHelpers = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'helpers', 'vscode.ts'), 'utf8');
+        const appHostTree = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'appHostTree.e2e.test.ts'), 'utf8');
+        const runningBeforeDiscoveryTest = getTestBlock(appHostTree, 'running AppHosts appear before slow discovery results');
+
+        assert.ok(fixtures.includes('writeGatedStreamingDiscoveryCliWrapper'));
+        assert.ok(fixtures.includes('function waitForReleaseFile'));
+        assert.ok(fixtures.includes('waitForPsSnapshotRequest: () => waitForPath(psSnapshotRequestFilePath, 30_000)'));
+        assert.ok(fixtures.includes('waitForLsCandidateRequest: () => waitForPath(lsCandidateRequestFilePath, 30_000)'));
+        assert.ok(fixtures.includes('psSnapshotAppHostPid'));
+        assert.ok(fixtures.includes("args.includes('--follow')"));
+        assert.ok(fixtures.includes('Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_147_483_647);'));
+        assert.ok(fixtures.includes('fs.writeSync(process.stdout.fd, JSON.stringify(payload)'));
+        assert.ok(appHostTree.includes('writeGatedStreamingDiscoveryCliWrapper'));
+        assert.ok(appHostTree.includes('discoveryGate.releasePsSnapshot();'));
+        assert.ok(appHostTree.includes('discoveryGate.releaseLsCandidate();'));
+        assert.ok(!runningBeforeDiscoveryTest.includes('waitForWorkspaceRediscoveryLoading'));
+        assert.ok(vscodeHelpers.includes('export async function startAppHostsSectionTextTransition'));
+        assert.ok(vscodeHelpers.includes('export async function waitForAppHostsSectionTextAfterTransition'));
+        assert.ok(vscodeHelpers.includes('export async function cancelAppHostsSectionTextTransition'));
+        assert.ok(runningBeforeDiscoveryTest.includes('const runningAppHost = findRunningAppHost(running.state);'));
+        assert.ok(runningBeforeDiscoveryTest.includes('const authoritativeSnapshotAppHostPid = runningAppHost.appHostPid + 1_000_000;'));
+        assert.ok(runningBeforeDiscoveryTest.includes('writeGatedStreamingDiscoveryCliWrapper(runningAppHost.appHostPath, authoritativeSnapshotAppHostPid)'));
+        assert.ok(runningBeforeDiscoveryTest.includes('await startAppHostsSectionTextTransition([appHostLabel], /\\(\\d+ resources\\)/);'));
+        assert.ok(runningBeforeDiscoveryTest.includes('const snapshotReleasedAt = Date.now();'));
+        assert.ok(runningBeforeDiscoveryTest.includes('await waitForAppHostsSectionTextAfterTransition([appHostLabel], /\\(\\d+ resources\\)/, snapshotReleasedAt);'));
+        assert.ok(runningBeforeDiscoveryTest.includes('file.state.isRepositoryLoading === false'));
+        assert.ok(runningBeforeDiscoveryTest.includes('findRunningAppHost(file.state)?.appHostPid === authoritativeSnapshotAppHostPid'));
+
+        const cleanupIndex = runningBeforeDiscoveryTest.indexOf('finally {');
+        assert.ok(cleanupIndex >= 0, 'Expected the E2E to keep cleanup releases in a finally block.');
+        const testBeforeCleanup = runningBeforeDiscoveryTest.slice(0, cleanupIndex);
+        const cleanup = runningBeforeDiscoveryTest.slice(cleanupIndex);
+        const startTransitionIndex = testBeforeCleanup.indexOf('await startAppHostsSectionTextTransition([appHostLabel], /\\(\\d+ resources\\)/);');
+        const refreshIndex = testBeforeCleanup.indexOf("await executeE2eControlCommand({ name: 'refreshAppHosts' }");
+        const waitForPsRequestIndex = testBeforeCleanup.indexOf('await discoveryGate.waitForPsSnapshotRequest();');
+        const waitForLsRequestIndex = testBeforeCleanup.indexOf('await discoveryGate.waitForLsCandidateRequest();');
+        const snapshotReleasedAtIndex = testBeforeCleanup.indexOf('const snapshotReleasedAt = Date.now();');
+        const releasePsIndex = testBeforeCleanup.indexOf('discoveryGate.releasePsSnapshot();');
+        const runningStateIndex = testBeforeCleanup.indexOf('const runningBeforeDiscovery = await waitForExtensionState');
+        const runningTreeTextIndex = testBeforeCleanup.indexOf('await waitForAppHostsSectionTextAfterTransition([appHostLabel], /\\(\\d+ resources\\)/, snapshotReleasedAt);');
+        const releaseLsIndex = testBeforeCleanup.indexOf('discoveryGate.releaseLsCandidate();');
+
+        assert.ok(startTransitionIndex >= 0, 'The E2E must track the currently rendered running row before refresh.');
+        assert.ok(refreshIndex > startTransitionIndex, 'The AppHosts pane transition must be tracked before refresh starts.');
+        assert.ok(waitForPsRequestIndex >= 0, 'The E2E must wait until the running AppHost snapshot reaches its gate.');
+        assert.ok(waitForLsRequestIndex > waitForPsRequestIndex, 'The E2E must wait until workspace discovery reaches its gate.');
+        assert.ok(snapshotReleasedAtIndex > waitForLsRequestIndex, 'The fresh running AppHost snapshot release time must be captured only after both refresh paths are gated.');
+        assert.ok(releasePsIndex > snapshotReleasedAtIndex, 'The fresh running AppHost snapshot must be released after its transition threshold is captured.');
+        assert.ok(runningStateIndex > releasePsIndex, 'The running AppHost must be asserted after the fresh snapshot is released.');
+        assert.ok(runningTreeTextIndex > runningStateIndex, 'The fresh running AppHost snapshot must be visibly rendered before discovery is released.');
+        assert.ok(releaseLsIndex > runningTreeTextIndex, 'The slow workspace candidate must remain gated until the running AppHost is rendered.');
+        assert.ok(cleanup.includes('await runE2eTeardown(['), 'Every cleanup must run even when another cleanup fails.');
+        assert.ok(cleanup.includes('() => cancelAppHostsSectionTextTransition()'), 'The transition tracker must be disposed even when the E2E fails before observing the rendered row.');
+    });
+
+    test('patches ExTester launch arguments without version-specific assumptions or replacement-token expansion', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const browser = fs.readFileSync(path.join(extensionRoot, 'node_modules', 'vscode-extension-tester', 'out', 'browser.js'), 'utf8');
+        const argsDeclaration = /const args = \[[^\n]*`--user-data-dir=\$\{path\.join\(this\.storagePath, 'settings'\)\}`(?:, [^\n]+?)?\];/.exec(browser);
+        const cleanArgsDeclaration = "const args = ['--no-sandbox', '--disable-dev-shm-usage', `--user-data-dir=${path.join(this.storagePath, 'settings')}`];";
 
-        assert.ok(runner.includes('ExTester 8.23.0 does not expose a supported way to open VS Code with a workspace'));
-        assert.ok(runner.includes('Patching ExTester VS Code launch arguments by exact 8.23.0 argument match.'));
+        assert.ok(argsDeclaration);
+        assert.ok(runner.includes(cleanArgsDeclaration));
+        assert.ok(runner.includes('ExTester does not expose a supported way to open VS Code with a workspace'));
+        assert.ok(runner.includes('Patching ExTester VS Code launch arguments by exact argument match.'));
         assert.ok(runner.includes('source.replace(target, () => replacement)'));
         assert.ok(runner.includes('source.replace(argsDeclarationPattern, () => replacement)'));
     });
@@ -2208,10 +2626,18 @@ suite('E2E launch profile', () => {
         // reusing the wrong install offline.
         assert.ok(runner.includes('CODE_VERSION: vscodeVersion,'));
         assert.ok(runner.includes('const vscodeVersion = resolveCachedVsCodeVersion('));
+        assert.match(runner, /vscodeVersion,\r?\n\s+extesterVersion,/);
 
         // ExTester's codeStream falls back to CODE_TYPE when --type is absent, and an Insiders
         // build unpacks into directory names this cache does not discover.
         assert.ok(runner.includes("CODE_TYPE: 'stable',"));
+    });
+
+    test('pins unit-test VS Code download to avoid moving latest resolution', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const unitTestConfig = fs.readFileSync(path.join(extensionRoot, '.vscode-test.mjs'), 'utf8');
+
+        assert.ok(unitTestConfig.includes("version: '1.131.0'"));
     });
 
     test('cleans only ExTester download archives between setup retries', () => {
@@ -2240,6 +2666,7 @@ suite('E2E launch profile', () => {
         assert.ok(resolverStart >= 0);
         assert.ok(resolverBody.includes("normalizedVersion === 'min' || normalizedVersion === 'max'"));
         assert.ok(resolverBody.includes('/^\\d+\\.\\d+(\\.\\d+)?$/.test(normalizedVersion)'));
+        assert.ok(resolverBody.includes("a concrete version such as '1.130.0'"));
         assert.ok(resolverBody.includes('throw new Error('));
     });
 
