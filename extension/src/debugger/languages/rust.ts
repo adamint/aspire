@@ -12,6 +12,7 @@ import { processGroupSpawnOptions, terminateProcessTree } from "../../utils/proc
 
 const rustBuildStderrTailLimit = 8 * 1024;
 const cargoHostProbeOutputLimit = 16 * 1024;
+const cargoHostProbeTimeoutMs = 5_000;
 const cargoExecutable = 'cargo';
 
 interface CargoCompilerArtifactMessage {
@@ -71,10 +72,16 @@ export class RustService implements IRustService {
                 return;
             }
 
-            let cancellationRequested = false;
             let settled = false;
             let cancellation: vscode.Disposable | undefined;
+            let timeout: ReturnType<typeof setTimeout> | undefined;
             let stdout = '';
+
+            const onStdout = (output: string): void => {
+                if (stdout.length < cargoHostProbeOutputLimit) {
+                    stdout += output.slice(0, cargoHostProbeOutputLimit - stdout.length);
+                }
+            };
 
             const settle = (complete: () => void): void => {
                 if (settled) {
@@ -82,40 +89,37 @@ export class RustService implements IRustService {
                 }
 
                 settled = true;
+                if (timeout) {
+                    clearTimeout(timeout);
+                    timeout = undefined;
+                }
                 cancellation?.dispose();
+                probeProcess.stdout.off('data', onStdout);
+                probeProcess.off('error', onError);
+                probeProcess.off('close', onClose);
                 complete();
             };
 
-            probeProcess.stdout.setEncoding('utf8');
-            probeProcess.stdout.on('data', (output: string) => {
-                if (stdout.length < cargoHostProbeOutputLimit) {
-                    stdout += output.slice(0, cargoHostProbeOutputLimit - stdout.length);
+            const terminateProbe = (force: boolean): void => {
+                try {
+                    terminateProcessTree(probeProcess, force);
+                } catch {
+                    // Process-tree termination handles its platform fallbacks internally. If direct
+                    // child signalling still throws, the probe must not block launch or cancellation.
+                    extensionLogOutputChannel.warn('Cargo host target probe termination failed.');
                 }
-            });
-            // A custom Cargo wrapper can write arbitrary diagnostics. Drain stderr so it cannot block
-            // the process, but never retain or log it because it can echo resource environment values.
-            probeProcess.stderr.resume();
+            };
 
-            probeProcess.on('error', err => {
+            const onError = (err: Error): void => {
                 settle(() => {
-                    if (cancellationRequested) {
-                        reject(new vscode.CancellationError());
-                        return;
-                    }
-
                     const errorCode = (err as NodeJS.ErrnoException).code ?? 'unknown error';
                     extensionLogOutputChannel.error(`Cargo host target probe failed to start in ${workingDirectory} (${errorCode}).`);
                     resolve(undefined);
                 });
-            });
+            };
 
-            probeProcess.on('close', (code, signal) => {
+            const onClose = (code: number | null, signal: NodeJS.Signals | null): void => {
                 settle(() => {
-                    if (cancellationRequested) {
-                        reject(new vscode.CancellationError());
-                        return;
-                    }
-
                     if (code !== 0) {
                         const exitDescription = code !== null ? `${code}` : `${signal}`;
                         extensionLogOutputChannel.error(`Cargo host target probe failed in ${workingDirectory} (${exitDescription}).`);
@@ -129,17 +133,41 @@ export class RustService implements IRustService {
                     }
                     resolve(target);
                 });
-            });
+            };
 
-            cancellation = this._debugSession.registerPendingStartCancellation({
+            probeProcess.stdout.setEncoding('utf8');
+            probeProcess.stdout.on('data', onStdout);
+            // A custom Cargo wrapper can write arbitrary diagnostics. Drain stderr so it cannot block
+            // the process, but never retain or log it because it can echo resource environment values.
+            probeProcess.stderr.resume();
+            probeProcess.on('error', onError);
+            probeProcess.on('close', onClose);
+
+            const pendingStartCancellation = this._debugSession.registerPendingStartCancellation({
                 dispose: () => {
                     if (probeProcess.exitCode === null && probeProcess.signalCode === null) {
-                        cancellationRequested = true;
-                        extensionLogOutputChannel.info(`Debug session ended; stopping Cargo host target probe in ${workingDirectory}.`);
-                        terminateProcessTree(probeProcess);
+                        settle(() => {
+                            extensionLogOutputChannel.info(`Debug session ended; stopping Cargo host target probe in ${workingDirectory}.`);
+                            terminateProbe(false);
+                            reject(new vscode.CancellationError());
+                        });
                     }
                 }
             });
+            if (settled) {
+                pendingStartCancellation.dispose();
+                return;
+            }
+
+            cancellation = pendingStartCancellation;
+            timeout = setTimeout(() => {
+                settle(() => {
+                    extensionLogOutputChannel.warn(`Cargo host target probe timed out after ${cargoHostProbeTimeoutMs}ms; continuing without automatic target detection.`);
+                    terminateProbe(true);
+                    resolve(undefined);
+                });
+            }, cargoHostProbeTimeoutMs);
+            timeout.unref();
         });
     }
 

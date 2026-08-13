@@ -261,6 +261,41 @@ suite('Rust Debugger Extension Tests', () => {
         await assert.rejects(probe, error => error instanceof vscode.CancellationError);
     });
 
+    test('times out a Cargo host probe that never closes', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const harness = createRustProcessHarness();
+        const info = sinon.stub(extensionLogOutputChannel, 'info');
+        const warning = sinon.stub(extensionLogOutputChannel, 'warn');
+        const errorLog = sinon.stub(extensionLogOutputChannel, 'error');
+        const secret = 'private-cargo-timeout-credential';
+        let result: string | undefined | 'pending' = 'pending';
+
+        try {
+            void harness.rustService.getCargoHostTarget(
+                '/workspace/api',
+                [{ name: 'PRIVATE_REGISTRY_TOKEN', value: secret }])
+                .then(value => result = value);
+
+            await clock.tickAsync(5_000);
+
+            assert.strictEqual(result, undefined);
+            assert.ok(harness.childProcess.kill.calledOnceWithExactly('SIGKILL'));
+            assert.strictEqual(harness.childProcess.listenerCount('close'), 0);
+            assert.strictEqual(harness.childProcess.listenerCount('error'), 0);
+            assert.strictEqual(harness.childProcess.stdout.listenerCount('data'), 0);
+            assert.strictEqual(clock.countTimers(), 0);
+
+            const persistentLogs = [...info.getCalls(), ...warning.getCalls(), ...errorLog.getCalls()]
+                .map(call => String(call.args[0]));
+            assert.ok(persistentLogs.some(message => message.includes('Cargo host target probe timed out')));
+            assert.ok(persistentLogs.every(message => !message.includes(secret)));
+            assert.ok(persistentLogs.every(message => !message.includes('launch_failed')));
+        } finally {
+            harness.childProcess.emit('close', null, 'SIGKILL');
+            clock.restore();
+        }
+    });
+
     test('does not expose Cargo host probe failure output', async () => {
         const harness = createRustProcessHarness();
         const info = sinon.stub(extensionLogOutputChannel, 'info');
