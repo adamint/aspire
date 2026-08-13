@@ -11,6 +11,15 @@ function readSourcePattern(source: string, name: string): RegExp {
     return new RegExp(declaration[1]);
 }
 
+function normalizeRunnerSource(source: string): string {
+    return source.replace(/\r\n/g, '\n');
+}
+
+function readRunnerSource(extensionRoot: string): string {
+    return normalizeRunnerSource(
+        fs.readFileSync(path.resolve(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8'));
+}
+
 /**
  * Removes block and line comments so a statement-level assertion is not satisfied or defeated by
  * prose. The comments in `run-e2e.js` discuss `throw` and `fs.` precisely because the code around
@@ -1109,7 +1118,7 @@ suite('E2E launch profile', () => {
 
     test('creates nothing in the per-run root that a later module-scope throw could strand', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
         const runRootDeclaration = runner.indexOf('const shortRunRoot =');
         const moduleScopeAfterRunRoot = stripComments(runner.slice(runner.indexOf('\n', runRootDeclaration), runner.indexOf('\nfunction ')));
 
@@ -1212,7 +1221,7 @@ suite('E2E launch profile', () => {
 
     test('uses in-memory secret storage so VS Code does not prompt for OS keychain access', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
 
         assert.ok(runner.includes("'--disable-keytar'"));
         assert.ok(runner.includes("'--use-inmemory-secretstorage'"));
@@ -1223,7 +1232,7 @@ suite('E2E launch profile', () => {
 
     test('opens the E2E workspace as a VS Code startup folder', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
 
         assert.ok(runner.includes('JSON.stringify(workspaceRoot)'));
         assert.ok(!runner.includes("'--open_resource', workspaceRoot"));
@@ -1261,7 +1270,7 @@ suite('E2E launch profile', () => {
 
     test('bounds the ExTester process below the workflow timeout so diagnostics still run', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
 
         assert.ok(runner.includes("const { runWithProcessTreeTimeout } = require('./e2e-process-runner.cjs');"));
         assert.ok(runner.includes('ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS'));
@@ -1274,14 +1283,14 @@ suite('E2E launch profile', () => {
 
     test('checks opted-in shard results after ExTester exits successfully', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
 
         assertShardResultGuardWiring(runner);
     });
 
     test('accepts the runner and wiring snapshot with Windows line endings', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(/\r?\n/g, '\r\n');
         const expectedSyntax = fs.readFileSync(
             path.join(extensionRoot, 'src', 'test', 'e2eLaunchProfile.runner-wiring.txt'),
@@ -1291,9 +1300,23 @@ suite('E2E launch profile', () => {
         assertShardResultGuardWiring(runner, expectedSyntax);
     });
 
+    test('applies protected runner mutations with Windows line endings', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = normalizeRunnerSource(
+            readRunnerSource(extensionRoot)
+                .replace(/\r?\n/g, '\r\n'))
+            .replace(
+                "main().catch(error => {\n  console.error(error instanceof Error ? error.stack ?? error.message : String(error));\n  process.exitCode = 1;\n});",
+                'main().catch(() => {});');
+
+        assert.throws(
+            () => assertShardResultGuardWiring(runner),
+            /protected runner syntax allowlist/);
+    });
+
     test('rejects a commented-out shard result guard import', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "const { assertShardExecutedTests } = require('./e2e-shard-results');",
                 "// const { assertShardExecutedTests } = require('./e2e-shard-results');");
@@ -1305,7 +1328,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a commented-out shard result guard invocation', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 '      assertShardExecutedTests({ shardName, results: readMochaResults() });',
                 '      // assertShardExecutedTests({ shardName, results: readMochaResults() });');
@@ -1317,7 +1340,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a shard result guard hidden in an unreachable branch', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 '      assertShardExecutedTests({ shardName, results: readMochaResults() });',
                 '      if (false) {\n        assertShardExecutedTests({ shardName, results: readMochaResults() });\n      }');
@@ -1329,7 +1352,7 @@ suite('E2E launch profile', () => {
 
     test('rejects the complete run-tests path when it is unreachable', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "    recording = startRecording();\n    try {\n      logStep('Running VS Code extension E2E tests');",
                 "    recording = startRecording();\n    if (false) {\n    try {\n      logStep('Running VS Code extension E2E tests');")
@@ -1344,7 +1367,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a disabled main invocation', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "main().catch(error => {\n  console.error(error instanceof Error ? error.stack ?? error.message : String(error));\n  process.exitCode = 1;\n});",
                 "if (false) {\n  main().catch(error => {\n    console.error(error instanceof Error ? error.stack ?? error.message : String(error));\n    process.exitCode = 1;\n  });\n}");
@@ -1356,7 +1379,7 @@ suite('E2E launch profile', () => {
 
     test('rejects an unconditional return before the guarded run-tests path', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 '  let cleanupFailed = false;',
                 '  let cleanupFailed = false;\n  return;');
@@ -1368,7 +1391,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a conditional return that always terminates before the guarded run-tests path', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 '    assertSpecMatches(testSpec);',
                 '    assertSpecMatches(testSpec);\n    if (true) return;');
@@ -1380,7 +1403,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a successful process exit before the guarded run-tests path', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 '    assertSpecMatches(testSpec);',
                 '    assertSpecMatches(testSpec);\n    process.exit(0);');
@@ -1392,7 +1415,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a successful process exit before the top-level main invocation', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 'main().catch(error => {',
                 'process.exit(0);\nmain().catch(error => {');
@@ -1404,7 +1427,7 @@ suite('E2E launch profile', () => {
 
     test('rejects process termination through element access in a protected initializer', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "const artifactsDir = path.join(extensionRoot, '.test-artifacts');",
                 "const artifactsDir = (process['exit'](0), path.join(extensionRoot, '.test-artifacts'));");
@@ -1416,7 +1439,7 @@ suite('E2E launch profile', () => {
 
     test('rejects aliased process termination in a protected initializer', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "const artifactsDir = path.join(extensionRoot, '.test-artifacts');",
                 "const terminateProcess = process.exit.bind(process);\nconst artifactsDir = (terminateProcess(0), path.join(extensionRoot, '.test-artifacts'));");
@@ -1428,7 +1451,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a shard result guard after a different awaited command', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 '      await runWithProcessTreeTimeout(process.execPath, runTestsArgs, {',
                 '      await Promise.resolve(process.execPath, runTestsArgs, {');
@@ -1440,7 +1463,7 @@ suite('E2E launch profile', () => {
 
     test('rejects an ExTester await through a shadowed fake runner', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "      logStep('Running VS Code extension E2E tests');",
                 "      logStep('Running VS Code extension E2E tests');\n      const runWithProcessTreeTimeout = async () => fs.writeFileSync(path.join(resultsDir, 'mocha.json'), JSON.stringify({ stats: { tests: 1, passes: 1, pending: 0 } }));");
@@ -1452,7 +1475,7 @@ suite('E2E launch profile', () => {
 
     test('rejects shadowed ExTester await dependencies', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "      logStep('Running VS Code extension E2E tests');",
                 "      logStep('Running VS Code extension E2E tests');\n      const extesterCli = 'fake';\n      const testSpec = 'fake';\n      const extestEnv = {};\n      const getRunTestsTimeoutMs = () => 1;");
@@ -1464,7 +1487,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a shard result guard call through a shadowed no-op binding', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "      logStep('Running VS Code extension E2E tests');",
                 "      logStep('Running VS Code extension E2E tests');\n      const assertShardExecutedTests = () => undefined;");
@@ -1476,7 +1499,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a reassigned shard result guard binding', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "const { assertShardExecutedTests } = require('./e2e-shard-results');",
                 "let { assertShardExecutedTests } = require('./e2e-shard-results');")
@@ -1491,7 +1514,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a shard result guard call with a shadowed shard name', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "      logStep('Running VS Code extension E2E tests');",
                 "      logStep('Running VS Code extension E2E tests');\n      const shardName = 'not-resource-debugger';");
@@ -1503,7 +1526,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a neutralized hardcoded shard name initializer', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "const shardName = sanitizePathSegment(process.env.ASPIRE_EXTENSION_E2E_SHARD || 'all');",
                 "const shardName = sanitizePathSegment('not-resource-debugger');");
@@ -1515,7 +1538,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a shard result guard call with a shadowed Mocha result reader', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "      logStep('Running VS Code extension E2E tests');",
                 "      logStep('Running VS Code extension E2E tests');\n      const readMochaResults = () => ({ stats: { tests: 1, pending: 0 } });");
@@ -1527,7 +1550,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a duplicate protected function declaration', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 'function sanitizePathSegment(value) {',
                 "function readMochaResults() {\n  return { stats: { tests: 1, passes: 1, pending: 0 } };\n}\n\nfunction sanitizePathSegment(value) {");
@@ -1539,7 +1562,7 @@ suite('E2E launch profile', () => {
 
     test('rejects replacing the protected Mocha JSON reader', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "function readJsonIfExists(filePath) {\n  if (!fs.existsSync(filePath)) {\n    return undefined;\n  }\n\n  try {\n    return JSON.parse(fs.readFileSync(filePath, 'utf8'));\n  }\n  catch (error) {\n    console.warn(`Failed to parse ${filePath}: ${error instanceof Error ? error.message : String(error)}`);\n    return undefined;\n  }\n}",
                 "function readJsonIfExists() {\n  return { stats: { tests: 1, passes: 1, pending: 0 } };\n}");
@@ -1551,7 +1574,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a duplicate protected Mocha JSON reader declaration', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 'function findLatestExtensionLogPath() {',
                 "function readJsonIfExists() {\n  return { stats: { tests: 1, passes: 1, pending: 0 } };\n}\n\nfunction findLatestExtensionLogPath() {");
@@ -1563,7 +1586,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a reassigned Mocha result reader', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "      logStep('Running VS Code extension E2E tests');",
                 "      logStep('Running VS Code extension E2E tests');\n      readMochaResults = () => ({ stats: { tests: 1, passes: 1, pending: 0 } });");
@@ -1575,7 +1598,7 @@ suite('E2E launch profile', () => {
 
     test('rejects an inner catch that swallows the shard result guard failure', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 '    catch (error) {\n      testFailure = error;\n    }',
                 '    catch (error) {\n    }');
@@ -1587,7 +1610,7 @@ suite('E2E launch profile', () => {
 
     test('rejects disabling the post-finally test failure throw', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 '    throw testFailure;',
                 '    return;');
@@ -1599,7 +1622,7 @@ suite('E2E launch profile', () => {
 
     test('rejects swallowing cleanup failures in the main finally block', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 '      else {\n        testFailure = cleanupFailure;\n      }',
                 '      else {\n        console.error(cleanupFailure);\n      }');
@@ -1611,7 +1634,7 @@ suite('E2E launch profile', () => {
 
     test('rejects clearing the recorded failure in the main finally block', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 '    if (cleanupErrors.length > 0) {',
                 '    testFailure = undefined;\n    if (cleanupErrors.length > 0) {');
@@ -1623,7 +1646,7 @@ suite('E2E launch profile', () => {
 
     test('rejects returning from the main finally block', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 '    if (cleanupErrors.length > 0) {',
                 '    return;\n    if (cleanupErrors.length > 0) {');
@@ -1635,7 +1658,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a top-level main handler that keeps a zero exit code', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "main().catch(error => {\n  console.error(error instanceof Error ? error.stack ?? error.message : String(error));\n  process.exitCode = 1;\n});",
                 'main().catch(() => {});');
@@ -1647,7 +1670,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a Mocha result reader reassigned through object destructuring', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "      logStep('Running VS Code extension E2E tests');",
                 "      logStep('Running VS Code extension E2E tests');\n      ({ readMochaResults } = { readMochaResults: () => ({ stats: { tests: 1, passes: 1, pending: 0 } }) });");
@@ -1659,7 +1682,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a Mocha result reader reassigned through array destructuring', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "      logStep('Running VS Code extension E2E tests');",
                 "      logStep('Running VS Code extension E2E tests');\n      [readMochaResults] = [() => ({ stats: { tests: 1, passes: 1, pending: 0 } })];");
@@ -1671,7 +1694,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a process runner reassigned through a for-of initializer', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "      logStep('Running VS Code extension E2E tests');",
                 "      logStep('Running VS Code extension E2E tests');\n      for (runWithProcessTreeTimeout of [async () => undefined]) {}");
@@ -1683,7 +1706,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a Mocha result reader reassigned through a for-in initializer', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "      logStep('Running VS Code extension E2E tests');",
                 "      logStep('Running VS Code extension E2E tests');\n      for (readMochaResults in { replacement: true }) {}");
@@ -1695,7 +1718,7 @@ suite('E2E launch profile', () => {
 
     test('rejects CommonJS require reassignment before the guard import', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "const { assertShardExecutedTests } = require('./e2e-shard-results');",
                 "require = () => ({ assertShardExecutedTests: () => undefined });\nconst { assertShardExecutedTests } = require('./e2e-shard-results');");
@@ -1707,7 +1730,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a CommonJS require declaration that replaces the intrinsic binding', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "const { assertShardExecutedTests } = require('./e2e-shard-results');",
                 "var require = () => ({ assertShardExecutedTests: () => undefined });\nconst { assertShardExecutedTests } = require('./e2e-shard-results');");
@@ -1719,7 +1742,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a hardcoded test spec initializer', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "const testSpec = process.env.ASPIRE_EXTENSION_E2E_SPEC || 'out/test-e2e/**/*.e2e.test.js';",
                 "const testSpec = 'out/test-e2e/resourceDebugger.e2e.test.js';");
@@ -1731,7 +1754,7 @@ suite('E2E launch profile', () => {
 
     test('rejects direct shard environment reassignment before shard initialization', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "const shardName = sanitizePathSegment(process.env.ASPIRE_EXTENSION_E2E_SHARD || 'all');",
                 "process.env.ASPIRE_EXTENSION_E2E_SHARD = 'all';\nconst shardName = sanitizePathSegment(process.env.ASPIRE_EXTENSION_E2E_SHARD || 'all');");
@@ -1743,7 +1766,7 @@ suite('E2E launch profile', () => {
 
     test('rejects Object.assign shard environment mutation before shard initialization', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "const shardName = sanitizePathSegment(process.env.ASPIRE_EXTENSION_E2E_SHARD || 'all');",
                 "Object.assign(process.env, { ASPIRE_EXTENSION_E2E_SHARD: 'all' });\nconst shardName = sanitizePathSegment(process.env.ASPIRE_EXTENSION_E2E_SHARD || 'all');");
@@ -1755,7 +1778,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a shard environment alias before shard initialization', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "const shardName = sanitizePathSegment(process.env.ASPIRE_EXTENSION_E2E_SHARD || 'all');",
                 "const shardEnvironment = process.env;\nshardEnvironment.ASPIRE_EXTENSION_E2E_SHARD = 'all';\nconst shardName = sanitizePathSegment(process.env.ASPIRE_EXTENSION_E2E_SHARD || 'all');");
@@ -1767,7 +1790,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a destructured shard environment alias before shard initialization', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "const shardName = sanitizePathSegment(process.env.ASPIRE_EXTENSION_E2E_SHARD || 'all');",
                 "const { env: shardEnvironment } = process;\nshardEnvironment.ASPIRE_EXTENSION_E2E_SHARD = 'all';\nconst shardName = sanitizePathSegment(process.env.ASPIRE_EXTENSION_E2E_SHARD || 'all');");
@@ -1779,7 +1802,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a reflected shard environment alias before shard initialization', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 "const shardName = sanitizePathSegment(process.env.ASPIRE_EXTENSION_E2E_SHARD || 'all');",
                 "const shardEnvironment = Reflect.get(process, 'env');\nshardEnvironment.ASPIRE_EXTENSION_E2E_SHARD = 'all';\nconst shardName = sanitizePathSegment(process.env.ASPIRE_EXTENSION_E2E_SHARD || 'all');");
@@ -1791,7 +1814,7 @@ suite('E2E launch profile', () => {
 
     test('rejects a shard result guard argument with a trailing override spread', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 '      assertShardExecutedTests({ shardName, results: readMochaResults() });',
                 '      assertShardExecutedTests({ shardName, results: readMochaResults(), ...{ shardName: null } });');
@@ -1803,7 +1826,7 @@ suite('E2E launch profile', () => {
 
     test('rejects duplicate shard result guard properties', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8')
+        const runner = readRunnerSource(extensionRoot)
             .replace(
                 '      assertShardExecutedTests({ shardName, results: readMochaResults() });',
                 '      assertShardExecutedTests({ shardName, results: readMochaResults(), shardName: null });');
@@ -1815,7 +1838,7 @@ suite('E2E launch profile', () => {
 
     test('wires the ExTester process lifecycle into the extracted runner', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
         const invocationStart = runner.indexOf('await runWithProcessTreeTimeout(process.execPath');
         const invocationEnd = runner.indexOf('\n      });', invocationStart);
         const runnerOptions = runner.slice(invocationStart, invocationEnd);
@@ -1830,7 +1853,7 @@ suite('E2E launch profile', () => {
 
     test('bounds retryable runner setup steps so setup failures still collect diagnostics', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
 
         assert.ok(runner.includes("'get-vscode'"));
         assert.ok(runner.includes("ASPIRE_EXTENSION_E2E_SETUP_DOWNLOAD_RETRY_ATTEMPTS', 5"));
@@ -1843,7 +1866,7 @@ suite('E2E launch profile', () => {
 
     test('guards destructive E2E workspace cleanup', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
 
         assert.ok(runner.includes('assertWorkspaceRootSafeForDeletion();'));
         assert.ok(runner.includes('ASPIRE_EXTENSION_E2E_ALLOW_EXTERNAL_WORKSPACE_ROOT_CLEANUP'));
@@ -1853,7 +1876,7 @@ suite('E2E launch profile', () => {
 
     test('redacts sensitive dashboard URLs from runner failure diagnostics', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
 
         assert.ok(runner.includes('debugSessions: state.state.debugSessions?.map(redactDebugSessionForDiagnostics)'));
         assert.ok(runner.includes('sanitizeDashboardUrlForDiagnostics'));
@@ -1886,7 +1909,7 @@ suite('E2E launch profile', () => {
 
     test('defaults to the newest VS Code with the legacy macOS executable path while the internal feed lacks newer ExTester', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
         const installedPackageJson = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'node_modules', 'vscode-extension-tester', 'package.json'), 'utf8'));
         const extester = require(path.join(extensionRoot, 'node_modules', 'vscode-extension-tester', 'out', 'extester.js')) as {
             loadCodeVersion(version: string): string;
@@ -1917,7 +1940,7 @@ suite('E2E launch profile', () => {
 
     test('preflights locked ExTester dependency graph before starting the E2E matrix', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
         const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
 
         assert.ok(runner.includes('--verify-extester-feed'));
@@ -1936,7 +1959,7 @@ suite('E2E launch profile', () => {
 
     test('pins the real Azure Functions toolchain for the offline E2E shard', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
         const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
         const resourceGroupsInstallIndex = runner.indexOf("displayName: 'Azure Resource Groups'");
         const functionsInstallIndex = runner.indexOf("displayName: 'Azure Functions'");
@@ -1963,7 +1986,7 @@ suite('E2E launch profile', () => {
 
     test('wires structured E2E harness failures into advisory handling', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
 
         assert.ok(runner.includes("const { shouldAllowAdvisoryTestFailure } = require('./e2e-process-failure.cjs');"));
         assert.ok(runner.includes("const advisoryIssue = process.env.ASPIRE_EXTENSION_E2E_ADVISORY_ISSUE || '';"));
@@ -1985,7 +2008,7 @@ suite('E2E launch profile', () => {
 
     test('waits for ffmpeg to flush before reporting E2E recordings as saved', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
 
         assert.ok(runner.includes('ffmpeg.once(\'close\''));
         assert.ok(runner.includes("await runCleanupStep('stop recording', () => stopRecording(recording, testFailure), cleanupErrors);"));
@@ -2015,7 +2038,7 @@ suite('E2E launch profile', () => {
 
     test('opts out of telemetry for all CLI processes spawned by E2E tests', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
         const envConstruction = runner.slice(runner.indexOf('const extestEnv = getAspireCliEnvironment({'), runner.indexOf("logStep('Downloading VS Code');"));
         const runTestsStart = runner.indexOf("logStep('Running VS Code extension E2E tests');");
         const runTests = runner.slice(runTestsStart, runner.indexOf('catch (error)', runTestsStart));
@@ -2036,7 +2059,7 @@ suite('E2E launch profile', () => {
 
     test('suppresses evaluation diagnostics for intentional E2E AppHost interaction APIs', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
 
         assert.ok(runner.includes('#pragma warning disable ASPIREINTERACTION001'));
         assert.ok(runner.includes('new InteractionInput'));
@@ -2045,7 +2068,7 @@ suite('E2E launch profile', () => {
 
     test('launches VS Code E2E tests with telemetry disabled before extension activation', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
         const settings = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'test-e2e', 'settings.json'), 'utf8'));
 
         assert.strictEqual(settings['telemetry.telemetryLevel'], 'off');
@@ -2054,7 +2077,7 @@ suite('E2E launch profile', () => {
 
     test('does not seed dashboard launch preferences in the E2E harness', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
         const settings = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'test-e2e', 'settings.json'), 'utf8'));
 
         assert.strictEqual(settings['aspire.dashboardBrowser'], undefined);
@@ -2305,7 +2328,7 @@ suite('E2E launch profile', () => {
 
     test('includes the Node fixture when the full E2E spec glob matches resource debugger tests', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
         const paths = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'helpers', 'paths.ts'), 'utf8');
 
         const matchedSpecsIndex = runner.indexOf('const matchedTestSpecs =');
@@ -2376,7 +2399,7 @@ suite('E2E launch profile', () => {
 
     test('patches ExTester launch arguments without version-specific assumptions or replacement-token expansion', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
         const browser = fs.readFileSync(path.join(extensionRoot, 'node_modules', 'vscode-extension-tester', 'out', 'browser.js'), 'utf8');
         const argsDeclaration = /const args = \[[^\n]*`--user-data-dir=\$\{path\.join\(this\.storagePath, 'settings'\)\}`(?:, [^\n]+?)?\];/.exec(browser);
         const cleanArgsDeclaration = "const args = ['--no-sandbox', '--disable-dev-shm-usage', `--user-data-dir=${path.join(this.storagePath, 'settings')}`];";
@@ -2421,7 +2444,7 @@ suite('E2E launch profile', () => {
 
     test('hides AppHost outside the workspace for empty-discovery coverage', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
         const paths = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'helpers', 'paths.ts'), 'utf8');
         const discoveryConfiguration = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'discoveryConfiguration.e2e.test.ts'), 'utf8');
 
@@ -2587,7 +2610,7 @@ suite('E2E launch profile', () => {
     });
     test('reuses immutable VS Code downloads while keeping ExTester state per run', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
 
         assert.ok(runner.includes("require('./e2e-download-cache')"));
         assert.ok(runner.includes('resolveDownloadCacheRoot(repoRoot)'));
@@ -2601,7 +2624,7 @@ suite('E2E launch profile', () => {
 
     test('downloads into the cache staging directory rather than the per-run storage directory', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
         const populateStart = runner.indexOf('populate(stagingDirectory) {');
         const populateEnd = runner.indexOf('projectDownloadCache(downloadCache, storageDir);');
         const populateBody = runner.slice(populateStart, populateEnd);
@@ -2618,7 +2641,7 @@ suite('E2E launch profile', () => {
 
     test('tears down the per-run root without following projections into the shared cache', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
         const cleanupStart = runner.indexOf('function cleanupTemporaryRunRoot()');
         const cleanupBody = runner.slice(cleanupStart, runner.indexOf('\n}', cleanupStart));
 
@@ -2632,7 +2655,7 @@ suite('E2E launch profile', () => {
 
     test('pins the VS Code version the download cache is keyed on', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
 
         // ExTester's loadCodeVersion prefers CODE_VERSION over --code_version, so an inherited
         // value would download a version the cache key does not describe and leave a later run
@@ -2655,7 +2678,7 @@ suite('E2E launch profile', () => {
 
     test('cleans only ExTester download archives between setup retries', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
         const cleanupStart = runner.indexOf('function cleanPartialExtesterDownloads(');
         const cleanupBody = runner.slice(cleanupStart, runner.indexOf('\n}', cleanupStart));
 
@@ -2670,7 +2693,7 @@ suite('E2E launch profile', () => {
 
     test('rejects moving VS Code aliases that a cache key could never invalidate', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
         const resolverStart = runner.indexOf('function resolveCachedVsCodeVersion(');
         const resolverBody = runner.slice(resolverStart, runner.indexOf('\n}', resolverStart));
 
@@ -2685,7 +2708,7 @@ suite('E2E launch profile', () => {
 
     test('hands ExTester a storage path the command interpreter cannot reinterpret', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
         const projectionStart = runner.indexOf('function projectCommandSafeStagingDirectory(');
         const projectionBody = runner.slice(projectionStart, runner.indexOf('\n}', projectionStart));
 
@@ -2767,7 +2790,7 @@ suite('E2E launch profile', () => {
 
     test('cleans up orphaned unpack processes before a setup download can be retried', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
         const runStart = runner.indexOf('function run(command, args, extraEnv = {}, options = {}) {');
         const runBody = runner.slice(runStart, runner.indexOf('\n}\n', runStart));
 
@@ -2789,7 +2812,7 @@ suite('E2E launch profile', () => {
 
     test('keeps setup downloads in the terminal foreground process group', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
         const runStart = runner.indexOf('function run(command, args, extraEnv = {}, options = {}) {');
         const runBody = runner.slice(runStart, runner.indexOf('\n}', runStart));
 
@@ -2802,7 +2825,7 @@ suite('E2E launch profile', () => {
 
     test('removes ExTester unpack directories abandoned by a killed setup attempt', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
         const cleanupStart = runner.indexOf('function cleanPartialExtesterDownloads(');
         const cleanupBody = runner.slice(cleanupStart, runner.indexOf('\n}', cleanupStart));
 
@@ -2817,7 +2840,7 @@ suite('E2E launch profile', () => {
 
     test('resolves the download cache root before creating the per-run temporary root', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runner = readRunnerSource(extensionRoot);
         const runRootIndex = runner.indexOf('const shortRunRoot =');
 
         // These run at module scope, outside the cleanup scope `main()` installs, so anything that
