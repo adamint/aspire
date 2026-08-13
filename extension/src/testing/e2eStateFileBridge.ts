@@ -1122,6 +1122,9 @@ function redactDebugAdapterArguments(value: unknown): unknown {
   if ('env' in copy) {
     copy.env = '<redacted>';
   }
+  if ('environment' in copy) {
+    copy.environment = '<redacted>';
+  }
   if ('environmentVariables' in copy) {
     copy.environmentVariables = '<redacted>';
   }

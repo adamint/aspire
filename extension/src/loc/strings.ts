@@ -171,7 +171,12 @@ export const rustDisplayName = (program: string) => vscode.l10n.t('Rust: {0}', p
 export const rustLabel = vscode.l10n.t('Rust');
 export const rustBuildFailedWithError = (workingDirectory: string, error: string) => vscode.l10n.t('cargo build failed in {0} with error: {1}.', workingDirectory, error);
 export const rustBuildFailedWithExitCode = (workingDirectory: string, exitCode: string) => vscode.l10n.t('cargo build failed in {0} with exit code {1}.', workingDirectory, exitCode);
+export const rustBuildProducedNoExecutable = (workingDirectory: string) => vscode.l10n.t('cargo build in {0} completed but did not produce a runnable binary. Ensure the crate defines a binary target.', workingDirectory);
+export const rustBuildProducedMultipleExecutables = (workingDirectory: string, targets: string) => vscode.l10n.t('cargo build in {0} could not determine which target to debug. Available targets: {1}. Call WithCargoBinTarget to specify one.', workingDirectory, targets);
+export const rustBuildOutputRedacted = vscode.l10n.t('[redacted]');
+export const rustBuildStderrTruncated = (limit: number) => vscode.l10n.t('[cargo stderr truncated to the last {0} characters.]', limit);
 export const rustLaunchConfigurationMissingExecutable = (workingDirectory: string) => vscode.l10n.t('The Aspire app host did not report which executable the Rust app in {0} produces, so there is nothing to debug.', workingDirectory);
+export const rustWindowsGnuDebuggerUnsupported = (target: string) => vscode.l10n.t('The cppvsdbg debugger cannot debug Rust target {0} because GNU Windows targets use DWARF symbols. Install CodeLLDB or build an MSVC Rust target such as x86_64-pc-windows-msvc.', target);
 export const bunDisplayName = (script: string) => `Bun: ${script}`;
 export const bunLabel = 'Bun';
 export const nodeDisplayName = (script: string) => `Node.js: ${script}`;

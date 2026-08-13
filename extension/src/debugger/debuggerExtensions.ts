@@ -10,7 +10,7 @@ import { nodeDebuggerExtension } from "./languages/node";
 import { browserDebuggerExtension } from "./languages/browser";
 import { azureFunctionsDebuggerExtension } from "./languages/azureFunctions";
 import { goDebuggerExtension } from "./languages/go";
-import { rustDebuggerExtension } from "./languages/rust";
+import { createDefaultRustDebuggerExtension } from "./languages/rust";
 import { bunDebuggerExtension } from "./languages/bun";
 import { mauiDebuggerExtension } from "./languages/maui";
 import { isDirectory } from "../utils/io";
@@ -90,7 +90,7 @@ export async function prepareDebugSession(debugSessionConfig: AspireExtendedDebu
     };
 }
 
-export function getResourceDebuggerExtensions(): ResourceDebuggerExtension[] {
+export function getResourceDebuggerExtensions(platform: NodeJS.Platform = process.platform): ResourceDebuggerExtension[] {
     const extensions = [];
     if (isCsharpInstalled()) {
         extensions.push(projectDebuggerExtension);
@@ -108,8 +108,10 @@ export function getResourceDebuggerExtensions(): ResourceDebuggerExtension[] {
         extensions.push(goDebuggerExtension);
     }
 
-    if (isRustInstalled()) {
-        extensions.push(rustDebuggerExtension);
+    if (isRustInstalled(platform)) {
+        // Adapter availability can change when an extension is installed without reloading VS Code.
+        // Resolve the Rust descriptor with the same current platform/extension state as capabilities.
+        extensions.push(createDefaultRustDebuggerExtension(platform));
     }
 
     extensions.push(nodeDebuggerExtension);

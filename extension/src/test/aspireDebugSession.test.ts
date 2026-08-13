@@ -9,7 +9,7 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import * as cliModule from '../debugger/languages/cli';
 import * as debuggerExtensionsModule from '../debugger/debuggerExtensions';
-import { AspireDebugSession, buildAspireCommandArgs, getLoggableDebugConfiguration } from '../debugger/AspireDebugSession';
+import { AspireDebugSession, buildAspireCommandArgs, getLoggableDebugConfiguration, markDebugConfigurationEnvironmentSensitive } from '../debugger/AspireDebugSession';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
 import { AspireResourceExtendedDebugConfiguration } from '../dcp/types';
@@ -1810,6 +1810,41 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         ]);
     });
 
+    test('stopDebugging cancels pending launch work before awaiting its completion', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = { isDebugConfigEnvironmentLoggingEnabled: () => false };
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(
+            parentDebugSession as unknown as vscode.DebugSession,
+            {} as any,
+            {} as any,
+            terminalProvider as any,
+            () => { });
+        const pendingStart = aspireDebugSession.beginPendingDebugSessionStart('rust');
+        const cancelPendingBuild = sinon.stub().callsFake(() => pendingStart.dispose());
+
+        aspireDebugSession.registerPendingStartCancellation({ dispose: cancelPendingBuild });
+        const shutdown = aspireDebugSession.stopDebugging();
+
+        assert.strictEqual(cancelPendingBuild.callCount, 1);
+        await shutdown;
+        assert.strictEqual(stopDebugging.callCount, 1);
+    });
+
     test('stopDebugging awaits a resource start event that arrives after the original session snapshot', async () => {
         let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
         const parentDebugSession = {
@@ -3509,12 +3544,16 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             env: {
                 SECRET_TOKEN: 'env-secret',
             },
+            environment: [
+                { name: 'SECRET_TOKEN', value: 'cpp-secret' },
+            ],
             environmentVariables: 'SECRET_TOKEN=maui-secret',
         } as AspireResourceExtendedDebugConfiguration;
 
         const loggableConfig = getLoggableDebugConfiguration(debugConfig, false);
 
         assert.strictEqual(loggableConfig.env, '<redacted>');
+        assert.strictEqual(loggableConfig.environment, '<redacted>');
         assert.strictEqual(loggableConfig.environmentVariables, '<redacted>');
     });
 
@@ -3535,6 +3574,29 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         assert.deepStrictEqual(loggableConfig.env, { SECRET_TOKEN: 'env-secret' });
         assert.strictEqual(loggableConfig.environmentVariables, '<redacted>');
+    });
+
+    test('redacts sensitive debugger environments even when environment logging is enabled', () => {
+        const debugConfig = {
+            runId: 'run-1',
+            debugSessionId: 'debug-1',
+            type: 'lldb',
+            name: 'Rust',
+            request: 'launch',
+            env: {
+                SECRET_TOKEN: 'env-secret',
+            },
+            environment: [
+                { name: 'SECRET_TOKEN', value: 'cpp-secret' },
+            ],
+        } as AspireResourceExtendedDebugConfiguration;
+        markDebugConfigurationEnvironmentSensitive(debugConfig);
+
+        const loggableConfig = getLoggableDebugConfiguration(debugConfig, true);
+
+        assert.strictEqual(loggableConfig.env, '<redacted>');
+        assert.strictEqual(loggableConfig.environment, '<redacted>');
+        assert.ok(!JSON.stringify(loggableConfig).includes('secret'));
     });
 
     test('responds to breakpoint requests with a DAP breakpoint body', () => {

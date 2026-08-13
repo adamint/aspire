@@ -32,6 +32,12 @@ export type DashboardLaunchBehavior = 'none' | 'notification' | DashboardBrowser
 export type DashboardBrowserType = 'openExternalBrowser' | 'integratedBrowser' | 'debugChrome' | 'debugEdge' | 'debugFirefox';
 export type AppHostDebugSessionTracker = (owner: AspireDebugSession, appHostPath: string, debugSession: AspireResourceDebugSession) => void;
 
+const debugConfigurationsWithSensitiveEnvironment = new WeakSet<AspireResourceExtendedDebugConfiguration>();
+
+export function markDebugConfigurationEnvironmentSensitive(debugConfig: AspireResourceExtendedDebugConfiguration): void {
+  debugConfigurationsWithSensitiveEnvironment.add(debugConfig);
+}
+
 function getOperationKind(value: unknown): AspireOperationKind {
   if (value === undefined || value === null) {
     return 'run';
@@ -43,11 +49,11 @@ function getOperationKind(value: unknown): AspireOperationKind {
 }
 
 export function getLoggableDebugConfiguration(debugConfig: AspireResourceExtendedDebugConfiguration, includeEnvironment: boolean): vscode.DebugConfiguration {
-  if (includeEnvironment && debugConfig.type !== 'maui') {
-    return debugConfig;
-  }
+  if (includeEnvironment && !debugConfigurationsWithSensitiveEnvironment.has(debugConfig)) {
+    if (debugConfig.type !== 'maui') {
+      return debugConfig;
+    }
 
-  if (includeEnvironment) {
     return {
       ...debugConfig,
       environmentVariables: debugConfig.environmentVariables ? '<redacted>' : undefined,
@@ -57,6 +63,7 @@ export function getLoggableDebugConfiguration(debugConfig: AspireResourceExtende
   return {
     ...debugConfig,
     env: debugConfig.env ? '<redacted>' : undefined,
+    environment: debugConfig.environment ? '<redacted>' : undefined,
     environmentVariables: debugConfig.environmentVariables ? '<redacted>' : undefined,
     msbuildProperties: debugConfig.msbuildProperties instanceof Map ? Object.fromEntries(debugConfig.msbuildProperties) : debugConfig.msbuildProperties,
   };
@@ -114,6 +121,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   private _startupCompleted = false;
   private readonly _onDidChangeState = new EventEmitter<void>();
   private readonly _disposables: vscode.Disposable[] = [];
+  private readonly _pendingStartCancellations = new Set<vscode.Disposable>();
   private _disposed = false;
   // Set as soon as stopDebugging() begins, before it snapshots the resource sessions. Resource
   // starts that land during the shutdown's awaits must not be registered as ordinary sessions:
@@ -257,6 +265,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
     this._stopAttemptInProgress = true;
     this._stopping = true;
+    this.cancelPendingStartWork();
     let resolveAttempt!: () => void;
     let rejectAttempt!: (reason: unknown) => void;
     const attempt = new Promise<void>((resolve, reject) => {
@@ -299,6 +308,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     return this._dashboardDebugSession !== null
       || this._pendingDashboardDebugSessionStarts.size > 0
       || this._pendingDebugSessionStarts.size > 0
+      || this._pendingStartCancellations.size > 0
       || this._resourceDebugSessions.length > 0
       || (this._appHostDebugSession !== undefined && !this._appHostStopped)
       || this._lateResourceStops.length > 0
@@ -1570,9 +1580,9 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   }
 
   /**
-   * Ties a disposable to this session's lifetime. Work started on behalf of the session (such as a
-   * language build spawned while preparing a resource launch) registers here so it is torn down when
-   * the session ends instead of outliving it. Disposing the returned handle detaches it early.
+   * Ties a disposable to the final session lifetime. Work that must be canceled before shutdown
+   * awaits pending resource starts should use {@link registerPendingStartCancellation} instead.
+   * Disposing the returned handle detaches it early.
    */
   registerDisposable(disposable: vscode.Disposable): vscode.Disposable {
     if (this._disposed) {
@@ -1596,6 +1606,31 @@ export class AspireDebugSession implements vscode.DebugAdapter {
         }
       }
     };
+  }
+
+  /**
+   * Registers cancellation for work that must finish before a resource debug session can start.
+   * Shutdown invokes these callbacks before it waits for pending starts, preventing that wait from
+   * delaying cancellation of a long-running build until the shutdown timeout.
+   */
+  registerPendingStartCancellation(disposable: vscode.Disposable): vscode.Disposable {
+    if (this._disposed || this._stopping) {
+      disposable.dispose();
+      return { dispose: () => { } };
+    }
+
+    this._pendingStartCancellations.add(disposable);
+    return {
+      dispose: () => {
+        this._pendingStartCancellations.delete(disposable);
+      }
+    };
+  }
+
+  private cancelPendingStartWork(): void {
+    const cancellations = [...this._pendingStartCancellations];
+    this._pendingStartCancellations.clear();
+    cancellations.forEach(cancellation => cancellation.dispose());
   }
 
   dispose(): void {
@@ -1650,6 +1685,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     this.closeDashboardInBackground();
     this._dashboardTerminationDisposable?.dispose();
     this._dashboardTerminationDisposable = undefined;
+    this.cancelPendingStartWork();
 
     // Stop child debug sessions first so their `sessionTerminated`
     // notifications can flow back through `AspireDcpServer.sendNotification`
