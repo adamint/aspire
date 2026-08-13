@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import * as crypto from 'crypto';
-import * as fs from 'fs';
+import fs = require('fs');
 import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
@@ -66,10 +66,16 @@ suite('AppHostLaunchService', () => {
     let startDebuggingStub: sinon.SinonStub;
     let stopDebuggingStub: sinon.SinonStub;
     let resolveCliPathStub: sinon.SinonStub;
+    let onDidStartDebugSessionStub: sinon.SinonStub;
+    let onDidStartDebugSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
     let onDidTerminateDebugSessionStub: sinon.SinonStub;
     let onDidTerminateDebugSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
 
     setup(() => {
+        onDidStartDebugSessionStub = sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            onDidStartDebugSessionCallback = callback;
+            return new vscode.Disposable(() => { });
+        });
         onDidTerminateDebugSessionStub = sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(callback => {
             onDidTerminateDebugSessionCallback = callback;
             return new vscode.Disposable(() => { });
@@ -85,7 +91,9 @@ suite('AppHostLaunchService', () => {
         startDebuggingStub.restore();
         stopDebuggingStub.restore();
         resolveCliPathStub.restore();
+        onDidStartDebugSessionStub.restore();
         onDidTerminateDebugSessionStub.restore();
+        onDidStartDebugSessionCallback = undefined;
         onDidTerminateDebugSessionCallback = undefined;
     });
 
@@ -1216,6 +1224,75 @@ suite('AppHostLaunchService', () => {
         assert.deepStrictEqual(stopRequests, [appHostPath]);
     });
 
+    test('case-distinct Windows AppHosts have independent launching state', async () => {
+        const platformStub = sinon.stub(process, 'platform').value('win32');
+        const statStub = sinon.stub(fs, 'statSync').callsFake((filePath: fs.PathLike) => ({
+            dev: 1n,
+            ino: path.basename(path.dirname(String(filePath))) === 'AppHost' ? 100n : 101n,
+        }) as fs.BigIntStats);
+        const upperCasePath = '/workspace/AppHost/apphost.mts';
+        const lowerCasePath = '/workspace/apphost/apphost.mts';
+
+        try {
+            await service.launch(upperCasePath, 'run', true);
+
+            assert.strictEqual(service.isLaunching(upperCasePath), true);
+            assert.strictEqual(service.isLaunching(lowerCasePath), false);
+        } finally {
+            statStub.restore();
+            platformStub.restore();
+        }
+    });
+
+    test('stale termination does not clear a newer equivalent launch', async () => {
+        const platformStub = sinon.stub(process, 'platform').value('win32');
+        const statStub = sinon.stub(fs, 'statSync').returns({
+            dev: 1n,
+            ino: 100n,
+        } as fs.BigIntStats);
+        const upperCasePath = '/workspace/AppHost/AppHost.csproj';
+        const lowerCasePath = '/workspace/apphost/apphost.csproj';
+
+        try {
+            await service.launch(upperCasePath, 'run', true);
+            const staleConfiguration = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
+            service.clearLaunching(upperCasePath);
+
+            await service.launch(lowerCasePath, 'run', true);
+            const currentConfiguration = startDebuggingStub.secondCall.args[1] as AspireExtendedDebugConfiguration;
+
+            assert.ok(onDidTerminateDebugSessionCallback);
+            onDidTerminateDebugSessionCallback({
+                configuration: staleConfiguration,
+            } as unknown as vscode.DebugSession);
+            assert.deepStrictEqual(service.launchingPaths, [path.resolve(lowerCasePath)]);
+
+            onDidTerminateDebugSessionCallback({
+                configuration: currentConfiguration,
+            } as unknown as vscode.DebugSession);
+            assert.deepStrictEqual(service.launchingPaths, []);
+        } finally {
+            statStub.restore();
+            platformStub.restore();
+        }
+    });
+
+    test('untokened termination does not clear service-owned launching state', async () => {
+        const appHostPath = '/repo/AppHost.csproj';
+        await service.launch(appHostPath, 'run', true);
+
+        assert.ok(onDidTerminateDebugSessionCallback);
+        onDidTerminateDebugSessionCallback({
+            configuration: {
+                type: 'aspire',
+                program: appHostPath,
+                command: 'run',
+            },
+        } as unknown as vscode.DebugSession);
+        assert.deepStrictEqual(service.launchingPaths, [path.resolve(appHostPath)]);
+        assert.deepStrictEqual(service.launchingPaths, [path.resolve(appHostPath)]);
+    });
+
     test('launch clears launching state and throws when startDebugging returns false', async () => {
         // vscode.debug.startDebugging returns Promise<boolean> and resolves false when
         // the debug adapter rejects or no provider matches — no terminate event is
@@ -1306,7 +1383,7 @@ suite('AppHostLaunchService', () => {
     });
 
     test('terminated run sessions include appHostPath and stop refresh semantics', () => {
-        let terminationEvent: { appHostPath: string; command?: string; shouldRequestStopRefresh: boolean } | undefined;
+        let terminationEvent: { appHostPath: string; command?: string; shouldRequestStopRefresh: boolean; shouldMarkAppHostStopping: boolean } | undefined;
         service.onDidTerminateAppHostDebugSession(event => {
             terminationEvent = event;
         });
@@ -1324,6 +1401,7 @@ suite('AppHostLaunchService', () => {
             appHostPath: '/repo/AppHost.csproj',
             command: 'run',
             shouldRequestStopRefresh: true,
+            shouldMarkAppHostStopping: true,
         });
     });
 
@@ -1403,8 +1481,212 @@ suite('AppHostLaunchService', () => {
         assert.strictEqual(terminationEvent?.shouldRequestStopRefresh, false);
     });
 
+    test('toolbar restart does not mark the replacement AppHost as stopping', () => {
+        let terminationEvent: {
+            appHostPath: string;
+            command?: string;
+            shouldRequestStopRefresh: boolean;
+            shouldMarkAppHostStopping: boolean;
+        } | undefined;
+        service.onDidTerminateAppHostDebugSession(event => {
+            terminationEvent = event;
+        });
+        const sessionId = 'aspire-session';
+
+        assert.ok(onDidTerminateDebugSessionCallback);
+        onDidTerminateDebugSessionCallback({
+            id: sessionId,
+            configuration: {
+                type: 'aspire',
+                program: '/repo/AppHost.csproj',
+                command: 'run',
+                __aspireAppHostRestartSourceSessionId: sessionId,
+            },
+        } as unknown as vscode.DebugSession);
+
+        assert.deepStrictEqual(terminationEvent, {
+            appHostPath: '/repo/AppHost.csproj',
+            command: 'run',
+            shouldRequestStopRefresh: true,
+            shouldMarkAppHostStopping: false,
+        });
+    });
+
+    test('terminating one of multiple equivalent run sessions does not mark the survivor as stopping', () => {
+        const platformStub = sinon.stub(process, 'platform').value('win32');
+        const statStub = sinon.stub(fs, 'statSync').callsFake((filePath: fs.PathLike) => ({
+            dev: 1n,
+            ino: path.extname(String(filePath)) === '.csproj' ? 100n : 50n,
+        }) as fs.BigIntStats);
+        const upperCasePath = '/workspace/AppHost/AppHost.csproj';
+        const lowerCasePath = '/workspace/apphost/apphost.csproj';
+        const terminationEvents: Array<{
+            appHostPath: string;
+            command?: string;
+            shouldRequestStopRefresh: boolean;
+            shouldMarkAppHostStopping: boolean;
+        }> = [];
+        service.onDidTerminateAppHostDebugSession(event => {
+            terminationEvents.push(event);
+        });
+        const workspaceRootSession = {
+            id: 'upper',
+            configuration: {
+                type: 'aspire',
+                program: '/workspace',
+                command: 'run',
+                [appHostTelemetryTargetPathConfigKey]: upperCasePath,
+            },
+        } as unknown as vscode.DebugSession;
+        const lowerCaseSession = {
+            id: 'lower',
+            configuration: {
+                type: 'aspire',
+                program: lowerCasePath,
+                command: 'run',
+            },
+        } as unknown as vscode.DebugSession;
+
+        try {
+            assert.ok(onDidStartDebugSessionCallback);
+            onDidStartDebugSessionCallback(workspaceRootSession);
+            onDidStartDebugSessionCallback(lowerCaseSession);
+
+            assert.ok(onDidTerminateDebugSessionCallback);
+            onDidTerminateDebugSessionCallback(workspaceRootSession);
+            onDidTerminateDebugSessionCallback(lowerCaseSession);
+
+            assert.deepStrictEqual(terminationEvents, [
+                {
+                    appHostPath: upperCasePath,
+                    command: 'run',
+                    shouldRequestStopRefresh: true,
+                    shouldMarkAppHostStopping: false,
+                },
+                {
+                    appHostPath: lowerCasePath,
+                    command: 'run',
+                    shouldRequestStopRefresh: true,
+                    shouldMarkAppHostStopping: true,
+                },
+            ]);
+        } finally {
+            statStub.restore();
+            platformStub.restore();
+        }
+    });
+
+    test('pending run is tracked before telemetry classification completes', async () => {
+        const platformStub = sinon.stub(process, 'platform').value('win32');
+        const statStub = sinon.stub(fs, 'statSync').returns({
+            dev: 1n,
+            ino: 100n,
+        } as fs.BigIntStats);
+        const upperCasePath = '/workspace/AppHost/AppHost.csproj';
+        const lowerCasePath = '/workspace/apphost/apphost.csproj';
+        const terminationEvents: Array<{
+            appHostPath: string;
+            command?: string;
+            shouldRequestStopRefresh: boolean;
+            shouldMarkAppHostStopping: boolean;
+        }> = [];
+        service.onDidTerminateAppHostDebugSession(event => {
+            terminationEvents.push(event);
+        });
+
+        try {
+            await service.launch(upperCasePath, 'run', true);
+            const upperCaseConfiguration = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
+            const upperCaseSession = {
+                id: 'upper',
+                configuration: upperCaseConfiguration,
+            } as unknown as vscode.DebugSession;
+            assert.ok(onDidStartDebugSessionCallback);
+            onDidStartDebugSessionCallback(upperCaseSession);
+            service.clearLaunching(upperCasePath);
+
+            const lowerCaseLaunchTask = service.launch(lowerCasePath, 'run', true);
+
+            assert.ok(onDidTerminateDebugSessionCallback);
+            onDidTerminateDebugSessionCallback(upperCaseSession);
+            await lowerCaseLaunchTask;
+
+            assert.deepStrictEqual(terminationEvents, [{
+                appHostPath: upperCasePath,
+                command: 'run',
+                shouldRequestStopRefresh: true,
+                shouldMarkAppHostStopping: false,
+            }]);
+        } finally {
+            statStub.restore();
+            platformStub.restore();
+        }
+    });
+
+    test('pending equivalent run prevents a terminated session from marking it as stopping', async () => {
+        const platformStub = sinon.stub(process, 'platform').value('win32');
+        const statStub = sinon.stub(fs, 'statSync').returns({
+            dev: 1n,
+            ino: 100n,
+        } as fs.BigIntStats);
+        const upperCasePath = '/workspace/AppHost/AppHost.csproj';
+        const lowerCasePath = '/workspace/apphost/apphost.csproj';
+        const terminationEvents: Array<{
+            appHostPath: string;
+            command?: string;
+            shouldRequestStopRefresh: boolean;
+            shouldMarkAppHostStopping: boolean;
+        }> = [];
+        service.onDidTerminateAppHostDebugSession(event => {
+            terminationEvents.push(event);
+        });
+
+        try {
+            await service.launch(upperCasePath, 'run', true);
+            const upperCaseConfiguration = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
+            const upperCaseSession = {
+                id: 'upper',
+                configuration: upperCaseConfiguration,
+            } as unknown as vscode.DebugSession;
+            assert.ok(onDidStartDebugSessionCallback);
+            onDidStartDebugSessionCallback(upperCaseSession);
+            service.clearLaunching(upperCasePath);
+
+            await service.launch(lowerCasePath, 'run', true);
+            const lowerCaseConfiguration = startDebuggingStub.secondCall.args[1] as AspireExtendedDebugConfiguration;
+            const lowerCaseSession = {
+                id: 'lower',
+                configuration: lowerCaseConfiguration,
+            } as unknown as vscode.DebugSession;
+            service.clearLaunching(lowerCasePath);
+
+            assert.ok(onDidTerminateDebugSessionCallback);
+            onDidTerminateDebugSessionCallback(upperCaseSession);
+            onDidStartDebugSessionCallback(lowerCaseSession);
+            onDidTerminateDebugSessionCallback(lowerCaseSession);
+
+            assert.deepStrictEqual(terminationEvents, [
+                {
+                    appHostPath: upperCasePath,
+                    command: 'run',
+                    shouldRequestStopRefresh: false,
+                    shouldMarkAppHostStopping: false,
+                },
+                {
+                    appHostPath: lowerCasePath,
+                    command: 'run',
+                    shouldRequestStopRefresh: true,
+                    shouldMarkAppHostStopping: true,
+                },
+            ]);
+        } finally {
+            statStub.restore();
+            platformStub.restore();
+        }
+    });
+
     test('terminated non-run sessions do not request stop refresh', () => {
-        let terminationEvent: { appHostPath: string; command?: string; shouldRequestStopRefresh: boolean } | undefined;
+        let terminationEvent: { appHostPath: string; command?: string; shouldRequestStopRefresh: boolean; shouldMarkAppHostStopping: boolean } | undefined;
         service.onDidTerminateAppHostDebugSession(event => {
             terminationEvent = event;
         });
@@ -1422,11 +1704,12 @@ suite('AppHostLaunchService', () => {
             appHostPath: '/repo/AppHost.csproj',
             command: 'publish',
             shouldRequestStopRefresh: false,
+            shouldMarkAppHostStopping: false,
         });
     });
 
     test('terminated Aspire sessions default missing command to run and request stop refresh', () => {
-        let terminationEvent: { appHostPath: string; command?: string; shouldRequestStopRefresh: boolean } | undefined;
+        let terminationEvent: { appHostPath: string; command?: string; shouldRequestStopRefresh: boolean; shouldMarkAppHostStopping: boolean } | undefined;
         service.onDidTerminateAppHostDebugSession(event => {
             terminationEvent = event;
         });
@@ -1443,11 +1726,12 @@ suite('AppHostLaunchService', () => {
             appHostPath: '/repo/AppHost.csproj',
             command: 'run',
             shouldRequestStopRefresh: true,
+            shouldMarkAppHostStopping: true,
         });
     });
 
     test('terminated Aspire sessions drop invalid command values and do not request stop refresh', () => {
-        let terminationEvent: { appHostPath: string; command?: string; shouldRequestStopRefresh: boolean } | undefined;
+        let terminationEvent: { appHostPath: string; command?: string; shouldRequestStopRefresh: boolean; shouldMarkAppHostStopping: boolean } | undefined;
         service.onDidTerminateAppHostDebugSession(event => {
             terminationEvent = event;
         });
@@ -1465,6 +1749,27 @@ suite('AppHostLaunchService', () => {
             appHostPath: '/repo/AppHost.csproj',
             command: undefined,
             shouldRequestStopRefresh: false,
+            shouldMarkAppHostStopping: false,
         });
+    });
+
+    test('terminated Aspire sessions ignore non-string AppHost paths', () => {
+        let terminationEventRaised = false;
+        service.onDidTerminateAppHostDebugSession(() => {
+            terminationEventRaised = true;
+        });
+
+        assert.ok(onDidTerminateDebugSessionCallback);
+        assert.doesNotThrow(() => {
+            onDidTerminateDebugSessionCallback?.({
+                configuration: {
+                    type: 'aspire',
+                    program: { path: '/repo/AppHost.csproj' },
+                    command: 'run',
+                },
+            } as unknown as vscode.DebugSession);
+        });
+
+        assert.strictEqual(terminationEventRaised, false);
     });
 });

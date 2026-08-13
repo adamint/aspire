@@ -7,7 +7,7 @@ import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { AspireDebugConfigurationProvider, type ExternalLaunchReservation } from '../debugger/AspireDebugConfigurationProvider';
-import { appHostLaunchReservationIdConfigKey, appHostSelectionOriginConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
+import { appHostLaunchReservationIdConfigKey, appHostLaunchTokenConfigKey, appHostSelectionOriginConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
 import { isAspireDebugConfigurationExtensionOwned, markAspireDebugConfigurationAsExtensionOwned, stripAspireDebugConfigurationProviderInternalProperties } from '../debugger/AspireDebugConfigurationProviderInternal';
 import type { AspireExtendedDebugConfiguration } from '../dcp/types';
 import * as cliPathModule from '../utils/cliPath';
@@ -441,6 +441,24 @@ suite('AspireDebugConfigurationProvider', () => {
         stripAspireDebugConfigurationProviderInternalProperties(secondPass ?? {});
         assert.strictEqual(isAspireDebugConfigurationExtensionOwned(secondPass ?? {}), false);
         assert.deepStrictEqual(Object.keys(secondPass ?? {}).filter(key => key.startsWith('__aspireAppHostLaunchServiceConfiguration_')), []);
+    });
+
+    test('preserves AppHost launch token through substituted variable resolution', async () => {
+        const appHostPath = path.join(tempDir, 'apphost.ts');
+        fs.writeFileSync(appHostPath, 'import { createBuilder } from "./.aspire/modules/aspire";');
+
+        const provider = new AspireDebugConfigurationProvider(
+            createAppHostDiscoveryService(appHostPath, appHostPath, 'typescript/nodejs'),
+            launchReservation);
+        const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined, {
+            name: 'Debug AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: appHostPath,
+            [appHostLaunchTokenConfigKey]: 42,
+        });
+
+        assert.strictEqual(config?.[appHostLaunchTokenConfigKey], 42);
     });
 
     test('leaves launch config non-AppHost C# source file unchanged', async () => {

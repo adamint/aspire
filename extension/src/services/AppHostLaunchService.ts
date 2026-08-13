@@ -1,4 +1,3 @@
-import * as path from 'path';
 import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { AspireCommandType, AspireExtendedDebugConfiguration, AspireOperationKind, type AspireResourceDebugSession } from '../dcp/types';
@@ -9,7 +8,7 @@ import { classifyError, isCommandCancellation, sendTelemetryEvent, type EventPro
 import { bucketAspireCommand } from '../utils/telemetryBuckets';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
-import { appHostLaunchReservationIdConfigKey, appHostSelectionOriginConfigKey, appHostTelemetryTargetPathConfigKey, type AppHostSelectionOrigin } from '../debugger/AspireDebugConfigurationMetadata';
+import { appHostLaunchReservationIdConfigKey, appHostLaunchTokenConfigKey, appHostRestartSourceSessionIdConfigKey, appHostSelectionOriginConfigKey, appHostTelemetryTargetPathConfigKey, type AppHostSelectionOrigin } from '../debugger/AspireDebugConfigurationMetadata';
 import { markAspireDebugConfigurationAsExtensionOwned } from '../debugger/AspireDebugConfigurationProviderInternal';
 
 function isAspireCommandType(value: unknown): value is AspireCommandType {
@@ -29,6 +28,15 @@ export function getAspireDebugConfigurationCommand(configuration: vscode.DebugCo
     return isAspireCommandType(configuration.command) ? configuration.command : undefined;
 }
 
+function getDebugConfigurationAppHostPath(configuration: vscode.DebugConfiguration): string | undefined {
+    const telemetryTargetPath = configuration[appHostTelemetryTargetPathConfigKey];
+    if (typeof telemetryTargetPath === 'string') {
+        return telemetryTargetPath;
+    }
+
+    return typeof configuration.program === 'string' ? configuration.program : undefined;
+}
+
 export interface AppHostLaunchRequestedEvent {
     appHostPath: string;
     command: AspireCommandType;
@@ -41,6 +49,7 @@ export interface AppHostDebugSessionTerminatedEvent {
     appHostPath: string;
     command?: AspireCommandType;
     shouldRequestStopRefresh: boolean;
+    shouldMarkAppHostStopping: boolean;
 }
 
 export interface AppHostLaunchSession {
@@ -180,6 +189,9 @@ export class AppHostLaunchService implements vscode.Disposable {
     private _getRunningAppHosts: (token: vscode.CancellationToken) => Promise<readonly RunningAppHost[]> = async () => [];
     private _stopExternalAppHost: ((appHostPath: string, token: vscode.CancellationToken) => Promise<void>) | undefined;
     private _disposed = false;
+    private readonly _activeRunDebugSessionPaths = new Map<string, string>();
+    private readonly _pendingRunPathByToken = new Map<number, string>();
+    private _nextLaunchToken = 0;
 
     private readonly _onDidChangeLaunchingState = new vscode.EventEmitter<void>();
     readonly onDidChangeLaunchingState = this._onDidChangeLaunchingState.event;
@@ -193,14 +205,31 @@ export class AppHostLaunchService implements vscode.Disposable {
     private readonly _debugSessionSubscription: vscode.Disposable;
 
     constructor() {
+        const startSubscription = vscode.debug.onDidStartDebugSession(session => {
+            const launchToken = session.configuration?.[appHostLaunchTokenConfigKey];
+            if (typeof launchToken === 'number') {
+                this._pendingRunPathByToken.delete(launchToken);
+            }
+
+            const appHostPath = getDebugConfigurationAppHostPath(session.configuration);
+            if (appHostPath &&
+                session.configuration?.type === 'aspire' &&
+                getAspireDebugConfigurationCommand(session.configuration) === 'run') {
+                this._activeRunDebugSessionPaths.set(session.id, appHostPath);
+            }
+        });
+
         // When a debug session terminates, clear launching state for that AppHost
         // so the tree reverts from "Starting..." if the launch failed or was cancelled.
-        this._debugSessionSubscription = vscode.debug.onDidTerminateDebugSession(session => {
+        const terminateSubscription = vscode.debug.onDidTerminateDebugSession(session => {
+            this._activeRunDebugSessionPaths.delete(session.id);
+            const launchToken = session.configuration?.[appHostLaunchTokenConfigKey];
+            if (typeof launchToken === 'number') {
+                this._pendingRunPathByToken.delete(launchToken);
+            }
+
             this._appHostDebugSessions.delete(session.id);
-            const telemetryTarget = session.configuration?.[appHostTelemetryTargetPathConfigKey];
-            const appHostPath = typeof telemetryTarget === 'string'
-                ? telemetryTarget
-                : session.configuration?.program;
+            const appHostPath = getDebugConfigurationAppHostPath(session.configuration);
             if (appHostPath && session.configuration?.type === 'aspire') {
                 const reservationId = session.configuration?.[appHostLaunchReservationIdConfigKey];
                 const isCurrentGeneration = typeof reservationId !== 'string' ||
@@ -209,13 +238,21 @@ export class AppHostLaunchService implements vscode.Disposable {
                     this.clearMatchingLaunching(appHostPath, reservationId);
                 }
                 const command = getAspireDebugConfigurationCommand(session.configuration);
+                const shouldRequestStopRefresh = command === 'run' && isCurrentGeneration;
+                const restartSourceSessionId = session.configuration[appHostRestartSourceSessionIdConfigKey];
+                const isToolbarRestart = typeof restartSourceSessionId === 'string' &&
+                    restartSourceSessionId === session.id;
                 this._onDidTerminateAppHostDebugSession.fire({
                     appHostPath,
                     command,
-                    shouldRequestStopRefresh: command === 'run' && isCurrentGeneration,
+                    shouldRequestStopRefresh,
+                    shouldMarkAppHostStopping: shouldRequestStopRefresh &&
+                        !isToolbarRestart &&
+                        !this.hasPendingOrActiveRunDebugSession(appHostPath),
                 });
             }
         });
+        this._debugSessionSubscription = vscode.Disposable.from(startSubscription, terminateSubscription);
     }
 
     dispose(): void {
@@ -232,6 +269,8 @@ export class AppHostLaunchService implements vscode.Disposable {
         this._externalReservationExpiries.clear();
         this._launchReservationIds.clear();
         this._latestLaunchReservationIds.clear();
+        this._activeRunDebugSessionPaths.clear();
+        this._pendingRunPathByToken.clear();
         this._onDidChangeLaunchingState.dispose();
         this._onDidTerminateAppHostDebugSession.dispose();
         this._onDidRequestLaunch.dispose();
@@ -797,17 +836,24 @@ export class AppHostLaunchService implements vscode.Disposable {
      * @param doStep Optional step name for the 'do' command.
      */
     async launch(appHostPath: string, command: AspireCommandType, noDebug: boolean, doStep?: string): Promise<void> {
-        return await this.runWithAppHostLifecycleLock(appHostPath, this._lifecycleCancellationSource.token, async lockToken => {
-            if (this._disposed) {
-                throw new vscode.CancellationError();
-            }
+        const launchToken = this.trackPendingRun(appHostPath, command);
+        try {
+            return await this.runWithAppHostLifecycleLock(appHostPath, this._lifecycleCancellationSource.token, async lockToken => {
+                if (this._disposed) {
+                    throw new vscode.CancellationError();
+                }
 
-            if (!this.tryReserveLaunch(appHostPath)) {
-                throw new vscode.CancellationError();
-            }
+                if (!this.tryReserveLaunch(appHostPath)) {
+                    throw new vscode.CancellationError();
+                }
 
-            await this.launchCore(appHostPath, command, noDebug, doStep, 'user-selection', lockToken);
-        });
+                await this.launchCore(appHostPath, command, noDebug, doStep, 'user-selection', launchToken, lockToken);
+            });
+        }
+        catch (error) {
+            this._pendingRunPathByToken.delete(launchToken);
+            throw error;
+        }
     }
 
     async launchFromLifecycleOwner(appHostPath: string, command: 'run', noDebug: boolean, token: vscode.CancellationToken): Promise<void> {
@@ -817,7 +863,14 @@ export class AppHostLaunchService implements vscode.Disposable {
 
         // The CLI treats this origin as invocation-scoped: an agent-selected target may
         // establish a missing default, but must not replace an existing workspace choice.
-        await this.launchCore(appHostPath, command, noDebug, undefined, 'explicit-launch-configuration', token);
+        const launchToken = this.trackPendingRun(appHostPath, command);
+        try {
+            await this.launchCore(appHostPath, command, noDebug, undefined, 'explicit-launch-configuration', launchToken, token);
+        }
+        catch (error) {
+            this._pendingRunPathByToken.delete(launchToken);
+            throw error;
+        }
     }
 
     private async launchCore(
@@ -826,6 +879,7 @@ export class AppHostLaunchService implements vscode.Disposable {
         noDebug: boolean,
         doStep: string | undefined,
         selectionOrigin: AppHostSelectionOrigin,
+        launchToken: number,
         token: vscode.CancellationToken,
     ): Promise<void> {
         // Reserve before the first await. The awaits below (telemetry, the CLI gate) run
@@ -856,12 +910,22 @@ export class AppHostLaunchService implements vscode.Disposable {
                 throw error;
             }
         };
-
         const startTime = Date.now();
         const executionSuppressed = isE2eDebugLaunchSuppressed();
-        const telemetryProperties = await releaseReservationOnFailure(
-            () => getLaunchTelemetryProperties(appHostPath, command, noDebug, executionSuppressed));
-        abortIfCancelled();
+        if (executionSuppressed) {
+            this._pendingRunPathByToken.delete(launchToken);
+        }
+
+        let telemetryProperties: Awaited<ReturnType<typeof getLaunchTelemetryProperties>>;
+        try {
+            telemetryProperties = await releaseReservationOnFailure(
+                () => getLaunchTelemetryProperties(appHostPath, command, noDebug, executionSuppressed));
+            abortIfCancelled();
+        }
+        catch (err) {
+            this._pendingRunPathByToken.delete(launchToken);
+            throw err;
+        }
 
         const config: AspireExtendedDebugConfiguration = {
             type: 'aspire',
@@ -871,6 +935,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             command,
             noDebug,
             [appHostSelectionOriginConfigKey]: selectionOrigin,
+            [appHostLaunchTokenConfigKey]: launchToken,
         };
         config[appHostLaunchReservationIdConfigKey] = reservationId;
         markAspireDebugConfigurationAsExtensionOwned(config);
@@ -889,7 +954,7 @@ export class AppHostLaunchService implements vscode.Disposable {
         });
         abortIfCancelled();
         if (executionSuppressed) {
-            this.clearLaunching(appHostPath);
+            this.clearMatchingLaunching(appHostPath, reservationId);
             sendTelemetryEvent('aspire/vscode/apphost/launch/result', {
                 ...telemetryProperties,
                 outcome: 'suppressed',
@@ -925,7 +990,8 @@ export class AppHostLaunchService implements vscode.Disposable {
                 duration_ms: Date.now() - startTime,
             });
         } catch (err) {
-            this.clearLaunching(appHostPath);
+            this._pendingRunPathByToken.delete(launchToken);
+            this.clearMatchingLaunching(appHostPath, reservationId);
             const canceled = isCommandCancellation(err);
             const properties: EventProperties<'aspire/vscode/apphost/launch/result'> = {
                 ...telemetryProperties,
@@ -941,6 +1007,19 @@ export class AppHostLaunchService implements vscode.Disposable {
         }
     }
 
+    private hasPendingOrActiveRunDebugSession(appHostPath: string): boolean {
+        return [...this._pendingRunPathByToken.values(), ...this._activeRunDebugSessionPaths.values()]
+            .some(runPath => compareAppHostIdentity(runPath, appHostPath) !== 'different');
+    }
+
+    private trackPendingRun(appHostPath: string, command: AspireCommandType): number {
+        const launchToken = ++this._nextLaunchToken;
+        if (command === 'run' && !isE2eDebugLaunchSuppressed()) {
+            this._pendingRunPathByToken.set(launchToken, appHostPath);
+        }
+
+        return launchToken;
+    }
 }
 
 function throwIfCancelled(token: vscode.CancellationToken): void {

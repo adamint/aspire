@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { isSameFileSystemEntry } from './appHostDiscovery';
 
 /** Whether two paths name the same AppHost. */
 export type AppHostIdentityRelation = 'same' | 'different' | 'ambiguous';
@@ -14,8 +15,7 @@ const appHostSourceFileNames = ['apphost.cs', 'program.cs'];
 const appHostAliasKeySuffix = '\u0000apphost';
 
 export function getAppHostPathComparisonKey(value: string): string {
-    const resolved = canonicalize(path.normalize(path.resolve(value)));
-    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+    return canonicalize(path.normalize(path.resolve(value)));
 }
 
 /**
@@ -29,12 +29,12 @@ export function compareAppHostIdentity(left: string | undefined, right: string |
 
     const leftPath = canonicalize(path.normalize(path.resolve(left)));
     const rightPath = canonicalize(path.normalize(path.resolve(right)));
-    if (getAppHostPathComparisonKey(leftPath) === getAppHostPathComparisonKey(rightPath)) {
+    if (isSameFileSystemEntry(leftPath, rightPath)) {
         return 'same';
     }
 
     const directory = path.dirname(leftPath);
-    if (getAppHostPathComparisonKey(directory) !== getAppHostPathComparisonKey(path.dirname(rightPath))) {
+    if (!isSameFileSystemEntry(directory, path.dirname(rightPath))) {
         return 'different';
     }
 
@@ -135,8 +135,7 @@ function readDirectoryAppHostShapes(directoryPath: string): DirectoryAppHostShap
 }
 
 function containsPath(paths: readonly string[], candidate: string): boolean {
-    const candidateKey = getAppHostPathComparisonKey(candidate);
-    return paths.some(value => getAppHostPathComparisonKey(value) === candidateKey);
+    return paths.some(value => isSameFileSystemEntry(value, candidate));
 }
 
 export function canonicalizeAppHostPath(resolvedPath: string): string {
