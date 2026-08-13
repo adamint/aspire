@@ -242,8 +242,16 @@ export function writeStreamingDiscoveryCliWrapper(delayMs = 5_000, initialDelayM
     });
 }
 
-export function writeGatedStreamingDiscoveryCliWrapper(): { cliPath: string; releasePsSnapshot: () => void; releaseLsCandidate: () => void } {
+export function writeGatedStreamingDiscoveryCliWrapper(psSnapshotAppHostPath: string, psSnapshotAppHostPid: number): {
+    cliPath: string;
+    waitForPsSnapshotRequest: () => Promise<void>;
+    waitForLsCandidateRequest: () => Promise<void>;
+    releasePsSnapshot: () => void;
+    releaseLsCandidate: () => void;
+} {
     const gateDirectory = path.join(getWorkspaceRoot(), '.e2e-cli-wrappers', 'gated-streaming-discovery');
+    const psSnapshotRequestFilePath = path.join(gateDirectory, 'ps-snapshot-request');
+    const lsCandidateRequestFilePath = path.join(gateDirectory, 'ls-candidate-request');
     const psSnapshotReleaseFilePath = path.join(gateDirectory, 'release-ps-snapshot');
     const lsCandidateReleaseFilePath = path.join(gateDirectory, 'release-ls-candidate');
     removePath(gateDirectory, { recursive: true, force: true });
@@ -258,12 +266,18 @@ export function writeGatedStreamingDiscoveryCliWrapper(): { cliPath: string; rel
             selected: true,
         },
         streamedLsDelayMs: 5_000,
+        streamedLsRequestFilePath: lsCandidateRequestFilePath,
         streamedLsReleaseFilePath: lsCandidateReleaseFilePath,
+        psSnapshotRequestFilePath,
         psSnapshotReleaseFilePath,
+        psSnapshotAppHostPath,
+        psSnapshotAppHostPid,
     });
 
     return {
         cliPath,
+        waitForPsSnapshotRequest: () => waitForPath(psSnapshotRequestFilePath, 30_000),
+        waitForLsCandidateRequest: () => waitForPath(lsCandidateRequestFilePath, 30_000),
         releasePsSnapshot: () => writeFileWithRetry(psSnapshotReleaseFilePath, ''),
         releaseLsCandidate: () => writeFileWithRetry(lsCandidateReleaseFilePath, ''),
     };
@@ -683,6 +697,19 @@ function getRunningAppHostFromState(appHostPath: string) {
         : state.appHosts.find(candidate => isSamePath(candidate.appHostPath, appHostPath));
 }
 
+export function isProcessAlive(pid: number): boolean {
+    return isProcessRunning(pid);
+}
+
+export async function waitForKnownProcessExit(pid: number, description: string, timeoutMs: number): Promise<void> {
+    try {
+        await waitForProcessExit(pid, timeoutMs);
+    }
+    catch (error) {
+        throw new Error(`Timed out after ${timeoutMs}ms waiting for ${description} ${pid} to exit. Last error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+
 async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void> {
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
@@ -763,11 +790,15 @@ function writeCliWrapper(
         streamedLsCandidate?: unknown;
         streamedLsDelayMs?: number;
         streamedLsInitialDelayMs?: number;
+        streamedLsRequestFilePath?: string;
         streamedLsReleaseFilePath?: string;
         streamedLsInvocationLogPath?: string;
         invocationLogPath?: string;
         psSnapshotDelayMs?: number;
+        psSnapshotRequestFilePath?: string;
         psSnapshotReleaseFilePath?: string;
+        psSnapshotAppHostPath?: string;
+        psSnapshotAppHostPid?: number;
     },
 ): string {
     const wrapperDirectory = path.join(getWorkspaceRoot(), '.e2e-cli-wrappers');
@@ -777,6 +808,7 @@ function writeCliWrapper(
     fs.writeFileSync(scriptPath, `#!/usr/bin/env node
 const { spawnSync } = require('child_process');
 const fs = require('fs');
+const path = require('path');
 const realCli = ${JSON.stringify(getCliPath())};
 const args = process.argv.slice(2);
 ${options.invocationLogPath === undefined ? '' : `fs.appendFileSync(${JSON.stringify(options.invocationLogPath)}, JSON.stringify(args) + '\\n');`}
@@ -814,6 +846,7 @@ ${options.streamedLsInvocationLogPath === undefined ? '' : `  fs.appendFileSync(
     process.exit(126);
   }
 
+${options.streamedLsRequestFilePath === undefined ? '' : `  fs.writeFileSync(${JSON.stringify(options.streamedLsRequestFilePath)}, '');`}
 ${options.streamedLsReleaseFilePath === undefined ? '' : `  waitForReleaseFile(${JSON.stringify(options.streamedLsReleaseFilePath)}, 'streamed ls candidate');`}
   setTimeout(() => {
     console.log(${JSON.stringify(JSON.stringify(options.streamedLsCandidate))});
@@ -822,9 +855,66 @@ ${options.streamedLsReleaseFilePath === undefined ? '' : `  waitForReleaseFile($
 }
 else {`}
 if (args[0] === 'ps') {
-${options.psSnapshotReleaseFilePath === undefined ? '' : `  waitForReleaseFile(${JSON.stringify(options.psSnapshotReleaseFilePath)}, 'ps snapshot');`}
+${options.psSnapshotAppHostPath === undefined || options.psSnapshotAppHostPid === undefined
+        ? ''
+        : `  if (args.includes('--follow')) {
+    // Keep the follow process alive without emitting a real-PID update that could overwrite the
+    // marked authoritative snapshot. Restoring the E2E CLI path terminates this process.
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_147_483_647);
+    process.exit(0);
+  }
+`}
   if (!args.includes('--follow')) {
+${options.psSnapshotRequestFilePath === undefined ? '' : `  fs.writeFileSync(${JSON.stringify(options.psSnapshotRequestFilePath)}, '');`}
+${options.psSnapshotReleaseFilePath === undefined ? '' : `  waitForReleaseFile(${JSON.stringify(options.psSnapshotReleaseFilePath)}, 'ps snapshot');`}
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${options.psSnapshotDelayMs ?? 0});
+${options.psSnapshotAppHostPath === undefined || options.psSnapshotAppHostPid === undefined
+        ? ''
+        : `    const result = spawnSync(realCli, args, {
+      cwd: process.cwd(),
+      env: process.env,
+      encoding: 'utf8',
+      shell: false,
+    });
+    if (result.error) {
+      console.error(result.error.stack || result.error.message);
+      process.exit(1);
+    }
+    if (result.stderr) {
+      fs.writeSync(process.stderr.fd, result.stderr);
+    }
+    if ((result.status ?? (result.signal ? 1 : 0)) !== 0) {
+      if (result.stdout) {
+        fs.writeSync(process.stdout.fd, result.stdout);
+      }
+      process.exit(result.status ?? 1);
+    }
+
+    try {
+      // aspire ps --format json emits one AppHost object or an array:
+      //   [{ "appHostPath": "/workspace/AppHost.csproj", "appHostPid": 123, ... }]
+      const payload = JSON.parse(result.stdout);
+      const appHosts = Array.isArray(payload) ? payload : [payload];
+      const normalizeAppHostPath = value => process.platform === 'win32'
+        ? path.normalize(value).toLowerCase()
+        : path.normalize(value);
+      const targetPath = normalizeAppHostPath(${JSON.stringify(options.psSnapshotAppHostPath)});
+      const appHost = appHosts.find(candidate =>
+        typeof candidate?.appHostPath === 'string'
+        && normalizeAppHostPath(candidate.appHostPath) === targetPath);
+      if (!appHost) {
+        console.error(\`The gated ps snapshot did not contain AppHost \${targetPath}: \${result.stdout}\`);
+        process.exit(125);
+      }
+      appHost.appHostPid = ${options.psSnapshotAppHostPid};
+      fs.writeSync(process.stdout.fd, JSON.stringify(payload) + '\\n');
+      process.exit(0);
+    }
+    catch (error) {
+      console.error(\`Failed to mark the gated ps snapshot: \${error instanceof Error ? error.stack || error.message : String(error)}\`);
+      process.exit(125);
+    }
+`}
   }
 }
 
