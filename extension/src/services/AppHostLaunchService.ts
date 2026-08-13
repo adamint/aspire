@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { AspireCommandType, AspireExtendedDebugConfiguration, AspireOperationKind, type AspireResourceDebugSession } from '../dcp/types';
 import { appHostLifecycleBusy, startDebuggingDeclined } from '../loc/strings';
 import { classifyAppHostDirectory, classifyAppHostPath } from '../utils/appHostLanguage';
-import { compareAppHostIdentity, getAppHostIdentityKeyInfo, getAppHostPathComparisonKey, type AppHostIdentityKeyInfo, type AppHostIdentityRelation } from '../utils/appHostIdentity';
+import { compareAppHostIdentity, getAppHostIdentityKeyInfo, getAppHostPathComparisonKey, isAppHostPathWithinDirectory, type AppHostIdentityKeyInfo, type AppHostIdentityRelation } from '../utils/appHostIdentity';
 import { classifyError, isCommandCancellation, sendTelemetryEvent, type EventProperties } from '../utils/telemetry';
 import { bucketAspireCommand } from '../utils/telemetryBuckets';
 import { extensionLogOutputChannel } from '../utils/logging';
@@ -179,6 +179,7 @@ export class AppHostLaunchService implements vscode.Disposable {
      * clear a launch that is still in flight and reopen the duplicate-launch window.
      */
     private readonly _externalReservationExpiries = new Map<string, NodeJS.Timeout>();
+    private readonly _externalDirectoryLaunchReservations = new Set<string>();
     private readonly _launchReservationIds = new Map<string, string>();
     private readonly _latestLaunchReservationIds = new Map<string, string>();
     private _nextLaunchReservationId = 0;
@@ -212,6 +213,10 @@ export class AppHostLaunchService implements vscode.Disposable {
             }
 
             const appHostPath = getDebugConfigurationAppHostPath(session.configuration);
+            const reservationId = session.configuration?.[appHostLaunchReservationIdConfigKey];
+            if (appHostPath && typeof reservationId === 'string') {
+                this.preserveStartedExternalLaunchReservation(appHostPath, reservationId);
+            }
             if (appHostPath &&
                 session.configuration?.type === 'aspire' &&
                 getAspireDebugConfigurationCommand(session.configuration) === 'run') {
@@ -267,6 +272,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             clearTimeout(expiry);
         }
         this._externalReservationExpiries.clear();
+        this._externalDirectoryLaunchReservations.clear();
         this._launchReservationIds.clear();
         this._latestLaunchReservationIds.clear();
         this._activeRunDebugSessionPaths.clear();
@@ -597,6 +603,11 @@ export class AppHostLaunchService implements vscode.Disposable {
             return true;
         }
 
+        if (Array.from(this._externalDirectoryLaunchReservations)
+            .some(directoryPath => isAppHostPathWithinDirectory(appHostPath, directoryPath))) {
+            return true;
+        }
+
         // The editor can discover a C# AppHost by its project while an agent addresses
         // the same AppHost by Program.cs/AppHost.cs (or vice versa). Keep the launching
         // guard active across that identity boundary after the shared launch lock releases.
@@ -685,14 +696,24 @@ export class AppHostLaunchService implements vscode.Disposable {
      * and no terminate event ever fires. Once the session does appear it is visible as an
      * editor session, so the reservation has nothing left to cover.
      */
-    tryReserveExternalLaunch(appHostPath: string): string | false {
-        const editorSessions = this.getEditorRunSessions(appHostPath);
-        if (this.isLaunching(appHostPath) ||
-            this.hasLifecycleLaunchClaim(appHostPath) ||
-            this.hasActiveLifecycleOperation(appHostPath) ||
-            editorSessions.sessions.length > 0 ||
-            editorSessions.ambiguous) {
-            return false;
+    tryReserveExternalLaunch(appHostPath: string, isDirectoryScope = false): string | false {
+        if (isDirectoryScope) {
+            if (this.hasLaunchingPathWithinDirectory(appHostPath) ||
+                this.hasLifecycleLaunchWithinDirectory(appHostPath) ||
+                this.hasActiveLifecycleOperationWithinDirectory(appHostPath) ||
+                this.hasEditorRunSessionWithinDirectory(appHostPath)) {
+                return false;
+            }
+        }
+        else {
+            const editorSessions = this.getEditorRunSessions(appHostPath);
+            if (this.isLaunching(appHostPath) ||
+                this.hasLifecycleLaunchClaim(appHostPath) ||
+                this.hasActiveLifecycleOperation(appHostPath) ||
+                editorSessions.sessions.length > 0 ||
+                editorSessions.ambiguous) {
+                return false;
+            }
         }
 
         const key = getAppHostPathComparisonKey(appHostPath);
@@ -700,6 +721,9 @@ export class AppHostLaunchService implements vscode.Disposable {
         const reservationId = String(++this._nextLaunchReservationId);
         this._launchReservationIds.set(key, reservationId);
         this.recordLatestLaunchReservation(appHostPath, reservationId);
+        if (isDirectoryScope) {
+            this._externalDirectoryLaunchReservations.add(key);
+        }
         if (!this._launchingPaths.has(key)) {
             this._launchingPaths.add(key);
             this._onDidChangeLaunchingState.fire();
@@ -714,10 +738,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             }
 
             this._externalReservationExpiries.delete(key);
-            this._launchReservationIds.delete(key);
-            if (this._launchingPaths.delete(key)) {
-                this._onDidChangeLaunchingState.fire();
-            }
+            this.clearLaunchingKey(key);
         }, externalLaunchReservationTimeoutMs);
         // A reservation must never be a reason for the host process to stay alive.
         expiry.unref?.();
@@ -732,9 +753,40 @@ export class AppHostLaunchService implements vscode.Disposable {
      * reservation and claiming the new target. The old reservation is released even when
      * the replacement is refused, because VS Code will abandon this debug configuration.
      */
-    replaceExternalLaunchReservation(previousAppHostPath: string, previousReservationId: string, appHostPath: string): string | false {
+    replaceExternalLaunchReservation(previousAppHostPath: string, previousReservationId: string, appHostPath: string, isDirectoryScope = false): string | false {
         this.clearMatchingLaunching(previousAppHostPath, previousReservationId);
-        return this.tryReserveExternalLaunch(appHostPath);
+        return this.tryReserveExternalLaunch(appHostPath, isDirectoryScope);
+    }
+
+    private hasLaunchingPathWithinDirectory(directoryPath: string): boolean {
+        return Array.from(this._launchingPaths).some(launchingPath =>
+            isAppHostPathWithinDirectory(launchingPath, directoryPath) ||
+            (this._externalDirectoryLaunchReservations.has(launchingPath) &&
+                isAppHostPathWithinDirectory(directoryPath, launchingPath)));
+    }
+
+    private hasLifecycleLaunchWithinDirectory(directoryPath: string): boolean {
+        return Array.from(this._lifecycleLaunchClaims)
+            .some(claimedPath => isAppHostPathWithinDirectory(claimedPath, directoryPath));
+    }
+
+    private hasActiveLifecycleOperationWithinDirectory(directoryPath: string): boolean {
+        return Array.from(this._lifecycleLockPathKeys.values())
+            .some(activePathKeys => Array.from(activePathKeys)
+                .some(activePathKey => isAppHostPathWithinDirectory(activePathKey, directoryPath)));
+    }
+
+    private hasEditorRunSessionWithinDirectory(directoryPath: string): boolean {
+        const sessions = [
+            ...this._getEditorSessions(),
+            ...Array.from(this._appHostDebugSessions.values(), tracked => tracked.session),
+        ];
+        return sessions.some(session => {
+            const sessionPath = session.resolvedAppHostPath ?? session.appHostPath;
+            return session.operationKind === 'run' &&
+                sessionPath !== undefined &&
+                isAppHostPathWithinDirectory(sessionPath, directoryPath);
+        });
     }
 
     private hasActiveLifecycleOperation(appHostPath: string): boolean {
@@ -777,7 +829,9 @@ export class AppHostLaunchService implements vscode.Disposable {
         // Only a proven identity clears another path's launching flag. An ambiguous
         // association would otherwise hide a launch that is still in flight.
         const matchingPaths = Array.from(this._launchingPaths).filter(launchingPath =>
-            compareAppHostIdentity(launchingPath, appHostPath) === 'same' &&
+            (compareAppHostIdentity(launchingPath, appHostPath) === 'same' ||
+                (this._externalDirectoryLaunchReservations.has(launchingPath) &&
+                    isAppHostPathWithinDirectory(appHostPath, launchingPath))) &&
             (reservationId === undefined || this._launchReservationIds.get(launchingPath) === reservationId));
         if (matchingPaths.length !== 1) {
             return;
@@ -798,6 +852,7 @@ export class AppHostLaunchService implements vscode.Disposable {
     private clearLaunchingKey(key: string): void {
         this._lifecycleLaunchClaims.delete(key);
         this._launchReservationIds.delete(key);
+        this._externalDirectoryLaunchReservations.delete(key);
         this.cancelExternalReservationExpiry(key);
         if (this._launchingPaths.delete(key)) {
             this._onDidChangeLaunchingState.fire();
@@ -824,6 +879,13 @@ export class AppHostLaunchService implements vscode.Disposable {
         }
 
         this._latestLaunchReservationIds.set(getAppHostPathComparisonKey(appHostPath), reservationId);
+    }
+
+    private preserveStartedExternalLaunchReservation(appHostPath: string, reservationId: string): void {
+        const key = getAppHostPathComparisonKey(appHostPath);
+        if (this._launchReservationIds.get(key) === reservationId) {
+            this.cancelExternalReservationExpiry(key);
+        }
     }
 
     /**

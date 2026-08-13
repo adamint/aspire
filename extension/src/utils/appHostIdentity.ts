@@ -142,6 +142,23 @@ export function canonicalizeAppHostPath(resolvedPath: string): string {
     return canonicalize(resolvedPath);
 }
 
+export function isAppHostPathWithinDirectory(appHostPath: string, directoryPath: string): boolean {
+    const directory = canonicalize(path.normalize(path.resolve(directoryPath)));
+    let current = canonicalize(path.normalize(path.resolve(appHostPath)));
+    while (true) {
+        if (isSameFileSystemEntry(current, directory)) {
+            return true;
+        }
+
+        const parent = path.dirname(current);
+        if (parent === current) {
+            return false;
+        }
+
+        current = parent;
+    }
+}
+
 function canonicalize(resolvedPath: string): string {
     try {
         // Native realpath returns the filesystem's canonical casing on Windows. That keeps

@@ -347,6 +347,70 @@ suite('AppHostLaunchService', () => {
         assert.strictEqual(service.tryReserveExternalLaunch(projectPath), false);
     });
 
+    test('an unresolved workspace launch blocks lifecycle operations for AppHosts inside it', async () => {
+        const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+        const projectPath = path.join(directory, 'AppHost.csproj');
+
+        assert.strictEqual(typeof service.tryReserveExternalLaunch(directory, true), 'string');
+
+        assert.strictEqual(service.isLaunching(projectPath), true);
+        assert.strictEqual(service.tryReserveLaunch(projectPath), false);
+        assert.deepStrictEqual(await service.stopAppHost(projectPath), {
+            outcome: 'alreadyStarting',
+            controller: 'editor',
+        });
+    });
+
+    test('an unresolved workspace launch loses to an existing concrete launch inside it', () => {
+        const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+        const projectPath = path.join(directory, 'AppHost.csproj');
+
+        assert.strictEqual(service.tryReserveLaunch(projectPath), true);
+
+        assert.strictEqual(service.tryReserveExternalLaunch(directory, true), false);
+    });
+
+    test('a started unresolved workspace reservation persists until its concrete AppHost appears', () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        try {
+            const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+            const projectPath = path.join(directory, 'AppHost.csproj');
+            const reservationId = service.tryReserveExternalLaunch(directory, true);
+            assert.strictEqual(typeof reservationId, 'string');
+
+            assert.ok(onDidStartDebugSessionCallback);
+            onDidStartDebugSessionCallback({
+                id: 'workspace-launch',
+                configuration: {
+                    type: 'aspire',
+                    program: directory,
+                    command: 'run',
+                    [appHostLaunchReservationIdConfigKey]: reservationId,
+                },
+            } as unknown as vscode.DebugSession);
+            clock.tick(externalLaunchReservationTimeoutMs + 1);
+
+            assert.strictEqual(service.isLaunching(projectPath), true);
+
+            service.setEditorSessionProvider(() => [{
+                appHostPath: directory,
+                resolvedAppHostPath: projectPath,
+                operationKind: 'run',
+                startupCompleted: true,
+                configuration: {
+                    [appHostLaunchReservationIdConfigKey]: reservationId,
+                },
+                stopDebugging: async () => { },
+            }]);
+            service.clearLaunchingForRunningAppHost(projectPath);
+
+            assert.strictEqual(service.isLaunching(projectPath), false);
+        }
+        finally {
+            clock.restore();
+        }
+    });
+
     test('replacing an external launch reservation releases the previous AppHost immediately', () => {
         const firstDirectory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
         const secondDirectory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
