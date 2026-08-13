@@ -1,7 +1,7 @@
 ﻿FROM rust:alpine AS build
 WORKDIR /app
 COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry --mount=type=cache,target=/build/target,sharing=locked \
+RUN --mount=type=cache,target=/usr/local/cargo/registry --mount=type=cache,id=aspire-rust-<resource-id>,target=/build/target,sharing=locked \
     rustup target add aarch64-unknown-linux-musl && \
     for candidate in /build/target/dist/examples/demo /build/target/*/dist/examples/demo; do if [ -f "$candidate" ]; then rm -f "$candidate"; fi; done && \
     cargo build --example demo --target aarch64-unknown-linux-musl --profile dist --target-dir /build/target && \

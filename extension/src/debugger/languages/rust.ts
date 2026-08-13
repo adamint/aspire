@@ -96,8 +96,9 @@ function asRustConfig(launchConfig: ExecutableLaunchConfiguration): RustLaunchCo
         return launchConfig;
     }
 
-    extensionLogOutputChannel.info(`The resource type was not rust for ${JSON.stringify(launchConfig)}`);
-    throw new Error(invalidLaunchConfiguration(JSON.stringify(launchConfig)));
+    const message = invalidLaunchConfiguration(rustLabel);
+    extensionLogOutputChannel.info(message);
+    throw new Error(message);
 }
 
 function getProjectFile(launchConfig: ExecutableLaunchConfiguration): string {

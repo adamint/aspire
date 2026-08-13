@@ -8,7 +8,7 @@ import { getSupportedCapabilities } from '../capabilities';
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
 import { getResourceDebuggerExtensions } from '../debugger/debuggerExtensions';
 import { createRustDebuggerExtension, IRustService, RustService } from '../debugger/languages/rust';
-import { AspireResourceExtendedDebugConfiguration, EnvVar, RustLaunchConfiguration } from '../dcp/types';
+import { AspireResourceExtendedDebugConfiguration, EnvVar, ExecutableLaunchConfiguration, RustLaunchConfiguration } from '../dcp/types';
 import { ResourceDebuggerExtension } from '../debugger/debuggerExtensions';
 import { extensionLogOutputChannel } from '../utils/logging';
 
@@ -163,10 +163,28 @@ suite('Rust Debugger Extension Tests', () => {
         childProcess.emit('close', 0, null);
         await build;
 
-        const diagnostic = String(info.firstCall.args[0]);
-        assert.ok(diagnostic.includes('Building Rust application'));
-        assert.ok(diagnostic.includes('/workspace/api'));
-        assert.strictEqual(diagnostic.includes('credential-value'), false);
+        const diagnostics = info.getCalls().map(call => String(call.args[0]));
+        assert.ok(diagnostics.some(diagnostic => diagnostic.includes('Building Rust application')));
+        assert.ok(diagnostics.some(diagnostic => diagnostic.includes('/workspace/api')));
+        assert.ok(diagnostics.every(diagnostic => !diagnostic.includes('credential-value')));
+    });
+
+    test('does not persist arbitrary launch configuration environment values', () => {
+        const info = sinon.stub(extensionLogOutputChannel, 'info');
+        const { extension } = createExtension();
+        const credential = 'environment-credential-value';
+        const launchConfig = {
+            type: 'not-rust',
+            environment_variables: [{ name: 'PRIVATE_TOKEN', value: credential }],
+        } as ExecutableLaunchConfiguration;
+
+        assert.throws(
+            () => extension.getProjectFile(launchConfig),
+            error => error instanceof Error && !error.message.includes(credential));
+        const diagnostics = info.getCalls().map(call => String(call.args[0]));
+
+        assert.ok(diagnostics.some(diagnostic => diagnostic.includes('launch configuration')));
+        assert.ok(diagnostics.every(diagnostic => !diagnostic.includes(credential)));
     });
 });
 

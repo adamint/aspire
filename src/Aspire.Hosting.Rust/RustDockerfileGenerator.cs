@@ -4,6 +4,8 @@
 #pragma warning disable ASPIREDOCKERFILEBUILDER001
 
 using System.Collections.ObjectModel;
+using System.IO.Hashing;
+using System.Text;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.ApplicationModel.Docker;
 using Aspire.Hosting.Utils;
@@ -72,6 +74,7 @@ internal static class RustDockerfileGenerator
             : new RustCargoOptionsAnnotation();
 
         var containerManifestPath = ValidateManifestPath(options.ManifestPath, workingDirectory, resource.Name);
+        var targetCacheId = BuildTargetCacheId(resource.Name, workingDirectory);
 
         var metadata = await context.Services.GetRequiredService<ICargoMetadataReader>()
             // Empty environment: the resource's environment applies to the process the container runs, not to
@@ -118,10 +121,13 @@ internal static class RustDockerfileGenerator
             // is what COPY --from reads. Lock the target cache because clearing stale candidates, building,
             // and collecting the current artifact must be atomic across concurrent BuildKit builds.
             .RunWithMounts(
-                $"{installTarget}{BuildClearArtifactCommand(target)}{CommandContinuation}" +
-                $"{BuildCargoCommand(cargoArgs)}{CommandContinuation}{BuildCollectArtifactCommand(target)}",
+                $"{installTarget}{BuildArtifactCommand(
+                    target,
+                    BuildCargoCommand(cargoArgs),
+                    ContainerTargetDirectory,
+                    ContainerArtifactDirectory)}",
                 "type=cache,target=/usr/local/cargo/registry",
-                $"type=cache,target={ContainerTargetDirectory},sharing=locked");
+                $"type=cache,id={targetCacheId},target={ContainerTargetDirectory},sharing=locked");
 
         // Add intermediate FROM stages for any container files sources (e.g. FROM frontend AS frontend_stage).
         context.Builder.AddContainerFilesStages(context.Resource, logger);
@@ -193,11 +199,18 @@ internal static class RustDockerfileGenerator
                 $"relative to its app directory '{workingDirectory}'.");
         }
 
-        var platformManifestPath = manifestPath
-            .Replace('\\', Path.DirectorySeparatorChar)
-            .Replace('/', Path.DirectorySeparatorChar);
-        var canonicalWorkingDirectory = PathNormalizer.ResolveSymlinks(Path.GetFullPath(workingDirectory));
-        var canonicalManifest = PathNormalizer.ResolveSymlinks(Path.GetFullPath(platformManifestPath, workingDirectory));
+        var platformManifestPath = OperatingSystem.IsWindows()
+            ? manifestPath.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar)
+            : manifestPath;
+
+        if (!PathNormalizer.TryResolveSymlinks(Path.GetFullPath(workingDirectory), out var canonicalWorkingDirectory)
+            || !PathNormalizer.TryResolveSymlinks(Path.GetFullPath(platformManifestPath, workingDirectory), out var canonicalManifest))
+        {
+            throw new DistributedApplicationException(
+                $"The Rust app '{resourceName}' builds from '{manifestPath}', but its symbolic links could not be " +
+                "fully resolved. Publishing stops rather than accepting a partially canonicalized path.");
+        }
+
         var relativeManifest = Path.GetRelativePath(canonicalWorkingDirectory, canonicalManifest);
 
         if (Path.IsPathRooted(relativeManifest)
@@ -211,18 +224,38 @@ internal static class RustDockerfileGenerator
         }
 
         // Rebase canonical-equivalent spellings (for example /var and /private/var on macOS) to the path
-        // below the build context. The container only receives that relative layout.
-        return relativeManifest.Replace('\\', '/');
+        // below the build context. A Unix backslash is a legal filename character, while a Windows backslash
+        // is a host separator that must become a forward slash for the Linux container.
+        return OperatingSystem.IsWindows() ? relativeManifest.Replace('\\', '/') : relativeManifest;
     }
 
     private static string BuildCargoCommand(List<string> cargoArgs)
         => string.Join(" ", new[] { "cargo", "build" }.Concat(cargoArgs.Select(ShellQuote)));
 
+    private static string BuildTargetCacheId(string resourceName, string workingDirectory)
+    {
+        var canonicalWorkingDirectory = PathNormalizer.ResolveSymlinks(Path.GetFullPath(workingDirectory));
+        var identity = $"{canonicalWorkingDirectory}\0{resourceName}";
+        var hash = XxHash3.HashToUInt64(Encoding.UTF8.GetBytes(identity));
+
+        // Lowercase hexadecimal contains none of the comma, whitespace, or quote delimiters used by
+        // Dockerfile mount options, so the stable resource-scoped id can be emitted without escaping.
+        return $"aspire-rust-{hash:x16}";
+    }
+
+    internal static string BuildArtifactCommand(
+        RustCargoTarget target,
+        string cargoCommand,
+        string targetDirectory,
+        string artifactDirectory)
+        => $"{BuildClearArtifactCommand(target, targetDirectory)}{CommandContinuation}" +
+           $"{cargoCommand}{CommandContinuation}{BuildCollectArtifactCommand(target, targetDirectory, artifactDirectory)}";
+
     // The target directory is cache mounted, so remove every path that could satisfy the collector before
     // cargo runs. Deleting only the final executable preserves dependency and incremental build caches while
     // ensuring the current invocation has to materialize the one artifact the runtime stage will copy.
-    private static string BuildClearArtifactCommand(RustCargoTarget target)
-        => $"for candidate in {BuildArtifactCandidates(target)}; do if [ -f \"$candidate\" ]; then rm -f \"$candidate\"; fi; done";
+    private static string BuildClearArtifactCommand(RustCargoTarget target, string targetDirectory)
+        => $"for candidate in {BuildArtifactCandidates(target, targetDirectory)}; do if [ -f \"$candidate\" ]; then rm -f \"$candidate\"; fi; done";
 
     // Collects the binary to a fixed path so the runtime stage's COPY --from need not know whether cargo
     // inserted a target-triple directory. `--target` is only one way a triple is selected — `[build] target`
@@ -232,31 +265,35 @@ internal static class RustDockerfileGenerator
     //   /build/target/x86_64-.../release/api (some target selected, by whatever means)
     // Only shell builtins plus the POSIX mkdir, cp, and rm utilities are used because the build image is
     // overridable. In particular, the generated build does not assume jq, grep, sed, or find are installed.
-    private static string BuildCollectArtifactCommand(RustCargoTarget target)
+    private static string BuildCollectArtifactCommand(
+        RustCargoTarget target,
+        string targetDirectory,
+        string artifactDirectory)
     {
-        var destination = $"{ContainerArtifactDirectory}/{ShellQuote(target.Name)}";
+        var destination = ShellQuote($"{artifactDirectory.TrimEnd('/')}/{target.Name}");
 
         return string.Join(
             CommandContinuation,
             [
                 "count=0",
                 // An unmatched glob stays literal, so each candidate is tested rather than counted.
-                $"for candidate in {BuildArtifactCandidates(target)}; do if [ -f \"$candidate\" ]; then bin=\"$candidate\"; count=$((count+1)); fi; done",
+                $"for candidate in {BuildArtifactCandidates(target, targetDirectory)}; do if [ -f \"$candidate\" ]; then bin=\"$candidate\"; count=$((count+1)); fi; done",
                 // `if` rather than `[ ... ] || { ... }`: && and || share precedence and associate left to right,
                 // so a trailing || catches the whole preceding chain and reports this on top of cargo's own error.
-                $"if [ \"$count\" = 0 ]; then echo \"no {ShellQuote(target.Name)} under {ContainerTargetDirectory}\" >&2; exit 1; fi",
-                $"if [ \"$count\" != 1 ]; then echo \"found $count {ShellQuote(target.Name)} under {ContainerTargetDirectory} after cargo build\" >&2; exit 1; fi",
-                $"mkdir -p {ContainerArtifactDirectory}",
+                $"if [ \"$count\" = 0 ]; then echo \"no {ShellQuote(target.Name)} under {targetDirectory}\" >&2; exit 1; fi",
+                $"if [ \"$count\" != 1 ]; then echo \"found $count {ShellQuote(target.Name)} under {targetDirectory} after cargo build\" >&2; exit 1; fi",
+                $"mkdir -p {ShellQuote(artifactDirectory)}",
                 $"cp \"$bin\" {destination}"
             ]);
     }
 
-    private static string BuildArtifactCandidates(RustCargoTarget target)
+    private static string BuildArtifactCandidates(RustCargoTarget target, string targetDirectory)
     {
         // Quoting only the suffix keeps the wildcard live: quoting the whole path would make the `*` literal.
         var suffix = ShellQuote(target.RelativePathWithoutTarget);
+        var directory = ShellQuote(targetDirectory.TrimEnd('/'));
 
-        return $"{ContainerTargetDirectory}/{suffix} {ContainerTargetDirectory}/*/{suffix}";
+        return $"{directory}/{suffix} {directory}/*/{suffix}";
     }
 
     // An explicit LF rather than Environment.NewLine: a CR after the backslash stops the shell treating the
