@@ -35,12 +35,13 @@ function hasUnparseableScopedIpv6CredentialMaterial(value: string): boolean {
         return false;
     }
 
-    // .NET accepts RFC 6874 scoped IPv6 sources such as:
-    //   https://user:pass@[fe80::1%25eth0]/v3/index.json?sig=token
+    // .NET accepts both raw and RFC 6874-encoded scoped IPv6 sources, including an empty port:
+    //   https://account:credential@[fe80::1%eth0]:
+    //   https://[fe80::1%25eth0]:8443/v3/index.json?sig=token
     // WHATWG URL rejects the zone identifier. Remove only the scope to verify that the remaining
     // URL is valid, then inspect the original delimiters. This keeps malformed authorities such as
     // an invalid port aligned with Uri.TryCreate. See https://www.rfc-editor.org/rfc/rfc6874.html.
-    const scopedHost = /(\[[0-9a-f:.]+)%25[^\]]*(\](?::\d+)?)$/i.exec(authority);
+    const scopedHost = /(\[[0-9a-f:.]+)%(?:25)?[^\]]*(\](?::\d*)?)$/i.exec(authority);
     if (!scopedHost) {
         return false;
     }

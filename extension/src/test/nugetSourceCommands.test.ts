@@ -110,6 +110,11 @@ suite('nuget source command forwarding', () => {
     for (const [description, source] of [
         ['an IPv6 URL', 'https://[2001:db8::1]/v3/index.json'],
         ['a scoped IPv6 URL without credential material', 'https://[fe80::1%25eth0]/v3/index.json'],
+        ['a raw scoped IPv6 URL without credential material', 'https://[fe80::1%eth0]/v3/index.json'],
+        ['a scoped IPv6 URL with a numeric port', 'https://[fe80::1%25eth0]:8443/v3/index.json'],
+        ['a raw scoped IPv6 URL with a numeric port', 'https://[fe80::1%eth0]:8443/v3/index.json'],
+        ['a scoped IPv6 URL with an empty port', 'https://[fe80::1%25eth0]:'],
+        ['a raw scoped IPv6 URL with an empty port', 'https://[fe80::1%eth0]:'],
         ['a local path', '/workspace/packages'],
     ]) {
         test(`new forwards ${description}`, async () => {
@@ -166,12 +171,22 @@ suite('nuget source command forwarding', () => {
     }
 
     for (const [description, source] of [
-        ['userinfo and a query string', 'https://user:pass@[fe80::1%25eth0]/v3/index.json?sig=token'],
-        ['userinfo', 'https://user:pass@[fe80::1%25eth0]/v3/index.json'],
-        ['a query string', 'https://[fe80::1%25eth0]/v3/index.json?sig=token'],
-        ['a fragment', 'https://[fe80::1%25eth0]/v3/index.json#token'],
-        ['an empty query string', 'https://[fe80::1%25eth0]/v3/index.json?'],
-        ['an empty fragment', 'https://[fe80::1%25eth0]/v3/index.json#'],
+        ['encoded userinfo', 'https://account@[fe80::1%25eth0]/v3/index.json'],
+        ['encoded userinfo with a password', 'https://account:credential@[fe80::1%25eth0]/v3/index.json'],
+        ['an encoded query string', 'https://[fe80::1%25eth0]/v3/index.json?sig=token'],
+        ['an encoded fragment', 'https://[fe80::1%25eth0]/v3/index.json#token'],
+        ['an encoded empty query string', 'https://[fe80::1%25eth0]/v3/index.json?'],
+        ['an encoded empty fragment', 'https://[fe80::1%25eth0]/v3/index.json#'],
+        ['encoded userinfo, query, and fragment with a numeric port', 'https://account:credential@[fe80::1%25eth0]:8443/v3/index.json?sig=token#fragment'],
+        ['encoded userinfo with an empty port', 'https://account:credential@[fe80::1%25eth0]:'],
+        ['raw userinfo', 'https://account@[fe80::1%eth0]/v3/index.json'],
+        ['raw userinfo with a password', 'https://account:credential@[fe80::1%eth0]/v3/index.json'],
+        ['a raw query string', 'https://[fe80::1%eth0]/v3/index.json?sig=token'],
+        ['a raw fragment', 'https://[fe80::1%eth0]/v3/index.json#token'],
+        ['a raw empty query string', 'https://[fe80::1%eth0]/v3/index.json?'],
+        ['a raw empty fragment', 'https://[fe80::1%eth0]/v3/index.json#'],
+        ['raw userinfo, query, and fragment with a numeric port', 'https://account:credential@[fe80::1%eth0]:8443/v3/index.json?sig=token#fragment'],
+        ['raw userinfo with an empty port', 'https://account:credential@[fe80::1%eth0]:'],
     ]) {
         test(`new rejects a scoped IPv6 nuget source with ${description}`, async () => {
             configuredNugetSource = source;
@@ -199,6 +214,9 @@ suite('nuget source command forwarding', () => {
         'https:example.com/v3/index.json?sig=token',
         'http:\\\\example.com\\v3\\index.json?sig=token',
         'https://[fe80::1%25eth0]:invalid/v3/index.json?sig=token',
+        'https://[fe80::1%eth0]:invalid/v3/index.json?sig=token',
+        'https://[fe80::1%25eth0]:65536/v3/index.json?sig=token',
+        'https://[fe80::1%eth0]:65536/v3/index.json?sig=token',
         'https://example host/v3/index.json?sig=token',
     ]) {
         test(`new allows malformed HTTP-shaped source "${source}" to match the CLI policy`, async () => {
