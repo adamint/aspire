@@ -618,6 +618,7 @@ const expectedConfigurationKeys = [
     'aspire.enableGutterDecorations',
     'aspire.enableSettingsFileCreationPromptOnStartup',
     'aspire.globalAppHostsPollingInterval',
+    'aspire.nugetSource',
     'aspire.registerMcpServerInWorkspace',
 ].sort();
 
