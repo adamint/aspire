@@ -18,7 +18,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
     {
         var content = await PublishDockerfileAsync();
 
-        await VerifyDockerfile(content);
+        await Verify(content);
     }
 
     [Fact]
@@ -33,7 +33,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
                 channel = "1.89.0"
                 """));
 
-        await VerifyDockerfile(content);
+        await Verify(content);
     }
 
     [Fact]
@@ -43,7 +43,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
             metadata: CargoMetadataFactory.SinglePackage("my-service", extraBins: ["worker"]),
             configureResource: app => app.WithCargoBinTarget("worker"));
 
-        await VerifyDockerfile(content);
+        await Verify(content);
     }
 
     [Fact]
@@ -52,7 +52,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         // Examples land in target/<profile>/examples/, so the COPY --from path gets an extra segment.
         var content = await PublishDockerfileAsync(configureResource: app => app.WithCargoExample("demo"));
 
-        await VerifyDockerfile(content);
+        await Verify(content);
     }
 
     [Fact]
@@ -62,7 +62,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         // assuming target/release.
         var content = await PublishDockerfileAsync(configureResource: app => app.WithCargoProfile("dist"));
 
-        await VerifyDockerfile(content);
+        await Verify(content);
     }
 
     [Fact]
@@ -70,7 +70,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
     {
         var content = await PublishDockerfileAsync(configureResource: app => app.WithCargoReleaseBuild());
 
-        await VerifyDockerfile(content);
+        await Verify(content);
     }
 
     [Fact]
@@ -78,7 +78,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
     {
         var content = await PublishDockerfileAsync(configureResource: app => app.WithCargoTarget("aarch64-unknown-linux-musl"));
 
-        await VerifyDockerfile(content);
+        await Verify(content);
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
                 .WithCargoProfile("dist")
                 .WithCargoTarget("aarch64-unknown-linux-musl"));
 
-        await VerifyDockerfile(content);
+        await Verify(content);
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         var content = await PublishDockerfileAsync(
             configureResource: app => app.WithDockerfileBaseImage(buildImage: "rust:1.89-bookworm", runtimeImage: "debian:bookworm-slim"));
 
-        await VerifyDockerfile(content);
+        await Verify(content);
     }
 
     [Fact]
@@ -111,7 +111,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         var content = await PublishDockerfileAsync(
             configureResource: app => app.WithCargoFeatures("grpc-tonic", "tls-ring").WithCargoArgs("--no-default-features", "--locked"));
 
-        await VerifyDockerfile(content);
+        await Verify(content);
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         var content = await PublishDockerfileAsync(
             configureResource: app => app.WithCargoArgs("--config", "build.rustflags=[\"--cfg\", 'has_quote']"));
 
-        await VerifyDockerfile(content);
+        await Verify(content);
     }
 
     [Fact]
@@ -132,7 +132,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
                 new CargoPackageSpec("worker", ["worker"])),
             configureResource: app => app.WithCargoPackage("worker"));
 
-        await VerifyDockerfile(content);
+        await Verify(content);
     }
 
     [Fact]
@@ -161,7 +161,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         var content = await PublishDockerfileAsync(
             configureResource: app => app.WithCargoManifestPath("crates/api/Cargo.toml"));
 
-        await VerifyDockerfile(content);
+        await Verify(content);
     }
 
     [Fact]
@@ -177,7 +177,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         var content = await PublishDockerfileAsync(
             configureResource: app => app.WithCargoManifestPath(@"crates\api\Cargo.toml"));
 
-        await VerifyDockerfile(content);
+        await Verify(content);
     }
 
     [Fact]
@@ -230,7 +230,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
 
         var content = await File.ReadAllTextAsync(Path.Combine(outputDir.FullName, "api.Dockerfile"), TestContext.Current.CancellationToken);
 
-        await VerifyDockerfile(content);
+        await Verify(content);
     }
 
     [Fact]
@@ -311,7 +311,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         var content = await PublishDockerfileAsync(configureSource: source =>
             File.WriteAllText(Path.Combine(source, "Cargo.lock"), "version = 4\n"));
 
-        await VerifyDockerfile(content);
+        await Verify(content);
     }
 
     [Fact]
@@ -321,14 +321,32 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
             configureSource: source => File.WriteAllText(Path.Combine(source, "Cargo.lock"), "version = 4\n"),
             configureResource: app => app.WithCargoLocked(false).WithCargoReleaseBuild(false));
 
-        await VerifyDockerfile(content);
+        await Verify(content);
     }
 
     [Fact]
-    public async Task PublishIsolatesTheTargetCacheByResourceIdentity()
+    public async Task PublishProducesTheSameDockerfileForEquivalentCratesInDifferentDirectories()
     {
         var first = await PublishDockerfileAsync();
         var second = await PublishDockerfileAsync();
+
+        Assert.Equal(first, second);
+    }
+
+    [Fact]
+    public async Task PublishIsolatesTheTargetCacheByResourceName()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var sourceDir = workspace.CreateDirectory("source");
+        var outputDir = workspace.CreateDirectory("output");
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
+        builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
+        builder.AddRustApp("api", sourceDir.FullName);
+        builder.AddRustApp("worker", sourceDir.FullName);
+        builder.Build().Run();
+
+        var first = await File.ReadAllTextAsync(Path.Combine(outputDir.FullName, "api.Dockerfile"), TestContext.Current.CancellationToken);
+        var second = await File.ReadAllTextAsync(Path.Combine(outputDir.FullName, "worker.Dockerfile"), TestContext.Current.CancellationToken);
         const string cacheMountPattern = @"--mount=type=cache,id=(aspire-rust-[0-9a-f]{16}),target=/build/target,sharing=locked";
 
         var firstMatch = Regex.Match(first, cacheMountPattern);
@@ -345,7 +363,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         // Run mode already emitted --locked, and passing it twice makes cargo's own error messages confusing.
         var content = await PublishDockerfileAsync(configureResource: app => app.WithCargoLocked());
 
-        await VerifyDockerfile(content);
+        await Verify(content);
     }
 
     [Fact]
@@ -432,15 +450,6 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         builder.Build().Run();
 
         return await File.ReadAllTextAsync(Path.Combine(outputDir.FullName, "api.Dockerfile"), TestContext.Current.CancellationToken);
-    }
-
-    private static async Task VerifyDockerfile(string content)
-    {
-        await Verify(content)
-            .ScrubLinesWithReplace(line => Regex.Replace(
-                line,
-                @"id=aspire-rust-[0-9a-f]{16}",
-                "id=aspire-rust-<resource-id>"));
     }
 
     private static void CreateDirectorySymbolicLinkOrSkip(string linkPath, string targetPath)

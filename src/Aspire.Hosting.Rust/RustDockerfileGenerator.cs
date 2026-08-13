@@ -74,7 +74,7 @@ internal static class RustDockerfileGenerator
             : new RustCargoOptionsAnnotation();
 
         var containerManifestPath = ValidateManifestPath(options.ManifestPath, workingDirectory, resource.Name);
-        var targetCacheId = BuildTargetCacheId(resource.Name, workingDirectory);
+        var targetCacheId = BuildTargetCacheId(resource.Name, containerManifestPath);
 
         var metadata = await context.Services.GetRequiredService<ICargoMetadataReader>()
             // Empty environment: the resource's environment applies to the process the container runs, not to
@@ -232,10 +232,11 @@ internal static class RustDockerfileGenerator
     private static string BuildCargoCommand(List<string> cargoArgs)
         => string.Join(" ", new[] { "cargo", "build" }.Concat(cargoArgs.Select(ShellQuote)));
 
-    private static string BuildTargetCacheId(string resourceName, string workingDirectory)
+    private static string BuildTargetCacheId(string resourceName, string? containerManifestPath)
     {
-        var canonicalWorkingDirectory = PathNormalizer.ResolveSymlinks(Path.GetFullPath(workingDirectory));
-        var identity = $"{canonicalWorkingDirectory}\0{resourceName}";
+        // The generated Dockerfile must be identical when the same app model is evaluated on another
+        // machine, so only app-model and build-context-relative inputs participate in the cache identity.
+        var identity = $"{resourceName}\0{containerManifestPath ?? "Cargo.toml"}";
         var hash = XxHash3.HashToUInt64(Encoding.UTF8.GetBytes(identity));
 
         // Lowercase hexadecimal contains none of the comma, whitespace, or quote delimiters used by

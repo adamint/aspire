@@ -1,7 +1,7 @@
 ﻿FROM rust:alpine AS build
 WORKDIR /app
 COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry --mount=type=cache,id=aspire-rust-<resource-id>,target=/build/target,sharing=locked \
+RUN --mount=type=cache,target=/usr/local/cargo/registry --mount=type=cache,id=aspire-rust-b66e5db297c6c0ec,target=/build/target,sharing=locked \
     for candidate in /build/target/release/my-service /build/target/*/release/my-service; do if [ -f "$candidate" ]; then rm -f "$candidate"; fi; done && \
     cargo build --release --target-dir /build/target && \
     count=0 && \
