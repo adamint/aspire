@@ -22,10 +22,10 @@ namespace Aspire.Hosting.Rust;
 /// </remarks>
 internal static class RustDockerfileGenerator
 {
-    // rustup is present in the image and installs whatever a rust-toolchain.toml pins, so an unversioned tag
-    // covers every channel. Runtime is pinned to a release so a rebuild cannot cross a major version.
-    private const string DefaultBuildImage = "rust:alpine";
-    private const string DefaultRuntimeImage = "alpine:3.24";
+    // Fully qualified release-line tags avoid Podman's short-name resolution while still picking up patch
+    // and security updates. rustup remains available to install whatever a rust-toolchain.toml pins.
+    private const string DefaultBuildImage = "docker.io/library/rust:1.97-alpine3.24";
+    private const string DefaultRuntimeImage = "docker.io/library/alpine:3.24";
 
     // Kept outside /app so a .cargo/config.toml arriving with the build context cannot move the binary
     // somewhere COPY --from does not look.
@@ -96,6 +96,8 @@ internal static class RustDockerfileGenerator
         {
             RewriteManifestPath(cargoArgs, path, containerPath);
         }
+
+        ValidateDockerfileCargoArgs(cargoArgs, resource.Name);
 
         // Images are used exactly as given and nothing is installed into either: a name is free-form, so an
         // image can be musl or glibc based regardless of what it is called. Pairing images that can run what
@@ -203,13 +205,20 @@ internal static class RustDockerfileGenerator
             ? manifestPath.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar)
             : manifestPath;
 
-        if (!PathNormalizer.TryResolveSymlinks(Path.GetFullPath(workingDirectory), out var canonicalWorkingDirectory)
-            || !PathNormalizer.TryResolveSymlinks(Path.GetFullPath(platformManifestPath, workingDirectory), out var canonicalManifest))
+        var filesystemWorkingDirectory = Path.GetFullPath(workingDirectory);
+        var filesystemManifest = Path.GetFullPath(platformManifestPath, workingDirectory);
+
+        if (!PathNormalizer.TryResolveSymlinks(filesystemWorkingDirectory, out var canonicalWorkingDirectory)
+            || !PathNormalizer.TryResolveSymlinks(filesystemManifest, out var canonicalManifest))
         {
             throw new DistributedApplicationException(
                 $"The Rust app '{resourceName}' builds from '{manifestPath}', but its symbolic links could not be " +
                 "fully resolved. Publishing stops rather than accepting a partially canonicalized path.");
         }
+
+        // Resolve aliases first so equivalent roots such as /var and /private/var become lexically related.
+        // Then only enumerate entries below the build context to recover the spelling Docker will copy.
+        canonicalManifest = ResolveFilesystemCasing(canonicalWorkingDirectory, canonicalManifest);
 
         var relativeManifest = Path.GetRelativePath(canonicalWorkingDirectory, canonicalManifest);
 
@@ -229,8 +238,88 @@ internal static class RustDockerfileGenerator
         return OperatingSystem.IsWindows() ? relativeManifest.Replace('\\', '/') : relativeManifest;
     }
 
+    private static string ResolveFilesystemCasing(string workingDirectory, string path)
+    {
+        var originalPath = path;
+        var relativePath = Path.GetRelativePath(workingDirectory, path);
+        if (relativePath == ".")
+        {
+            return workingDirectory;
+        }
+
+        if (Path.IsPathRooted(relativePath)
+            || relativePath == ".."
+            || relativePath.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+            || relativePath.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal))
+        {
+            return path;
+        }
+
+        var segments = relativePath.Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries);
+        var current = workingDirectory;
+
+        for (var i = 0; i < segments.Length; i++)
+        {
+            var candidate = Path.Combine(current, segments[i]);
+            if (!File.Exists(candidate) && !Directory.Exists(candidate))
+            {
+                for (; i < segments.Length; i++)
+                {
+                    current = Path.Combine(current, segments[i]);
+                }
+
+                return current;
+            }
+
+            // On a case-insensitive host, File.Exists accepts a spelling that will not exist after Docker
+            // copies the context into Linux. Enumerating the parent returns the directory entry's stored
+            // casing; on case-sensitive hosts the exact candidate above is the only matching entry.
+            string[] entries;
+            try
+            {
+                entries = Directory.GetFileSystemEntries(current);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new DistributedApplicationException(
+                    $"The filesystem spelling of '{originalPath}' could not be read from '{current}'.",
+                    ex);
+            }
+
+            // APFS can treat canonically equivalent Unicode names as the same entry while returning the
+            // stored normalization form. Normalize only for matching, then keep the enumerated spelling.
+            var normalizedSegment = segments[i].Normalize(NormalizationForm.FormC);
+            current = entries.FirstOrDefault(entry =>
+                    string.Equals(Path.GetFileName(entry), segments[i], StringComparison.Ordinal))
+                ?? entries.FirstOrDefault(entry =>
+                    string.Equals(
+                        Path.GetFileName(entry).Normalize(NormalizationForm.FormC),
+                        normalizedSegment,
+                        StringComparison.OrdinalIgnoreCase))
+                ?? throw new DistributedApplicationException(
+                    $"The filesystem spelling of '{originalPath}' could not be matched in '{current}'.");
+        }
+
+        return current;
+    }
+
     private static string BuildCargoCommand(List<string> cargoArgs)
         => string.Join(" ", new[] { "cargo", "build" }.Concat(cargoArgs.Select(ShellQuote)));
+
+    private static void ValidateDockerfileCargoArgs(IEnumerable<string> cargoArgs, string resourceName)
+    {
+        foreach (var cargoArg in cargoArgs)
+        {
+            foreach (var controlCharacter in cargoArg.Where(char.IsControl))
+            {
+                throw new DistributedApplicationException(
+                    $"The Rust app '{resourceName}' has a cargo value containing the control character " +
+                    $"U+{(int)controlCharacter:X4}. Control characters cannot be written to a generated Dockerfile.");
+            }
+        }
+    }
 
     private static string BuildTargetCacheId(string resourceName, string? containerManifestPath)
     {

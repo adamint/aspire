@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Collections.ObjectModel;
+using Aspire.Hosting.Utils;
 using Aspire.TestUtilities;
 
 namespace Aspire.Hosting.Rust.Tests;
@@ -49,9 +50,8 @@ public class CargoMetadataTests
     }
 
     [Fact]
-    public void FallsBackToWorkspaceMembersOnOlderCargo()
+    public void RejectsMetadataFromCargoOlderThan171()
     {
-        // workspace_default_members only exists from cargo 1.71.
         const string Json = """
             {
               "packages": [
@@ -65,9 +65,12 @@ public class CargoMetadataTests
             }
             """;
 
-        var metadata = CargoMetadata.Parse(Json);
+        var exception = Assert.Throws<DistributedApplicationException>(() => CargoMetadata.Parse(Json));
 
-        Assert.Equal(["my-service 0.1.0 (path+file:///app)"], metadata.DefaultMemberIds);
+        Assert.Equal(
+            "Aspire.Hosting.Rust requires Cargo 1.71 or later because this 'cargo metadata' output does not " +
+            "include 'workspace_default_members'. Update the Rust toolchain and try again.",
+            exception.Message);
     }
 
     [Fact]
@@ -120,7 +123,10 @@ public class CargoMetadataTests
 
         // The target directory cargo reports is absolute, which is what lets the debugger point at the
         // executable without reimplementing CARGO_TARGET_DIR / build.target-dir / workspace resolution.
-        Assert.Equal(Path.Combine(crate.Path, "target"), metadata.TargetDirectory);
+        Assert.True(Path.IsPathFullyQualified(metadata.TargetDirectory));
+        Assert.Equal(
+            PathNormalizer.ResolveSymlinks(Path.Combine(crate.Path, "target")),
+            PathNormalizer.ResolveSymlinks(metadata.TargetDirectory));
 
         // Compiling would have created target/. Its absence is the proof that the host did no build work.
         Assert.False(Directory.Exists(Path.Combine(crate.Path, "target")));

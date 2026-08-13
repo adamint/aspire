@@ -3,10 +3,17 @@
 
 #pragma warning disable ASPIREEXTENSION001
 #pragma warning disable ASPIREDOCKERFILEBUILDER001
+#pragma warning disable ASPIREPIPELINES001
+#pragma warning disable ASPIREPIPELINES003
 
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.Pipelines;
+using Aspire.Hosting.Publishing;
 using Aspire.Hosting.Utils;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using System.Runtime.Versioning;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Aspire.Hosting.Rust.Tests;
@@ -18,6 +25,8 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
     {
         var content = await PublishDockerfileAsync();
 
+        Assert.StartsWith("FROM docker.io/library/rust:1.97-alpine3.24 AS build", content);
+        Assert.Contains($"{Environment.NewLine}FROM docker.io/library/alpine:3.24{Environment.NewLine}", content);
         await Verify(content);
     }
 
@@ -81,6 +90,140 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         await Verify(content);
     }
 
+    [Theory]
+    [InlineData("x86_64-unknown-linux-musl", ContainerTargetPlatform.LinuxAmd64, false)]
+    [InlineData("aarch64-unknown-linux-musl", ContainerTargetPlatform.LinuxArm64, false)]
+    [InlineData("x86_64-unknown-linux-gnu", ContainerTargetPlatform.LinuxAmd64, true)]
+    [InlineData("aarch64-unknown-linux-gnu", ContainerTargetPlatform.LinuxArm64, true)]
+    public async Task PublishMapsSupportedCargoTargetsToTheContainerPlatform(
+        string target,
+        ContainerTargetPlatform expectedPlatform,
+        bool useGnuImages)
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var sourceDir = workspace.CreateDirectory("source");
+        var outputDir = workspace.CreateDirectory("output");
+
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
+        builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
+        var rust = builder.AddRustApp("api", sourceDir.FullName).WithCargoTarget(target);
+        if (useGnuImages)
+        {
+            rust.WithDockerfileBaseImage(
+                buildImage: "docker.io/library/rust:1.97.1-bookworm",
+                runtimeImage: "docker.io/library/debian:bookworm-slim");
+        }
+
+        using var app = builder.Build();
+        app.Run();
+
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var logger = app.Services.GetRequiredService<ILogger<AddRustAppPublishTests>>();
+        var buildOptions = await container.ProcessContainerBuildOptionsCallbackAsync(
+            app.Services,
+            logger,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(expectedPlatform, buildOptions.TargetPlatform);
+    }
+
+    [Fact]
+    public async Task PublishRejectsAGnuTargetWithTheDefaultMuslImages()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var sourceDir = workspace.CreateDirectory("source");
+        var outputDir = workspace.CreateDirectory("output");
+
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
+        builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
+        builder.AddRustApp("api", sourceDir.FullName).WithCargoTarget("x86_64-unknown-linux-gnu");
+        using var app = builder.Build();
+
+        var exception = await Assert.ThrowsAsync<DistributedApplicationException>(
+            () => app.RunAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(
+            "The Rust app 'api' targets 'x86_64-unknown-linux-gnu', which requires GNU libc build and runtime images. " +
+            "Configure both images with WithDockerfileBaseImage before publishing.",
+            exception.Message);
+    }
+
+    [Fact]
+    public async Task PublishRejectsATargetThatCannotRunInTheGeneratedLinuxContainer()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var sourceDir = workspace.CreateDirectory("source");
+        var outputDir = workspace.CreateDirectory("output");
+
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
+        builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
+        builder.AddRustApp("api", sourceDir.FullName).WithCargoTarget("wasm32-wasip1");
+        using var app = builder.Build();
+
+        var exception = await Assert.ThrowsAsync<DistributedApplicationException>(
+            () => app.RunAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(
+            "The Rust app 'api' targets 'wasm32-wasip1', but generated Rust containers support only " +
+            "x86_64-unknown-linux-musl, aarch64-unknown-linux-musl, x86_64-unknown-linux-gnu, and " +
+            "aarch64-unknown-linux-gnu.",
+            exception.Message);
+    }
+
+    [Fact]
+    public async Task PublishRejectsAContainerPlatformThatConflictsWithTheCargoTarget()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var sourceDir = workspace.CreateDirectory("source");
+        var outputDir = workspace.CreateDirectory("output");
+
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
+        builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
+        builder.AddRustApp("api", sourceDir.FullName)
+            .WithCargoTarget("aarch64-unknown-linux-musl")
+            .PublishAsDockerFile(container => container.WithContainerBuildOptions(
+                context => context.TargetPlatform = ContainerTargetPlatform.LinuxAmd64));
+
+        using var app = builder.Build();
+        app.Run();
+
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var logger = app.Services.GetRequiredService<ILogger<AddRustAppPublishTests>>();
+        var exception = await Assert.ThrowsAsync<DistributedApplicationException>(
+            () => container.ProcessContainerBuildOptionsCallbackAsync(
+                app.Services,
+                logger,
+                cancellationToken: TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Equal(
+            "The Rust app 'api' targets 'aarch64-unknown-linux-musl', which requires container target platform " +
+            "'LinuxArm64', but WithContainerBuildOptions selected 'LinuxAmd64'.",
+            exception.Message);
+    }
+
+    [Fact]
+    public void PublishingPreservesACallerPipelineStepAnnotation()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var sourceDir = workspace.CreateDirectory("source");
+        var outputDir = workspace.CreateDirectory("output");
+        var pipelineSteps = new PipelineStepAnnotation(_ => Array.Empty<PipelineStep>());
+
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
+        builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
+        builder.AddRustApp("api", sourceDir.FullName)
+            .PublishAsDockerFile(container => container.WithAnnotation(
+                pipelineSteps,
+                ResourceAnnotationMutationBehavior.Replace));
+        builder.Build().Run();
+
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+
+        Assert.Same(pipelineSteps, Assert.Single(container.Annotations.OfType<PipelineStepAnnotation>()));
+    }
+
+    #pragma warning restore ASPIREPIPELINES003
+
     [Fact]
     public async Task VerifyPublish_ClearsStaleArtifactsBeforeACustomTargetProfileBuild()
     {
@@ -123,6 +266,38 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         await Verify(content);
     }
 
+    [Theory]
+    [InlineData("raw-argument")]
+    [InlineData("nul-argument")]
+    [InlineData("feature")]
+    [InlineData("manifest-path")]
+    [InlineData("binary-path")]
+    public async Task PublishDoesNotEmitADockerfileWhenCargoValuesContainControlCharacters(string valueKind)
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var sourceDir = workspace.CreateDirectory("source");
+        var outputDir = workspace.CreateDirectory("output");
+
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
+        builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
+        var rust = builder.AddRustApp("api", sourceDir.FullName);
+
+        _ = valueKind switch
+        {
+            "raw-argument" => rust.WithCargoArgs("--config\nFROM scratch"),
+            "nul-argument" => rust.WithCargoArgs("--config\0FROM scratch"),
+            "feature" => rust.WithCargoFeatures("safe\rRUN echo injected"),
+            "manifest-path" => rust.WithCargoManifestPath("Cargo.toml\nFROM scratch"),
+            "binary-path" => rust.WithCargoBinTarget("api\u001b"),
+            _ => throw new ArgumentOutOfRangeException(nameof(valueKind))
+        };
+
+        using var app = builder.Build();
+        await app.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(File.Exists(Path.Combine(outputDir.FullName, "api.Dockerfile")));
+    }
+
     [Fact]
     public async Task VerifyPublish_SelectsAWorkspacePackage()
     {
@@ -153,6 +328,73 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         Assert.False(File.Exists(Path.Combine(outputDir.FullName, "api.Dockerfile")));
     }
 
+    [Theory]
+    [InlineData("wasm32-wasip1")]
+    [InlineData("x86_64-unknown-linux-gnu")]
+    public void PublishingLeavesCargoTargetHandlingToAHandWrittenDockerfile(string target)
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var sourceDir = workspace.CreateDirectory("source");
+        var outputDir = workspace.CreateDirectory("output");
+
+        File.WriteAllText(Path.Combine(sourceDir.FullName, "Dockerfile"), "FROM scratch\n");
+
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
+        builder.AddRustApp("api", sourceDir.FullName).WithCargoTarget(target);
+        builder.Build().Run();
+
+        Assert.False(File.Exists(Path.Combine(outputDir.FullName, "api.Dockerfile")));
+    }
+
+    [Fact]
+    public void PublishingPreservesACallerConfiguredDockerfile()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var sourceDir = workspace.CreateDirectory("source");
+        var customContext = workspace.CreateDirectory("custom");
+        var outputDir = workspace.CreateDirectory("output");
+        var customDockerfile = Path.Combine(customContext.FullName, "Dockerfile.prod");
+
+        File.WriteAllText(customDockerfile, "FROM scratch\n");
+
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
+        builder.AddRustApp("api", sourceDir.FullName)
+            .PublishAsDockerFile(container => container.WithDockerfile(customContext.FullName, "Dockerfile.prod"));
+        builder.Build().Run();
+
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var dockerfile = Assert.Single(container.Annotations.OfType<DockerfileBuildAnnotation>());
+
+        Assert.Equal(customContext.FullName, dockerfile.ContextPath);
+        Assert.Equal(customDockerfile, dockerfile.DockerfilePath);
+        Assert.False(File.Exists(Path.Combine(outputDir.FullName, "api.Dockerfile")));
+    }
+
+    [Fact]
+    public async Task PublishingPreservesACallerConfiguredDockerfileFactory()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var sourceDir = workspace.CreateDirectory("source");
+        var customContext = workspace.CreateDirectory("custom");
+        var outputDir = workspace.CreateDirectory("output");
+
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
+        builder.AddRustApp("api", sourceDir.FullName)
+            .PublishAsDockerFile(container => container.WithDockerfileFactory(
+                customContext.FullName,
+                _ => Task.FromResult("FROM scratch\n")));
+        builder.Build().Run();
+
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var dockerfile = Assert.Single(container.Annotations.OfType<DockerfileBuildAnnotation>());
+        var content = await File.ReadAllTextAsync(
+            Path.Combine(outputDir.FullName, "api.Dockerfile"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(customContext.FullName, dockerfile.ContextPath);
+        Assert.Equal("FROM scratch\n", content);
+    }
+
     [Fact]
     public async Task VerifyPublish_KeepsTheManifestPathRelative()
     {
@@ -162,6 +404,112 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
             configureResource: app => app.WithCargoManifestPath("crates/api/Cargo.toml"));
 
         await Verify(content);
+    }
+
+    [Fact]
+    public async Task PublishUsesTheFilesystemCasingForTheManifestPath()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var sourceDir = workspace.CreateDirectory("source");
+        var outputDir = workspace.CreateDirectory("output");
+        var manifestDirectory = Directory.CreateDirectory(Path.Combine(sourceDir.FullName, "Crates", "API"));
+        File.WriteAllText(Path.Combine(manifestDirectory.FullName, "Cargo.toml"), "[package]\nname = \"api\"\n");
+
+        var differentlyCasedPath = Path.Combine("crates", "api", "cargo.toml");
+        if (!File.Exists(Path.Combine(sourceDir.FullName, differentlyCasedPath)))
+        {
+            Assert.Skip("The test filesystem is case-sensitive.");
+        }
+
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
+        builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
+        builder.AddRustApp("api", sourceDir.FullName).WithCargoManifestPath(differentlyCasedPath);
+        builder.Build().Run();
+
+        var content = await File.ReadAllTextAsync(Path.Combine(outputDir.FullName, "api.Dockerfile"), TestContext.Current.CancellationToken);
+
+        Assert.Contains("cargo build --manifest-path Crates/API/Cargo.toml", content);
+    }
+
+    [Fact]
+    public async Task PublishUsesTheStoredUnicodeNormalizationForTheManifestPath()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var sourceDir = workspace.CreateDirectory("source");
+        var outputDir = workspace.CreateDirectory("output");
+        var decomposedDirectoryName = "Café".Normalize(NormalizationForm.FormD);
+        var composedDirectoryName = decomposedDirectoryName.Normalize(NormalizationForm.FormC);
+        var manifestDirectory = Directory.CreateDirectory(Path.Combine(sourceDir.FullName, decomposedDirectoryName));
+
+        File.WriteAllText(Path.Combine(manifestDirectory.FullName, "Cargo.toml"), "[package]\nname = \"api\"\n");
+
+        var composedManifestPath = Path.Combine(composedDirectoryName, "Cargo.toml");
+        if (!File.Exists(Path.Combine(sourceDir.FullName, composedManifestPath)))
+        {
+            Assert.Skip("The test filesystem distinguishes Unicode normalization forms.");
+        }
+
+        var storedDirectoryName = Path.GetFileName(Assert.Single(Directory.EnumerateDirectories(sourceDir.FullName)));
+
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
+        builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
+        builder.AddRustApp("api", sourceDir.FullName).WithCargoManifestPath(composedManifestPath);
+        builder.Build().Run();
+
+        var content = await File.ReadAllTextAsync(Path.Combine(outputDir.FullName, "api.Dockerfile"), TestContext.Current.CancellationToken);
+        var expectedManifestPath = $"{storedDirectoryName}/Cargo.toml";
+
+        Assert.Contains($"cargo build --manifest-path '{expectedManifestPath}'", content);
+    }
+
+    [Fact]
+    [UnsupportedOSPlatform("windows")]
+    public async Task PublishDoesNotEnumerateAncestorsAboveTheBuildContext()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Skip("Unix directory traversal permission regression test.");
+        }
+
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var restrictedAncestor = workspace.CreateDirectory("restricted");
+        var sourceDir = Directory.CreateDirectory(Path.Combine(restrictedAncestor.FullName, "source"));
+        var manifestDirectory = Directory.CreateDirectory(Path.Combine(sourceDir.FullName, "Crates", "API"));
+        var outputDir = workspace.CreateDirectory("output");
+
+        File.WriteAllText(Path.Combine(manifestDirectory.FullName, "Cargo.toml"), "[package]\nname = \"api\"\n");
+
+        var originalMode = File.GetUnixFileMode(restrictedAncestor.FullName);
+        try
+        {
+            // Execute permission permits access through a known path, while removing read permission prevents
+            // enumerating this ancestor. Resolving a manifest below the build context must not need that listing.
+            File.SetUnixFileMode(restrictedAncestor.FullName, UnixFileMode.UserExecute);
+
+            try
+            {
+                Directory.GetFileSystemEntries(restrictedAncestor.FullName);
+                Assert.Skip("The test filesystem still permits enumerating an execute-only directory.");
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+
+            using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
+            builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
+            builder.AddRustApp("api", sourceDir.FullName).WithCargoManifestPath("Crates/API/Cargo.toml");
+            builder.Build().Run();
+
+            var content = await File.ReadAllTextAsync(
+                Path.Combine(outputDir.FullName, "api.Dockerfile"),
+                TestContext.Current.CancellationToken);
+
+            Assert.Contains("cargo build --manifest-path Crates/API/Cargo.toml", content);
+        }
+        finally
+        {
+            File.SetUnixFileMode(restrictedAncestor.FullName, originalMode);
+        }
     }
 
     [Fact]
@@ -231,6 +579,45 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         var content = await File.ReadAllTextAsync(Path.Combine(outputDir.FullName, "api.Dockerfile"), TestContext.Current.CancellationToken);
 
         await Verify(content);
+    }
+
+    [Fact]
+    public async Task PublishPreservesManifestCasingAcrossAMacOSFilesystemAlias()
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            Assert.Skip("macOS filesystem alias regression test.");
+        }
+
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var sourceDir = workspace.CreateDirectory("source");
+        var outputDir = workspace.CreateDirectory("output");
+        var canonicalSourceDir = PathNormalizer.ResolveSymlinks(sourceDir.FullName);
+        var manifestDirectory = Directory.CreateDirectory(Path.Combine(sourceDir.FullName, "Crates", "API"));
+
+        File.WriteAllText(Path.Combine(manifestDirectory.FullName, "Cargo.toml"), "[package]\nname = \"api\"\n");
+
+        if (string.Equals(sourceDir.FullName, canonicalSourceDir, StringComparison.Ordinal))
+        {
+            Assert.Skip("The test temporary directory does not traverse a macOS filesystem alias.");
+        }
+
+        var differentlyCasedCanonicalManifest = Path.Combine(canonicalSourceDir, "crates", "api", "cargo.toml");
+        if (!File.Exists(differentlyCasedCanonicalManifest))
+        {
+            Assert.Skip("The test filesystem is case-sensitive.");
+        }
+
+        var manifestPath = Path.GetRelativePath(sourceDir.FullName, differentlyCasedCanonicalManifest);
+
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
+        builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
+        builder.AddRustApp("api", sourceDir.FullName).WithCargoManifestPath(manifestPath);
+        builder.Build().Run();
+
+        var content = await File.ReadAllTextAsync(Path.Combine(outputDir.FullName, "api.Dockerfile"), TestContext.Current.CancellationToken);
+
+        Assert.Contains("cargo build --manifest-path Crates/API/Cargo.toml", content);
     }
 
     [Fact]
@@ -404,25 +791,46 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         Assert.False(File.Exists(Path.Combine(outputDir.FullName, "api.Dockerfile.dockerignore")));
     }
 
-    [Fact]
-    public void PublishingFollowsWithWorkingDirectory()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PublishingMaterializesTheDockerfileFromTheFinalWorkingDirectory(bool hasDockerfile)
     {
-        // The crate is read from the resource's working directory rather than the value AddRustApp was given,
-        // so a WithWorkingDirectory applied afterwards decides both what cargo is asked about and what is
-        // copied into the image.
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         var sourceDir = workspace.CreateDirectory("source");
         var relocatedDir = workspace.CreateDirectory("relocated");
         var outputDir = workspace.CreateDirectory("output");
+
+        if (hasDockerfile)
+        {
+            File.WriteAllText(Path.Combine(relocatedDir.FullName, "Dockerfile"), "FROM scratch\n");
+        }
 
         var reader = new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service"));
 
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
         builder.Services.AddSingleton<ICargoMetadataReader>(reader);
         builder.AddRustApp("api", sourceDir.FullName).WithWorkingDirectory(relocatedDir.FullName);
+        var initialContainer = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var initialDockerfile = Assert.Single(initialContainer.Annotations.OfType<DockerfileBuildAnnotation>());
+        initialDockerfile.BuildContextIgnoreContent = "custom-ignore\n";
         builder.Build().Run();
 
-        Assert.Equal(relocatedDir.FullName, reader.LastWorkingDirectory);
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var dockerfile = Assert.Single(container.Annotations.OfType<DockerfileBuildAnnotation>());
+
+        Assert.Equal(relocatedDir.FullName, dockerfile.ContextPath);
+        Assert.Equal("custom-ignore\n", dockerfile.BuildContextIgnoreContent);
+
+        if (hasDockerfile)
+        {
+            Assert.Equal(Path.Combine(relocatedDir.FullName, "Dockerfile"), dockerfile.DockerfilePath);
+            Assert.Equal(0, reader.ReadCount);
+        }
+        else
+        {
+            Assert.Equal(relocatedDir.FullName, reader.LastWorkingDirectory);
+        }
     }
 
     private async Task<string> PublishDockerfileAsync(

@@ -9,7 +9,7 @@ namespace Aspire.Hosting.Rust;
 /// Represents a callback annotation for cargo-level arguments.
 /// </summary>
 /// <param name="callback">The callback that populates cargo arguments.</param>
-public sealed class RustCargoArgsCallbackAnnotation(Func<RustCargoArgsCallbackContext, Task> callback) : IResourceAnnotation
+internal sealed class RustCargoArgsCallbackAnnotation(Func<RustCargoArgsCallbackContext, Task> callback) : IResourceAnnotation
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="RustCargoArgsCallbackAnnotation"/> class.

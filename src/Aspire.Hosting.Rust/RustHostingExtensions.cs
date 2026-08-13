@@ -2,10 +2,16 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 #pragma warning disable ASPIREEXTENSION001
+#pragma warning disable ASPIREFILESYSTEM001
 #pragma warning disable ASPIREDOCKERFILEBUILDER001
+#pragma warning disable ASPIREPIPELINES003
 
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
+using System.Text;
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.ApplicationModel.Docker;
+using Aspire.Hosting.Publishing;
 using Aspire.Hosting.Rust;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -78,7 +84,7 @@ public static class RustHostingExtensions
         // reader by registering one before or after AddRustApp.
         builder.Services.TryAddSingleton<ICargoMetadataReader, CargoMetadataReader>();
 
-        return builder.AddResource(resource)
+        var resourceBuilder = builder.AddResource(resource)
             .WithRequiredCommand("cargo", "https://www.rust-lang.org/tools/install")
             .WithRustDefaults()
             .WithCargoArgs(context => AddInitialCargoArgs(resource, builder.ExecutionContext, context.Args))
@@ -117,19 +123,34 @@ public static class RustHostingExtensions
                 context.Args.Add("--");
             }, ownedByLaunchConfigurationType: "rust")
             .WithVSCodeDebugging()
-            .PublishAsDockerFile(containerBuilder =>
-            {
-                // A hand-written Dockerfile always wins: the generated one is a convenience for crates that
-                // do not have one, not something that should silently shadow the user's own container build.
-                if (File.Exists(Path.Combine(resource.WorkingDirectory, "Dockerfile")))
-                {
-                    return;
-                }
+            .PublishAsDockerFile();
 
-                containerBuilder.WithDockerfileBuilder(
-                    resource.WorkingDirectory,
-                    context => RustDockerfileGenerator.WriteAsync(resource, context));
+        if (builder.ExecutionContext.IsPublishMode)
+        {
+            if (!builder.TryCreateResourceBuilder<ContainerResource>(resource.Name, out var containerBuilder)
+                || !containerBuilder.Resource.TryGetLastAnnotation<DockerfileBuildAnnotation>(out var provisionalDockerfile))
+            {
+                throw new InvalidOperationException(
+                    $"The published Rust app '{resource.Name}' was not converted to a Dockerfile container resource.");
+            }
+
+            var publishState = new RustPublishState();
+            containerBuilder.WithContainerBuildOptions(context =>
+            {
+                if (publishState.TargetPlatform is { } targetPlatform)
+                {
+                    context.TargetPlatform = targetPlatform;
+                }
             });
+
+            builder.OnBeforeStart((_, _) =>
+            {
+                FinalizePublishDockerfile(builder, resource, provisionalDockerfile, publishState);
+                return Task.CompletedTask;
+            });
+        }
+
+        return resourceBuilder;
     }
 
     /// <summary>
@@ -352,10 +373,14 @@ public static class RustHostingExtensions
     /// <remarks>
     /// Passed to cargo as <c>--target</c>. Cargo writes a cross-compiled binary to
     /// <c>target/&lt;triple&gt;/&lt;profile&gt;/</c>, and the generated Dockerfile follows that layout and adds
-    /// the target to the build image with <c>rustup target add</c>. Pairing the triple with base images that
-    /// can build and run the result is the caller's: a glibc (<c>-gnu</c>) triple needs glibc images, and a
-    /// triple for another architecture needs a cross-linker in the build image, both of which
-    /// <c>WithDockerfileBaseImage</c> supplies.
+    /// the target's standard library to the build image with <c>rustup target add</c>.
+    /// <para>
+    /// Aspire-generated Dockerfiles support the x86_64 and aarch64 Linux musl and GNU triples. The selected
+    /// architecture becomes the container build platform, musl uses the default images, and GNU requires
+    /// custom build and runtime images. A custom build image must already contain any linker or native
+    /// dependencies the target needs; <c>WithDockerfileBaseImage</c> changes images but does not install
+    /// cross-compilation tooling. Other triples require an authored Dockerfile for publishing.
+    /// </para>
     /// </remarks>
     [AspireExport]
     public static IResourceBuilder<T> WithCargoTarget<T>(this IResourceBuilder<T> builder, string target)
@@ -564,6 +589,8 @@ public static class RustHostingExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
 
+        var debugExecutablePathCache = new ConditionalWeakTable<LaunchConfigurationCallbackContext, DebugExecutablePathCache>();
+
         return builder.WithDebugSupport(
             async context =>
             {
@@ -579,6 +606,8 @@ public static class RustHostingExtensions
 
                 var workingDirectory = Path.GetFullPath(resource.WorkingDirectory);
                 var executablePath = await ResolveDebugExecutablePathAsync(
+                    debugExecutablePathCache,
+                    context,
                     resource,
                     workingDirectory,
                     builder.ApplicationBuilder.ExecutionContext,
@@ -610,41 +639,36 @@ public static class RustHostingExtensions
     // artifacts: `cargo build` ignores `default-run` and therefore reports every binary in the package,
     // whereas metadata reports `default-run` itself and so matches what `cargo run` launches.
     private static async Task<string> ResolveDebugExecutablePathAsync(
+        ConditionalWeakTable<LaunchConfigurationCallbackContext, DebugExecutablePathCache> caches,
+        LaunchConfigurationCallbackContext callbackContext,
         RustAppResource resource,
         string workingDirectory,
         DistributedApplicationExecutionContext executionContext,
         IReadOnlyDictionary<string, string> environment,
         CancellationToken cancellationToken)
     {
-        // The crate layout is fixed for the lifetime of the app host, so the first successful resolution is
-        // reused. Without this, every launch configuration request would pay for another `cargo metadata`.
-        if (resource.ResolvedDebugExecutablePath is { } cached)
-        {
-            return cached;
-        }
-
-        await resource.DebugExecutablePathGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        // A launch callback context represents one executable creation, including its resolved environment.
+        // Reuse metadata work only inside that creation: restarts and replicas get a new context because
+        // Cargo.toml, CARGO_TARGET_DIR, or CARGO_BUILD_TARGET may have changed since the previous process.
+        var cache = caches.GetValue(callbackContext, static _ => new DebugExecutablePathCache());
 
         try
         {
-            if (resource.ResolvedDebugExecutablePath is { } resolvedWhileWaiting)
-            {
-                return resolvedWhileWaiting;
-            }
-
-            var executablePath = await ResolveDebugExecutablePathCoreAsync(
-                resource,
-                workingDirectory,
-                executionContext,
-                environment,
+            return await cache.GetOrCreateAsync(
+                ct => ResolveDebugExecutablePathCoreAsync(
+                    resource,
+                    workingDirectory,
+                    executionContext,
+                    environment,
+                    ct),
                 cancellationToken).ConfigureAwait(false);
-            resource.ResolvedDebugExecutablePath = executablePath;
-
-            return executablePath;
         }
-        finally
+        catch
         {
-            resource.DebugExecutablePathGate.Release();
+            // Missing toolchains and transient metadata failures are retryable even when Aspire invokes the
+            // producer again with the same executable-creation context.
+            caches.Remove(callbackContext);
+            throw;
         }
     }
 
@@ -681,6 +705,209 @@ public static class RustHostingExtensions
         return target.GetExecutablePath(metadata.TargetDirectory);
     }
 
+    private static void FinalizePublishDockerfile(
+        IDistributedApplicationBuilder applicationBuilder,
+        RustAppResource resource,
+        DockerfileBuildAnnotation provisionalDockerfile,
+        RustPublishState publishState)
+    {
+        if (!applicationBuilder.TryCreateResourceBuilder<ContainerResource>(resource.Name, out var containerBuilder))
+        {
+            throw new InvalidOperationException(
+                $"The published Rust app '{resource.Name}' was not converted to a container resource.");
+        }
+
+        var annotations = containerBuilder.Resource.Annotations;
+        if (!containerBuilder.Resource.TryGetLastAnnotation<DockerfileBuildAnnotation>(out var activeDockerfile)
+            || !ReferenceEquals(activeDockerfile, provisionalDockerfile))
+        {
+            // PublishAsDockerFile is idempotent, so callers can replace the integration's provisional
+            // Dockerfile or factory after AddRustApp returns. That later configuration owns its context,
+            // generated content, platform, and target handling.
+            return;
+        }
+
+        ContainerTargetPlatform? targetPlatform = null;
+
+        annotations.Remove(provisionalDockerfile);
+
+        var workingDirectory = Path.GetFullPath(resource.WorkingDirectory);
+
+        // The app model remains mutable after AddRustApp returns. Resolve both the authored-Dockerfile
+        // decision and the build context at the final model hook so a later WithWorkingDirectory changes
+        // the directory cargo inspects and the directory Docker copies together.
+        if (File.Exists(Path.Combine(workingDirectory, "Dockerfile")))
+        {
+            containerBuilder.WithAnnotation(
+                new DockerfileBuildAnnotation(
+                    workingDirectory,
+                    Path.Combine(workingDirectory, "Dockerfile"),
+                    provisionalDockerfile.Stage),
+                ResourceAnnotationMutationBehavior.Replace);
+        }
+        else
+        {
+            targetPlatform = ResolveContainerTargetPlatform(resource, containerBuilder.Resource);
+            publishState.TargetPlatform = targetPlatform;
+            containerBuilder.WithAnnotation(
+                CreateGeneratedDockerfileAnnotation(
+                    applicationBuilder,
+                    resource,
+                    workingDirectory,
+                    provisionalDockerfile.Stage),
+                ResourceAnnotationMutationBehavior.Replace);
+        }
+
+        var dockerfile = annotations.OfType<DockerfileBuildAnnotation>().Last();
+        foreach (var buildArgument in provisionalDockerfile.BuildArguments)
+        {
+            dockerfile.BuildArguments[buildArgument.Key] = buildArgument.Value;
+        }
+
+        foreach (var buildSecret in provisionalDockerfile.BuildSecrets)
+        {
+            dockerfile.BuildSecrets[buildSecret.Key] = buildSecret.Value;
+        }
+
+        dockerfile.ImageName = provisionalDockerfile.ImageName ?? dockerfile.ImageName;
+        dockerfile.ImageTag = provisionalDockerfile.ImageTag ?? dockerfile.ImageTag;
+        dockerfile.HasEntrypoint = provisionalDockerfile.HasEntrypoint;
+        dockerfile.BuildContextIgnoreContent = provisionalDockerfile.BuildContextIgnoreContent;
+
+        if (targetPlatform is { } platform)
+        {
+            var cargoTarget = resource.TryGetLastAnnotation<RustCargoOptionsAnnotation>(out var options)
+                ? options.Target
+                : null;
+
+            containerBuilder.WithContainerBuildOptions(context =>
+            {
+                if (context.TargetPlatform is { } configuredPlatform && configuredPlatform != platform)
+                {
+                    throw new DistributedApplicationException(
+                        $"The Rust app '{resource.Name}' targets '{cargoTarget}', " +
+                        $"which requires container target platform '{platform}', but WithContainerBuildOptions selected '{configuredPlatform}'.");
+                }
+
+                // The earlier Rust callback establishes the mapped default before caller callbacks run.
+                // Reapply it here only after confirming a later callback did not choose a conflicting platform.
+                context.TargetPlatform = platform;
+            });
+        }
+    }
+
+    private static DockerfileBuildAnnotation CreateGeneratedDockerfileAnnotation(
+        IDistributedApplicationBuilder applicationBuilder,
+        RustAppResource resource,
+        string workingDirectory,
+        string? stage)
+    {
+        // Replacing the integration-owned provisional annotation directly avoids rerunning WithDockerfileFactory,
+        // which would replace caller-owned pipeline annotations and append duplicate pipeline configuration.
+        var dockerfilePath = applicationBuilder.ExecutionContext.Services
+            .GetRequiredService<IFileSystemService>()
+            .TempDirectory.CreateTempFile("Dockerfile").Path;
+
+        return new DockerfileBuildAnnotation(workingDirectory, dockerfilePath, stage)
+        {
+            DockerfileFactory = async factoryContext =>
+            {
+                var dockerfileBuilder = new DockerfileBuilder();
+                var callbackContext = new DockerfileBuilderCallbackContext(
+                    factoryContext.Resource,
+                    dockerfileBuilder,
+                    factoryContext.Services,
+                    factoryContext.CancellationToken);
+
+                await RustDockerfileGenerator.WriteAsync(resource, callbackContext).ConfigureAwait(false);
+
+                using var stream = new MemoryStream();
+                using var writer = new StreamWriter(
+                    stream,
+                    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                    leaveOpen: true)
+                {
+                    NewLine = "\n"
+                };
+
+                await dockerfileBuilder.WriteAsync(writer, factoryContext.CancellationToken).ConfigureAwait(false);
+                await writer.FlushAsync(factoryContext.CancellationToken).ConfigureAwait(false);
+
+                return Encoding.UTF8.GetString(stream.GetBuffer(), 0, checked((int)stream.Length));
+            }
+        };
+    }
+
+    private static ContainerTargetPlatform? ResolveContainerTargetPlatform(
+        RustAppResource resource,
+        ContainerResource container)
+    {
+        var target = resource.TryGetLastAnnotation<RustCargoOptionsAnnotation>(out var options)
+            ? options.Target
+            : null;
+
+        if (target is null)
+        {
+            return null;
+        }
+
+        var platform = target switch
+        {
+            "x86_64-unknown-linux-musl" or "x86_64-unknown-linux-gnu" => ContainerTargetPlatform.LinuxAmd64,
+            "aarch64-unknown-linux-musl" or "aarch64-unknown-linux-gnu" => ContainerTargetPlatform.LinuxArm64,
+            _ => throw new DistributedApplicationException(
+                $"The Rust app '{resource.Name}' targets '{target}', but generated Rust containers support only " +
+                "x86_64-unknown-linux-musl, aarch64-unknown-linux-musl, x86_64-unknown-linux-gnu, and " +
+                "aarch64-unknown-linux-gnu.")
+        };
+
+        if (target.EndsWith("-gnu", StringComparison.Ordinal))
+        {
+            var baseImages = container.Annotations.OfType<DockerfileBaseImageAnnotation>().LastOrDefault();
+            if (baseImages?.BuildImage is null || baseImages.RuntimeImage is null)
+            {
+                throw new DistributedApplicationException(
+                    $"The Rust app '{resource.Name}' targets '{target}', which requires GNU libc build and runtime images. " +
+                    "Configure both images with WithDockerfileBaseImage before publishing.");
+            }
+        }
+
+        return platform;
+    }
+
+    private sealed class DebugExecutablePathCache
+    {
+        private readonly SemaphoreSlim _gate = new(1, 1);
+        private string? _executablePath;
+
+        public async Task<string> GetOrCreateAsync(
+            Func<CancellationToken, Task<string>> factory,
+            CancellationToken cancellationToken)
+        {
+            if (_executablePath is { } cached)
+            {
+                return cached;
+            }
+
+            await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                _executablePath ??= await factory(cancellationToken).ConfigureAwait(false);
+
+                return _executablePath;
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+    }
+
+    private sealed class RustPublishState
+    {
+        public ContainerTargetPlatform? TargetPlatform { get; set; }
+    }
+
     // OTLP export plus certificate trust so outbound TLS calls made by the app pick up the dev/test
     // certificate bundle. Certificate trust needs nothing Rust-specific: the app host already exports
     // SSL_CERT_DIR (and SSL_CERT_FILE, for the scopes that replace the system store rather than add to it),
@@ -690,4 +917,6 @@ public static class RustHostingExtensions
 }
 
 #pragma warning restore ASPIREEXTENSION001
+#pragma warning restore ASPIREFILESYSTEM001
 #pragma warning restore ASPIREDOCKERFILEBUILDER001
+#pragma warning restore ASPIREPIPELINES003

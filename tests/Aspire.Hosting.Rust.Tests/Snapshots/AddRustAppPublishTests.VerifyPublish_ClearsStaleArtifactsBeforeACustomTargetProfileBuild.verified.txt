@@ -1,4 +1,4 @@
-﻿FROM rust:alpine AS build
+﻿FROM docker.io/library/rust:1.97-alpine3.24 AS build
 WORKDIR /app
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry --mount=type=cache,id=aspire-rust-b66e5db297c6c0ec,target=/build/target,sharing=locked \
@@ -12,7 +12,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry --mount=type=cache,id=as
     mkdir -p /build/bin && \
     cp "$bin" /build/bin/demo
 
-FROM alpine:3.24
+FROM docker.io/library/alpine:3.24
 RUN (addgroup -S app || groupadd --system app) && (adduser -S -G app app || useradd --system --gid app --no-create-home app)
 WORKDIR /app
 COPY --from=build /build/bin/demo /app/demo

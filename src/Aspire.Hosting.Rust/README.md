@@ -1,14 +1,13 @@
 # Rust hosting integration
 
-Use this integration to model, configure, and orchestrate a Rust application resource in an Aspire
-solution.
+Use this integration to model, configure, and orchestrate a Rust application resource in an Aspire solution.
 
 ## Getting started
 
 ### Prerequisites
 
-The **Rust toolchain** (`cargo`) must be available on the PATH of the machine running the AppHost.
-Install it with [rustup](https://www.rust-lang.org/tools/install).
+The **Rust toolchain** (`cargo` 1.71 or later) must be available on the PATH of the machine running
+the AppHost. Install it with [rustup](https://www.rust-lang.org/tools/install).
 
 For VS Code debugging, install the platform's native debugger extension:
 [C/C++](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools) on Windows, or
@@ -24,16 +23,20 @@ aspire add Aspire.Hosting.Rust
 
 ## Usage example
 
-In the AppHost, add a Rust application resource with either C# or TypeScript:
+Then, in the AppHost, add a Rust application resource and reference it from another resource with either C# or TypeScript:
 
 **C#**
 
 ```csharp
 var builder = DistributedApplication.CreateBuilder(args);
 
-builder.AddRustApp("api", "../rust-api")
+var rustApi = builder.AddRustApp("api", "../rust-api")
     .WithHttpEndpoint(env: "PORT")
     .WithExternalHttpEndpoints();
+
+builder.AddProject<Projects.Frontend>("frontend")
+    .WithReference(rustApi)
+    .WaitFor(rustApi);
 
 builder.Build().Run();
 ```
@@ -45,9 +48,13 @@ import { createBuilder } from "./.aspire/modules/aspire.mjs";
 
 const builder = await createBuilder();
 
-await builder.addRustApp("api", "../rust-api")
+const rustApi = await builder.addRustApp("api", "../rust-api")
     .withHttpEndpoint({ env: "PORT" })
     .withExternalHttpEndpoints();
+
+await builder.addNodeApp("frontend", "../frontend", "server.js")
+    .withReference(rustApi)
+    .waitFor(rustApi);
 
 await builder.build().run();
 ```
@@ -74,7 +81,7 @@ builder.AddRustApp("api", "../rust-api")
 | `WithCargoBinTarget(string binName)` | Adds `--bin` to select one of several `[[bin]]` targets |
 | `WithCargoExample(string exampleName)` | Adds `--example` to run an example instead of a binary |
 | `WithCargoPackage(string packageName)` | Adds `--package` to select a workspace member |
-| `WithCargoTarget(string target)` | Adds `--target` to cross-compile for a specific triple |
+| `WithCargoTarget(string target)` | Adds `--target`. Generated Dockerfiles support the `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `x86_64-unknown-linux-gnu`, and `aarch64-unknown-linux-gnu` triples |
 | `WithCargoManifestPath(string manifestPath)` | Adds `--manifest-path`. Only needed when the manifest is not the one cargo finds from the app directory. Publishing requires a path relative to the app directory so the manifest can be copied into the image |
 | `WithCargoProfile(string profileName)` | Adds `--profile`. Takes precedence over `WithCargoReleaseBuild()`, which cargo rejects alongside `--profile` |
 
@@ -98,17 +105,21 @@ workspace root and select the crate with `WithCargoPackage("<name>")`.
 
 | Stage | Default |
 | --- | --- |
-| Build | `rust:alpine` (current stable; a `rust-toolchain.toml` pin is installed by rustup inside the image) |
-| Runtime | `alpine:3.24` |
+| Build | `docker.io/library/rust:1.97-alpine3.24` (a `rust-toolchain.toml` pin is installed by rustup inside the image) |
+| Runtime | `docker.io/library/alpine:3.24` |
 
 If you change either image with `WithDockerfileBaseImage`, or name an explicit target with
 `WithCargoTarget`, it is on you to keep the libc compatible across the three — the defaults are all
 musl.
 
+The generated Dockerfile maps `x86_64` targets to a Linux AMD64 image and `aarch64` targets to a
+Linux ARM64 image. GNU targets require custom build and runtime images because the defaults use
+musl. `WithCargoTarget` does not install a linker or cross-compilation toolchain, so the selected
+build image must already support the target. Other target triples require an authored Dockerfile.
+
 ## Additional documentation
 
 - https://aspire.dev/integrations/gallery/
-- https://aspire.dev/integrations/frameworks/rust/rust-host/
 - [Aspire documentation](https://aspire.dev/)
 - [The Cargo Book](https://doc.rust-lang.org/cargo/)
 

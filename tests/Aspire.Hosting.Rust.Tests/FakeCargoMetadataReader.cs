@@ -36,11 +36,16 @@ internal sealed class FakeCargoMetadataReader(string metadataJson) : ICargoMetad
     /// </summary>
     public Func<CancellationToken, Task>? OnRead { get; set; }
 
+    /// <summary>
+    /// Optional factory for returning different metadata documents on successive reads.
+    /// </summary>
+    public Func<int, string>? MetadataJsonFactory { get; set; }
+
     private int _readCount;
 
     public async Task<CargoMetadata> ReadAsync(string workingDirectory, string? manifestPath, string resourceName, IReadOnlyDictionary<string, string> environment, CancellationToken cancellationToken)
     {
-        Interlocked.Increment(ref _readCount);
+        var readCount = Interlocked.Increment(ref _readCount);
         LastEnvironment = environment;
         LastWorkingDirectory = workingDirectory;
 
@@ -49,7 +54,7 @@ internal sealed class FakeCargoMetadataReader(string metadataJson) : ICargoMetad
             await onRead(cancellationToken).ConfigureAwait(false);
         }
 
-        var rebased = metadataJson;
+        var rebased = MetadataJsonFactory?.Invoke(readCount) ?? metadataJson;
 
         // Real cargo honours CARGO_TARGET_DIR when reporting target_directory, and the debug executable path
         // is derived from it, so the fake reflects it too.

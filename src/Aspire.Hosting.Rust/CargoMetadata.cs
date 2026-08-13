@@ -62,8 +62,8 @@ internal sealed class CargoMetadata
     /// <item><c>default_run</c> is <see langword="null"/> (or absent on old cargo) unless the manifest sets it.</item>
     /// <item><c>rust_version</c> is likewise absent unless the manifest declares an MSRV, and may be written
     /// with one, two, or three components.</item>
-    /// <item><c>workspace_default_members</c> only exists from cargo 1.71; older cargo only emits
-    /// <c>workspace_members</c>, so that is used as the fallback.</item>
+    /// <item><c>workspace_default_members</c> only exists from cargo 1.71. Older output is rejected because
+    /// falling back to every workspace member would ignore an explicit <c>[workspace] default-members</c>.</item>
     /// <item>Package id syntax changed in cargo 1.77 from <c>"my-app 0.1.0 (path+file:///app)"</c> to
     /// <c>"path+file:///app#my-app@0.1.0"</c>. Ids are only ever compared against other ids from the same
     /// document, so both forms work without being parsed.</item>
@@ -85,16 +85,18 @@ internal sealed class CargoMetadata
             }
         }
 
-        var defaultMembers = ReadStringArray(root, "workspace_default_members");
-        if (defaultMembers.Count == 0)
+        if (!root.TryGetProperty("workspace_default_members", out var defaultMembersElement)
+            || defaultMembersElement.ValueKind != JsonValueKind.Array)
         {
-            defaultMembers = ReadStringArray(root, "workspace_members");
+            throw new DistributedApplicationException(
+                "Aspire.Hosting.Rust requires Cargo 1.71 or later because this 'cargo metadata' output does not " +
+                "include 'workspace_default_members'. Update the Rust toolchain and try again.");
         }
 
         return new CargoMetadata
         {
             Packages = packages,
-            DefaultMemberIds = defaultMembers,
+            DefaultMemberIds = ReadStringArray(defaultMembersElement),
             TargetDirectory = root.TryGetProperty("target_directory", out var targetDirectoryElement)
                 ? targetDirectoryElement.GetString() ?? string.Empty
                 : string.Empty
@@ -145,11 +147,11 @@ internal sealed class CargoMetadata
         return false;
     }
 
-    private static List<string> ReadStringArray(JsonElement root, string propertyName)
+    private static List<string> ReadStringArray(JsonElement element)
     {
         var values = new List<string>();
 
-        if (root.TryGetProperty(propertyName, out var element) && element.ValueKind == JsonValueKind.Array)
+        if (element.ValueKind == JsonValueKind.Array)
         {
             foreach (var item in element.EnumerateArray())
             {
