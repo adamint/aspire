@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { spawn } from 'child_process';
+import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
 import * as readline from 'readline';
 import { getRustExtensionId } from "../../capabilities";
 import { AspireResourceExtendedDebugConfiguration, EnvVar, ExecutableLaunchConfiguration, isRustLaunchConfiguration, RustLaunchConfiguration } from "../../dcp/types";
@@ -11,6 +11,8 @@ import { mergeCliSpawnEnvironment } from "./cli";
 import { processGroupSpawnOptions, terminateProcessTree } from "../../utils/processTree";
 
 const rustBuildStderrTailLimit = 8 * 1024;
+const cargoHostProbeOutputLimit = 16 * 1024;
+const cargoExecutable = 'cargo';
 
 interface CargoCompilerArtifactMessage {
     reason: 'compiler-artifact';
@@ -26,6 +28,11 @@ interface CargoCompilerMessage {
 type CargoBuildMessage = CargoCompilerArtifactMessage | CargoCompilerMessage | { reason: string };
 
 export interface IRustService {
+    getCargoHostTarget(
+        workingDirectory: string,
+        env: EnvVar[]
+    ): Promise<string | undefined>;
+
     build(
         workingDirectory: string,
         cargoArgs: string[],
@@ -45,6 +52,97 @@ export class RustService implements IRustService {
         this._debugSession.sendMessage(message, false, category);
     }
 
+    getCargoHostTarget(
+        workingDirectory: string,
+        env: EnvVar[]
+    ): Promise<string | undefined> {
+        return new Promise<string | undefined>((resolve, reject) => {
+            extensionLogOutputChannel.info(`Probing Cargo host target in ${workingDirectory}.`);
+            let probeProcess: ChildProcessWithoutNullStreams;
+            try {
+                probeProcess = spawn(cargoExecutable, ['-Vv'], {
+                    cwd: workingDirectory,
+                    env: createCargoEnvironment(env),
+                    ...processGroupSpawnOptions()
+                });
+            } catch {
+                extensionLogOutputChannel.error(`Cargo host target probe failed to start in ${workingDirectory} (unknown error).`);
+                resolve(undefined);
+                return;
+            }
+
+            let cancellationRequested = false;
+            let settled = false;
+            let cancellation: vscode.Disposable | undefined;
+            let stdout = '';
+
+            const settle = (complete: () => void): void => {
+                if (settled) {
+                    return;
+                }
+
+                settled = true;
+                cancellation?.dispose();
+                complete();
+            };
+
+            probeProcess.stdout.setEncoding('utf8');
+            probeProcess.stdout.on('data', (output: string) => {
+                if (stdout.length < cargoHostProbeOutputLimit) {
+                    stdout += output.slice(0, cargoHostProbeOutputLimit - stdout.length);
+                }
+            });
+            // A custom Cargo wrapper can write arbitrary diagnostics. Drain stderr so it cannot block
+            // the process, but never retain or log it because it can echo resource environment values.
+            probeProcess.stderr.resume();
+
+            probeProcess.on('error', err => {
+                settle(() => {
+                    if (cancellationRequested) {
+                        reject(new vscode.CancellationError());
+                        return;
+                    }
+
+                    const errorCode = (err as NodeJS.ErrnoException).code ?? 'unknown error';
+                    extensionLogOutputChannel.error(`Cargo host target probe failed to start in ${workingDirectory} (${errorCode}).`);
+                    resolve(undefined);
+                });
+            });
+
+            probeProcess.on('close', (code, signal) => {
+                settle(() => {
+                    if (cancellationRequested) {
+                        reject(new vscode.CancellationError());
+                        return;
+                    }
+
+                    if (code !== 0) {
+                        const exitDescription = code !== null ? `${code}` : `${signal}`;
+                        extensionLogOutputChannel.error(`Cargo host target probe failed in ${workingDirectory} (${exitDescription}).`);
+                        resolve(undefined);
+                        return;
+                    }
+
+                    const target = parseCargoHostTarget(stdout);
+                    if (!target) {
+                        extensionLogOutputChannel.error(`Cargo host target probe returned no host target in ${workingDirectory}.`);
+                    }
+                    resolve(target);
+                });
+            });
+
+            cancellation = this._debugSession.registerPendingStartCancellation({
+                dispose: () => {
+                    if (probeProcess.exitCode === null && probeProcess.signalCode === null) {
+                        cancellationRequested = true;
+                        extensionLogOutputChannel.info(`Debug session ended; stopping Cargo host target probe in ${workingDirectory}.`);
+                        terminateProcessTree(probeProcess);
+                    }
+                }
+            });
+        });
+    }
+
     build(
         workingDirectory: string,
         cargoArgs: string[],
@@ -58,16 +156,15 @@ export class RustService implements IRustService {
             // messages. Keep that protocol fallback while newer hosts use their metadata-derived path.
             const discoverExecutable = !executablePath;
             const buildArgs = discoverExecutable
-                ? [...cargoArgs, '--message-format=json']
+                ? withJsonMessageFormat(cargoArgs)
                 : cargoArgs;
 
             // Build with the resource's environment so settings the app host injects (RUSTFLAGS,
             // CARGO_*, proxy variables, and anything set with WithEnvironment) apply to the debug
             // build exactly as they do when DCP runs `cargo run` itself.
-            const buildEnv: Record<string, string | undefined> = { ...process.env };
-            mergeCliSpawnEnvironment(buildEnv, env);
+            const buildEnv = createCargoEnvironment(env);
 
-            const buildProcess = spawn('cargo', buildArgs, {
+            const buildProcess = spawn(cargoExecutable, buildArgs, {
                 cwd: workingDirectory,
                 env: buildEnv,
                 // Cargo fans out into rustc, the linker and any build scripts. Making it a process group
@@ -206,6 +303,48 @@ export class RustService implements IRustService {
 }
 
 const runnableTargetKinds = ['bin', 'example'];
+
+function createCargoEnvironment(env: EnvVar[]): Record<string, string | undefined> {
+    const cargoEnvironment: Record<string, string | undefined> = { ...process.env };
+    mergeCliSpawnEnvironment(cargoEnvironment, env);
+    return cargoEnvironment;
+}
+
+function parseCargoHostTarget(output: string): string | undefined {
+    // `cargo -Vv` emits one field per line, for example:
+    //   cargo 1.89.0 (c24e10642 2025-06-23)
+    //   release: 1.89.0
+    //   host: x86_64-pc-windows-msvc
+    return output.match(/^host:\s*(\S+)\s*$/im)?.[1];
+}
+
+function withJsonMessageFormat(cargoArgs: string[]): string[] {
+    const separatorIndex = cargoArgs.indexOf('--');
+    const cargoArgumentCount = separatorIndex >= 0 ? separatorIndex : cargoArgs.length;
+    const normalizedArgs: string[] = [];
+    let messageFormatIndex: number | undefined;
+
+    for (let index = 0; index < cargoArgumentCount; index++) {
+        const argument = cargoArgs[index];
+        if (argument === '--message-format') {
+            messageFormatIndex ??= normalizedArgs.length;
+            if (index + 1 < cargoArgumentCount && !cargoArgs[index + 1].startsWith('-')) {
+                index++;
+            }
+        } else if (argument.startsWith('--message-format=')) {
+            messageFormatIndex ??= normalizedArgs.length;
+        } else {
+            normalizedArgs.push(argument);
+        }
+    }
+
+    normalizedArgs.splice(messageFormatIndex ?? normalizedArgs.length, 0, '--message-format=json');
+    if (separatorIndex >= 0) {
+        normalizedArgs.push(...cargoArgs.slice(separatorIndex));
+    }
+
+    return normalizedArgs;
+}
 
 function collectExecutableArtifact(
     executablesByTarget: Map<string, string>,
@@ -472,11 +611,25 @@ export function createRustDebuggerExtension(
             const config = asRustConfig(launchConfig);
             const workingDirectory = config.working_directory || '';
             const cargoArgs = config.cargo?.args ?? ['build'];
-            const cargoTarget = getCargoTarget(
+            let cargoTarget = getCargoTarget(
                 cargoArgs,
                 env ?? [],
                 process.env,
                 config.cargo?.executable_path);
+            const rustService = rustServiceProducer(launchOptions.debugSession);
+            const configuredAdapter = debugConfiguration.type;
+            const selectedAdapter = !configuredAdapter || configuredAdapter === launchConfig.type
+                ? rustDebugAdapter
+                : configuredAdapter;
+            // Cargo can resolve through a different rustup proxy or wrapper for each resource
+            // environment, so probing per launch is safer than caching a process-wide host triple.
+            if (launchOptions.debug
+                && platform === 'win32'
+                && selectedAdapter === 'cppvsdbg'
+                && !cargoTarget) {
+                cargoTarget = await rustService.getCargoHostTarget(workingDirectory, env ?? []);
+            }
+
             const isGnuTarget = isGnuWindowsTarget(cargoTarget);
 
             // GNU Windows Rust targets emit DWARF debug information, while cppvsdbg is the Visual Studio
@@ -488,7 +641,6 @@ export function createRustDebuggerExtension(
             // - https://code.visualstudio.com/docs/cpp/cpp-debug#_windows-debugging-with-gdb
             // NoDebug still launches through an adapter, but it does not ask that adapter to consume
             // the binary's debug symbols, so the CodeView-versus-DWARF restriction does not apply.
-            const configuredAdapter = debugConfiguration.type;
             const hasGnuCompatibleAdapter = configuredAdapter === 'cppdbg' || configuredAdapter === 'lldb';
             const needsGnuDebugger = launchOptions.debug
                 && platform === 'win32'
@@ -500,7 +652,6 @@ export function createRustDebuggerExtension(
                 throw new Error(rustWindowsGnuDebuggerUnsupported(cargoTarget ?? 'windows-gnu'));
             }
 
-            const rustService = rustServiceProducer(launchOptions.debugSession);
             const executablePath = await rustService.build(
                 workingDirectory,
                 cargoArgs,
@@ -576,7 +727,7 @@ function getCargoTarget(
 
     // Cross-target Cargo outputs include the target triple as a path segment, for example:
     //   target\x86_64-pc-windows-gnullvm\debug\api.exe
-    return executablePath?.match(/(?:^|[\\/])([^\\/]*-windows-(?:gnu|gnullvm))(?:[\\/]|$)/i)?.[1];
+    return executablePath?.match(/(?:^|[\\/])([^\\/]*-windows-(?:gnu|gnullvm|msvc))(?:[\\/]|$)/i)?.[1];
 }
 
 function isGnuWindowsTarget(target: string | undefined): boolean {

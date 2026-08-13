@@ -23,6 +23,7 @@ type TestChildProcess = Omit<nodeChildProcess.ChildProcessWithoutNullStreams, 'e
 
 class TestRustService implements IRustService {
     public buildStub: sinon.SinonStub;
+    public getCargoHostTargetStub = sinon.stub().resolves(undefined);
 
     constructor(error?: Error) {
         this.buildStub = sinon.stub();
@@ -45,6 +46,13 @@ class TestRustService implements IRustService {
         executablePath: string | undefined
     ): Promise<string> {
         return this.buildStub(workingDirectory, cargoArgs, env, executablePath);
+    }
+
+    getCargoHostTarget(
+        workingDirectory: string,
+        env: EnvVar[]
+    ): Promise<string | undefined> {
+        return this.getCargoHostTargetStub(workingDirectory, env);
     }
 }
 
@@ -142,6 +150,7 @@ suite('Rust Debugger Extension Tests', () => {
         assert.strictEqual(debugConfig.program, '/workspace/api/target/release/api');
         assert.strictEqual(debugConfig.cwd, '/workspace/api');
         assert.deepStrictEqual(debugConfig.args, ['--listen', ':8080']);
+        assert.ok(rustService.getCargoHostTargetStub.notCalled);
 
         if (rustDebugAdapter === 'cppvsdbg') {
             assert.strictEqual(debugConfig.console, 'internalConsole');
@@ -218,6 +227,91 @@ suite('Rust Debugger Extension Tests', () => {
         harness.childProcess.emit('close', null, 'SIGTERM');
 
         await assert.rejects(build, error => error instanceof vscode.CancellationError);
+    });
+
+    test('probes the Cargo host with the build environment', async () => {
+        const harness = createRustProcessHarness();
+        const env = [{ name: 'RUSTFLAGS', value: '-C target-cpu=native' }];
+        const probe = harness.rustService.getCargoHostTarget('/workspace/api', env);
+
+        harness.childProcess.stdout.write([
+            'cargo 1.89.0 (c24e10642 2025-06-23)',
+            'release: 1.89.0',
+            'host: x86_64-pc-windows-msvc',
+            '',
+        ].join('\n'));
+        harness.childProcess.emit('close', 0, null);
+
+        assert.strictEqual(await probe, 'x86_64-pc-windows-msvc');
+        const spawn = nodeChildProcess.spawn as unknown as sinon.SinonStub;
+        assert.strictEqual(spawn.firstCall.args[0], 'cargo');
+        assert.deepStrictEqual(spawn.firstCall.args[1], ['-Vv']);
+        assert.strictEqual(spawn.firstCall.args[2].cwd, '/workspace/api');
+        assert.strictEqual(spawn.firstCall.args[2].env.RUSTFLAGS, '-C target-cpu=native');
+    });
+
+    test('reports user disposal during the Cargo host probe as cancellation', async () => {
+        const harness = createRustProcessHarness();
+        const probe = harness.rustService.getCargoHostTarget('/workspace/api', []);
+
+        harness.disposeSession();
+        assert.ok(harness.childProcess.kill.calledOnce);
+        harness.childProcess.emit('close', null, 'SIGTERM');
+
+        await assert.rejects(probe, error => error instanceof vscode.CancellationError);
+    });
+
+    test('does not expose Cargo host probe failure output', async () => {
+        const harness = createRustProcessHarness();
+        const info = sinon.stub(extensionLogOutputChannel, 'info');
+        const errorLog = sinon.stub(extensionLogOutputChannel, 'error');
+        const secret = 'private-cargo-probe-credential';
+        const probe = harness.rustService.getCargoHostTarget(
+            '/workspace/api',
+            [{ name: 'PRIVATE_REGISTRY_TOKEN', value: secret }]);
+
+        harness.childProcess.stderr.write(`error: registry rejected ${secret}\n`);
+        harness.childProcess.emit('close', 101, null);
+
+        assert.strictEqual(await probe, undefined);
+        const persistentLogs = [...info.getCalls(), ...errorLog.getCalls()].map(call => String(call.args[0]));
+        assert.ok(persistentLogs.some(message => message.includes('Cargo host target probe')));
+        assert.ok(persistentLogs.every(message => !message.includes(secret)));
+    });
+
+    test('does not expose Cargo host probe spawn errors', async () => {
+        const harness = createRustProcessHarness();
+        const info = sinon.stub(extensionLogOutputChannel, 'info');
+        const errorLog = sinon.stub(extensionLogOutputChannel, 'error');
+        const secret = 'private-cargo-spawn-error';
+        const probe = harness.rustService.getCargoHostTarget('/workspace/api', []);
+        const spawnError = new Error(secret);
+        spawnError.name = secret;
+
+        harness.childProcess.emit('error', spawnError);
+
+        assert.strictEqual(await probe, undefined);
+        const persistentLogs = [...info.getCalls(), ...errorLog.getCalls()].map(call => String(call.args[0]));
+        assert.ok(persistentLogs.some(message => message.includes('failed to start')));
+        assert.ok(persistentLogs.every(message => !message.includes(secret)));
+    });
+
+    test('does not expose synchronous Cargo host probe spawn failures', async () => {
+        const harness = createRustProcessHarness();
+        const info = sinon.stub(extensionLogOutputChannel, 'info');
+        const errorLog = sinon.stub(extensionLogOutputChannel, 'error');
+        const secret = 'private-synchronous-cargo-spawn-error';
+        const spawnError = new Error(secret);
+        spawnError.name = secret;
+        const spawn = nodeChildProcess.spawn as unknown as sinon.SinonStub;
+        spawn.throws(spawnError);
+
+        assert.strictEqual(
+            await harness.rustService.getCargoHostTarget('/workspace/api', []),
+            undefined);
+        const persistentLogs = [...info.getCalls(), ...errorLog.getCalls()].map(call => String(call.args[0]));
+        assert.ok(persistentLogs.some(message => message.includes('failed to start')));
+        assert.ok(persistentLogs.every(message => !message.includes(secret)));
     });
 
     test('does not convert an exited cargo build to cancellation while streams are closing', async () => {
@@ -515,18 +609,87 @@ suite('Rust Debugger Extension Tests', () => {
     test('discovers a legacy executable through the spawned Cargo artifact stream', async () => {
         const harness = createRustProcessHarness();
         const build = harness.rustService.build('/workspace/api', ['build'], [], undefined);
-        const artifact = {
-            reason: 'compiler-artifact',
-            target: { name: 'api', kind: ['bin'] },
-            executable: '/workspace/api/target/debug/api',
-        };
 
-        harness.childProcess.stdout.write(`${JSON.stringify(artifact)}\n`);
-        harness.childProcess.emit('close', 0, null);
+        completeLegacyCargoBuild(harness);
 
         assert.strictEqual(await build, '/workspace/api/target/debug/api');
         const spawn = nodeChildProcess.spawn as unknown as sinon.SinonStub;
         assert.deepStrictEqual(spawn.firstCall.args[1], ['build', '--message-format=json']);
+    });
+
+    test('adds the legacy JSON message format before rustc arguments', async () => {
+        const harness = createRustProcessHarness();
+        const build = harness.rustService.build(
+            '/workspace/api',
+            ['rustc', '--bin', 'api', '--', '-C', 'link-arg=--message-format=human'],
+            [],
+            undefined);
+
+        completeLegacyCargoBuild(harness);
+
+        await build;
+        const spawn = nodeChildProcess.spawn as unknown as sinon.SinonStub;
+        assert.deepStrictEqual(spawn.firstCall.args[1], [
+            'rustc',
+            '--bin',
+            'api',
+            '--message-format=json',
+            '--',
+            '-C',
+            'link-arg=--message-format=human',
+        ]);
+    });
+
+    test('replaces a split legacy Cargo message format', async () => {
+        const harness = createRustProcessHarness();
+        const build = harness.rustService.build(
+            '/workspace/api',
+            ['build', '--message-format', 'short', '--release'],
+            [],
+            undefined);
+
+        completeLegacyCargoBuild(harness);
+
+        await build;
+        const spawn = nodeChildProcess.spawn as unknown as sinon.SinonStub;
+        assert.deepStrictEqual(spawn.firstCall.args[1], ['build', '--message-format=json', '--release']);
+    });
+
+    test('replaces equals-form legacy Cargo message formats deterministically', async () => {
+        const harness = createRustProcessHarness();
+        const build = harness.rustService.build(
+            '/workspace/api',
+            ['build', '--message-format=short', '--release', '--message-format', 'human'],
+            [],
+            undefined);
+
+        completeLegacyCargoBuild(harness);
+
+        await build;
+        const spawn = nodeChildProcess.spawn as unknown as sinon.SinonStub;
+        assert.deepStrictEqual(spawn.firstCall.args[1], ['build', '--message-format=json', '--release']);
+    });
+
+    test('preserves message-format-like arguments after the Cargo separator', async () => {
+        const harness = createRustProcessHarness();
+        const build = harness.rustService.build(
+            '/workspace/api',
+            ['build', '--release', '--', '--message-format', 'human'],
+            [],
+            undefined);
+
+        completeLegacyCargoBuild(harness);
+
+        await build;
+        const spawn = nodeChildProcess.spawn as unknown as sinon.SinonStub;
+        assert.deepStrictEqual(spawn.firstCall.args[1], [
+            'build',
+            '--release',
+            '--message-format=json',
+            '--',
+            '--message-format',
+            'human',
+        ]);
     });
 
     test('uses cppvsdbg for an MSVC Rust target on a forced Windows host', async () => {
@@ -547,6 +710,118 @@ suite('Rust Debugger Extension Tests', () => {
         assert.strictEqual(debugConfig.console, 'internalConsole');
         assert.ok(Array.isArray(debugConfig.environment));
         assert.ok(rustService.buildStub.calledOnce);
+        assert.ok(rustService.getCargoHostTargetStub.notCalled);
+    });
+
+    test('does not probe when the executable path contains an MSVC target triple', async () => {
+        const { rustService, extension } = createExtension(undefined, 'win32');
+        const debugConfig = createDebugConfig();
+        debugConfig.type = extension.debugAdapter;
+
+        await extension.createDebugSessionConfigurationCallback!(
+            createLaunchConfig(['build'], '/workspace/api/target/x86_64-pc-windows-msvc/debug/api.exe'),
+            [],
+            [],
+            { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession },
+            debugConfig);
+
+        assert.ok(rustService.getCargoHostTargetStub.notCalled);
+        assert.ok(rustService.buildStub.calledOnce);
+        assert.strictEqual(debugConfig.type, 'cppvsdbg');
+    });
+
+    test('uses cppvsdbg for the default MSVC Cargo host on a forced Windows host', async () => {
+        const { rustService, extension } = createExtension(undefined, 'win32');
+        rustService.getCargoHostTargetStub.resolves('x86_64-pc-windows-msvc');
+        const debugConfig = createDebugConfig();
+        debugConfig.type = extension.debugAdapter;
+        const env = [{ name: 'RUSTFLAGS', value: '-C target-cpu=native' }];
+
+        await extension.createDebugSessionConfigurationCallback!(
+            createLaunchConfig(['build'], '/workspace/api/target/debug/api.exe'),
+            [],
+            env,
+            { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession },
+            debugConfig);
+
+        assert.ok(rustService.getCargoHostTargetStub.calledOnceWith('/workspace/api', env));
+        assert.ok(rustService.buildStub.calledOnce);
+        assert.strictEqual(debugConfig.type, 'cppvsdbg');
+    });
+
+    test('rejects the default GNU Cargo host on a forced Windows host', async () => {
+        const { rustService, extension } = createExtension(undefined, 'win32');
+        rustService.getCargoHostTargetStub.resolves('x86_64-pc-windows-gnu');
+        const debugConfig = createDebugConfig();
+        debugConfig.type = extension.debugAdapter;
+
+        await assert.rejects(
+            () => extension.createDebugSessionConfigurationCallback!(
+                createLaunchConfig(['build'], '/workspace/api/target/debug/api.exe'),
+                [],
+                [],
+                { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession },
+                debugConfig),
+            /cannot debug Rust target.+CodeLLDB.+windows-msvc/);
+
+        assert.ok(rustService.getCargoHostTargetStub.calledOnce);
+        assert.ok(rustService.buildStub.notCalled);
+    });
+
+    test('propagates cancellation from the Cargo host probe on a forced Windows host', async () => {
+        const { rustService, extension } = createExtension(undefined, 'win32');
+        rustService.getCargoHostTargetStub.rejects(new vscode.CancellationError());
+        const debugConfig = createDebugConfig();
+        debugConfig.type = extension.debugAdapter;
+
+        await assert.rejects(
+            () => extension.createDebugSessionConfigurationCallback!(
+                createLaunchConfig(['build'], '/workspace/api/target/debug/api.exe'),
+                [],
+                [],
+                { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession },
+                debugConfig),
+            error => error instanceof vscode.CancellationError);
+
+        assert.ok(rustService.getCargoHostTargetStub.calledOnce);
+        assert.ok(rustService.buildStub.notCalled);
+    });
+
+    test('continues when the Cargo host probe cannot determine a target on a forced Windows host', async () => {
+        const { rustService, extension } = createExtension(undefined, 'win32');
+        const debugConfig = createDebugConfig();
+        debugConfig.type = extension.debugAdapter;
+
+        await extension.createDebugSessionConfigurationCallback!(
+            createLaunchConfig(['build'], '/workspace/api/target/debug/api.exe'),
+            [],
+            [],
+            { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession },
+            debugConfig);
+
+        assert.ok(rustService.getCargoHostTargetStub.calledOnce);
+        assert.ok(rustService.buildStub.calledOnce);
+        assert.strictEqual(debugConfig.type, 'cppvsdbg');
+    });
+
+    test('does not probe the Cargo host when CodeLLDB is selected on Windows', async () => {
+        const { rustService, extension } = createExtension(
+            undefined,
+            'win32',
+            ['vadimcn.vscode-lldb']);
+        const debugConfig = createDebugConfig();
+        debugConfig.type = extension.debugAdapter;
+
+        await extension.createDebugSessionConfigurationCallback!(
+            createLaunchConfig(['build'], '/workspace/api/target/debug/api.exe'),
+            [],
+            [],
+            { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession },
+            debugConfig);
+
+        assert.ok(rustService.getCargoHostTargetStub.notCalled);
+        assert.ok(rustService.buildStub.calledOnce);
+        assert.strictEqual(debugConfig.type, 'lldb');
     });
 
     test('preserves a user-configured Rust debug adapter', async () => {
@@ -812,4 +1087,16 @@ function createTestChildProcess(): TestChildProcess {
         pid: undefined,
         kill: sinon.stub().returns(true),
     }) as unknown as TestChildProcess;
+}
+
+function completeLegacyCargoBuild(
+    harness: ReturnType<typeof createRustProcessHarness>,
+    executable = '/workspace/api/target/debug/api'
+): void {
+    harness.childProcess.stdout.write(`${JSON.stringify({
+        reason: 'compiler-artifact',
+        target: { name: 'api', kind: ['bin'] },
+        executable,
+    })}\n`);
+    harness.childProcess.emit('close', 0, null);
 }
