@@ -1,8 +1,8 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import { getCommandInvocationCount, getTerminalCommandCount, isSamePath, waitForCommandOutcome, waitForExtensionState, waitForRepositoryIdle, waitForTerminalCommand, waitForWorkspaceAppHost } from './helpers/assertions';
-import { createAdditionalAppHostCandidate, executeE2eControlCommand, removeAdditionalAppHostCandidate, removeWorkspaceAppHostConfig, restoreE2eCliPathForE2E, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, setE2eCliPathForE2E, setTerminalCommandExecutionSuppressedForE2E, writeWorkspaceCliPath } from './helpers/fixtures';
+import { getCommandInvocationCount, getTerminalCommandCount, isSamePath, waitForCommandOutcome, waitForExtensionState, waitForRepositoryIdle, waitForSelectedWorkspaceAppHost, waitForTerminalCommand, waitForWorkspaceAppHost } from './helpers/assertions';
+import { createAdditionalAppHostCandidate, executeE2eControlCommand, removeAdditionalAppHostCandidate, removeWorkspaceAppHostConfig, restoreE2eCliPathForE2E, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, setE2eCliPathForE2E, setTerminalCommandExecutionSuppressedForE2E, writeWorkspaceCliPath, writeWorkspaceSetting } from './helpers/fixtures';
 import { getWorkspaceRoot } from './helpers/paths';
 import { chooseActiveQuickPick, executeCommandFromPalette, openAspireView, waitForEditorTitle, waitForNotificationMessage, waitForTerminalChannel, waitForWorkbenchText } from './helpers/vscode';
 
@@ -14,6 +14,7 @@ suite('Aspire command palette E2E', function () {
             () => executeE2eControlCommand({ name: 'closeAllEditors' }),
             () => setCliUnavailableForE2E(false),
             () => setTerminalCommandExecutionSuppressedForE2E(false),
+            () => writeWorkspaceSetting('aspire.nugetSource', undefined),
             () => restoreE2eCliPathForE2E(),
             () => restoreWorkspaceCliPath(),
             () => restoreWorkspaceAppHostConfig(),
@@ -74,6 +75,51 @@ suite('Aspire command palette E2E', function () {
         assert.strictEqual(terminalCommand.executionSuppressed, true);
     });
 
+    test('routes the configured NuGet source through the registered new and add commands', async () => {
+        const source = 'https://example.invalid/v3/index.json?feed="quoted value"&marker=\'$(touch no);|$HOME\'';
+        writeWorkspaceSetting('aspire.nugetSource', source);
+
+        await openAspireView();
+        await waitForRepositoryIdle();
+        const discovered = await waitForSelectedWorkspaceAppHost();
+        const expectedAppHostPath = discovered.state.workspaceAppHostPath;
+        assert.ok(expectedAppHostPath, 'Expected a selected workspace AppHost path.');
+
+        await setTerminalCommandExecutionSuppressedForE2E(true);
+
+        let beforeInvocation = getCommandInvocationCount('aspire-vscode.new');
+        let beforeTerminalCommand = getTerminalCommandCount();
+        await executeE2eControlCommand({ name: 'executeAspireCommand', commandId: 'aspire-vscode.new' });
+        await waitForCommandOutcome('aspire-vscode.new', 'success', 60000, beforeInvocation);
+        const newTerminalCommand = await waitForTerminalCommand(
+            event => event.executionSuppressed && event.subcommand === 'new',
+            'suppressed Aspire: New Project terminal routing with a configured NuGet source',
+            60000,
+            beforeTerminalCommand);
+        assert.strictEqual(newTerminalCommand.executionSuppressed, true);
+        assert.strictEqual(newTerminalCommand.subcommand, 'new');
+        assert.deepStrictEqual(newTerminalCommand.additionalArgs, ['--source', source]);
+        assert.ok(
+            newTerminalCommand.commandLine.includes(getQuotedShellArgumentPair('--source', source)),
+            `Expected new command line to quote the configured NuGet source once. Command line: ${newTerminalCommand.commandLine}`);
+
+        beforeInvocation = getCommandInvocationCount('aspire-vscode.add');
+        beforeTerminalCommand = getTerminalCommandCount();
+        await executeE2eControlCommand({ name: 'executeAspireCommand', commandId: 'aspire-vscode.add' });
+        await waitForCommandOutcome('aspire-vscode.add', 'success', 60000, beforeInvocation);
+        const addTerminalCommand = await waitForTerminalCommand(
+            event => event.executionSuppressed && event.subcommand === 'add',
+            'suppressed Aspire: Add Package terminal routing with a configured NuGet source',
+            60000,
+            beforeTerminalCommand);
+        assert.strictEqual(addTerminalCommand.executionSuppressed, true);
+        assert.strictEqual(addTerminalCommand.subcommand, 'add');
+        assert.deepStrictEqual(addTerminalCommand.additionalArgs, ['--apphost', expectedAppHostPath, '--source', source]);
+        assert.ok(
+            addTerminalCommand.commandLine.includes(getQuotedShellArgumentPair('--source', source)),
+            `Expected add command line to quote the configured NuGet source once. Command line: ${addTerminalCommand.commandLine}`);
+    });
+
     test('opens settings UI and writes launch configuration through command palette commands', async () => {
         const settingsBefore = getCommandInvocationCount('aspire-vscode.settings');
         await executeCommandFromPalette('Aspire: Extension settings');
@@ -113,3 +159,15 @@ suite('Aspire command palette E2E', function () {
         assert.ok(stateFile.state.workspaceAppHostCandidatePaths.length >= 2);
     });
 });
+
+function quoteExpectedShellArg(arg: string): string {
+    if (process.platform === 'win32') {
+        return `"${arg.replace(/`/g, '``').replace(/"/g, '`"').replace(/\$/g, '`$')}"`;
+    }
+
+    return `'${arg.replace(/'/g, "'\"'\"'")}'`;
+}
+
+function getQuotedShellArgumentPair(flag: string, value: string): string {
+    return `${quoteExpectedShellArg(flag)} ${quoteExpectedShellArg(value)}`;
+}
