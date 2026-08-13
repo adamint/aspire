@@ -26,7 +26,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         var content = await PublishDockerfileAsync();
 
         Assert.StartsWith("FROM docker.io/library/rust:1.97-alpine3.24 AS build", content);
-        Assert.Contains($"{Environment.NewLine}FROM docker.io/library/alpine:3.24{Environment.NewLine}", content);
+        Assert.Contains("\nFROM docker.io/library/alpine:3.24\n", content);
         await Verify(content);
     }
 

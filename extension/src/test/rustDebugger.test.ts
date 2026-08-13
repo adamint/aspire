@@ -150,7 +150,13 @@ suite('Rust Debugger Extension Tests', () => {
         assert.strictEqual(debugConfig.program, '/workspace/api/target/release/api');
         assert.strictEqual(debugConfig.cwd, '/workspace/api');
         assert.deepStrictEqual(debugConfig.args, ['--listen', ':8080']);
-        assert.ok(rustService.getCargoHostTargetStub.notCalled);
+        if (process.platform === 'win32') {
+            assert.ok(rustService.getCargoHostTargetStub.calledOnceWith(
+                '/workspace/api',
+                [{ name: 'RUSTFLAGS', value: '-C target-cpu=native' }]));
+        } else {
+            assert.ok(rustService.getCargoHostTargetStub.notCalled);
+        }
 
         if (rustDebugAdapter === 'cppvsdbg') {
             assert.strictEqual(debugConfig.console, 'internalConsole');
