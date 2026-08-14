@@ -12,6 +12,11 @@
         <target state="translated">Canal que se va a usar para plantillas (estable, de ensayo, diariamente)</target>
         <note />
       </trans-unit>
+      <trans-unit id="ConfiguredLinkedSourceNotSupported">
+        <source>Symbolic links and junctions are not supported in persistent NuGet source configuration. Use the resolved local directory or pass the linked source explicitly with --source.</source>
+        <target state="new">Symbolic links and junctions are not supported in persistent NuGet source configuration. Use the resolved local directory or pass the linked source explicitly with --source.</target>
+        <note />
+      </trans-unit>
       <trans-unit id="ConfiguredRemoteSourceNotSupported">
         <source>Remote file shares are not supported in persistent NuGet source configuration. Use an HTTP(S) feed or pass the remote source explicitly with --source.</source>
         <target state="new">Remote file shares are not supported in persistent NuGet source configuration. Use an HTTP(S) feed or pass the remote source explicitly with --source.</target>

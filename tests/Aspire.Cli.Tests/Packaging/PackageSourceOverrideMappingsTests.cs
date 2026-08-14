@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Aspire.Cli.Packaging;
+using Aspire.Cli.Utils;
 
 namespace Aspire.Cli.Tests.Packaging;
 
@@ -62,6 +63,8 @@ public class PackageSourceOverrideMappingsTests(ITestOutputHelper outputHelper)
     [InlineData("file:///%2F%2Fexample.test/share", true)]
     [InlineData("file:///%2Fattacker.example/share", true)]
     [InlineData("file:///%2F%3F%2FUNC/example.test/share", true)]
+    [InlineData("file:///%3F%3F/UNC/attacker/share", true)]
+    [InlineData("file:///%3F%3F%5CUNC%5Cattacker%5Cshare", true)]
     [InlineData("file:///C:/feed", false)]
     [InlineData("file:///usr/feed", false)]
     public void IsRemoteFileSystemSource_FileUri_ReturnsExpectedResult(string source, bool expected)
@@ -71,9 +74,47 @@ public class PackageSourceOverrideMappingsTests(ITestOutputHelper outputHelper)
 
     [Theory]
     [InlineData(@"C:\feed", false)]
+    [InlineData("/usr/feed", false)]
     [InlineData(@"\\example.test\share", true)]
-    public void IsRemoteFileSystemSource_WindowsPath_ReturnsExpectedResult(string source, bool expected)
+    [InlineData("//example.test/share", true)]
+    [InlineData(@"/\attacker\share", true)]
+    [InlineData(@"\/attacker/share", true)]
+    [InlineData(@"\??\UNC\attacker\share", true)]
+    [InlineData("/??/UNC/attacker/share", true)]
+    [InlineData(@"\??/UNC\attacker\share", true)]
+    [InlineData(@"/??\UNC/attacker/share", true)]
+    public void IsRemoteFileSystemSource_LocalPath_ReturnsExpectedResult(string source, bool expected)
     {
         Assert.Equal(expected, PackageSourceOverrideMappings.IsRemoteFileSystemSource(source));
+    }
+
+    [Fact]
+    public void GetFirstReparsePoint_RelativeSourceRootIsLink_ReturnsLink()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var target = workspace.CreateDirectory("target");
+        var link = Path.Combine(workspace.WorkspaceRoot.FullName, "feed");
+        ReparsePoint.CreateOrReplace(link, target.FullName);
+
+        var result = PackageSourceOverrideMappings.GetFirstReparsePoint("feed", workspace.WorkspaceRoot);
+
+        Assert.Equal(link, result);
+    }
+
+    [Fact]
+    public void GetFirstReparsePoint_RelativeSourceContainsLink_ReturnsFirstLink()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var target = workspace.CreateDirectory("target");
+        Directory.CreateDirectory(Path.Combine(target.FullName, "subdir"));
+        var feed = workspace.CreateDirectory("feed");
+        var link = Path.Combine(feed.FullName, "link");
+        ReparsePoint.CreateOrReplace(link, target.FullName);
+
+        var result = PackageSourceOverrideMappings.GetFirstReparsePoint(
+            Path.Combine("feed", "link", "subdir"),
+            workspace.WorkspaceRoot);
+
+        Assert.Equal(link, result);
     }
 }

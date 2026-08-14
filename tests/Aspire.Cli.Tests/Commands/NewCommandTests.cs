@@ -1681,6 +1681,26 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         AssertSourceOverrideNuGetConfig(Path.Combine(workspace.WorkspaceRoot.FullName, "output"), sourceOverride);
     }
 
+    [Fact]
+    public async Task NewCommandWithExplicitLinkedSourceCreatesProject()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var target = CreateLocalTemplateFeed(Path.Combine(workspace.WorkspaceRoot.FullName, "target-feed"));
+        var sourceOverride = Path.Combine(workspace.WorkspaceRoot.FullName, "source-feed");
+        ReparsePoint.CreateOrReplace(sourceOverride, target);
+
+        var services = CreateServiceCollection(workspace);
+
+        using var provider = services.BuildServiceProvider();
+        var command = provider.GetRequiredService<NewCommand>();
+        var result = command.Parse($"new aspire-empty --name TestApp --output ./output --language csharp --localhost-tld false --suppress-agent-init --source \"{sourceOverride}\"");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        AssertSourceOverrideNuGetConfig(Path.Combine(workspace.WorkspaceRoot.FullName, "output"), sourceOverride);
+    }
+
     [Theory]
     [InlineData("https://user:token@example.invalid/v3/index.json")]
     [InlineData("https://example.invalid/v3/index.json?sig=token")]
@@ -1732,6 +1752,62 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             """
             {
               "nugetSource": "file://example.test/share"
+            }
+            """);
+
+        var cache = new FakeNuGetPackageCache
+        {
+            GetTemplatePackagesAsyncCallback = (_, _, _, _) =>
+            {
+                templateDiscoveryInvoked = true;
+                return Task.FromResult<IEnumerable<NuGetPackage>>([]);
+            }
+        };
+        var services = CreateServiceCollection(workspace, options =>
+        {
+            options.InteractionServiceFactory = _ => interactionService;
+            options.NuGetPackageCacheFactory = _ => cache;
+        });
+
+        services.AddSingleton<IScaffoldingService>(new TestScaffoldingService
+        {
+            ScaffoldAsyncCallback = (_, _) =>
+            {
+                scaffoldingInvoked = true;
+                return Task.FromResult(true);
+            }
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var command = provider.GetRequiredService<NewCommand>();
+        var result = command.Parse("new aspire-empty --name TestApp --output ./output --language typescript --localhost-tld false --suppress-agent-init");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
+        Assert.False(templateDiscoveryInvoked);
+        Assert.False(scaffoldingInvoked);
+        Assert.False(Directory.Exists(Path.Combine(workspace.WorkspaceRoot.FullName, "output")));
+        Assert.Equal([expectedError], interactionService.DisplayedErrors);
+    }
+
+    [Fact]
+    public async Task NewCommandWithConfiguredLinkedSourceFailsBeforeCreatingProject()
+    {
+        var expectedError = NewCommandStrings.ConfiguredLinkedSourceNotSupported;
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var target = workspace.CreateDirectory("target-feed");
+        var link = Path.Combine(workspace.WorkspaceRoot.FullName, "feed");
+        ReparsePoint.CreateOrReplace(link, target.FullName);
+        var templateDiscoveryInvoked = false;
+        var scaffoldingInvoked = false;
+        var interactionService = new TestInteractionService();
+
+        await File.WriteAllTextAsync(
+            Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName),
+            """
+            {
+              "nugetSource": "feed"
             }
             """);
 

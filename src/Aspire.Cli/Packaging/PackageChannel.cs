@@ -401,7 +401,8 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
         return packageSource.EnumerateFiles("*.nupkg", new EnumerationOptions
         {
             RecurseSubdirectories = true,
-            IgnoreInaccessible = true
+            IgnoreInaccessible = true,
+            AttributesToSkip = FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReparsePoint
         });
     }
 

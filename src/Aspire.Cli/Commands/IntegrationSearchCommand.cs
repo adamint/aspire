@@ -64,15 +64,17 @@ internal abstract class IntegrationDiscoveryCommand : BaseCommand
                 return CommandResult.FromExitCode(exitCode);
             }
 
-            var packageSource = await _integrationPackageSearchService.ResolvePackageSourceAsync(
+            var packageSourceResolution = await _integrationPackageSearchService.ResolvePackageSourceAsync(
                 explicitSource: null,
                 workingDirectory,
                 cancellationToken);
-            if (IntegrationPackageSearchService.GetPackageSourceValidationError(packageSource, isExplicitSource: false) is { } sourceValidationError)
+            if (IntegrationPackageSearchService.GetPackageSourceValidationError(packageSourceResolution) is { } sourceValidationError)
             {
                 InteractionService.DisplayError(sourceValidationError);
                 return CommandResult.Failure(CliExitCodes.InvalidCommand);
             }
+
+            var packageSource = packageSourceResolution?.ResolvedValue;
 
             // Match `aspire add`: a non-C# (polyglot) AppHost can only consume integrations with ATS
             // export coverage (the `polyglot` NuGet tag), so list/search hide the rest unless --all is

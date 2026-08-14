@@ -501,6 +501,12 @@ internal sealed class NewCommand : BaseCommand
                 InteractionService.DisplayError(NewCommandStrings.ConfiguredRemoteSourceNotSupported);
                 return CommandResult.Failure(CliExitCodes.InvalidCommand);
             }
+            if (!sourceIsExplicit &&
+                PackageSourceOverrideMappings.GetFirstReparsePoint(sourceResolution.Value, sourceResolution.BaseDirectory) is not null)
+            {
+                InteractionService.DisplayError(NewCommandStrings.ConfiguredLinkedSourceNotSupported);
+                return CommandResult.Failure(CliExitCodes.InvalidCommand);
+            }
             if (PackageSourceOverrideMappings.GetMissingLocalDirectory(source) is { } missingDirectory)
             {
                 InteractionService.DisplayError(string.Format(

@@ -7,6 +7,7 @@ using Aspire.Cli.Configuration;
 using Aspire.Cli.Packaging;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Tests.TestServices;
+using Aspire.Cli.Utils;
 using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.Logging.Abstractions;
 using NuGetPackage = Aspire.Shared.NuGetPackageCli;
@@ -180,6 +181,36 @@ public class PackageChannelTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var packagesDirectory = workspace.CreateDirectory("packages");
         CreateHierarchicalPackage(packagesDirectory, "Aspire.ProjectTemplates", "13.4.0");
+
+        var packageSource = packagesDirectory.FullName.Replace('\\', '/');
+        var cache = new FakeNuGetPackageCache
+        {
+            GetTemplatePackagesAsyncCallback = (_, _, _, _) => throw new InvalidOperationException("Local package sources should be enumerated directly.")
+        };
+        var channel = PackageChannel.CreateImplicitChannel(cache, new TestFeatures(), NullLogger.Instance);
+
+        var package = Assert.Single(await channel.GetTemplatePackagesAsync(
+            workspace.WorkspaceRoot,
+            PackageSourceOverrideMappings.CreateForTemplateOperations(packageSource),
+            CancellationToken.None).DefaultTimeout());
+
+        Assert.Equal("Aspire.ProjectTemplates", package.Id);
+        Assert.Equal("13.4.0", package.Version);
+        Assert.Equal(packageSource, package.Source);
+    }
+
+    [Fact]
+    public async Task GetTemplatePackagesAsync_ImplicitChannelWithLocalOverride_SkipsNestedReparsePoints()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var packagesDirectory = workspace.CreateDirectory("packages");
+        File.WriteAllText(Path.Combine(packagesDirectory.FullName, "Aspire.ProjectTemplates.13.4.0.nupkg"), string.Empty);
+
+        var linkedTarget = workspace.CreateDirectory("linked-target");
+        File.WriteAllText(Path.Combine(linkedTarget.FullName, "Aspire.ProjectTemplates.13.5.0.nupkg"), string.Empty);
+        ReparsePoint.CreateOrReplace(
+            Path.Combine(packagesDirectory.FullName, "linked-packages"),
+            linkedTarget.FullName);
 
         var packageSource = packagesDirectory.FullName.Replace('\\', '/');
         var cache = new FakeNuGetPackageCache

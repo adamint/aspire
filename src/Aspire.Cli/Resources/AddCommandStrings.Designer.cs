@@ -149,6 +149,14 @@ namespace Aspire.Cli.Resources {
             }
         }
 
+        public static string ConfiguredLinkedSourceNotSupported
+        {
+            get
+            {
+                return ResourceManager.GetString("ConfiguredLinkedSourceNotSupported", resourceCulture);
+            }
+        }
+
         public static string SourceWithCredentialsNotSupported
         {
             get

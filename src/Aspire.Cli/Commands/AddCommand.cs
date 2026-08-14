@@ -156,16 +156,16 @@ internal sealed class AddCommand : BaseCommand
                 return AddCommandFromExitCode(exitCode);
             }
 
-            var source = await _integrationPackageSearchService.ResolvePackageSourceAsync(
+            var sourceResolution = await _integrationPackageSearchService.ResolvePackageSourceAsync(
                 explicitSource,
                 effectiveAppHostProjectFile.Directory!,
                 cancellationToken);
-            if (IntegrationPackageSearchService.GetPackageSourceValidationError(
-                source,
-                isExplicitSource: !string.IsNullOrWhiteSpace(explicitSource)) is { } sourceValidationError)
+            if (IntegrationPackageSearchService.GetPackageSourceValidationError(sourceResolution) is { } sourceValidationError)
             {
                 return AddCommandFailure(CliExitCodes.InvalidCommand, sourceValidationError);
             }
+
+            var source = sourceResolution?.ResolvedValue;
 
             // Package discovery and any later version lookup must resolve against the same source override.
             // Reusing one mapping set prevents version selection from silently falling back to the channel feed

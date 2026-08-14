@@ -122,11 +122,15 @@ internal sealed class IntegrationPackageSearchService(
             : allChannels.Where(c => c.Type is PackageChannelType.Implicit);
     }
 
-    public async Task<string?> ResolvePackageSourceAsync(string? explicitSource, DirectoryInfo workingDirectory, CancellationToken cancellationToken)
+    public async Task<PackageSourceResolution?> ResolvePackageSourceAsync(string? explicitSource, DirectoryInfo workingDirectory, CancellationToken cancellationToken)
     {
         if (!string.IsNullOrWhiteSpace(explicitSource))
         {
-            return PackageSourceOverrideMappings.ResolveForWorkingDirectory(explicitSource, executionContext.WorkingDirectory);
+            return new PackageSourceResolution(
+                explicitSource,
+                PackageSourceOverrideMappings.ResolveForWorkingDirectory(explicitSource, executionContext.WorkingDirectory),
+                executionContext.WorkingDirectory,
+                IsExplicit: true);
         }
 
         var configuredSource = await configurationService.GetConfigurationFromDirectoryWithOriginAsync(
@@ -142,29 +146,42 @@ internal sealed class IntegrationPackageSearchService(
         // Preserve configured remote paths such as \\server\share until validation rejects them.
         // Resolving first on Unix would turn the backslashes into a cwd-relative local path and
         // allow the missing-directory probe to run instead.
-        return PackageSourceOverrideMappings.IsRemoteFileSystemSource(configuredSource.Value)
+        var resolvedSource = PackageSourceOverrideMappings.IsRemoteFileSystemSource(configuredSource.Value)
             ? configuredSource.Value
             : PackageSourceOverrideMappings.ResolveForWorkingDirectory(configuredSource.Value, configuredSource.BaseDirectory);
+        return new PackageSourceResolution(
+            configuredSource.Value,
+            resolvedSource,
+            configuredSource.BaseDirectory,
+            IsExplicit: false);
     }
 
-    public static string? GetPackageSourceValidationError(string? packageSource, bool isExplicitSource)
+    public static string? GetPackageSourceValidationError(PackageSourceResolution? packageSource)
     {
-        if (string.IsNullOrWhiteSpace(packageSource))
+        if (packageSource is null)
         {
             return null;
         }
 
-        if (PackageSourceOverrideMappings.HasCredentialMaterial(packageSource))
+        if (PackageSourceOverrideMappings.HasCredentialMaterial(packageSource.ResolvedValue))
         {
             return AddCommandStrings.SourceWithCredentialsNotSupported;
         }
 
-        if (!isExplicitSource && PackageSourceOverrideMappings.IsRemoteFileSystemSource(packageSource))
+        if (!packageSource.IsExplicit &&
+            (PackageSourceOverrideMappings.IsRemoteFileSystemSource(packageSource.RawValue) ||
+                PackageSourceOverrideMappings.IsRemoteFileSystemSource(packageSource.ResolvedValue)))
         {
             return AddCommandStrings.ConfiguredRemoteSourceNotSupported;
         }
 
-        return PackageSourceOverrideMappings.GetMissingLocalDirectory(packageSource) is { } missingDirectory
+        if (!packageSource.IsExplicit &&
+            PackageSourceOverrideMappings.GetFirstReparsePoint(packageSource.RawValue, packageSource.BaseDirectory) is not null)
+        {
+            return AddCommandStrings.ConfiguredLinkedSourceNotSupported;
+        }
+
+        return PackageSourceOverrideMappings.GetMissingLocalDirectory(packageSource.ResolvedValue) is { } missingDirectory
             ? string.Format(CultureInfo.CurrentCulture, AddCommandStrings.SourceDirectoryNotFound, missingDirectory)
             : null;
     }
@@ -260,3 +277,12 @@ internal sealed class IntegrationPackageSearchService(
             StringUtils.CalculateFuzzyScore(searchTerm, package.Package.Id));
     }
 }
+
+/// <summary>
+/// Preserves a package source's configured value and resolution origin for validation.
+/// </summary>
+internal sealed record PackageSourceResolution(
+    string RawValue,
+    string ResolvedValue,
+    DirectoryInfo BaseDirectory,
+    bool IsExplicit);

@@ -47,8 +47,7 @@ internal static class PackageSourceOverrideMappings
         ArgumentException.ThrowIfNullOrWhiteSpace(source);
 
         var trimmedSource = source.Trim();
-        if (trimmedSource.StartsWith(@"\\", StringComparison.Ordinal) ||
-            OperatingSystem.IsWindows() && trimmedSource.StartsWith("//", StringComparison.Ordinal))
+        if (HasWindowsRemotePathPrefix(trimmedSource))
         {
             return true;
         }
@@ -76,9 +75,38 @@ internal static class PackageSourceOverrideMappings
         // Uri.GetComponents(Path, Unescaped) can collapse the first encoded separator, so use
         // the complete decoded LocalPath and classify it before any filesystem API receives it.
         var decodedPath = uri.LocalPath;
-        return decodedPath.Length >= 2 &&
-            IsWindowsDirectorySeparator(decodedPath[0]) &&
-            IsWindowsDirectorySeparator(decodedPath[1]);
+        return HasWindowsRemotePathPrefix(decodedPath);
+    }
+
+    public static string? GetFirstReparsePoint(string source, DirectoryInfo baseDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(source);
+        ArgumentNullException.ThrowIfNull(baseDirectory);
+
+        var sourceKind = ClassifySource(source, out var localDirectory);
+        if (sourceKind is PackageSourceKind.Http)
+        {
+            return null;
+        }
+
+        var isRelativeLocalPath = sourceKind is PackageSourceKind.LocalPath &&
+            !Path.IsPathFullyQualified(source);
+
+        // Relative configuration is inspected from its declaring directory on every OS, which
+        // avoids rejecting unrelated symlinked ancestors such as macOS system temporary paths.
+        // Absolute sources are inspected from the filesystem root only on Windows, where following
+        // a junction or symlink can cross onto an authenticated remote filesystem.
+        if (!isRelativeLocalPath && !OperatingSystem.IsWindows())
+        {
+            return null;
+        }
+
+        var resolvedLocalDirectory = Path.GetFullPath(localDirectory!, baseDirectory.FullName);
+        var inspectionBase = isRelativeLocalPath
+            ? Path.GetFullPath(baseDirectory.FullName)
+            : Path.GetPathRoot(resolvedLocalDirectory)!;
+
+        return GetFirstReparsePoint(resolvedLocalDirectory, inspectionBase);
     }
 
     public static string? GetNormalizedLocalDirectory(string source)
@@ -181,6 +209,57 @@ internal static class PackageSourceOverrideMappings
     private static bool IsWindowsDirectorySeparator(char value)
     {
         return value is '\\' or '/';
+    }
+
+    private static bool HasWindowsRemotePathPrefix(string path)
+    {
+        if (path.Length >= 2 &&
+            IsWindowsDirectorySeparator(path[0]) &&
+            IsWindowsDirectorySeparator(path[1]))
+        {
+            return true;
+        }
+
+        // Windows accepts either slash as a separator, including mixed forms:
+        //   /\server\share
+        //   \??/UNC\server\share
+        return path.Length >= 4 &&
+            IsWindowsDirectorySeparator(path[0]) &&
+            path[1] == '?' &&
+            path[2] == '?' &&
+            IsWindowsDirectorySeparator(path[3]);
+    }
+
+    private static string? GetFirstReparsePoint(string localDirectory, string inspectionBase)
+    {
+        var relativePath = Path.GetRelativePath(inspectionBase, localDirectory);
+        var currentPath = inspectionBase;
+
+        foreach (var component in relativePath.Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries))
+        {
+            currentPath = Path.GetFullPath(Path.Combine(currentPath, component));
+            if (component is "." or "..")
+            {
+                continue;
+            }
+
+            try
+            {
+                if ((File.GetAttributes(currentPath) & FileAttributes.ReparsePoint) is FileAttributes.ReparsePoint)
+                {
+                    return currentPath;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Missing and inaccessible components retain the existing missing-source behavior.
+                return null;
+            }
+        }
+
+        return null;
     }
 
     private enum PackageSourceKind
