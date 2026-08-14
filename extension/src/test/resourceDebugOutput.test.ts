@@ -39,4 +39,18 @@ suite('Resource debug output pid markers', () => {
             }, 'ASPIRE_E2E_NODE_PID'),
             /Expected the debuggee to print ASPIRE_E2E_NODE_PID/);
     });
+
+    test('does not combine partial pid markers across noncontiguous output captures', () => {
+        assert.throws(
+            () => readReportedPidFromDebugOutput({
+                resourceDebugSession: { id: 'resource-session' },
+                outputHead: [
+                    { sessionId: 'resource-session', sessionType: 'pwa-node', output: 'ASPIRE_E2E_NODE_PID=' },
+                ],
+                outputSample: [
+                    { sessionId: 'resource-session', sessionType: 'pwa-node', output: '12345\n' },
+                ],
+            }, 'ASPIRE_E2E_NODE_PID'),
+            /Expected the debuggee to print ASPIRE_E2E_NODE_PID/);
+    });
 });

@@ -11,15 +11,17 @@ export interface ResourceDebugOutputProof {
  * Reads a pid the debuggee printed, for example:
  *   ASPIRE_E2E_NODE_CHILD_PID=54321
  * The value arrives as DAP `output` events, which can split or batch lines, so the whole captured
- * output is searched rather than a single event.
+ * output is searched rather than a single event. The head and sample captures are searched
+ * independently because a ring-buffer wrap can leave an unknown gap between them.
  */
 export function readReportedPidFromDebugOutput(proof: ResourceDebugOutputProof, marker: string): number {
-    const events = [...proof.outputHead, ...proof.outputSample];
-    const stoppedSessionEvents = events.filter(event => event.sessionId === proof.resourceDebugSession?.id);
-    const stoppedSessionMatches = findPidMatches(stoppedSessionEvents, marker);
+    const captures = [proof.outputHead, proof.outputSample];
+    const stoppedSessionMatches = captures.flatMap(events =>
+        findPidMatches(events.filter(event => event.sessionId === proof.resourceDebugSession?.id), marker));
     const matches = stoppedSessionMatches.length > 0
         ? stoppedSessionMatches
-        : findPidMatches(events, marker);
+        : captures.flatMap(events => findPidMatches(events, marker));
+    const events = captures.flat();
 
     assert.ok(matches.length > 0, `Expected the debuggee to print ${marker} in its debug output: ${JSON.stringify(events)}`);
 
