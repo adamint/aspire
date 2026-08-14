@@ -212,6 +212,10 @@
       "description": "The language identifier for this AppHost (e.g., \"typescript\", \"python\"). Used to determine which runtime to use for execution.",
       "type": "string"
     },
+    "nugetSource": {
+      "description": "The default NuGet source for package and template operations. Explicit --source arguments override this value.",
+      "type": "string"
+    },
     "packages": {
       "description": "Package references as an object literal (like npm's package.json). Key is package name, value is version.",
       "type": "object",
