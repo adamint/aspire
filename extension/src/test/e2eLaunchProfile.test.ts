@@ -2346,6 +2346,7 @@ suite('E2E launch profile', () => {
 
     test('gives resource debugger shards enough runner time for their bounded suite budget', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = readRunnerSource(extensionRoot);
         const resourceDebugger = readResourceDebuggerSource(extensionRoot);
         const workflow = normalizeLineEndings(
             fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8'));
@@ -2359,6 +2360,11 @@ suite('E2E launch profile', () => {
         // The first two tests share one proof, the third test runs another proof, and every test
         // executes teardown. Keep additional process-runner time for Mocha and browser shutdown.
         const worstCaseSuiteTimeoutMs = (2 * Number(proofTimeoutMatch[1])) + (3 * Number(teardownTimeoutMatch[1]));
+        const resourceAwareDefaultTimeoutMatch = /const defaultRunTestsTimeoutMs = includeNodeResourceFixture \? (\d+) : 2400000;/.exec(runner);
+        assert.ok(resourceAwareDefaultTimeoutMatch, 'Expected the local runner default to account for the resource debugger spec.');
+        assert.ok(
+            Number(resourceAwareDefaultTimeoutMatch[1]) >= worstCaseSuiteTimeoutMs + 2400000 + 300000,
+            'The full-suite runner timeout must preserve the previous suite budget plus the resource debugger budget and cleanup slack.');
         const resourceShardBlocks = workflow
             .split('\n          - name: ')
             .filter(block => block.includes('\n            shardName: resource-debugger\n'));
@@ -2384,6 +2390,9 @@ suite('E2E launch profile', () => {
         assert.ok(
             contributing.includes('ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS=3600000 ASPIRE_EXTENSION_E2E_SHARD=resource-debugger'),
             'The documented resource debugger command must use the same process-runner timeout as CI.');
+        assert.ok(
+            contributing.includes(`ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS=${resourceAwareDefaultTimeoutMatch[1]} ASPIRE_EXTENSION_E2E_CLI_PATH=/path/to/aspire corepack yarn test:e2e`),
+            'The documented full-suite command must expose its larger resource-aware timeout.');
     });
 
     test('applies resource debugger mutations with Windows line endings', () => {

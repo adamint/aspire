@@ -212,7 +212,8 @@ async function main() {
 
 [function getRunTestsTimeoutMs]
 function getRunTestsTimeoutMs() {
-    const configured = Number(process.env.ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS || 2400000);
+    const defaultRunTestsTimeoutMs = includeNodeResourceFixture ? 6000000 : 2400000;
+    const configured = Number(process.env.ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS || defaultRunTestsTimeoutMs);
     if (!Number.isFinite(configured) || configured <= 0) {
         throw new Error(`ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS must be a positive number. Got '${process.env.ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS}'.`);
     }
