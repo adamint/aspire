@@ -630,7 +630,7 @@ public class AspireConfigFileTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public void LoadOrCreate_MigratesLegacy_FiltersDestinationPropertyCollisions()
+    public void LoadOrCreate_MigratesLegacy_MergesForwardAuthoredConfiguration()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var root = workspace.WorkspaceRoot.FullName;
@@ -641,14 +641,28 @@ public class AspireConfigFileTests(ITestOutputHelper outputHelper)
               "appHostPath": "../mapped-apphost.mts",
               "sdkVersion": "13.2.0",
               "AppHost": {
-                "path": "extension-apphost.mts"
+                "path": "object-extension-apphost.mts",
+                "language": "typescript/nodejs"
               },
+              "appHost:path": "flattened-extension-apphost.mts",
               "SDK": {
                 "version": "0.0.0"
               },
+              "sdk:version": "1.0.0",
+              "Docs": {
+                "llmsTxtUrl": "https://forward.example/llms.txt"
+              },
+              "docs:api:sitemapUrl": "https://forward.example/sitemap.xml",
               "Profiles": {
                 "extension": {
                   "applicationUrl": "https://localhost:6001"
+                },
+                "Mapped": {
+                  "applicationUrl": "https://localhost:6002",
+                  "environmentVariables": {
+                    "FORWARD_ONLY": "forward",
+                    "CONFLICT": "forward"
+                  }
                 }
               },
               "templateSpecific": {
@@ -670,7 +684,8 @@ public class AspireConfigFileTests(ITestOutputHelper outputHelper)
                 "mapped": {
                   "applicationUrl": "https://localhost:7001",
                   "environmentVariables": {
-                    "SOURCE": "legacy-run-profile"
+                    "SOURCE": "legacy-run-profile",
+                    "CONFLICT": "mapped"
                   }
                 }
               }
@@ -694,9 +709,93 @@ public class AspireConfigFileTests(ITestOutputHelper outputHelper)
 
         var configPath = Path.Combine(root, AspireConfigFile.FileName);
         var migratedJson = JsonNode.Parse(File.ReadAllText(configPath))!.AsObject();
-        Assert.Equal(
-            migratedJson.Count,
-            migratedJson.Select(property => property.Key).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        var loaded = AspireConfigFile.Load(root);
+        Assert.NotNull(loaded);
+        Assert.Equal("mapped-apphost.mts", loaded.AppHost?.Path);
+        Assert.Equal("typescript/nodejs", loaded.AppHost?.Language);
+        Assert.Equal("13.2.0", loaded.SdkVersion);
+        Assert.Equal("https://forward.example/llms.txt", loaded.Docs?.LlmsTxtUrl);
+        Assert.Equal("https://forward.example/sitemap.xml", loaded.Docs?.Api?.SitemapUrl);
+        Assert.Equal("https://localhost:6001", loaded.Profiles?["extension"].ApplicationUrl);
+        Assert.Equal("https://localhost:7001", loaded.Profiles?["mapped"].ApplicationUrl);
+        Assert.Equal("forward", loaded.Profiles?["mapped"].EnvironmentVariables?["FORWARD_ONLY"]);
+        Assert.Equal("legacy-run-profile", loaded.Profiles?["mapped"].EnvironmentVariables?["SOURCE"]);
+        Assert.Equal("mapped", loaded.Profiles?["mapped"].EnvironmentVariables?["CONFLICT"]);
+
+        var appHostProperty = Assert.Single(
+            migratedJson,
+            property => string.Equals(property.Key, "appHost", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("appHost", appHostProperty.Key);
+        Assert.Equal("mapped-apphost.mts", appHostProperty.Value!["path"]!.GetValue<string>());
+        Assert.Equal("typescript/nodejs", appHostProperty.Value!["language"]!.GetValue<string>());
+
+        var sdkProperty = Assert.Single(
+            migratedJson,
+            property => string.Equals(property.Key, "sdk", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("sdk", sdkProperty.Key);
+        Assert.Equal("13.2.0", sdkProperty.Value!["version"]!.GetValue<string>());
+
+        var docsProperty = Assert.Single(
+            migratedJson,
+            property => string.Equals(property.Key, "docs", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("docs", docsProperty.Key);
+        Assert.Equal("https://forward.example/llms.txt", docsProperty.Value!["llmsTxtUrl"]!.GetValue<string>());
+        Assert.Equal("https://forward.example/sitemap.xml", docsProperty.Value!["api"]!["sitemapUrl"]!.GetValue<string>());
+
+        var profilesProperty = Assert.Single(
+            migratedJson,
+            property => string.Equals(property.Key, "profiles", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("profiles", profilesProperty.Key);
+        Assert.Equal("https://localhost:6001", profilesProperty.Value!["extension"]!["applicationUrl"]!.GetValue<string>());
+        Assert.Equal("https://localhost:7001", profilesProperty.Value!["mapped"]!["applicationUrl"]!.GetValue<string>());
+        Assert.Equal("forward", profilesProperty.Value!["mapped"]!["environmentVariables"]!["FORWARD_ONLY"]!.GetValue<string>());
+        Assert.Equal("legacy-run-profile", profilesProperty.Value!["mapped"]!["environmentVariables"]!["SOURCE"]!.GetValue<string>());
+        Assert.Equal("mapped", profilesProperty.Value!["mapped"]!["environmentVariables"]!["CONFLICT"]!.GetValue<string>());
+        Assert.True(JsonNode.DeepEquals(expectedUnknownProperty, migratedJson["templateSpecific"]));
+        AssertHasNormalizedConfigurationKeys(migratedJson);
+
+        loaded.Save(root);
+        var roundTrippedJson = JsonNode.Parse(File.ReadAllText(configPath))!.AsObject();
+        Assert.True(JsonNode.DeepEquals(expectedUnknownProperty, roundTrippedJson["templateSpecific"]));
+        AssertHasNormalizedConfigurationKeys(roundTrippedJson);
+
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(configPath)
+            .Build();
+        Assert.Equal("mapped-apphost.mts", configuration["appHost:path"]);
+        Assert.Equal("typescript/nodejs", configuration["appHost:language"]);
+        Assert.Equal("13.2.0", configuration["sdk:version"]);
+        Assert.Equal("https://forward.example/llms.txt", configuration["docs:llmsTxtUrl"]);
+        Assert.Equal("https://forward.example/sitemap.xml", configuration["docs:api:sitemapUrl"]);
+        Assert.Equal("https://localhost:6001", configuration["profiles:extension:applicationUrl"]);
+        Assert.Equal("https://localhost:7001", configuration["profiles:mapped:applicationUrl"]);
+        Assert.Equal("forward", configuration["profiles:mapped:environmentVariables:FORWARD_ONLY"]);
+        Assert.Equal("legacy-run-profile", configuration["profiles:mapped:environmentVariables:SOURCE"]);
+        Assert.Equal("mapped", configuration["profiles:mapped:environmentVariables:CONFLICT"]);
+        Assert.Equal("42", configuration["templateSpecific:nested:value"]);
+    }
+
+    [Fact]
+    public void LoadOrCreate_MigratesLegacy_NormalizesFlattenedMappedConflicts()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var root = workspace.WorkspaceRoot.FullName;
+
+        var settingsPath = Path.Combine(root, ".aspire", "settings.json");
+        File.WriteAllText(settingsPath, """
+            {
+              "appHostPath": "../mapped-apphost.mts",
+              "sdkVersion": "13.2.0",
+              "appHost:path": "flattened-extension-apphost.mts",
+              "sdk:version": "0.0.0"
+            }
+            """);
+
+        AspireConfigFile.LoadOrCreate(root);
+
+        var configPath = Path.Combine(root, AspireConfigFile.FileName);
+        var migratedJson = JsonNode.Parse(File.ReadAllText(configPath))!.AsObject();
+        AssertHasNormalizedConfigurationKeys(migratedJson);
 
         var appHostProperty = Assert.Single(
             migratedJson,
@@ -710,31 +809,16 @@ public class AspireConfigFileTests(ITestOutputHelper outputHelper)
         Assert.Equal("sdk", sdkProperty.Key);
         Assert.Equal("13.2.0", sdkProperty.Value!["version"]!.GetValue<string>());
 
-        var profilesProperty = Assert.Single(
-            migratedJson,
-            property => string.Equals(property.Key, "profiles", StringComparison.OrdinalIgnoreCase));
-        Assert.Equal("profiles", profilesProperty.Key);
-        Assert.Equal("https://localhost:7001", profilesProperty.Value!["mapped"]!["applicationUrl"]!.GetValue<string>());
-        Assert.True(JsonNode.DeepEquals(expectedUnknownProperty, migratedJson["templateSpecific"]));
-
         var loaded = AspireConfigFile.Load(root);
         Assert.NotNull(loaded);
         Assert.Equal("mapped-apphost.mts", loaded.AppHost?.Path);
         Assert.Equal("13.2.0", loaded.SdkVersion);
-        Assert.Equal("https://localhost:7001", loaded.Profiles?["mapped"].ApplicationUrl);
-
-        loaded.Save(root);
-        var roundTrippedJson = JsonNode.Parse(File.ReadAllText(configPath))!.AsObject();
-        Assert.True(JsonNode.DeepEquals(expectedUnknownProperty, roundTrippedJson["templateSpecific"]));
 
         var configuration = new ConfigurationBuilder()
             .AddJsonFile(configPath)
             .Build();
         Assert.Equal("mapped-apphost.mts", configuration["appHost:path"]);
         Assert.Equal("13.2.0", configuration["sdk:version"]);
-        Assert.Equal("https://localhost:7001", configuration["profiles:mapped:applicationUrl"]);
-        Assert.Equal("legacy-run-profile", configuration["profiles:mapped:environmentVariables:SOURCE"]);
-        Assert.Equal("42", configuration["templateSpecific:nested:value"]);
     }
 
     [Fact]
@@ -915,5 +999,30 @@ public class AspireConfigFileTests(ITestOutputHelper outputHelper)
 
         // On Windows, c:\ is rooted and should be left unchanged
         Assert.Equal("c:\\path\\apphost.ts", config.AppHost?.Path);
+    }
+
+    private static void AssertHasNormalizedConfigurationKeys(JsonNode? node, string path = "$")
+    {
+        if (node is JsonObject jsonObject)
+        {
+            var propertyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (propertyName, value) in jsonObject)
+            {
+                Assert.True(
+                    propertyNames.Add(propertyName),
+                    $"Configuration object '{path}' contains duplicate logical property '{propertyName}'.");
+                Assert.False(
+                    propertyName.Contains(':', StringComparison.Ordinal),
+                    $"Configuration property '{path}:{propertyName}' was not normalized.");
+                AssertHasNormalizedConfigurationKeys(value, $"{path}:{propertyName}");
+            }
+        }
+        else if (node is JsonArray jsonArray)
+        {
+            for (var i = 0; i < jsonArray.Count; i++)
+            {
+                AssertHasNormalizedConfigurationKeys(jsonArray[i], $"{path}:{i}");
+            }
+        }
     }
 }

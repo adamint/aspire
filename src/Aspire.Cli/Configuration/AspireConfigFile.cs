@@ -4,6 +4,7 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Aspire.Cli.Documentation.ApiDocs;
 using Aspire.Cli.Documentation.Docs;
@@ -54,22 +55,6 @@ internal sealed class AspireConfigFile
 {
     public const string FileName = "aspire.config.json";
     public const string NuGetSourceKey = "nugetSource";
-
-    // Legacy settings capture forward-authored properties as extension data. Exclude every
-    // property owned by the destination type so migration cannot serialize duplicate logical
-    // keys with alternate casing. Keep this explicit instead of using reflection for Native AOT.
-    private static readonly HashSet<string> s_serializedPropertyNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "$schema",
-        "appHost",
-        "sdk",
-        "channel",
-        NuGetSourceKey,
-        "features",
-        "docs",
-        "profiles",
-        "packages"
-    };
 
     /// <summary>
     /// The JSON Schema URL for this configuration file.
@@ -428,11 +413,14 @@ internal sealed class AspireConfigFile
     /// </summary>
     public static AspireConfigFile FromLegacy(AspireJsonConfiguration? settings, Dictionary<string, AspireConfigProfile>? profiles)
     {
-        var config = new AspireConfigFile();
+        var mappedConfig = new AspireConfigFile
+        {
+            Profiles = profiles
+        };
 
         if (settings is not null)
         {
-            config.AppHost = new AspireConfigAppHost
+            mappedConfig.AppHost = new AspireConfigAppHost
             {
                 Path = settings.AppHostPath,
                 Language = settings.Language
@@ -440,21 +428,159 @@ internal sealed class AspireConfigFile
 
             if (!string.IsNullOrEmpty(settings.SdkVersion))
             {
-                config.Sdk = new AspireConfigSdk { Version = settings.SdkVersion };
+                mappedConfig.Sdk = new AspireConfigSdk { Version = settings.SdkVersion };
             }
 
-            config.Channel = settings.Channel;
-            config.NuGetSource = settings.NuGetSource;
-            config.Features = settings.Features;
-            config.Packages = settings.Packages;
-            config.ExtensionData = settings.ExtensionData?
-                .Where(entry => !s_serializedPropertyNames.Contains(entry.Key))
-                .ToDictionary(entry => entry.Key, entry => entry.Value);
+            mappedConfig.Channel = settings.Channel;
+            mappedConfig.NuGetSource = settings.NuGetSource;
+            mappedConfig.Features = settings.Features;
+            mappedConfig.Packages = settings.Packages;
         }
 
-        config.Profiles = profiles;
+        // Legacy extension data can contain both nested objects and flattened configuration keys:
+        //   { "Docs": { "llmsTxtUrl": "..." }, "docs:api:sitemapUrl": "..." }
+        // Normalize those paths case-insensitively first, then overlay mapped legacy values. The
+        // mapped source wins leaf and type conflicts, while object/object merges retain disjoint
+        // forward-authored fields and use the mapped source's canonical property casing.
+        var mergedJson = NormalizeExtensionData(settings?.ExtensionData);
+        var mappedJson = JsonSerializer.SerializeToNode(
+            mappedConfig,
+            JsonSourceGenerationContext.Default.AspireConfigFile)!.AsObject();
+        OverlayJsonObject(mergedJson, mappedJson);
 
-        return config;
+        return mergedJson.Deserialize(JsonSourceGenerationContext.Default.AspireConfigFile)
+            ?? new AspireConfigFile();
+    }
+
+    private static JsonObject NormalizeExtensionData(Dictionary<string, JsonElement>? extensionData)
+    {
+        var normalized = new JsonObject();
+        if (extensionData is null)
+        {
+            return normalized;
+        }
+
+        // Process extension properties in their JSON/input order. Later properties and explicit
+        // colon-delimited paths win conflicts, but object/object overlays retain disjoint children.
+        foreach (var (propertyName, propertyValue) in extensionData)
+        {
+            var normalizedValue = NormalizeJsonNode(JsonNode.Parse(propertyValue.GetRawText()));
+            OverlayJsonPath(normalized, propertyName.Split(':'), normalizedValue);
+        }
+
+        return normalized;
+    }
+
+    private static JsonNode? NormalizeJsonNode(JsonNode? node)
+    {
+        if (node is JsonObject jsonObject)
+        {
+            var normalized = new JsonObject();
+            foreach (var (propertyName, propertyValue) in jsonObject)
+            {
+                OverlayJsonPath(
+                    normalized,
+                    propertyName.Split(':'),
+                    NormalizeJsonNode(propertyValue));
+            }
+
+            return normalized;
+        }
+
+        if (node is JsonArray jsonArray)
+        {
+            var normalized = new JsonArray();
+            foreach (var item in jsonArray)
+            {
+                normalized.Add(NormalizeJsonNode(item));
+            }
+
+            return normalized;
+        }
+
+        return node?.DeepClone();
+    }
+
+    private static void OverlayJsonPath(JsonObject target, string[] pathSegments, JsonNode? value)
+    {
+        var current = target;
+        for (var i = 0; i < pathSegments.Length - 1; i++)
+        {
+            var pathSegment = pathSegments[i];
+            var hasExistingProperty = TryGetPropertyName(current, pathSegment, out var existingName);
+            if (hasExistingProperty &&
+                current[existingName] is JsonObject existingObject)
+            {
+                if (!string.Equals(existingName, pathSegment, StringComparison.Ordinal))
+                {
+                    current.Remove(existingName);
+                    current[pathSegment] = existingObject;
+                }
+
+                current = existingObject;
+            }
+            else
+            {
+                if (hasExistingProperty)
+                {
+                    current.Remove(existingName);
+                }
+
+                var child = new JsonObject();
+                current[pathSegment] = child;
+                current = child;
+            }
+        }
+
+        OverlayJsonProperty(current, pathSegments[^1], value);
+    }
+
+    private static void OverlayJsonObject(JsonObject target, JsonObject source)
+    {
+        foreach (var (propertyName, sourceValue) in source)
+        {
+            OverlayJsonProperty(target, propertyName, sourceValue);
+        }
+    }
+
+    private static void OverlayJsonProperty(JsonObject target, string propertyName, JsonNode? sourceValue)
+    {
+        var hasExistingProperty = TryGetPropertyName(target, propertyName, out var existingName);
+        if (hasExistingProperty &&
+            target[existingName] is JsonObject targetObject &&
+            sourceValue is JsonObject sourceObject)
+        {
+            if (!string.Equals(existingName, propertyName, StringComparison.Ordinal))
+            {
+                target.Remove(existingName);
+                target[propertyName] = targetObject;
+            }
+
+            OverlayJsonObject(targetObject, sourceObject);
+            return;
+        }
+
+        if (hasExistingProperty)
+        {
+            target.Remove(existingName);
+        }
+
+        target[propertyName] = sourceValue?.DeepClone();
+    }
+
+    private static bool TryGetPropertyName(JsonObject jsonObject, string propertyName, out string existingName)
+    {
+        foreach (var property in jsonObject)
+        {
+            if (string.Equals(property.Key, propertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                existingName = property.Key;
+                return true;
+            }
+        }
+
+        existingName = string.Empty;
+        return false;
     }
 }
 
