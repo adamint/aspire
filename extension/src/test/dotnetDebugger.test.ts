@@ -618,10 +618,7 @@ suite('Dotnet Debugger Extension Tests', () => {
                 program: projectPath,
                 debuggers: {
                     apphost: {
-                        launchProfile: 'h2',
-                        env: {
-                            EXPLICIT: 'from-launch-json'
-                        }
+                        launchProfile: 'h2'
                     }
                 }
             };
@@ -655,7 +652,7 @@ suite('Dotnet Debugger Extension Tests', () => {
                 mode: '2',
                 DOTNET_LAUNCH_PROFILE: 'h2',
                 ASPNETCORE_URLS: 'http://localhost:16002',
-                EXPLICIT: 'from-launch-json',
+                EXPLICIT: 'from-h2',
                 AMBIENT_ONLY: 'from-process',
                 CLI_PRECEDENCE: 'from-cli',
                 UNSELECTED_ONLY: 'from-cli'
@@ -782,6 +779,31 @@ suite('Dotnet Debugger Extension Tests', () => {
             assert.strictEqual(debugConfig.env.mode, 'from-cli');
             assert.strictEqual(debugConfig.env.DOTNET_LAUNCH_PROFILE, 'from-cli');
             assert.strictEqual(debugConfig.env.ASPNETCORE_URLS, 'http://localhost:15001');
+
+            const disabledDebugSessionConfig: AspireExtendedDebugConfiguration = {
+                ...debugSessionConfig,
+                debuggers: {
+                    apphost: {
+                        disableLaunchProfile: true
+                    }
+                }
+            };
+            fakeAspireDebugSession.configuration = disabledDebugSessionConfig;
+            const disabledDebugConfig = await createDebugSessionConfiguration(
+                disabledDebugSessionConfig,
+                launchConfig,
+                undefined,
+                [
+                    { name: 'mode', value: 'from-cli' },
+                    { name: 'DOTNET_LAUNCH_PROFILE', value: 'from-cli' },
+                    { name: 'ASPNETCORE_URLS', value: 'http://localhost:15001' }
+                ],
+                { debug: true, runId: '1', debugSessionId: '1', isApphost: true, debugSession: fakeAspireDebugSession },
+                extension);
+
+            assert.strictEqual(disabledDebugConfig.env.mode, 'from-cli');
+            assert.strictEqual(disabledDebugConfig.env.DOTNET_LAUNCH_PROFILE, undefined);
+            assert.strictEqual(disabledDebugConfig.env.ASPNETCORE_URLS, 'http://localhost:15001');
         } finally {
             fs.rmSync(tempRoot, { recursive: true, force: true });
         }
@@ -897,10 +919,7 @@ suite('Dotnet Debugger Extension Tests', () => {
                 program: projectPath,
                 debuggers: {
                     apphost: {
-                        disableLaunchProfile: true,
-                        env: {
-                            EXPLICIT: 'from-launch-json'
-                        }
+                        disableLaunchProfile: true
                     }
                 }
             };
@@ -924,7 +943,7 @@ suite('Dotnet Debugger Extension Tests', () => {
             assert.strictEqual(debugConfig.env.mode, undefined);
             assert.strictEqual(debugConfig.env.DOTNET_LAUNCH_PROFILE, undefined);
             assert.strictEqual(debugConfig.env.ASPNETCORE_URLS, undefined);
-            assert.strictEqual(debugConfig.env.EXPLICIT, 'from-launch-json');
+            assert.strictEqual(debugConfig.env.EXPLICIT, 'from-cli');
             assert.strictEqual(debugConfig.env.CLI_ONLY, 'from-cli');
             assert.deepStrictEqual(
                 Object.keys(debugConfig.env).filter(name => name.toLowerCase() === 'mode'),

@@ -427,12 +427,15 @@ function createProjectEnvironment(
         }
         deleteEnvironmentVariable(environment, 'DOTNET_LAUNCH_PROFILE');
     }
+    else if (launchOptions.debugSession.configuration?.debuggers?.['apphost']?.disableLaunchProfile === true) {
+        deleteEnvironmentVariable(environment, 'DOTNET_LAUNCH_PROFILE');
+    }
 
     if (baseProfile?.applicationUrl) {
         setEnvironmentVariable(environment, 'ASPNETCORE_URLS', baseProfile.applicationUrl);
     }
     applyEnvironmentVariables(environment, baseProfile?.environmentVariables);
-    applyEnvironmentVariables(environment, debugConfigurationEnvironment);
+    applyEnvironmentVariables(environment, launchOptions.debugSession.configuration?.debuggers?.['project']?.env);
 
     // The AppHost uses DOTNET_LAUNCH_PROFILE to determine which launch profile to use for project resources.
     // The dotnet CLI sets it (see https://github.com/dotnet/sdk/pull/35029), so replicate that behavior before
