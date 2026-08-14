@@ -1202,7 +1202,7 @@ internal sealed class DashboardClient : IDashboardClient
         }
     }
 
-    public async Task<string> UploadFileAsync(Stream fileStream, string fileName, long expectedSize, CancellationToken cancellationToken)
+    public async Task<string> UploadFileAsync(Stream fileStream, string fileName, long expectedSize, int interactionId, string inputName, CancellationToken cancellationToken)
     {
         EnsureInitialized();
 
@@ -1231,6 +1231,8 @@ internal sealed class DashboardClient : IDashboardClient
             if (isFirst)
             {
                 chunk.FileName = fileName;
+                chunk.InteractionId = interactionId;
+                chunk.InputName = inputName;
             }
 
             await call.RequestStream.WriteAsync(chunk, combinedTokens.Token).ConfigureAwait(false);
@@ -1240,7 +1242,7 @@ internal sealed class DashboardClient : IDashboardClient
         // Handle case where the file was empty — still send filename.
         if (isFirst)
         {
-            await call.RequestStream.WriteAsync(new UploadFileChunk { FileName = fileName }, combinedTokens.Token).ConfigureAwait(false);
+            await call.RequestStream.WriteAsync(new UploadFileChunk { FileName = fileName, InteractionId = interactionId, InputName = inputName }, combinedTokens.Token).ConfigureAwait(false);
         }
 
         await call.RequestStream.CompleteAsync().ConfigureAwait(false);
