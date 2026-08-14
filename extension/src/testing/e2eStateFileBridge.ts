@@ -758,6 +758,12 @@ async function executeE2eControlCommand(
         fileName: folder.uri.fsPath,
       })) ?? [];
     }
+    case 'getLaunchConfigurations': {
+      markStarted();
+      const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+      return vscode.workspace.getConfiguration('launch', workspaceFolder?.uri)
+        .get<readonly vscode.DebugConfiguration[]>('configurations', []);
+    }
     case 'getActiveEditor': {
       markStarted();
       return getActiveEditorInfo();

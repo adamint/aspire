@@ -225,6 +225,7 @@ export type AspireExtensionE2EControlCommand =
     | { name: 'openWorkspaceFolder'; folderPath: string }
     | { name: 'stopOwnedDebugSessionProcesses'; appHostPath?: string }
     | { name: 'getWorkspaceFolders' }
+    | { name: 'getLaunchConfigurations' }
     | { name: 'getActiveEditor' }
     | { name: 'getResourceDebuggerExtensions' }
     | { name: 'createResourceDebugConfiguration'; launchConfig: ExecutableLaunchConfiguration; args?: readonly string[]; env?: readonly EnvVar[]; debug?: boolean }

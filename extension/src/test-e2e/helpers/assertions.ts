@@ -2,11 +2,13 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as https from 'https';
 import * as path from 'path';
+import { isDeepStrictEqual } from 'util';
 import type { AspireAppHostState as AppHostState, AspireDebugSessionState, AspireExtensionE2EControlStatus as ExtensionE2EControlStatus, AspireExtensionE2EStateFile as ExtensionE2EStateFile, AspireExtensionE2ETaskProcessEvent as TaskProcessEvent, AspireExtensionStateSnapshot as ExtensionStateSnapshot, AspireResourceState as ResourceState } from '../../types/extensionApi';
 import { getControlFilePath, getPrimaryAppHostProjectPath, getStateFilePath, getWorkspaceRoot } from './paths';
 
 type CommandInvocation = ExtensionE2EStateFile['commandInvocations'][number];
 type BrowserDebugSession = ExtensionE2EStateFile['browserDebugSessions'][number];
+type LaunchConfiguration = Record<string, unknown>;
 interface Deadline {
     readonly started: number;
     readonly timeoutMs: number;
@@ -27,6 +29,34 @@ export async function waitForWorkspaceAppHost(timeoutMs = 120000): Promise<Exten
         file => file.state.workspaceAppHostCandidatePaths.some(candidate => isSamePath(candidate, getPrimaryAppHostProjectPath())),
         'workspace AppHost candidate',
         getRemainingTimeout(deadline, 'workspace AppHost candidate'));
+}
+
+export async function getLaunchConfigurations(timeoutMs = 10000): Promise<readonly LaunchConfiguration[]> {
+    const status = await applyE2eControl({ command: { name: 'getLaunchConfigurations' } }, 'applied', timeoutMs);
+    if (!Array.isArray(status.result) || status.result.some(configuration => typeof configuration !== 'object' || configuration === null || Array.isArray(configuration))) {
+        throw new Error(`Expected E2E launch configurations to be an array of objects, got ${JSON.stringify(status.result)}.`);
+    }
+
+    return status.result as LaunchConfiguration[];
+}
+
+export async function waitForLaunchConfigurations(expectedConfigurations: readonly LaunchConfiguration[], timeoutMs = 30000): Promise<readonly LaunchConfiguration[]> {
+    const started = Date.now();
+    let lastConfigurations: readonly LaunchConfiguration[] = [];
+
+    // launch.json file writes complete before VS Code asynchronously refreshes the configuration
+    // service used by the debug picker, so filesystem state alone is not a sufficient barrier.
+    while (Date.now() - started < timeoutMs) {
+        const remainingTimeoutMs = timeoutMs - (Date.now() - started);
+        lastConfigurations = await getLaunchConfigurations(Math.min(10000, remainingTimeoutMs));
+        if (isDeepStrictEqual(lastConfigurations, expectedConfigurations)) {
+            return lastConfigurations;
+        }
+
+        await delay(Math.max(1, Math.min(200, timeoutMs - (Date.now() - started))));
+    }
+
+    throw new Error(`Timed out after ${timeoutMs}ms waiting for effective launch configurations.\nExpected: ${JSON.stringify(expectedConfigurations, undefined, 2)}\nActual: ${JSON.stringify(lastConfigurations, undefined, 2)}`);
 }
 
 export async function waitForSelectedWorkspaceAppHost(appHostPath = getPrimaryAppHostProjectPath(), timeoutMs = 120000): Promise<ExtensionE2EStateFile> {
