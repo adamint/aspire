@@ -27,7 +27,13 @@ export function readReportedPidFromDebugOutput(proof: ResourceDebugOutputProof, 
 }
 
 function findPidMatches(events: readonly DebugAdapterOutputEvent[], marker: string): RegExpMatchArray[] {
-    const output = events.map(event => event.output).join('');
+    // Aspire, AppHost, and resource adapters can emit output concurrently. Reassemble fragments
+    // per session so one adapter's marker cannot be completed with digits from another adapter.
+    const outputBySessionId = new Map<string, string>();
+    for (const event of events) {
+        outputBySessionId.set(event.sessionId, `${outputBySessionId.get(event.sessionId) ?? ''}${event.output}`);
+    }
 
-    return [...output.matchAll(new RegExp(`${marker}=(\\d+)`, 'g'))];
+    return [...outputBySessionId.values()]
+        .flatMap(output => [...output.matchAll(new RegExp(`${marker}=(\\d+)`, 'g'))]);
 }

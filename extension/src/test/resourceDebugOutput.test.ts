@@ -27,4 +27,16 @@ suite('Resource debug output pid markers', () => {
 
         assert.strictEqual(pid, 22222);
     });
+
+    test('does not combine partial pid markers from different debug sessions', () => {
+        assert.throws(
+            () => readReportedPidFromDebugOutput({
+                outputHead: [
+                    { sessionId: 'apphost-session', sessionType: 'aspire', output: 'ASPIRE_E2E_NODE_PID=' },
+                    { sessionId: 'resource-session', sessionType: 'pwa-node', output: '12345\n' },
+                ],
+                outputSample: [],
+            }, 'ASPIRE_E2E_NODE_PID'),
+            /Expected the debuggee to print ASPIRE_E2E_NODE_PID/);
+    });
 });
