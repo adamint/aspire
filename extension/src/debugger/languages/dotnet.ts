@@ -8,7 +8,7 @@ import * as readline from 'readline';
 import * as os from 'os';
 import * as fs from 'fs';
 import { doesFileExist } from '../../utils/io';
-import { AspireResourceExtendedDebugConfiguration, EnvVar, ExecutableLaunchConfiguration, isProjectLaunchConfiguration, ProjectLaunchConfiguration } from '../../dcp/types';
+import { AspireResourceExtendedDebugConfiguration, EnvVar, ExecutableLaunchConfiguration, isProjectLaunchConfiguration, LaunchOptions, ProjectLaunchConfiguration } from '../../dcp/types';
 import { ResourceDebuggerExtension } from '../debuggerExtensions';
 import {
     readLaunchSettings,
@@ -20,11 +20,13 @@ import {
     determineServerReadyAction,
     LaunchProfileCommandName,
     LaunchProfile,
+    LaunchSettings,
     expandEnvironmentVariables
 } from '../launchProfiles';
 import { AspireDebugSession } from '../AspireDebugSession';
 import { createAspireCliPathProcessEnvironment } from '../../utils/cliPathEnvironment';
 import { getHotReloadDiagnostics, logHotReloadDiagnostics, showHotReloadDisabledAdvisoryIfNeeded } from '../hotReload';
+import { getEnvironmentWithoutE2EBridgeVariables } from '../../utils/environment';
 
 interface IDotNetService {
     getAndActivateDevKit(): Promise<boolean>
@@ -372,8 +374,7 @@ function createDotNetRunArguments(projectPath: string, baseProfileArgs: string |
 function configureDotNetRunDebugConfiguration(
     debugConfiguration: AspireResourceExtendedDebugConfiguration,
     args: string[] | string,
-    baseProfileEnvironmentVariables: { [key: string]: string } | undefined,
-    runSessionEnvironmentVariables: EnvVar[],
+    environment: NodeJS.ProcessEnv,
     processWorkingDirectory?: string): void {
     debugConfiguration.program = 'dotnet';
     debugConfiguration.args = args;
@@ -385,11 +386,53 @@ function configureDotNetRunDebugConfiguration(
     debugConfiguration.executablePath = undefined;
     debugConfiguration.noDebug = true;
     debugConfiguration.cwd = processWorkingDirectory ?? debugConfiguration.cwd;
-    debugConfiguration.env = Object.fromEntries(mergeEnvironmentVariables(
-        baseProfileEnvironmentVariables,
-        debugConfiguration.env,
-        runSessionEnvironmentVariables
-    ));
+    debugConfiguration.env = environment;
+}
+
+function createProjectEnvironment(
+    launchSettings: LaunchSettings | null,
+    baseProfile: LaunchProfile | null,
+    debugConfigurationEnvironment: { [key: string]: string } | undefined,
+    runSessionEnvironment: EnvVar[],
+    launchOptions: LaunchOptions,
+    runApiEnvironment?: { [key: string]: string }
+): NodeJS.ProcessEnv {
+    if (!launchOptions.isApphost) {
+        return Object.fromEntries(mergeEnvironmentVariables(
+            baseProfile?.environmentVariables,
+            debugConfigurationEnvironment,
+            runSessionEnvironment,
+            runApiEnvironment
+        ));
+    }
+
+    const environment: NodeJS.ProcessEnv = {
+        ...getEnvironmentWithoutE2EBridgeVariables(),
+        ...runApiEnvironment
+    };
+    for (const envVar of runSessionEnvironment) {
+        environment[envVar.name] = envVar.value;
+    }
+
+    // Older CLIs send one flattened AppHost environment that can include the SDK default profile's
+    // values. Remove every launch-profile-owned key before applying the profile selected by launch.json,
+    // otherwise a stale default profile survives when another profile is selected or profiles are disabled.
+    // See https://github.com/microsoft/aspire/issues/19387.
+    for (const profile of Object.values(launchSettings?.profiles ?? {})) {
+        for (const name of Object.keys(profile.environmentVariables ?? {})) {
+            delete environment[name];
+        }
+    }
+    delete environment.DOTNET_LAUNCH_PROFILE;
+    delete environment.ASPNETCORE_URLS;
+
+    Object.assign(environment, baseProfile?.environmentVariables);
+    if (baseProfile?.applicationUrl) {
+        environment.ASPNETCORE_URLS = baseProfile.applicationUrl;
+    }
+    Object.assign(environment, launchOptions.debugSession.configuration?.debuggers?.['apphost']?.env);
+
+    return environment;
 }
 
 export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSession: AspireDebugSession) => IDotNetService): ResourceDebuggerExtension {
@@ -490,11 +533,12 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                     // Fall back to launch profile args if run session args were empty
                     debugConfiguration.args = expandEnvironmentVariables(baseProfile.commandLineArgs);
                 }
-                debugConfiguration.env = Object.fromEntries(mergeEnvironmentVariables(
-                    baseProfile?.environmentVariables,
+                debugConfiguration.env = createProjectEnvironment(
+                    launchSettings,
+                    baseProfile,
                     debugConfiguration.env,
-                    env
-                ));
+                    env,
+                    launchOptions);
             }
             else if (!isFileBasedProject) {
                 const dotNetService: IDotNetService = dotNetServiceProducer(launchOptions.debugSession);
@@ -510,14 +554,18 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                         vscode.window.showInformationMessage(fallbackMessage);
                     }
 
-                    configureDotNetRunDebugConfiguration(debugConfiguration, createDotNetRunArguments(projectPath, baseProfile?.commandLineArgs, args), baseProfile?.environmentVariables, env);
+                    configureDotNetRunDebugConfiguration(
+                        debugConfiguration,
+                        createDotNetRunArguments(projectPath, baseProfile?.commandLineArgs, args),
+                        createProjectEnvironment(launchSettings, baseProfile, debugConfiguration.env, env, launchOptions));
                 } else {
                     debugConfiguration.program = outputPath;
-                    debugConfiguration.env = Object.fromEntries(mergeEnvironmentVariables(
-                        baseProfile?.environmentVariables,
+                    debugConfiguration.env = createProjectEnvironment(
+                        launchSettings,
+                        baseProfile,
                         debugConfiguration.env,
-                        env
-                    ));
+                        env,
+                        launchOptions);
                 }
             }
             else {
@@ -560,8 +608,7 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                             /* skipBuild */ !shouldBuildProject,
                             runWorkingDirectory,
                             /* suppressCliRunHook */ launchOptions.isApphost),
-                        baseProfile?.environmentVariables,
-                        env,
+                        createProjectEnvironment(launchSettings, baseProfile, debugConfiguration.env, env, launchOptions),
                         projectDirectory);
                 }
                 else {
@@ -597,12 +644,13 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                         ...collectProfileDotnetHostEnvVarNames(baseProfile)
                     ]);
 
-                    debugConfiguration.env = Object.fromEntries(mergeEnvironmentVariables(
-                        baseProfile?.environmentVariables,
+                    debugConfiguration.env = createProjectEnvironment(
+                        launchSettings,
+                        baseProfile,
                         debugConfiguration.env,
                         env,
-                        pickRuntimeHostEnvironment(runApiConfig.env, profileDefinedRuntimeHostNames)
-                    ));
+                        launchOptions,
+                        pickRuntimeHostEnvironment(runApiConfig.env, profileDefinedRuntimeHostNames));
                 }
             }
 
