@@ -181,9 +181,17 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
         return filteredPackages;
     }
 
-    public async Task<IEnumerable<NuGetPackage>> GetIntegrationPackagesAsync(DirectoryInfo workingDirectory, CancellationToken cancellationToken)
+    public Task<IEnumerable<NuGetPackage>> GetIntegrationPackagesAsync(DirectoryInfo workingDirectory, CancellationToken cancellationToken)
     {
-        var localPackageSource = GetLocalAspirePackageSource();
+        return GetIntegrationPackagesAsync(workingDirectory, Mappings, cancellationToken);
+    }
+
+    /// <summary>
+    /// Gets integration packages using the specified mappings without changing this channel's identity.
+    /// </summary>
+    public async Task<IEnumerable<NuGetPackage>> GetIntegrationPackagesAsync(DirectoryInfo workingDirectory, PackageMapping[]? mappings, CancellationToken cancellationToken)
+    {
+        var localPackageSource = GetLocalAspirePackageSource(mappings);
         if (localPackageSource is not null)
         {
             return GetIntegrationPackagesFromLocalPackageSource(localPackageSource, cancellationToken);
@@ -191,7 +199,7 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
 
         var tasks = new List<Task<IEnumerable<NuGetPackage>>>();
 
-        using var tempNuGetConfig = Type is PackageChannelType.Explicit ? await TemporaryNuGetConfig.CreateAsync(Mappings!) : null;
+        using var tempNuGetConfig = mappings is not null ? await TemporaryNuGetConfig.CreateAsync(mappings) : null;
 
         if (Quality is PackageChannelQuality.Stable || Quality is PackageChannelQuality.Both)
         {
@@ -229,14 +237,14 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
         return filteredPackages;
     }
 
-    private DirectoryInfo? GetLocalAspirePackageSource()
+    private static DirectoryInfo? GetLocalAspirePackageSource(PackageMapping[]? mappings)
     {
-        if (Type is not PackageChannelType.Explicit || Mappings is null)
+        if (mappings is null)
         {
             return null;
         }
 
-        foreach (var mapping in Mappings)
+        foreach (var mapping in mappings)
         {
             if (IsScopedAspireMapping(mapping) && Directory.Exists(mapping.Source))
             {
@@ -306,15 +314,23 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
     /// <item>Remote feeds: a secondary <c>tags:polyglot</c> search is issued.</item>
     /// </list>
     /// </remarks>
-    public async Task<IReadOnlySet<string>> GetPolyglotCompatiblePackageIdsAsync(DirectoryInfo workingDirectory, CancellationToken cancellationToken)
+    public Task<IReadOnlySet<string>> GetPolyglotCompatiblePackageIdsAsync(DirectoryInfo workingDirectory, CancellationToken cancellationToken)
     {
-        var localPackageSource = GetLocalAspirePackageSource();
+        return GetPolyglotCompatiblePackageIdsAsync(workingDirectory, Mappings, cancellationToken);
+    }
+
+    /// <summary>
+    /// Gets polyglot-compatible integration package IDs using the specified mappings without changing this channel's identity.
+    /// </summary>
+    public async Task<IReadOnlySet<string>> GetPolyglotCompatiblePackageIdsAsync(DirectoryInfo workingDirectory, PackageMapping[]? mappings, CancellationToken cancellationToken)
+    {
+        var localPackageSource = GetLocalAspirePackageSource(mappings);
         if (localPackageSource is not null)
         {
             return GetPolyglotCompatiblePackageIdsFromLocalPackageSource(localPackageSource, cancellationToken);
         }
 
-        using var tempNuGetConfig = Type is PackageChannelType.Explicit ? await TemporaryNuGetConfig.CreateAsync(Mappings!) : null;
+        using var tempNuGetConfig = mappings is not null ? await TemporaryNuGetConfig.CreateAsync(mappings) : null;
 
         var tasks = new List<Task<IEnumerable<NuGetPackage>>>();
 

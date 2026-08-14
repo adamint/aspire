@@ -2,12 +2,14 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.IO.Compression;
+using System.Xml.Linq;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Packaging;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Tests.TestServices;
 using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.Logging.Abstractions;
+using NuGetPackage = Aspire.Shared.NuGetPackageCli;
 
 namespace Aspire.Cli.Tests.Packaging;
 
@@ -204,6 +206,84 @@ public class PackageChannelTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task GetIntegrationPackagesAsync_WithOverrideMappings_UsesOverrideSource()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        const string channelSource = "https://channel.example/v3/index.json";
+        const string sourceOverride = "https://proxy.example/v3/index.json";
+        string? mappedAspireSource = null;
+        string? mappedFallbackSource = null;
+
+        var cache = new FakeNuGetPackageCache
+        {
+            GetIntegrationPackagesAsyncCallback = (_, _, nugetConfig, _) =>
+            {
+                Assert.NotNull(nugetConfig);
+                (mappedAspireSource, mappedFallbackSource) = GetPackageSourceMappingKeys(nugetConfig!);
+
+                return Task.FromResult<IEnumerable<NuGetPackage>>(
+                [
+                    new NuGetPackage { Id = "Aspire.Hosting.Redis", Version = "13.4.0", Source = sourceOverride }
+                ]);
+            }
+        };
+        var channel = PackageChannel.CreateExplicitChannel(
+            "staging",
+            PackageChannelQuality.Stable,
+            [
+                new PackageMapping("Aspire*", channelSource),
+                new PackageMapping(PackageMapping.AllPackages, PackageSources.NuGetOrg)
+            ],
+            cache,
+            new TestFeatures(),
+            NullLogger.Instance);
+
+        var package = Assert.Single(await channel.GetIntegrationPackagesAsync(
+            workspace.WorkspaceRoot,
+            PackageSourceOverrideMappings.CreateForTemplateOperations(sourceOverride),
+            CancellationToken.None));
+
+        Assert.Equal("Aspire.Hosting.Redis", package.Id);
+        Assert.Equal(sourceOverride, mappedAspireSource);
+        Assert.Equal(sourceOverride, mappedFallbackSource);
+        Assert.Equal(channelSource, channel.SourceDetails);
+    }
+
+    [Fact]
+    public async Task GetIntegrationPackagesAsync_ImplicitChannelWithLocalOverride_EnumeratesLocalSource()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var packagesDirectory = workspace.CreateDirectory("packages");
+        CreatePackageWithTags(packagesDirectory, "Aspire.Hosting.Redis", "13.4.0", "aspire integration hosting cache");
+        var packageSource = packagesDirectory.FullName.Replace('\\', '/');
+        var mappings = new[]
+        {
+            new PackageMapping("Aspire*", packageSource),
+            new PackageMapping(PackageMapping.AllPackages, PackageSources.NuGetOrg)
+        };
+        var cacheCalled = false;
+        var cache = new FakeNuGetPackageCache
+        {
+            GetIntegrationPackagesAsyncCallback = (_, _, _, _) =>
+            {
+                cacheCalled = true;
+                throw new InvalidOperationException("Local package sources should be enumerated directly.");
+            }
+        };
+        var channel = PackageChannel.CreateImplicitChannel(cache, new TestFeatures(), NullLogger.Instance);
+
+        var package = Assert.Single((await channel.GetIntegrationPackagesAsync(
+            workspace.WorkspaceRoot,
+            mappings,
+            CancellationToken.None).DefaultTimeout()).ToArray());
+
+        Assert.False(cacheCalled);
+        Assert.Equal("Aspire.Hosting.Redis", package.Id);
+        Assert.Equal("13.4.0", package.Version);
+        Assert.Equal(packageSource, package.Source);
+    }
+
+    [Fact]
     public async Task GetPolyglotCompatiblePackageIdsAsync_WithPinnedLocalSource_ReturnsOnlyTaggedIntegrationPackageIds()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
@@ -232,6 +312,51 @@ public class PackageChannelTests(ITestOutputHelper outputHelper)
             .ToArray();
 
         Assert.Equal(["Aspire.Hosting.Redis"], packageIds);
+    }
+
+    [Fact]
+    public async Task GetPolyglotCompatiblePackageIdsAsync_WithOverrideMappings_UsesOverrideSource()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        const string channelSource = "https://channel.example/v3/index.json";
+        const string sourceOverride = "https://proxy.example/v3/index.json";
+        string? mappedAspireSource = null;
+        string? mappedFallbackSource = null;
+
+        var cache = new FakeNuGetPackageCache
+        {
+            GetPackagesAsyncCallback = (_, packageId, _, _, nugetConfig, _, _) =>
+            {
+                Assert.Equal("tags:polyglot", packageId);
+                Assert.NotNull(nugetConfig);
+                (mappedAspireSource, mappedFallbackSource) = GetPackageSourceMappingKeys(nugetConfig!);
+
+                return Task.FromResult<IEnumerable<NuGetPackage>>(
+                [
+                    new NuGetPackage { Id = "Aspire.Hosting.Redis", Version = "13.4.0", Source = sourceOverride }
+                ]);
+            }
+        };
+        var channel = PackageChannel.CreateExplicitChannel(
+            "staging",
+            PackageChannelQuality.Stable,
+            [
+                new PackageMapping("Aspire*", channelSource),
+                new PackageMapping(PackageMapping.AllPackages, PackageSources.NuGetOrg)
+            ],
+            cache,
+            new TestFeatures(),
+            NullLogger.Instance);
+
+        var packageIds = await channel.GetPolyglotCompatiblePackageIdsAsync(
+            workspace.WorkspaceRoot,
+            PackageSourceOverrideMappings.CreateForTemplateOperations(sourceOverride),
+            CancellationToken.None);
+
+        Assert.Equal(["Aspire.Hosting.Redis"], packageIds.OrderBy(id => id, StringComparer.Ordinal).ToArray());
+        Assert.Equal(sourceOverride, mappedAspireSource);
+        Assert.Equal(sourceOverride, mappedFallbackSource);
+        Assert.Equal(channelSource, channel.SourceDetails);
     }
 
     [Fact]
@@ -501,6 +626,38 @@ public class PackageChannelTests(ITestOutputHelper outputHelper)
         };
 
         return PackageChannel.CreateExplicitChannel("local", quality, mappings, cache, features ?? new TestFeatures(), NullLogger.Instance);
+    }
+
+    private static (string AspireSource, string FallbackSource) GetPackageSourceMappingKeys(FileInfo nugetConfigFile)
+    {
+        var document = XDocument.Load(nugetConfigFile.FullName);
+        var packageSources = document.Root!
+            .Element("packageSources")!;
+        Assert.NotNull(packageSources.Element("clear"));
+        var configuredSources = packageSources
+            .Elements("add")
+            .Select(source => ((string?)source.Attribute("key"), (string?)source.Attribute("value")))
+            .ToArray();
+        var configuredSource = Assert.Single(configuredSources);
+        var sourceMappings = document.Root!
+            .Element("packageSourceMapping")!
+            .Elements("packageSource")
+            .ToArray();
+        var aspireSource = Assert.Single(
+            sourceMappings,
+            source => source.Elements("package").Any(package => (string?)package.Attribute("pattern") == "Aspire*"))
+            .Attribute("key")?.Value;
+        var fallbackSource = Assert.Single(
+            sourceMappings,
+            source => source.Elements("package").Any(package => (string?)package.Attribute("pattern") == PackageMapping.AllPackages))
+            .Attribute("key")?.Value;
+        Assert.NotNull(aspireSource);
+        Assert.NotNull(fallbackSource);
+        Assert.Equal(configuredSource.Item1, configuredSource.Item2);
+        Assert.Equal(configuredSource.Item1, aspireSource);
+        Assert.Equal(configuredSource.Item1, fallbackSource);
+
+        return (aspireSource, fallbackSource);
     }
 
     private static void CreatePackageWithTags(DirectoryInfo packagesDirectory, string packageId, string version, string tags)
