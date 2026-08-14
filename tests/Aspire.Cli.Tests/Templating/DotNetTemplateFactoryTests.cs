@@ -586,7 +586,23 @@ public class DotNetTemplateFactoryTests
         // while the test waits for the process to exit.
         var standardOutputTask = process.StandardOutput.ReadToEndAsync();
         var standardErrorTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
+        using var timeout = AsyncTestHelpers.CreateDefaultTimeoutTokenSource(TestConstants.LongTimeoutDuration);
+        try
+        {
+            await process.WaitForExitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            throw new TimeoutException($"Process '{process.StartInfo.FileName}' did not exit within the timeout.");
+        }
 
         var output = await standardOutputTask + await standardErrorTask;
         return (process.ExitCode, output);
