@@ -418,7 +418,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
             workspaceSource,
             CancellationToken.None);
 
-        Assert.Equal(Path.Combine(workspace.WorkspaceRoot.FullName, workspaceSource), source);
+        Assert.Equal(Path.Combine(workspace.WorkspaceRoot.FullName, "feeds", "local"), source);
     }
 
     [Fact]
@@ -451,7 +451,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
             workspaceSource,
             CancellationToken.None);
 
-        Assert.Equal(Path.Combine(workspace.WorkspaceRoot.FullName, workspaceSource), source);
+        Assert.Equal(Path.Combine(workspace.WorkspaceRoot.FullName, "feeds", "local"), source);
     }
 
     [Fact]
@@ -480,7 +480,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
             invocationConfiguredSource: null,
             CancellationToken.None);
 
-        Assert.Equal(Path.Combine(targetWorkspace.WorkspaceRoot.FullName, appHostSource), source);
+        Assert.Equal(Path.Combine(targetWorkspace.WorkspaceRoot.FullName, "feeds", "target"), source);
     }
 
     [Fact]
@@ -520,7 +520,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
             sourceValue,
             CancellationToken.None);
 
-        Assert.Equal(Path.Combine(targetWorkspace.WorkspaceRoot.FullName, sourceValue), source);
+        Assert.Equal(Path.Combine(targetWorkspace.WorkspaceRoot.FullName, "feeds", "shared"), source);
     }
 
     [Theory]
