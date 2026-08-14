@@ -6,6 +6,7 @@ import { AspireExtensionContext } from '../AspireExtensionContext';
 import { getLoggableDebugConfiguration, type AspireDebugSession } from '../debugger/AspireDebugSession';
 import { createDebugSessionConfiguration, getResourceDebuggerExtensions } from '../debugger/debuggerExtensions';
 import { spawnCliProcess } from '../debugger/languages/cli';
+import { projectDebuggerExtension } from '../debugger/languages/dotnet';
 import { cleanupRun } from '../debugger/runCleanupRegistry';
 import type { AspireResourceExtendedDebugConfiguration, EnvVar, ExecutableLaunchConfiguration } from '../dcp/types';
 import { createStateSnapshot, getSensitiveDashboardUrl, isSamePath } from '../extensionState';
@@ -645,7 +646,10 @@ async function executeE2eControlCommand(
     case 'createResourceDebugConfiguration': {
       markStarted();
       const launchConfig = getE2eLaunchConfiguration(command.launchConfig);
-      const debuggerExtension = getResourceDebuggerExtensions().find(extension => extension.resourceType === launchConfig.type);
+      const isApphost = command.isApphost ?? false;
+      const debuggerExtension = isApphost && launchConfig.type === 'project'
+        ? projectDebuggerExtension
+        : getResourceDebuggerExtensions().find(extension => extension.resourceType === launchConfig.type);
       if (!debuggerExtension) {
         throw new Error(`No resource debugger extension is registered for launch configuration type '${launchConfig.type}'.`);
       }
@@ -653,20 +657,34 @@ async function executeE2eControlCommand(
       const runId = 'e2e-resource-debug-configuration';
       try {
         const debugConfiguration = await createDebugSessionConfiguration(
-          { type: 'aspire', request: 'launch', name: 'E2E resource debug configuration', program: '' },
+          {
+            type: 'aspire',
+            request: 'launch',
+            name: 'E2E resource debug configuration',
+            program: '',
+            debuggers: command.debuggers ? { ...command.debuggers } : undefined,
+          },
           launchConfig,
           getE2eStringArray(command.args, 'args'),
           getE2eEnvVars(command.env),
           {
             debug: command.debug ?? true,
+            forceBuild: false,
             runId,
             debugSessionId: 'e2e-debug-session',
-            isApphost: false,
+            isApphost,
             debugSession: {} as AspireDebugSession
           },
           debuggerExtension);
 
-        return getLoggableDebugConfiguration(debugConfiguration, false);
+        const loggableConfiguration = getLoggableDebugConfiguration(debugConfiguration, false);
+        const environmentKeys = getE2eStringArray(command.environmentKeys, 'environmentKeys');
+        return environmentKeys
+          ? {
+            ...loggableConfiguration,
+            environment: Object.fromEntries(environmentKeys.map(key => [key, debugConfiguration.env?.[key]])),
+          }
+          : loggableConfiguration;
       } finally {
         cleanupRun(runId);
       }
@@ -757,12 +775,6 @@ async function executeE2eControlCommand(
         uri: folder.uri.toString(),
         fileName: folder.uri.fsPath,
       })) ?? [];
-    }
-    case 'getLaunchConfigurations': {
-      markStarted();
-      const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-      return vscode.workspace.getConfiguration('launch', workspaceFolder?.uri)
-        .get<readonly vscode.DebugConfiguration[]>('configurations', []);
     }
     case 'getActiveEditor': {
       markStarted();

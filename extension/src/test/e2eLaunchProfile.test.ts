@@ -336,22 +336,6 @@ suite('E2E launch profile', () => {
         assert.ok(assertions.includes('throwIfControlFailed(openWorkspaceRevision);'));
     });
 
-    test('waits for effective launch configurations after launch.json changes', () => {
-        const extensionRoot = path.resolve(__dirname, '..', '..');
-        const apiTypes = fs.readFileSync(path.join(extensionRoot, 'src', 'types', 'extensionApi.ts'), 'utf8');
-        const e2eStateFileBridge = fs.readFileSync(path.join(extensionRoot, 'src', 'testing', 'e2eStateFileBridge.ts'), 'utf8');
-        const assertions = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'helpers', 'assertions.ts'), 'utf8');
-        const launchProfilesE2E = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'launchProfiles.e2e.test.ts'), 'utf8');
-
-        assert.ok(apiTypes.includes("{ name: 'getLaunchConfigurations' }"));
-        assert.ok(e2eStateFileBridge.includes("case 'getLaunchConfigurations':"));
-        assert.ok(e2eStateFileBridge.includes("vscode.workspace.getConfiguration('launch', workspaceFolder?.uri)"));
-        assert.ok(assertions.includes('export async function getLaunchConfigurations'));
-        assert.ok(assertions.includes('export async function waitForLaunchConfigurations'));
-        assertTextOrder(launchProfilesE2E, 'writeFileWithRetry(launchJsonPath', 'await waitForLaunchConfigurations([launchConfiguration])');
-        assertTextOrder(launchProfilesE2E, 'restoreFile(launchJsonPath', 'await waitForLaunchConfigurations(originalLaunchConfigurations)');
-    });
-
     test('bounds the ExTester process below the workflow timeout so diagnostics still run', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
