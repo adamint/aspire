@@ -29,15 +29,17 @@ import { getHotReloadDiagnostics, logHotReloadDiagnostics, showHotReloadDisabled
 interface IDotNetService {
     getAndActivateDevKit(): Promise<boolean>
     buildDotNetProject(projectFile: string): Promise<void>;
-    getDotNetTargetPath(projectFile: string): Promise<string>;
+    getDotNetTargetPath(projectFile: string, configuration?: string): Promise<string>;
     getDotNetRunApiOutput(projectFile: string, environment?: NodeJS.ProcessEnv): Promise<string>;
 }
 
 interface DotNetAttachDebuggerResourceInfo {
+    configuration?: string;
     projectPath: string;
     resourceLabel: string;
 }
 
+const executableArgsPropertyName = 'executable.args';
 const executablePidPropertyName = 'executable.pid';
 const executablePathPropertyName = 'executable.path';
 const projectPathPropertyName = 'project.path';
@@ -124,7 +126,7 @@ export class DotNetService implements IDotNetService {
         });
     }
 
-    async getDotNetTargetPath(projectFile: string): Promise<string> {
+    async getDotNetTargetPath(projectFile: string, configuration?: string): Promise<string> {
         const args = [
             'msbuild',
             projectFile,
@@ -133,6 +135,10 @@ export class DotNetService implements IDotNetService {
             '-v:q',
             '-property:GenerateFullPaths=true'
         ];
+        if (configuration) {
+            args.push(`-property:Configuration=${configuration}`);
+        }
+
         try {
             const { stdout } = await this.execFileAsync('dotnet', args, {
                 cwd: path.dirname(projectFile),
@@ -436,9 +442,41 @@ function getDotNetAttachDebuggerResourceInfo(resource: DebuggableResourceSnapsho
     }
 
     return {
+        configuration: getDotNetLaunchConfiguration(resource),
         projectPath,
         resourceLabel: resource.displayName ?? resource.name,
     };
+}
+
+function getDotNetLaunchConfiguration(resource: DebuggableResourceSnapshot): string | undefined {
+    const executableArgs: unknown = resource.properties?.[executableArgsPropertyName];
+    if (!Array.isArray(executableArgs)) {
+        return undefined;
+    }
+
+    // Project launcher arguments have the shape:
+    //   ["run", "--project", "/repo/api.csproj", "--configuration", "Release", "--no-launch-profile", "--", ...appArgs]
+    // Stop at the application-argument separator so an app's own --configuration value is not mistaken
+    // for the MSBuild configuration DCP used to launch the project.
+    for (let index = 0; index < executableArgs.length; index++) {
+        const argument = executableArgs[index];
+        if (typeof argument !== 'string') {
+            continue;
+        }
+
+        if (argument === '--') {
+            break;
+        }
+
+        if (argument === '--configuration') {
+            const configuration = executableArgs[index + 1];
+            return typeof configuration === 'string' && configuration.trim().length > 0
+                ? configuration.trim()
+                : undefined;
+        }
+    }
+
+    return undefined;
 }
 
 function getResourceParentName(resource: DebuggableResourceSnapshot): string | null {
@@ -487,7 +525,7 @@ async function createDotNetAttachDebugSessionConfiguration(resource: DebuggableR
 
     let targetPath: string;
     try {
-        targetPath = await dotNetService.getDotNetTargetPath(attachInfo.projectPath);
+        targetPath = await dotNetService.getDotNetTargetPath(attachInfo.projectPath, attachInfo.configuration);
     }
     catch (error) {
         throw new AttachDebuggerConfigurationError(

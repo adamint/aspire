@@ -4,7 +4,7 @@ import { EventEmitter } from 'events';
 import * as nodePath from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
-import { createProjectDebuggerExtension, projectDebuggerExtension, quoteCommandLineArgument } from '../debugger/languages/dotnet';
+import { createProjectDebuggerExtension, DotNetService, projectDebuggerExtension, quoteCommandLineArgument } from '../debugger/languages/dotnet';
 import { AspireExtendedDebugConfiguration, AspireResourceExtendedDebugConfiguration, ExecutableLaunchConfiguration, ProjectLaunchConfiguration } from '../dcp/types';
 import * as io from '../utils/io';
 import { createDebugSessionConfiguration, ResourceDebuggerExtension } from '../debugger/debuggerExtensions';
@@ -36,8 +36,8 @@ class TestDotNetService {
         this._hasDevKit = hasDevKit;
     }
 
-    getDotNetTargetPath(projectFile: string): Promise<string> {
-        return this.getDotNetTargetPathStub(projectFile);
+    getDotNetTargetPath(projectFile: string, configuration?: string): Promise<string> {
+        return this.getDotNetTargetPathStub(projectFile, configuration);
     }
 
     buildDotNetProject(projectFile: string): Promise<void> {
@@ -98,7 +98,48 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(configuration.name, 'Attach debugger: API');
         assert.strictEqual(configuration.processId, undefined);
         assert.strictEqual(configuration.processName, 'FromTargetPath');
-        assert.ok(dotNetService.getDotNetTargetPathStub.calledOnceWithExactly('/repo/api/Api.csproj'));
+        assert.ok(dotNetService.getDotNetTargetPathStub.calledOnceWithExactly('/repo/api/Api.csproj', undefined));
+    });
+
+    test('attach configuration evaluates TargetPath with the launched project configuration', async () => {
+        const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Release/net10.0/ReleaseApi.dll', null, true, true);
+
+        const configuration = await extension.createAttachDebugSessionConfigurationCallback!({
+            name: 'api',
+            displayName: 'API',
+            resourceType: 'Project',
+            state: 'Running',
+            properties: {
+                'executable.pid': '1234',
+                'executable.path': 'dotnet',
+                'executable.args': ['run', '--project', '/repo/api/Api.csproj', '--configuration', 'Release', '--no-launch-profile'],
+                'project.path': '/repo/api/Api.csproj',
+            },
+        });
+
+        assert.strictEqual(configuration.processName, 'ReleaseApi');
+        assert.ok(dotNetService.getDotNetTargetPathStub.calledOnceWithExactly('/repo/api/Api.csproj', 'Release'));
+    });
+
+    test('TargetPath evaluation passes the project configuration to MSBuild', async () => {
+        const dotNetService = new DotNetService(undefined);
+        const execFileAsync = sinon.stub(dotNetService, 'execFileAsync').resolves({
+            stdout: '/repo/bin/Release/net10.0/ReleaseApi.dll\n',
+            stderr: '',
+        });
+
+        const targetPath = await dotNetService.getDotNetTargetPath('/repo/api/Api.csproj', 'Release');
+
+        assert.strictEqual(targetPath, '/repo/bin/Release/net10.0/ReleaseApi.dll');
+        assert.deepStrictEqual(execFileAsync.firstCall.args[1], [
+            'msbuild',
+            '/repo/api/Api.csproj',
+            '-nologo',
+            '-getProperty:TargetPath',
+            '-v:q',
+            '-property:GenerateFullPaths=true',
+            '-property:Configuration=Release',
+        ]);
     });
 
     test('attach configuration rejects file-based project resources', async () => {
@@ -141,7 +182,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         });
 
         assert.strictEqual(configuration.processName, 'FromTargetPath');
-        assert.ok(dotNetService.getDotNetTargetPathStub.calledOnceWithExactly('/repo/api/Api.csproj'));
+        assert.ok(dotNetService.getDotNetTargetPathStub.calledOnceWithExactly('/repo/api/Api.csproj', undefined));
     });
 
     test('attach configuration rejects parented MAUI platform resources', async () => {
