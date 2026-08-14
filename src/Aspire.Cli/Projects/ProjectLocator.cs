@@ -1024,7 +1024,7 @@ internal sealed class ProjectLocator(
                         logger.LogDebug("Using {Language} apphost {ProjectFile}", handler.DisplayName, projectFile.FullName);
                         if (createSettingsFile)
                         {
-                            await CreateSettingsFileAsync(projectFile, cancellationToken);
+                            await CreateSettingsFileAsync(projectFile, preserveExistingDefault: true, cancellationToken);
                         }
 
                         return new AppHostProjectSearchResult(projectFile, [projectFile]);
@@ -1072,7 +1072,7 @@ internal sealed class ProjectLocator(
             // was only kept because MSBuild failed into a confirmed choice.
             if (createSettingsFile && !settingsResult.IsUnverified)
             {
-                await CreateSettingsFileAsync(settingsAppHost, cancellationToken);
+                await CreateSettingsFileAsync(settingsAppHost, preserveExistingDefault: false, cancellationToken);
             }
 
             return new AppHostProjectSearchResult(settingsAppHost, [settingsAppHost]);
@@ -1165,7 +1165,7 @@ internal sealed class ProjectLocator(
 
         if (createSettingsFile && !selectionIsUnverifiedSettingsAppHost)
         {
-            await CreateSettingsFileAsync(selectedAppHost!, cancellationToken);
+            await CreateSettingsFileAsync(selectedAppHost!, preserveExistingDefault: false, cancellationToken);
         }
 
         // Ensure the selected AppHost is always represented in the candidate list so callers
@@ -1200,10 +1200,12 @@ internal sealed class ProjectLocator(
         return string.Equals(persistedPath, selectedPath, pathComparison);
     }
 
-    private async Task CreateSettingsFileAsync(FileInfo projectFile, CancellationToken cancellationToken)
+    private async Task CreateSettingsFileAsync(FileInfo projectFile, bool preserveExistingDefault, CancellationToken cancellationToken)
     {
-        var selectionOrigin = configuration[KnownConfigNames.CliAppHostSelectionOrigin];
-        var isExplicitLaunchConfiguration = string.Equals(selectionOrigin, ExplicitLaunchConfigurationSelectionOrigin, StringComparison.OrdinalIgnoreCase);
+        var configuredSelectionOrigin = configuration[KnownConfigNames.CliAppHostSelectionOrigin];
+        var isExplicitLaunchConfiguration = string.Equals(configuredSelectionOrigin, ExplicitLaunchConfigurationSelectionOrigin, StringComparison.OrdinalIgnoreCase);
+        var selectionOrigin = preserveExistingDefault ? "--apphost" : configuredSelectionOrigin;
+        var shouldPreserveExistingDefault = preserveExistingDefault || isExplicitLaunchConfiguration;
 
         var (settingsFile, appHostDirForScopedConfig) = ResolveWorkspaceConfigTarget(projectFile);
 
@@ -1230,9 +1232,9 @@ internal sealed class ProjectLocator(
                 return;
             }
 
-            // A launch configuration or agent-selected target is for this invocation only. Preserve
+            // An explicit CLI target or launch configuration is for this invocation only. Preserve
             // an existing workspace default, but let the selected AppHost replace a deleted target.
-            if (isExplicitLaunchConfiguration && File.Exists(resolvedPath))
+            if (shouldPreserveExistingDefault && File.Exists(resolvedPath))
             {
                 logger.LogDebug(
                     "Not replacing recorded AppHost default {RecordedAppHost} with {AppHost} because the latter was selected by {SelectionOrigin}.",
