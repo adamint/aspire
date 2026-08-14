@@ -4,7 +4,6 @@
   "description": "Minimalna wersja hosta Aspire AppHost dla scenariuszy z pojedynczym plikiem (co najmniej .NET 10).",
   "symbols/Framework/choices/net10.0/description": "Docelowa platforma net10.0",
   "symbols/Framework/choices/net11.0/description": "Target net11.0",
-  "symbols/no-restore/description": "If specified, skips the automatic restore of the project on create.",
   "symbols/appHostHttpPort/description": "Numer portu do użycia dla punktu końcowego HTTP w pliku launchSettings.json projektu AppHost.",
   "symbols/appHostOtlpHttpPort/description": "Numer portu do użycia dla punktu końcowego HTTP OTLP w pliku launchSettings.json projektu AppHost.",
   "symbols/appHostResourceHttpPort/description": "Numer portu do użycia dla punktu końcowego HTTP usługi zasobów w pliku launchSettings.json projektu AppHost.",
