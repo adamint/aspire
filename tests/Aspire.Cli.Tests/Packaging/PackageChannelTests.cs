@@ -135,6 +135,46 @@ public class PackageChannelTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task GetTemplatePackagesAsync_ImplicitChannelWithLocalOverride_EnumeratesLocalSource()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var packagesDirectory = workspace.CreateDirectory("packages");
+
+        File.WriteAllText(Path.Combine(packagesDirectory.FullName, "Aspire.ProjectTemplates.13.4.0.nupkg"), string.Empty);
+        File.WriteAllText(Path.Combine(packagesDirectory.FullName, "Aspire.ProjectTemplates.13.5.0-preview.1.nupkg"), string.Empty);
+        File.WriteAllText(Path.Combine(packagesDirectory.FullName, "Aspire.Hosting.Redis.13.5.0-preview.1.nupkg"), string.Empty);
+
+        var packageSource = packagesDirectory.FullName.Replace('\\', '/');
+        var cache = new FakeNuGetPackageCache
+        {
+            GetTemplatePackagesAsyncCallback = (_, _, _, _) => throw new InvalidOperationException("Local package sources should be enumerated directly.")
+        };
+        var channel = PackageChannel.CreateImplicitChannel(cache, new TestFeatures(), NullLogger.Instance);
+
+        var packages = (await channel.GetTemplatePackagesAsync(
+            workspace.WorkspaceRoot,
+            PackageSourceOverrideMappings.CreateForTemplateOperations(packageSource),
+            CancellationToken.None).DefaultTimeout())
+            .OrderBy(package => package.Version, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Collection(
+            packages,
+            package =>
+            {
+                Assert.Equal("Aspire.ProjectTemplates", package.Id);
+                Assert.Equal("13.4.0", package.Version);
+                Assert.Equal(packageSource, package.Source);
+            },
+            package =>
+            {
+                Assert.Equal("Aspire.ProjectTemplates", package.Id);
+                Assert.Equal("13.5.0-preview.1", package.Version);
+                Assert.Equal(packageSource, package.Source);
+            });
+    }
+
+    [Fact]
     public async Task GetIntegrationPackagesAsync_WithPinnedLocalSource_ReturnsOnlyPinnedLocalIntegrationPackages()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
@@ -281,6 +321,53 @@ public class PackageChannelTests(ITestOutputHelper outputHelper)
         Assert.Equal("Aspire.Hosting.Redis", package.Id);
         Assert.Equal("13.4.0", package.Version);
         Assert.Equal(packageSource, package.Source);
+    }
+
+    [Fact]
+    public async Task LocalOverrideAsFileUri_EnumeratesIntegrationAndPolyglotPackages()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var packagesDirectory = workspace.CreateDirectory("packages");
+        CreatePackageWithTags(packagesDirectory, "Aspire.Hosting.Redis", "13.4.0", "aspire integration hosting cache polyglot");
+        CreatePackageWithTags(packagesDirectory, "Aspire.Hosting.PostgreSQL", "13.5.0-preview.1", "aspire integration hosting database");
+        CreatePackageWithTags(packagesDirectory, "Aspire.ProjectTemplates", "13.5.0-preview.1", "aspire templates polyglot");
+
+        var fileUriSource = new Uri(packagesDirectory.FullName).AbsoluteUri;
+        var normalizedSource = packagesDirectory.FullName.Replace('\\', '/');
+        var cache = new FakeNuGetPackageCache
+        {
+            GetIntegrationPackagesAsyncCallback = (_, _, _, _) => throw new InvalidOperationException("Local package sources should be enumerated directly."),
+            GetPackagesAsyncCallback = (_, _, _, _, _, _, _) => throw new InvalidOperationException("Local package sources should be enumerated directly.")
+        };
+        var mappings = new[]
+        {
+            new PackageMapping("Aspire*", fileUriSource),
+            new PackageMapping(PackageMapping.AllPackages, PackageSources.NuGetOrg)
+        };
+        var channel = PackageChannel.CreateExplicitChannel("local", PackageChannelQuality.Both, mappings, cache, new TestFeatures(), NullLogger.Instance);
+
+        var packages = (await channel.GetIntegrationPackagesAsync(workspace.WorkspaceRoot, CancellationToken.None).DefaultTimeout())
+            .OrderBy(package => package.Id, StringComparer.Ordinal)
+            .ToArray();
+        var polyglotPackageIds = (await channel.GetPolyglotCompatiblePackageIdsAsync(workspace.WorkspaceRoot, CancellationToken.None).DefaultTimeout())
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Collection(
+            packages,
+            package =>
+            {
+                Assert.Equal("Aspire.Hosting.PostgreSQL", package.Id);
+                Assert.Equal("13.5.0-preview.1", package.Version);
+                Assert.Equal(normalizedSource, package.Source);
+            },
+            package =>
+            {
+                Assert.Equal("Aspire.Hosting.Redis", package.Id);
+                Assert.Equal("13.4.0", package.Version);
+                Assert.Equal(normalizedSource, package.Source);
+            });
+        Assert.Equal(["Aspire.Hosting.Redis"], polyglotPackageIds);
     }
 
     [Fact]

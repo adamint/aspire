@@ -32,13 +32,26 @@ internal static class PackageSourceOverrideMappings
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(source);
 
+        var localDirectory = GetNormalizedLocalDirectory(source);
+        if (localDirectory is null)
+        {
+            return null;
+        }
+
+        return Directory.Exists(localDirectory) ? null : localDirectory;
+    }
+
+    public static string? GetNormalizedLocalDirectory(string source)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(source);
+
         var sourceKind = ClassifySource(source, out var localDirectory);
         if (sourceKind is PackageSourceKind.Http)
         {
             return null;
         }
 
-        return Directory.Exists(localDirectory) ? null : localDirectory;
+        return Path.GetFullPath(localDirectory!);
     }
 
     public static PackageMapping[] Create(string packageSourceOverride, PackageChannel? requestedChannel, string? nugetServiceIndexOverride)

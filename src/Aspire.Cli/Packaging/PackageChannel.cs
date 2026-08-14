@@ -16,6 +16,8 @@ namespace Aspire.Cli.Packaging;
 
 internal class PackageChannel(string name, PackageChannelQuality quality, PackageMapping[]? mappings, INuGetPackageCache nuGetPackageCache, IFeatures features, ILogger logger, bool configureGlobalPackagesFolder = false, string? cliDownloadBaseUrl = null, string? pinnedVersion = null, string? currentCliVersion = null, Action? validateTemplatePackageMetadataPrefetching = null)
 {
+    private const string TemplatePackageId = "Aspire.ProjectTemplates";
+
     // Threaded so the local-folder integration listing can honor the same
     // ShowDeprecatedPackages flag that NuGetPackageCache honors on the feed-based path.
     // Without this, flipping the flag silently has no effect on local hive / PR hive listings
@@ -140,7 +142,13 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
 
         if (PinnedVersion is not null)
         {
-            return [new NuGetPackage { Id = "Aspire.ProjectTemplates", Version = PinnedVersion, Source = ComputeSourceDetails(mappings) }];
+            return [new NuGetPackage { Id = TemplatePackageId, Version = PinnedVersion, Source = ComputeSourceDetails(mappings) }];
+        }
+
+        var localPackageSource = GetLocalAspirePackageSource(mappings);
+        if (localPackageSource is not null)
+        {
+            return GetTemplatePackagesFromLocalPackageSource(localPackageSource, cancellationToken);
         }
 
         var tasks = new List<Task<IEnumerable<NuGetPackage>>>();
@@ -168,15 +176,7 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
         // matching template package from daily/staging feeds, then filter out the remaining noise.
         // Falls back to the assembly version only when no identity was threaded in (direct construction);
         // production channels created by PackagingService always supply CliExecutionContext.IdentitySdkVersion.
-        var currentCliVersion = _currentCliVersion ?? VersionHelper.GetDefaultSdkVersion();
-        var filteredPackages = packages.Where(p => new { SemVer = SemVersion.Parse(p.Version), Quality = Quality } switch
-        {
-            { Quality: PackageChannelQuality.Both } => true,
-            { Quality: PackageChannelQuality.Stable, SemVer: { IsPrerelease: false } } => true,
-            { Quality: PackageChannelQuality.Prerelease, SemVer: { IsPrerelease: true } } => true,
-            { Quality: PackageChannelQuality.Prerelease, SemVer: { IsPrerelease: false } } when string.Equals(p.Version, currentCliVersion, StringComparison.OrdinalIgnoreCase) => true,
-            _ => false
-        });
+        var filteredPackages = packages.Where(p => IsAllowedTemplatePackageByQuality(SemVersion.Parse(p.Version), p.Version));
 
         return filteredPackages;
     }
@@ -246,13 +246,33 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
 
         foreach (var mapping in mappings)
         {
-            if (IsScopedAspireMapping(mapping) && Directory.Exists(mapping.Source))
+            var localDirectory = PackageSourceOverrideMappings.GetNormalizedLocalDirectory(mapping.Source);
+            if (IsScopedAspireMapping(mapping) && localDirectory is not null && Directory.Exists(localDirectory))
             {
-                return new DirectoryInfo(mapping.Source);
+                return new DirectoryInfo(localDirectory);
             }
         }
 
         return null;
+    }
+
+    private IEnumerable<NuGetPackage> GetTemplatePackagesFromLocalPackageSource(DirectoryInfo packageSource, CancellationToken cancellationToken)
+    {
+        var source = PathNormalizer.NormalizePathForStorage(packageSource.FullName);
+
+        return packageSource
+            .EnumerateFiles("*.nupkg", SearchOption.TopDirectoryOnly)
+            .Select(file =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return GetPackageFileMetadata(file.FullName);
+            })
+            .OfType<PackageFileMetadata>()
+            .Where(metadata => string.Equals(metadata.PackageId, TemplatePackageId, StringComparison.OrdinalIgnoreCase))
+            .Where(metadata => IsAllowedTemplatePackageByQuality(metadata.Version, metadata.Version.ToString()))
+            .OrderByDescending(metadata => metadata.Version, SemVersion.PrecedenceComparer)
+            .Select(metadata => new NuGetPackage { Id = metadata.PackageId, Version = metadata.Version.ToString(), Source = source })
+            .ToArray();
     }
 
     private IEnumerable<NuGetPackage> GetIntegrationPackagesFromLocalPackageSource(DirectoryInfo packageSource, CancellationToken cancellationToken)
@@ -372,6 +392,24 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
         }
 
         return ids;
+    }
+
+    private bool IsAllowedTemplatePackageByQuality(SemVersion version, string versionText)
+    {
+        // Keep the current CLI/SDK version so shipped CLIs can resolve their matching template
+        // package from prerelease channels even when the package itself is stable. The feed-based
+        // path does the same filtering after `dotnet package search`; local folder enumeration must
+        // mirror that behavior so a local override doesn't silently hide the same template.
+        var currentCliVersion = _currentCliVersion ?? VersionHelper.GetDefaultSdkVersion();
+
+        return new { SemVer = version, Quality } switch
+        {
+            { Quality: PackageChannelQuality.Both } => true,
+            { Quality: PackageChannelQuality.Stable, SemVer: { IsPrerelease: false } } => true,
+            { Quality: PackageChannelQuality.Prerelease, SemVer: { IsPrerelease: true } } => true,
+            { Quality: PackageChannelQuality.Prerelease, SemVer: { IsPrerelease: false } } when string.Equals(versionText, currentCliVersion, StringComparison.OrdinalIgnoreCase) => true,
+            _ => false
+        };
     }
 
     private static bool PackageHasPolyglotTag(string packageFile, ILogger logger)
