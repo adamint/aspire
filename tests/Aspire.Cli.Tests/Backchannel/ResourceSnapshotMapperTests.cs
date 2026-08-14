@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Aspire.Cli.Backchannel;
 using Aspire.Cli.Commands;
+using Aspire.Dashboard.Model;
 using Aspire.Shared.Model.Serialization;
 
 namespace Aspire.Cli.Tests.Backchannel;
@@ -29,6 +30,30 @@ public class ResourceSnapshotMapperTests
         Assert.NotNull(snapshot);
         var pid = Assert.IsAssignableFrom<JsonValue>(snapshot.Properties["executable.pid"]);
         Assert.Equal(12345, pid.GetValue<int>());
+    }
+
+    [Fact]
+    public void MapToResourceJson_WithLaunchConfigurationType_PreservesProperty()
+    {
+        var snapshot = new ResourceSnapshot
+        {
+            Name = "mauiapp-android-emulator",
+            DisplayName = "MAUI",
+            ResourceType = "Project",
+            State = "Running",
+            Properties =
+            {
+                [KnownProperties.Project.Path] = JsonValue.Create("/repo/maui/MauiApp.csproj"),
+                [KnownProperties.Project.LaunchProfile] = JsonValue.Create("AndroidEmulator"),
+                [KnownProperties.Resource.LaunchConfigurationType] = JsonValue.Create("maui"),
+                [KnownProperties.Resource.ParentName] = JsonValue.Create("mauiapp"),
+            }
+        };
+
+        var result = ResourceSnapshotMapper.MapToResourceJson(snapshot, [snapshot]);
+
+        Assert.Equal("maui", result.Properties![KnownProperties.Resource.LaunchConfigurationType]!.GetValue<string>());
+        Assert.Equal("MauiApp.csproj", result.Source);
     }
 
     [Fact]

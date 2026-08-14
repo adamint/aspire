@@ -123,6 +123,74 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
     });
 
+    test('attach configuration keeps parented project resources attachable', async () => {
+        const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/FromTargetPath.dll', null, true, true);
+
+        const configuration = await extension.createAttachDebugSessionConfigurationCallback!({
+            name: 'api-grouped',
+            displayName: 'API',
+            resourceType: 'Project',
+            state: 'Running',
+            properties: {
+                'executable.pid': '1234',
+                'executable.path': 'dotnet',
+                'project.path': '/repo/api/Api.csproj',
+                'resource.launchConfigurationType': 'project',
+                'resource.parentName': 'group',
+            },
+        });
+
+        assert.strictEqual(configuration.processName, 'FromTargetPath');
+        assert.ok(dotNetService.getDotNetTargetPathStub.calledOnceWithExactly('/repo/api/Api.csproj'));
+    });
+
+    test('attach configuration rejects parented MAUI platform resources', async () => {
+        const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/FromTargetPath.dll', null, true, true);
+
+        await assert.rejects(
+            extension.createAttachDebugSessionConfigurationCallback!({
+                name: 'mauiapp-android-emulator',
+                displayName: 'MAUI',
+                resourceType: 'Project',
+                state: 'Running',
+                properties: {
+                    'executable.pid': '1234',
+                    'executable.path': 'dotnet',
+                    'project.path': '/repo/maui/MauiApp.csproj',
+                    'resource.launchConfigurationType': 'maui',
+                    'resource.parentName': 'mauiapp',
+                },
+            }),
+            (error: unknown) => error instanceof Error
+                && error.name === 'AttachDebuggerConfigurationError'
+                && (error as Error & { errorKind?: string }).errorKind === 'ResourceNotAttachable');
+
+        assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
+    });
+
+    test('attach configuration rejects parented resources without explicit launch metadata', async () => {
+        const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/FromTargetPath.dll', null, true, true);
+
+        await assert.rejects(
+            extension.createAttachDebugSessionConfigurationCallback!({
+                name: 'legacy-parented',
+                displayName: 'Legacy parented project',
+                resourceType: 'Project',
+                state: 'Running',
+                properties: {
+                    'executable.pid': '1234',
+                    'executable.path': 'dotnet',
+                    'project.path': '/repo/api/Api.csproj',
+                    'resource.parentName': 'group',
+                },
+            }),
+            (error: unknown) => error instanceof Error
+                && error.name === 'AttachDebuggerConfigurationError'
+                && (error as Error & { errorKind?: string }).errorKind === 'ResourceNotAttachable');
+
+        assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
+    });
+
     test('failed AppHost start writes error to debug console', async () => {
         const parentDebugSession = {
             id: 'aspire-session',

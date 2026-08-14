@@ -42,6 +42,7 @@ const executablePidPropertyName = 'executable.pid';
 const executablePathPropertyName = 'executable.path';
 const projectPathPropertyName = 'project.path';
 const resourceParentNamePropertyName = 'resource.parentName';
+const resourceLaunchConfigurationTypePropertyName = 'resource.launchConfigurationType';
 const dotNetProjectFileExtensions = new Set(['.csproj', '.fsproj', '.vbproj']);
 
 export class DotNetService implements IDotNetService {
@@ -404,16 +405,16 @@ function configureDotNetRunDebugConfiguration(
 }
 
 function getDotNetAttachDebuggerResourceInfo(resource: DebuggableResourceSnapshot): DotNetAttachDebuggerResourceInfo | undefined {
-    // The parent check is deliberately broader than it needs to be. MAUI platform resources derive from
-    // ProjectResource (MauiMacCatalystPlatformResource : ProjectResource, IMauiPlatformResource), so they
-    // report resourceType 'Project' and are only distinguishable from an ordinary project by their parent -
-    // the launch configuration type that actually names them as MAUI ('maui', MauiPlatformHelper) never
-    // reaches the resource snapshot. Attaching coreclr by TargetName to an app running on a device or
-    // simulator would be wrong, so a project with a parent is skipped. The cost is that an ordinary project
-    // given a parent purely for grouping (WithParentRelationship) also loses the attach action; that is a
-    // missing menu entry rather than a debugger pointed at the wrong process, so it is the safer side to err
-    // on until the snapshot carries something that names the debugger a resource needs.
-    if (resource.resourceType !== 'Project' || resource.state !== 'Running' || getResourceParentName(resource) !== null) {
+    if (resource.resourceType !== 'Project' || resource.state !== 'Running') {
+        return undefined;
+    }
+
+    const launchConfigurationType = getLaunchConfigurationType(resource);
+    // Newer AppHosts identify MAUI platform resources explicitly. Older AppHosts do not emit this
+    // property, so retain the parent fallback there rather than risking a CoreCLR attach to a device
+    // or simulator process. Ordinary grouped projects from newer AppHosts remain attachable.
+    if (launchConfigurationType === 'maui' ||
+        (launchConfigurationType === null && getResourceParentName(resource) !== null)) {
         return undefined;
     }
 
@@ -443,6 +444,11 @@ function getDotNetAttachDebuggerResourceInfo(resource: DebuggableResourceSnapsho
 function getResourceParentName(resource: DebuggableResourceSnapshot): string | null {
     const value: unknown = resource.properties?.[resourceParentNamePropertyName];
     return typeof value === 'string' ? value : null;
+}
+
+function getLaunchConfigurationType(resource: DebuggableResourceSnapshot): string | null {
+    const value: unknown = resource.properties?.[resourceLaunchConfigurationTypePropertyName];
+    return typeof value === 'string' ? value.trim().toLowerCase() : null;
 }
 
 function getAttachDebuggerProcessId(resource: DebuggableResourceSnapshot): number | undefined {

@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+#pragma warning disable ASPIREEXTENSION001 // Launch configuration metadata is experimental but needed for snapshot serialization.
+
 using System.Collections.Immutable;
 using Aspire.Dashboard.Model;
 using Aspire.Hosting.ApplicationModel;
@@ -132,11 +134,17 @@ internal class ResourceSnapshotBuilder
     {
         string? projectPath = null;
         string? launchProfileName = null;
+        string? launchConfigurationType = null;
         IResource? appModelResource = null;
 
         if (executable.AppModelResourceName is not null &&
             _resourceState.ApplicationModel.TryGetValue(executable.AppModelResourceName, out appModelResource))
         {
+            if (appModelResource.TryGetLastAnnotation<SupportsDebuggingAnnotation>(out var debugSupport))
+            {
+                launchConfigurationType = debugSupport.LaunchConfigurationType;
+            }
+
             if (appModelResource is ProjectResource projectResource)
             {
                 projectPath = projectResource.GetProjectMetadata().ProjectPath;
@@ -168,6 +176,9 @@ internal class ResourceSnapshotBuilder
         }
 
         var launchArguments = GetLaunchArgs(executable, effectiveArgs);
+        ImmutableArray<ResourcePropertySnapshot> launchConfigurationProperties = launchConfigurationType is null
+            ? []
+            : [new(KnownProperties.Resource.LaunchConfigurationType, launchConfigurationType)];
 
         if (projectPath is not null)
         {
@@ -185,6 +196,7 @@ internal class ResourceSnapshotBuilder
                     ResourcePropertySnapshotMetadata.Create(KnownResourceTypes.Project, KnownProperties.Project.LaunchProfile, launchProfileName),
                     new(KnownProperties.Resource.AppArgs, launchArguments?.Args) { IsSensitive = launchArguments?.IsSensitive ?? false },
                     new(KnownProperties.Resource.AppArgsSensitivity, launchArguments?.ArgsAreSensitive) { IsSensitive = launchArguments?.IsSensitive ?? false },
+                    .. launchConfigurationProperties,
                 ]),
                 EnvironmentVariables = environment,
                 CreationTimeStamp = executable.Metadata.CreationTimestamp?.ToUniversalTime(),
@@ -207,6 +219,7 @@ internal class ResourceSnapshotBuilder
                 ResourcePropertySnapshotMetadata.Create(KnownResourceTypes.Executable, KnownProperties.Executable.Pid, executable.Status?.ProcessId),
                 new(KnownProperties.Resource.AppArgs, launchArguments?.Args) { IsSensitive = launchArguments?.IsSensitive ?? false },
                 new(KnownProperties.Resource.AppArgsSensitivity, launchArguments?.ArgsAreSensitive) { IsSensitive = launchArguments?.IsSensitive ?? false },
+                .. launchConfigurationProperties,
             ]),
             EnvironmentVariables = environment,
             CreationTimeStamp = executable.Metadata.CreationTimestamp?.ToUniversalTime(),
