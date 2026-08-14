@@ -568,6 +568,13 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
         return CreateScopedChannelForPackages([packageId]);
     }
 
+    public PackageChannel WithMappings(PackageMapping[] mappings)
+    {
+        ArgumentNullException.ThrowIfNull(mappings);
+
+        return new PackageChannel(Name, Quality, mappings, nuGetPackageCache, _features, logger, ConfigureGlobalPackagesFolder, CliDownloadBaseUrl, PinnedVersion, _currentCliVersion, validateTemplatePackageMetadataPrefetching);
+    }
+
     public PackageChannel CreateScopedChannelForPackages(IEnumerable<string> packageIds)
     {
         ArgumentNullException.ThrowIfNull(packageIds);

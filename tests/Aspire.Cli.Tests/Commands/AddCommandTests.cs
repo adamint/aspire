@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Text.Json;
+using System.Xml.Linq;
 using Aspire.Cli.Commands;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Interaction;
@@ -193,6 +194,44 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
         Assert.Contains(integrations, i => i.Name == "azure-redis" && i.Package == "Aspire.Hosting.Azure.Redis" && i.Version == "9.2.0");
         Assert.Contains(integrations, i => i.Name == "docker" && i.Package == "Aspire.Hosting.Docker" && i.Version == "9.2.0");
         Assert.Contains(integrations, i => i.Name == "redis" && i.Package == "Aspire.Hosting.Redis" && i.Version == "9.3.0");
+    }
+
+    [Fact]
+    public async Task IntegrationListCommandUsesConfiguredNuGetSource()
+    {
+        const string configuredSource = "https://configured.example/v3/index.json";
+        string? searchSource = null;
+
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.ConfigurationCallback += config => config[AspireConfigFile.NuGetSourceKey] = configuredSource;
+            options.DotNetCliRunnerFactory = _ =>
+            {
+                var runner = new TestDotNetCliRunner();
+                runner.SearchPackagesAsyncCallback = (_, _, _, _, _, _, nugetConfigFile, _, _, _) =>
+                {
+                    searchSource = nugetConfigFile is null
+                        ? null
+                        : (string?)XDocument.Load(nugetConfigFile.FullName).Root!
+                            .Element("packageSources")!
+                            .Elements("add")
+                            .Single()
+                            .Attribute("value");
+                    return (0, new[] { CreatePackage("Aspire.Hosting.Redis", "9.2.0") });
+                };
+                return runner;
+            };
+        });
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("integration list --format json");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Equal(configuredSource, searchSource);
     }
 
     [Theory]
@@ -1991,20 +2030,22 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal("9.2.0", addedPackageVersion);
     }
 
-    [Fact]
-    public async Task AddCommandPreservesSourceArgumentInBothCommands()
+    [Theory]
+    [InlineData(null, "https://configured.example/v3/index.json")]
+    [InlineData("https://explicit.example/v3/index.json", "https://explicit.example/v3/index.json")]
+    public async Task AddCommandUsesConfiguredSourceUnlessExplicitSourceIsProvided(string? explicitSource, string expectedSource)
     {
-        // Arrange
+        const string configuredSource = "https://configured.example/v3/index.json";
+        string? searchUsedSource = null;
         string? addUsedSource = null;
-        const string expectedSource = "https://custom-nuget-source.test/v3/index.json";
 
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
         {
-
             // Makes it easier to isolate behavior in test case by disabling one
             // of the concurrent calls to the NuGetCache from the prefetcher.
             options.DisabledFeatures = [KnownFeatures.UpdateNotificationsEnabled];
+            options.ConfigurationCallback += config => config[AspireConfigFile.NuGetSourceKey] = configuredSource;
 
             options.AddCommandPrompterFactory = (sp) =>
             {
@@ -2017,8 +2058,15 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
             options.DotNetCliRunnerFactory = (sp) =>
             {
                 var runner = new TestDotNetCliRunner();
-                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetConfigFile, useCache, options, cancellationToken) =>
                 {
+                    searchUsedSource = nugetConfigFile is null
+                        ? null
+                        : (string?)XDocument.Load(nugetConfigFile.FullName).Root!
+                            .Element("packageSources")!
+                            .Elements("add")
+                            .Single()
+                            .Attribute("value");
                     var redisPackage = new NuGetPackage()
                     {
                         Id = "Aspire.Hosting.Redis",
@@ -2046,14 +2094,14 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
         });
         using var provider = services.BuildServiceProvider();
 
-        // Act
         var command = provider.GetRequiredService<AddCommand>();
-        var result = command.Parse($"add redis --source {expectedSource}");
+        var sourceArgument = explicitSource is null ? string.Empty : $" --source {explicitSource}";
+        var result = command.Parse($"add redis{sourceArgument}");
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
-        // Assert
         Assert.Equal(0, exitCode);
+        Assert.Equal(expectedSource, searchUsedSource);
         Assert.Equal(expectedSource, addUsedSource);
     }
 

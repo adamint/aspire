@@ -21,9 +21,9 @@ internal sealed class IntegrationPackageSearchService(
 {
     private const double FuzzyMatchThreshold = 0.3;
 
-    public async Task<IEnumerable<(NuGetPackage Package, PackageChannel Channel)>> GetIntegrationPackagesWithChannelsAsync(DirectoryInfo workingDirectory, string? configuredChannel, CancellationToken cancellationToken)
+    public async Task<IEnumerable<(NuGetPackage Package, PackageChannel Channel)>> GetIntegrationPackagesWithChannelsAsync(DirectoryInfo workingDirectory, string? configuredChannel, string? source, CancellationToken cancellationToken)
     {
-        var channels = await GetSearchChannelsAsync(configuredChannel, cancellationToken);
+        var channels = await GetSearchChannelsAsync(workingDirectory, configuredChannel, source, cancellationToken);
 
         var packages = new List<(NuGetPackage Package, PackageChannel Channel)>();
         var packagesLock = new object();
@@ -52,9 +52,9 @@ internal sealed class IntegrationPackageSearchService(
     /// Resolving both lists together avoids re-resolving the channel set and lets each channel's integration
     /// search and its <c>tags:polyglot</c> lookup run concurrently, rather than as two serial discovery passes.
     /// </remarks>
-    public async Task<(IReadOnlyList<(NuGetPackage Package, PackageChannel Channel)> Packages, IReadOnlySet<string> PolyglotCompatibleIds)> GetIntegrationPackagesWithPolyglotCompatibilityAsync(DirectoryInfo workingDirectory, string? configuredChannel, CancellationToken cancellationToken)
+    public async Task<(IReadOnlyList<(NuGetPackage Package, PackageChannel Channel)> Packages, IReadOnlySet<string> PolyglotCompatibleIds)> GetIntegrationPackagesWithPolyglotCompatibilityAsync(DirectoryInfo workingDirectory, string? configuredChannel, string? source, CancellationToken cancellationToken)
     {
-        var channels = await GetSearchChannelsAsync(configuredChannel, cancellationToken);
+        var channels = await GetSearchChannelsAsync(workingDirectory, configuredChannel, source, cancellationToken);
 
         var packages = new List<(NuGetPackage Package, PackageChannel Channel)>();
         var polyglotIds = new HashSet<string>(StringComparers.NuGetPackageId);
@@ -78,7 +78,7 @@ internal sealed class IntegrationPackageSearchService(
         return (packages, polyglotIds);
     }
 
-    private async Task<IEnumerable<PackageChannel>> GetSearchChannelsAsync(string? configuredChannel, CancellationToken cancellationToken)
+    private async Task<IEnumerable<PackageChannel>> GetSearchChannelsAsync(DirectoryInfo workingDirectory, string? configuredChannel, string? source, CancellationToken cancellationToken)
     {
         // `configuredChannel` (from a polyglot apphost's aspire.config.json) is forwarded
         // as `requestedChannelName` so PackagingService can synthesize the staging channel
@@ -104,9 +104,18 @@ internal sealed class IntegrationPackageSearchService(
         // emulated identity (stable/daily/staging), not a local-build name — participates in the
         // search instead of being filtered out, which would silently fall back to nuget.org.
         var hasHives = executionContext.GetHiveCount() > 0 || executionContext.IdentityPackagesDirectory is not null;
-        return hasHives || !string.IsNullOrEmpty(configuredChannel)
+        var channels = hasHives || !string.IsNullOrEmpty(configuredChannel)
             ? allChannels
             : allChannels.Where(c => c.Type is PackageChannelType.Implicit);
+
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            return channels;
+        }
+
+        var resolvedSource = PackageSourceOverrideMappings.ResolveForWorkingDirectory(source, workingDirectory);
+        var mappings = PackageSourceOverrideMappings.CreateForTemplateOperations(resolvedSource);
+        return channels.Select(channel => channel.WithMappings(mappings));
     }
 
     public async Task<(DirectoryInfo WorkingDirectory, string? ConfiguredChannel, string? LanguageId, int? ExitCode)> GetPackageSearchContextAsync(FileInfo? passedAppHostProjectFile, CancellationToken cancellationToken)
