@@ -59,6 +59,11 @@ internal sealed class TestConfigurationService : IConfigurationService
 
     public Task<ConfigurationValueWithOrigin?> GetConfigurationFromDirectoryWithOriginAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
     {
+        if (OnGetConfigurationFromDirectoryWithOrigin is not null)
+        {
+            return Task.FromResult(OnGetConfigurationFromDirectoryWithOrigin.Invoke(key, startDirectory));
+        }
+
         var result = OnGetConfigurationFromDirectory is not null
             ? OnGetConfigurationFromDirectory.Invoke(key, startDirectory)
             : OnGetConfiguration?.Invoke(key);
@@ -69,6 +74,7 @@ internal sealed class TestConfigurationService : IConfigurationService
     }
 
     public Func<string, DirectoryInfo, string?>? OnGetConfigurationFromDirectory { get; set; }
+    public Func<string, DirectoryInfo, ConfigurationValueWithOrigin?>? OnGetConfigurationFromDirectoryWithOrigin { get; set; }
 
     public string SettingsFilePath { get; set; } = string.Empty;
 

@@ -134,8 +134,16 @@ internal sealed class IntegrationPackageSearchService(
             workingDirectory,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
-        return string.IsNullOrWhiteSpace(configuredSource?.Value)
-            ? null
+        if (string.IsNullOrWhiteSpace(configuredSource?.Value))
+        {
+            return null;
+        }
+
+        // Preserve configured remote paths such as \\server\share until validation rejects them.
+        // Resolving first on Unix would turn the backslashes into a cwd-relative local path and
+        // allow the missing-directory probe to run instead.
+        return PackageSourceOverrideMappings.IsRemoteFileSystemSource(configuredSource.Value)
+            ? configuredSource.Value
             : PackageSourceOverrideMappings.ResolveForWorkingDirectory(configuredSource.Value, configuredSource.BaseDirectory);
     }
 

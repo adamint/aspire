@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Globalization;
+using System.Text.Json.Nodes;
 using System.Xml.Linq;
 using Aspire.Cli.Agents;
 using Aspire.Cli.Utils;
@@ -1339,6 +1340,56 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task NewCommandWithConfiguredSourcePreservesExistingConfigProperties()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        const string configuredSource = "https://configured.example/v3/index.json";
+
+        var services = CreateServiceCollection(workspace, options =>
+        {
+            options.ConfigurationCallback += config => config[AspireConfigFile.NuGetSourceKey] = configuredSource;
+        });
+        services.AddSingleton<IScaffoldingService>(new TestScaffoldingService
+        {
+            ScaffoldAsyncCallback = (context, _) =>
+            {
+                File.WriteAllText(Path.Combine(context.TargetDirectory.FullName, "apphost.mts"), "// test apphost");
+                File.WriteAllText(
+                    Path.Combine(context.TargetDirectory.FullName, AspireConfigFile.FileName),
+                    """
+                    {
+                      "appHost": {
+                        "path": "apphost.mts",
+                        "language": "typescript/nodejs"
+                      },
+                      "templateSpecific": {
+                        "nested": {
+                          "value": 42
+                        }
+                      }
+                    }
+                    """);
+                return Task.FromResult(true);
+            }
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var command = provider.GetRequiredService<NewCommand>();
+        var result = command.Parse("new aspire-empty --name TestApp --output ./output --language typescript --localhost-tld false --suppress-agent-init");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        var configPath = Path.Combine(workspace.WorkspaceRoot.FullName, "output", AspireConfigFile.FileName);
+        var config = JsonNode.Parse(await File.ReadAllTextAsync(configPath))!.AsObject();
+        Assert.Equal(configuredSource, config[AspireConfigFile.NuGetSourceKey]!.GetValue<string>());
+        Assert.Equal("apphost.mts", config["appHost"]!["path"]!.GetValue<string>());
+        Assert.Equal("typescript/nodejs", config["appHost"]!["language"]!.GetValue<string>());
+        var templateSpecific = Assert.IsType<JsonObject>(config["templateSpecific"]);
+        Assert.Equal(42, templateSpecific["nested"]!["value"]!.GetValue<int>());
+    }
+
+    [Fact]
     public async Task NewCommandWithRelativeConfiguredSourceResolvesAgainstConfigDirectory()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
@@ -1597,6 +1648,60 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         };
         var services = CreateServiceCollection(workspace, options =>
         {
+            options.InteractionServiceFactory = _ => interactionService;
+            options.NuGetPackageCacheFactory = _ => cache;
+        });
+
+        services.AddSingleton<IScaffoldingService>(new TestScaffoldingService
+        {
+            ScaffoldAsyncCallback = (_, _) =>
+            {
+                scaffoldingInvoked = true;
+                return Task.FromResult(true);
+            }
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var command = provider.GetRequiredService<NewCommand>();
+        var result = command.Parse("new aspire-empty --name TestApp --output ./output --language typescript --localhost-tld false --suppress-agent-init");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
+        Assert.False(templateDiscoveryInvoked);
+        Assert.False(scaffoldingInvoked);
+        Assert.False(Directory.Exists(Path.Combine(workspace.WorkspaceRoot.FullName, "output")));
+        Assert.Equal([expectedError], interactionService.DisplayedErrors);
+    }
+
+    [Fact]
+    [PlatformSpecific(TestPlatforms.Windows)]
+    public async Task NewCommandWithRelativeConfiguredSourceResolvedFromRemoteBaseFailsBeforeCreatingProject()
+    {
+        var expectedError = NewCommandStrings.ConfiguredRemoteSourceNotSupported;
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var templateDiscoveryInvoked = false;
+        var scaffoldingInvoked = false;
+        var interactionService = new TestInteractionService();
+        var configurationService = new Aspire.Cli.Tests.TestServices.TestConfigurationService
+        {
+            OnGetConfigurationFromDirectoryWithOrigin = (key, _) =>
+                key == AspireConfigFile.NuGetSourceKey
+                    ? new ConfigurationValueWithOrigin(".", new DirectoryInfo($@"\\?\{workspace.WorkspaceRoot.FullName}"))
+                    : null
+        };
+
+        var cache = new FakeNuGetPackageCache
+        {
+            GetTemplatePackagesAsyncCallback = (_, _, _, _) =>
+            {
+                templateDiscoveryInvoked = true;
+                return Task.FromResult<IEnumerable<NuGetPackage>>([]);
+            }
+        };
+        var services = CreateServiceCollection(workspace, options =>
+        {
+            options.ConfigurationServiceFactory = _ => configurationService;
             options.InteractionServiceFactory = _ => interactionService;
             options.NuGetPackageCacheFactory = _ => cache;
         });

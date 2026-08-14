@@ -2409,8 +2409,10 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
         Assert.Contains(expectedError, interactionService.DisplayedErrors);
     }
 
-    [Fact]
-    public async Task AddCommandRejectsConfiguredRemoteFileSourceBeforeDiscovery()
+    [Theory]
+    [InlineData("file://example.test/share")]
+    [InlineData(@"\\example.test\share")]
+    public async Task AddCommandRejectsConfiguredRemoteFileSourceBeforeDiscovery(string configuredSource)
     {
         var expectedError = AddCommandStrings.ConfiguredRemoteSourceNotSupported;
         var discoveryCalled = false;
@@ -2418,7 +2420,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
 
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var appHostFile = CreateAppHostProject(workspace.WorkspaceRoot, "apphost.ts");
-        WriteAspireConfig(workspace.WorkspaceRoot, "file://example.test/share");
+        WriteAspireConfig(workspace.WorkspaceRoot, configuredSource);
 
         var cache = new FakeNuGetPackageCache
         {
@@ -2542,8 +2544,10 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
         Assert.Contains(expectedError, interactionService.DisplayedErrors);
     }
 
-    [Fact]
-    public async Task IntegrationListCommandRejectsConfiguredRemoteFileSourceBeforeDiscovery()
+    [Theory]
+    [InlineData("file://example.test/share")]
+    [InlineData(@"\\example.test\share")]
+    public async Task IntegrationListCommandRejectsConfiguredRemoteFileSourceBeforeDiscovery(string configuredSource)
     {
         var expectedError = AddCommandStrings.ConfiguredRemoteSourceNotSupported;
         var discoveryCalled = false;
@@ -2555,7 +2559,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
 
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var appHostFile = CreateAppHostProject(workspace.WorkspaceRoot, "apphost.ts");
-        WriteAspireConfig(workspace.WorkspaceRoot, "file://example.test/share");
+        WriteAspireConfig(workspace.WorkspaceRoot, configuredSource);
 
         var cache = new FakeNuGetPackageCache
         {
@@ -3946,11 +3950,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
     {
         File.WriteAllText(
             Path.Combine(directory.FullName, AspireConfigFile.FileName),
-            $$"""
-            {
-              "nugetSource": "{{nugetSource}}"
-            }
-            """);
+            JsonSerializer.Serialize(new { nugetSource }));
     }
 
     private static (string? AspireSource, string? FallbackSource) GetMappedSources(FileInfo? nugetConfigFile)

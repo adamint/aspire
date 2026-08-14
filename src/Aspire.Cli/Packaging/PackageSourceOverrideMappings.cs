@@ -53,11 +53,25 @@ internal static class PackageSourceOverrideMappings
             return true;
         }
 
-        return trimmedSource.StartsWith("file:", StringComparison.OrdinalIgnoreCase) &&
-            Uri.TryCreate(trimmedSource, UriKind.Absolute, out var uri) &&
-            uri.IsFile &&
-            !uri.IsLoopback &&
-            (uri.IsUnc || !string.IsNullOrEmpty(uri.Host));
+        if (!trimmedSource.StartsWith("file:", StringComparison.OrdinalIgnoreCase) ||
+            !Uri.TryCreate(trimmedSource, UriKind.Absolute, out var uri) ||
+            !uri.IsFile)
+        {
+            return false;
+        }
+
+        if (!uri.IsLoopback && (uri.IsUnc || !string.IsNullOrEmpty(uri.Host)))
+        {
+            return true;
+        }
+
+        // Hostless file URIs can encode a Windows UNC or device path in their path component:
+        //   file:///%5C%5Cserver%5Cshare -> \\server\share
+        // Decode and classify it lexically before any filesystem API receives the path.
+        var decodedPath = uri.GetComponents(UriComponents.Path, UriFormat.Unescaped);
+        return decodedPath.Length >= 2 &&
+            IsWindowsDirectorySeparator(decodedPath[0]) &&
+            IsWindowsDirectorySeparator(decodedPath[1]);
     }
 
     public static string? GetNormalizedLocalDirectory(string source)
@@ -155,6 +169,11 @@ internal static class PackageSourceOverrideMappings
 
         localDirectory = source;
         return PackageSourceKind.LocalPath;
+    }
+
+    private static bool IsWindowsDirectorySeparator(char value)
+    {
+        return value is '\\' or '/';
     }
 
     private enum PackageSourceKind

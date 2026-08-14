@@ -496,6 +496,11 @@ internal sealed class NewCommand : BaseCommand
         if (!string.IsNullOrWhiteSpace(source))
         {
             source = PackageSourceOverrideMappings.ResolveForWorkingDirectory(source, sourceResolution!.BaseDirectory);
+            if (!sourceIsExplicit && PackageSourceOverrideMappings.IsRemoteFileSystemSource(source))
+            {
+                InteractionService.DisplayError(NewCommandStrings.ConfiguredRemoteSourceNotSupported);
+                return CommandResult.Failure(CliExitCodes.InvalidCommand);
+            }
             if (PackageSourceOverrideMappings.GetMissingLocalDirectory(source) is { } missingDirectory)
             {
                 InteractionService.DisplayError(string.Format(
@@ -582,9 +587,11 @@ internal sealed class NewCommand : BaseCommand
             if (!sourceIsExplicit && !string.IsNullOrWhiteSpace(source))
             {
                 var outputPath = templateResult.OutputPath ?? ExecutionContext.WorkingDirectory.FullName;
-                var config = AspireConfigFile.LoadOrCreate(outputPath);
-                config.NuGetSource = source;
-                config.Save(outputPath);
+                await ConfigurationService.SetConfigurationInFileAsync(
+                    Path.Combine(outputPath, AspireConfigFile.FileName),
+                    AspireConfigFile.NuGetSourceKey,
+                    source,
+                    cancellationToken).ConfigureAwait(false);
             }
 
             await _bundleService.EnsureExtractedAsync(cancellationToken);
