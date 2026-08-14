@@ -623,8 +623,13 @@ suite('Dotnet Debugger Extension Tests', () => {
                 name: 'Aspire',
                 program: projectPath,
                 debuggers: {
+                    project: {
+                        launchProfile: 'h3',
+                        disableLaunchProfile: true
+                    },
                     apphost: {
-                        launchProfile: 'h2'
+                        launchProfile: 'h2',
+                        disableLaunchProfile: false
                     }
                 }
             };
@@ -901,7 +906,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         }
     });
 
-    test('AppHost disabled profile removes inherited and old CLI profile environment', async () => {
+    test('AppHost disabled profile filters old CLI profile environment and preserves inherited values', async () => {
         const fs = require('fs');
         const platformStub = sinon.stub(process, 'platform').value('win32');
         const tempRoot = nodePath.join(process.cwd(), '.test-temp', `dotnet-apphost-disabled-profile-${process.pid}-${Date.now()}`);
@@ -918,7 +923,7 @@ suite('Dotnet Debugger Extension Tests', () => {
 
         process.env.mode = 'ambient-h1';
         process.env.DOTNET_LAUNCH_PROFILE = 'h1';
-        process.env.ASPNETCORE_URLS = 'http://localhost:15001';
+        process.env.ASPNETCORE_URLS = 'http://localhost:14000';
         process.env.EXPLICIT = 'from-process';
 
         try {
@@ -971,14 +976,14 @@ suite('Dotnet Debugger Extension Tests', () => {
                 { debug: true, runId: '1', debugSessionId: '1', isApphost: true, debugSession: fakeAspireDebugSession },
                 extension);
 
-            assert.strictEqual(debugConfig.env.mode, undefined);
+            assert.strictEqual(debugConfig.env.mode, 'ambient-h1');
             assert.strictEqual(debugConfig.env.DOTNET_LAUNCH_PROFILE, undefined);
-            assert.strictEqual(debugConfig.env.ASPNETCORE_URLS, undefined);
+            assert.strictEqual(debugConfig.env.ASPNETCORE_URLS, 'http://localhost:14000');
             assert.strictEqual(debugConfig.env.EXPLICIT, 'from-cli');
             assert.strictEqual(debugConfig.env.CLI_ONLY, 'from-cli');
             assert.deepStrictEqual(
                 Object.keys(debugConfig.env).filter(name => name.toLowerCase() === 'mode'),
-                []);
+                ['mode']);
         } finally {
             platformStub.restore();
             for (const [name, value] of Object.entries(inheritedEnvironment)) {

@@ -411,14 +411,6 @@ function createProjectEnvironment(
     const environment = getEnvironmentWithoutE2EBridgeVariables();
     const { profile: defaultProfile, profileName: defaultProfileName } = determineDefaultLaunchProfile(launchSettings);
     applyEnvironmentVariables(environment, runApiEnvironment, defaultProfile, defaultProfileName);
-    if (disableLaunchProfile && defaultProfile) {
-        for (const name of Object.keys(defaultProfile.environmentVariables ?? {})) {
-            deleteEnvironmentVariable(environment, name);
-        }
-        if (defaultProfile.applicationUrl) {
-            deleteEnvironmentVariable(environment, 'ASPNETCORE_URLS');
-        }
-    }
     for (const envVar of runSessionEnvironment) {
         if (!isDefaultLaunchProfileEnvironmentVariable(envVar.name, envVar.value, defaultProfile, defaultProfileName)) {
             setEnvironmentVariable(environment, envVar.name, envVar.value);
@@ -522,12 +514,18 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 throw new Error(invalidLaunchConfiguration(projectPath));
             }
 
-            // For apphost, read launch profile settings from debugConfiguration (from launch.json)
-            // For resources, read from launchConfig (from payload)
+            // AppHost-specific launch profile settings override generic project settings. prepareDebugSession
+            // applies resource-type settings last, so resolve these directly from launch.json instead.
+            const projectDebuggerSettings = launchOptions.debugSession.configuration?.debuggers?.['project'];
+            const appHostDebuggerSettings = launchOptions.debugSession.configuration?.debuggers?.['apphost'];
             const effectiveLaunchConfig: ProjectLaunchConfiguration = launchOptions.isApphost ? {
                 ...launchConfig,
-                disable_launch_profile: debugConfiguration.disableLaunchProfile,
-                launch_profile: debugConfiguration.launchProfile
+                disable_launch_profile: appHostDebuggerSettings?.disableLaunchProfile
+                    ?? projectDebuggerSettings?.disableLaunchProfile
+                    ?? debugConfiguration.disableLaunchProfile,
+                launch_profile: appHostDebuggerSettings?.launchProfile
+                    ?? projectDebuggerSettings?.launchProfile
+                    ?? debugConfiguration.launchProfile
             } : launchConfig;
 
             const { profile: baseProfile, profileName } = determineBaseLaunchProfile(effectiveLaunchConfig, launchSettings);
