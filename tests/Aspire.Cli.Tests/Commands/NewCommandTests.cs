@@ -1187,6 +1187,73 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Theory]
+    [InlineData(null, "https://configured.example/v3/index.json")]
+    [InlineData("https://explicit.example/v3/index.json", "https://explicit.example/v3/index.json")]
+    public async Task NewCommandUsesConfiguredSourceUnlessExplicitSourceIsProvided(string? explicitSource, string expectedSource)
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        const string configuredSource = "https://configured.example/v3/index.json";
+        string? discoveryAspireSource = null;
+        string? discoveryFallbackSource = null;
+
+        var cache = new FakeNuGetPackageCache
+        {
+            GetTemplatePackagesAsyncCallback = (_, _, nugetConfig, _) =>
+            {
+                Assert.NotNull(nugetConfig);
+
+                var sourceMappings = XDocument.Load(nugetConfig.FullName).Root!
+                    .Element("packageSourceMapping")!
+                    .Elements("packageSource")
+                    .ToArray();
+                discoveryAspireSource = (string?)sourceMappings
+                    .Single(source => source
+                        .Elements("package")
+                        .Any(package => (string?)package.Attribute("pattern") == "Aspire*"))
+                    .Attribute("key");
+                discoveryFallbackSource = (string?)sourceMappings
+                    .Single(source => source
+                        .Elements("package")
+                        .Any(package => (string?)package.Attribute("pattern") == PackageMapping.AllPackages))
+                    .Attribute("key");
+
+                return Task.FromResult<IEnumerable<NuGetPackage>>(
+                    [new NuGetPackage { Id = "Aspire.ProjectTemplates", Source = expectedSource, Version = "9.2.0" }]);
+            }
+        };
+        var channel = PackageChannel.CreateExplicitChannel(
+            PackageChannelNames.Staging,
+            PackageChannelQuality.Stable,
+            [
+                new PackageMapping("Aspire*", "https://channel.example/v3/index.json"),
+                new PackageMapping(PackageMapping.AllPackages, PackageSources.NuGetOrg)
+            ],
+            cache,
+            new TestFeatures(),
+            NullLogger.Instance);
+        var services = CreateServiceCollection(workspace, options =>
+        {
+            options.ConfigurationCallback += config => config[AspireConfigFile.NuGetSourceKey] = configuredSource;
+            options.PackagingServiceFactory = _ => new TestPackagingService
+            {
+                GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>([channel])
+            };
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var command = provider.GetRequiredService<NewCommand>();
+        var sourceArgument = explicitSource is null ? string.Empty : $" --source {explicitSource}";
+        var result = command.Parse($"new aspire-empty --name TestApp --output ./output --language csharp --localhost-tld false --suppress-agent-init --channel staging{sourceArgument}");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Equal(expectedSource, discoveryAspireSource);
+        Assert.Equal(expectedSource, discoveryFallbackSource);
+        AssertSourceOverrideNuGetConfig(Path.Combine(workspace.WorkspaceRoot.FullName, "output"), expectedSource);
+    }
+
+    [Theory]
     [InlineData("https://proxy.example/v3/index.json", false)]
     [InlineData("relative-feed", true)]
     public async Task NewCommandWithCSharpEmptyTemplateAndSourceOverrideUsesSourceForTemplateDiscovery(string sourceOverride, bool isRelative)
