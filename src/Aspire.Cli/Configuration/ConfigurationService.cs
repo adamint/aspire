@@ -210,6 +210,7 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
     /// <summary>
     /// Sets a nested value in a JsonObject using dot notation.
     /// Creates intermediate objects as needed and replaces primitives with objects when necessary.
+    /// Property matching is case-insensitive to match Microsoft.Extensions.Configuration semantics.
     /// Also removes any conflicting flattened keys (colon-separated format) to prevent duplicate key errors.
     /// </summary>
     private static void SetNestedValue(JsonObject settings, string key, string value)
@@ -221,28 +222,25 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
 
         var keyParts = key.Split('.');
 
-        // Remove any conflicting flattened keys (e.g., "features:showAllTemplates" when setting "features.showAllTemplates")
-        // This prevents duplicate key errors when loading the configuration
-        RemoveConflictingFlattenedKeys(settings, keyParts);
-
         var currentObject = settings;
 
         // Navigate to the parent object, creating objects as needed
         for (int i = 0; i < keyParts.Length - 1; i++)
         {
+            // A flattened key can occur at any level:
+            //   { "appHost": { "path:language": "..." } }
+            // Remove conflicts relative to the current object before descending.
+            RemoveConflictingFlattenedKeys(currentObject, keyParts, i);
+
             var part = keyParts[i];
-
-            // If the property doesn't exist or isn't an object, replace it with a new object
-            if (!currentObject.ContainsKey(part) || currentObject[part] is not JsonObject)
-            {
-                currentObject[part] = new JsonObject();
-            }
-
-            currentObject = currentObject[part]!.AsObject();
+            currentObject = GetOrCreateNestedObject(currentObject, part);
         }
 
-        // Set the final value
+        // Microsoft.Extensions.Configuration treats JSON keys case-insensitively. Remove every
+        // logical match before writing the canonical requested casing so invalid duplicates such
+        // as "NuGetSource" plus "nugetSource" are repaired instead of preserved.
         var finalKey = keyParts[keyParts.Length - 1];
+        RemovePropertiesCaseInsensitive(currentObject, finalKey);
         currentObject[finalKey] = value;
     }
 
@@ -250,23 +248,63 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
     /// Removes any flattened keys (colon-separated) that would conflict with a nested structure.
     /// For example, when setting "features.showAllTemplates", remove "features:showAllTemplates".
     /// </summary>
-    private static void RemoveConflictingFlattenedKeys(JsonObject settings, string[] keyParts)
+    private static void RemoveConflictingFlattenedKeys(JsonObject settings, string[] keyParts, int startIndex)
     {
-        // Build all possible flattened key patterns that could conflict
-        // For key "a.b.c", we need to remove "a:b:c" from the root
-        var flattenedKey = string.Join(":", keyParts);
-        settings.Remove(flattenedKey);
-
-        // Also check for partial flattened keys at each level
-        // For example, if we have "a.b.c", we should also check for "a:b" in the root
-        // that might contain a "c" value
-        for (int i = 1; i < keyParts.Length; i++)
+        for (var length = keyParts.Length - startIndex; length > 1; length--)
         {
-            var partialKey = string.Join(":", keyParts.Take(i));
-            if (settings.ContainsKey(partialKey) && settings[partialKey] is not JsonObject)
+            var flattenedKey = string.Join(":", keyParts, startIndex, length);
+            var matchingPropertyNames = GetPropertyNamesCaseInsensitive(settings, flattenedKey);
+
+            foreach (var propertyName in matchingPropertyNames)
             {
-                // This is a flattened value that conflicts with our nested structure
-                settings.Remove(partialKey);
+                // Preserve the existing behavior for partial flattened objects because their
+                // child values do not conflict with the value being written. A full flattened
+                // match conflicts regardless of its node type.
+                if (length == keyParts.Length - startIndex || settings[propertyName] is not JsonObject)
+                {
+                    settings.Remove(propertyName);
+                }
+            }
+        }
+    }
+
+    private static JsonObject GetOrCreateNestedObject(JsonObject settings, string propertyName)
+    {
+        var matchingPropertyNames = GetPropertyNamesCaseInsensitive(settings, propertyName);
+        var objectPropertyName = matchingPropertyNames.FirstOrDefault(
+            name => string.Equals(name, propertyName, StringComparison.Ordinal) && settings[name] is JsonObject)
+            ?? matchingPropertyNames.FirstOrDefault(name => settings[name] is JsonObject);
+
+        if (objectPropertyName is not null)
+        {
+            RemovePropertiesCaseInsensitive(settings, propertyName, objectPropertyName);
+            return settings[objectPropertyName]!.AsObject();
+        }
+
+        RemovePropertiesCaseInsensitive(settings, propertyName);
+        var nestedObject = new JsonObject();
+        settings[propertyName] = nestedObject;
+
+        return nestedObject;
+    }
+
+    private static string[] GetPropertyNamesCaseInsensitive(JsonObject settings, string propertyName)
+    {
+        return
+        [
+            .. settings
+                .Select(property => property.Key)
+                .Where(name => string.Equals(name, propertyName, StringComparison.OrdinalIgnoreCase))
+        ];
+    }
+
+    private static void RemovePropertiesCaseInsensitive(JsonObject settings, string propertyName, string? propertyNameToPreserve = null)
+    {
+        foreach (var matchingPropertyName in GetPropertyNamesCaseInsensitive(settings, propertyName))
+        {
+            if (!string.Equals(matchingPropertyName, propertyNameToPreserve, StringComparison.Ordinal))
+            {
+                settings.Remove(matchingPropertyName);
             }
         }
     }

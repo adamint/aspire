@@ -1390,6 +1390,77 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task NewCommandWithConfiguredSourceMigratesLegacyTemplateConfigBeforePersistingSource()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        const string configuredSource = "https://configured.example/v3/index.json";
+
+        var services = CreateServiceCollection(workspace, options =>
+        {
+            options.ConfigurationCallback += config => config[AspireConfigFile.NuGetSourceKey] = configuredSource;
+        });
+        services.AddSingleton<IScaffoldingService>(new TestScaffoldingService
+        {
+            ScaffoldAsyncCallback = (context, _) =>
+            {
+                File.WriteAllText(Path.Combine(context.TargetDirectory.FullName, "apphost.mts"), "// test apphost");
+
+                var legacySettingsDirectory = context.TargetDirectory.CreateSubdirectory(AspireJsonConfiguration.SettingsFolder);
+                File.WriteAllText(
+                    Path.Combine(legacySettingsDirectory.FullName, AspireJsonConfiguration.FileName),
+                    """
+                    {
+                      "appHostPath": "../apphost.mts",
+                      "language": "typescript/nodejs",
+                      "channel": "daily",
+                      "sdkVersion": "13.1.2",
+                      "packages": {
+                        "Aspire.Hosting.Redis": "13.1.2"
+                      }
+                    }
+                    """);
+                File.WriteAllText(
+                    Path.Combine(context.TargetDirectory.FullName, "apphost.run.json"),
+                    """
+                    {
+                      "profiles": {
+                        "default": {
+                          "applicationUrl": "https://localhost:17000",
+                          "environmentVariables": {
+                            "ASPNETCORE_ENVIRONMENT": "Development"
+                          }
+                        }
+                      }
+                    }
+                    """);
+
+                return Task.FromResult(true);
+            }
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var command = provider.GetRequiredService<NewCommand>();
+        var result = command.Parse("new aspire-empty --name TestApp --output ./output --language typescript --localhost-tld false --suppress-agent-init");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        var outputPath = Path.Combine(workspace.WorkspaceRoot.FullName, "output");
+        var config = AspireConfigFile.Load(outputPath);
+        Assert.NotNull(config);
+        Assert.Equal("apphost.mts", config.AppHost?.Path);
+        Assert.Equal("typescript/nodejs", config.AppHost?.Language);
+        Assert.Equal("daily", config.Channel);
+        Assert.Equal("13.1.2", config.SdkVersion);
+        Assert.Equal(configuredSource, config.NuGetSource);
+        Assert.Equal("13.1.2", config.Packages?["Aspire.Hosting.Redis"]);
+        var profile = Assert.Single(config.Profiles!);
+        Assert.Equal("default", profile.Key);
+        Assert.Equal("https://localhost:17000", profile.Value.ApplicationUrl);
+        Assert.Equal("Development", profile.Value.EnvironmentVariables?["ASPNETCORE_ENVIRONMENT"]);
+    }
+
+    [Fact]
     public async Task NewCommandWithRelativeConfiguredSourceResolvesAgainstConfigDirectory()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);

@@ -60,6 +60,8 @@ public class PackageSourceOverrideMappingsTests(ITestOutputHelper outputHelper)
     [InlineData("file://example.test/share", true)]
     [InlineData("file:///%5C%5Cexample.test%5Cshare", true)]
     [InlineData("file:///%2F%2Fexample.test/share", true)]
+    [InlineData("file:///%2Fattacker.example/share", true)]
+    [InlineData("file:///%2F%3F%2FUNC/example.test/share", true)]
     [InlineData("file:///C:/feed", false)]
     [InlineData("file:///usr/feed", false)]
     public void IsRemoteFileSystemSource_FileUri_ReturnsExpectedResult(string source, bool expected)

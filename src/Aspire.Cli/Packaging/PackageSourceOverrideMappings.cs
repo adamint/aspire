@@ -65,10 +65,17 @@ internal static class PackageSourceOverrideMappings
             return true;
         }
 
-        // Hostless file URIs can encode a Windows UNC or device path in their path component:
-        //   file:///%5C%5Cserver%5Cshare -> \\server\share
-        // Decode and classify it lexically before any filesystem API receives the path.
-        var decodedPath = uri.GetComponents(UriComponents.Path, UriFormat.Unescaped);
+        if (uri.IsLoopback && !string.IsNullOrEmpty(uri.Host))
+        {
+            return false;
+        }
+
+        // Hostless file URIs can encode a Windows UNC or device path in their local path:
+        //   file:///%2Fserver/share -> //server/share
+        //   file:///%2F%3F%2FUNC/server/share -> //?/UNC/server/share
+        // Uri.GetComponents(Path, Unescaped) can collapse the first encoded separator, so use
+        // the complete decoded LocalPath and classify it before any filesystem API receives it.
+        var decodedPath = uri.LocalPath;
         return decodedPath.Length >= 2 &&
             IsWindowsDirectorySeparator(decodedPath[0]) &&
             IsWindowsDirectorySeparator(decodedPath[1]);

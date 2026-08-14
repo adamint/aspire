@@ -372,6 +372,75 @@ public class ConfigurationServiceTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task SetConfigurationAsync_ReplacesCaseInsensitivePropertyWithoutDuplicateConfigurationKeys()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        var (service, settingsFilePath) = CreateService(
+            workspace,
+            """
+            {
+              "NuGetSource": "https://old.example/v3/index.json"
+            }
+            """);
+
+        const string configuredSource = "https://configured.example/v3/index.json";
+        await service.SetConfigurationAsync(AspireConfigFile.NuGetSourceKey, configuredSource, isGlobal: false);
+
+        var json = JsonNode.Parse(File.ReadAllText(settingsFilePath))!.AsObject();
+        var matchingProperties = json
+            .Where(property => string.Equals(property.Key, AspireConfigFile.NuGetSourceKey, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var property = Assert.Single(matchingProperties);
+        Assert.Equal(AspireConfigFile.NuGetSourceKey, property.Key);
+        Assert.Equal(configuredSource, property.Value!.GetValue<string>());
+
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(settingsFilePath)
+            .Build();
+        Assert.Equal(configuredSource, configuration[AspireConfigFile.NuGetSourceKey]);
+    }
+
+    [Fact]
+    public async Task SetConfigurationAsync_ReusesCaseInsensitiveObjectAndRemovesFlattenedConflicts()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        var (service, settingsFilePath) = CreateService(
+            workspace,
+            """
+            {
+              "APPHOST": {
+                "PATH": "old-apphost.mts",
+                "language": "typescript/nodejs"
+              },
+              "APPHOST:PATH": "flattened-apphost.mts"
+            }
+            """);
+        await service.SetConfigurationAsync("appHost.path", "apphost.mts", isGlobal: false);
+        var json = JsonNode.Parse(File.ReadAllText(settingsFilePath))!.AsObject();
+        Assert.Equal(["APPHOST"], json.Select(property => property.Key));
+        var appHostProperty = Assert.Single(
+            json,
+            property => string.Equals(property.Key, "appHost", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("APPHOST", appHostProperty.Key);
+
+        var appHost = Assert.IsType<JsonObject>(appHostProperty.Value);
+        var pathProperty = Assert.Single(
+            appHost,
+            property => string.Equals(property.Key, "path", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("path", pathProperty.Key);
+        Assert.Equal("apphost.mts", pathProperty.Value!.GetValue<string>());
+        Assert.Equal("typescript/nodejs", appHost["language"]!.GetValue<string>());
+
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(settingsFilePath)
+            .Build();
+        Assert.Equal("apphost.mts", configuration["appHost:path"]);
+        Assert.Equal("typescript/nodejs", configuration["appHost:language"]);
+    }
+
+    [Fact]
     public async Task SetConfigurationAsync_WritesBooleanStringAsJsonString()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);

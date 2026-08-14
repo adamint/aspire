@@ -587,8 +587,18 @@ internal sealed class NewCommand : BaseCommand
             if (!sourceIsExplicit && !string.IsNullOrWhiteSpace(source))
             {
                 var outputPath = templateResult.OutputPath ?? ExecutionContext.WorkingDirectory.FullName;
+                var configPath = Path.Combine(outputPath, AspireConfigFile.FileName);
+
+                // A legacy template may emit only .aspire/settings.json and apphost.run.json.
+                // Migrate those files before creating aspire.config.json so the persisted source
+                // does not shadow the template's AppHost, SDK, package, and profile settings.
+                if (!File.Exists(configPath))
+                {
+                    _ = AspireConfigFile.LoadOrCreate(outputPath);
+                }
+
                 await ConfigurationService.SetConfigurationInFileAsync(
-                    Path.Combine(outputPath, AspireConfigFile.FileName),
+                    configPath,
                     AspireConfigFile.NuGetSourceKey,
                     source,
                     cancellationToken).ConfigureAwait(false);
