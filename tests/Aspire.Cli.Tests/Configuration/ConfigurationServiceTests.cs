@@ -453,7 +453,12 @@ public class ConfigurationServiceTests(ITestOutputHelper outputHelper)
                 "language": "typescript/nodejs",
                 "runtime": "bun",
                 "Metadata": {
-                  "owner": "sibling"
+                  "owner": "sibling",
+                  "version": 2,
+                  "Details": {
+                    "sourceOnly": "source",
+                    "Conflict": "sibling"
+                  }
                 },
                 "future": {
                   "enabled": true
@@ -463,7 +468,11 @@ public class ConfigurationServiceTests(ITestOutputHelper outputHelper)
                 "PATH": "target-apphost.mts",
                 "Runtime": "node",
                 "metadata": {
-                  "owner": "target"
+                  "owner": "target",
+                  "details": {
+                    "targetOnly": "target",
+                    "conflict": "target"
+                  }
                 }
               },
               "AppHost": "invalid"
@@ -485,9 +494,25 @@ public class ConfigurationServiceTests(ITestOutputHelper outputHelper)
             appHost.Select(property => property.Key).Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Assert.Equal("updated-apphost.mts", appHost["path"]!.GetValue<string>());
         Assert.Equal("node", appHost["Runtime"]!.GetValue<string>());
-        Assert.Equal("target", appHost["metadata"]!["owner"]!.GetValue<string>());
         Assert.Equal("typescript/nodejs", appHost["language"]!.GetValue<string>());
         Assert.True(appHost["future"]!["enabled"]!.GetValue<bool>());
+
+        var metadata = Assert.IsType<JsonObject>(appHost["metadata"]);
+        Assert.Equal(3, metadata.Count);
+        Assert.Equal(
+            metadata.Count,
+            metadata.Select(property => property.Key).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal("target", metadata["owner"]!.GetValue<string>());
+        Assert.Equal(2, metadata["version"]!.GetValue<int>());
+
+        var details = Assert.IsType<JsonObject>(metadata["details"]);
+        Assert.Equal(3, details.Count);
+        Assert.Equal(
+            details.Count,
+            details.Select(property => property.Key).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal("target", details["targetOnly"]!.GetValue<string>());
+        Assert.Equal("source", details["sourceOnly"]!.GetValue<string>());
+        Assert.Equal("target", details["conflict"]!.GetValue<string>());
 
         var configuration = new ConfigurationBuilder()
             .AddJsonFile(settingsFilePath)
@@ -495,6 +520,10 @@ public class ConfigurationServiceTests(ITestOutputHelper outputHelper)
         Assert.Equal("updated-apphost.mts", configuration["appHost:path"]);
         Assert.Equal("node", configuration["appHost:runtime"]);
         Assert.Equal("target", configuration["appHost:metadata:owner"]);
+        Assert.Equal("2", configuration["appHost:metadata:version"]);
+        Assert.Equal("target", configuration["appHost:metadata:details:targetOnly"]);
+        Assert.Equal("source", configuration["appHost:metadata:details:sourceOnly"]);
+        Assert.Equal("target", configuration["appHost:metadata:details:conflict"]);
         Assert.Equal("typescript/nodejs", configuration["appHost:language"]);
     }
 

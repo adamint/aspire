@@ -55,6 +55,22 @@ internal sealed class AspireConfigFile
     public const string FileName = "aspire.config.json";
     public const string NuGetSourceKey = "nugetSource";
 
+    // Legacy settings capture forward-authored properties as extension data. Exclude every
+    // property owned by the destination type so migration cannot serialize duplicate logical
+    // keys with alternate casing. Keep this explicit instead of using reflection for Native AOT.
+    private static readonly HashSet<string> s_serializedPropertyNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "$schema",
+        "appHost",
+        "sdk",
+        "channel",
+        NuGetSourceKey,
+        "features",
+        "docs",
+        "profiles",
+        "packages"
+    };
+
     /// <summary>
     /// The JSON Schema URL for this configuration file.
     /// </summary>
@@ -431,9 +447,9 @@ internal sealed class AspireConfigFile
             config.NuGetSource = settings.NuGetSource;
             config.Features = settings.Features;
             config.Packages = settings.Packages;
-            config.ExtensionData = settings.ExtensionData is null
-                ? null
-                : new Dictionary<string, JsonElement>(settings.ExtensionData);
+            config.ExtensionData = settings.ExtensionData?
+                .Where(entry => !s_serializedPropertyNames.Contains(entry.Key))
+                .ToDictionary(entry => entry.Key, entry => entry.Value);
         }
 
         config.Profiles = profiles;

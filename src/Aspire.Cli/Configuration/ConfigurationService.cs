@@ -305,17 +305,18 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
 
     private static void MergeDisjointProperties(JsonObject target, JsonObject source)
     {
-        var logicalPropertyNames = target
-            .Select(property => property.Key)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
         foreach (var (propertyName, value) in source)
         {
-            // Invalid case variants can each contain valid settings. Preserve only disjoint
-            // logical children, while the selected target deterministically wins conflicts.
-            if (logicalPropertyNames.Add(propertyName))
+            var targetPropertyName = GetPropertyNamesCaseInsensitive(target, propertyName).FirstOrDefault();
+            if (targetPropertyName is null)
             {
                 target[propertyName] = value?.DeepClone();
+            }
+            else if (target[targetPropertyName] is JsonObject targetObject && value is JsonObject sourceObject)
+            {
+                // Invalid case variants can each contain valid nested settings. Merge object
+                // children recursively, while the selected target wins leaf and type conflicts.
+                MergeDisjointProperties(targetObject, sourceObject);
             }
         }
     }

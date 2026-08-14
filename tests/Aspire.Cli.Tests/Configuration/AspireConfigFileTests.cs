@@ -4,6 +4,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Aspire.Cli.Configuration;
+using Microsoft.Extensions.Configuration;
 
 namespace Aspire.Cli.Tests.Configuration;
 
@@ -626,6 +627,114 @@ public class AspireConfigFileTests(ITestOutputHelper outputHelper)
 
         var roundTrippedJson = JsonNode.Parse(File.ReadAllText(configPath))!.AsObject();
         Assert.True(JsonNode.DeepEquals(expected, roundTrippedJson["templateSpecific"]));
+    }
+
+    [Fact]
+    public void LoadOrCreate_MigratesLegacy_FiltersDestinationPropertyCollisions()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var root = workspace.WorkspaceRoot.FullName;
+
+        var settingsPath = Path.Combine(root, ".aspire", "settings.json");
+        File.WriteAllText(settingsPath, """
+            {
+              "appHostPath": "../mapped-apphost.mts",
+              "sdkVersion": "13.2.0",
+              "AppHost": {
+                "path": "extension-apphost.mts"
+              },
+              "SDK": {
+                "version": "0.0.0"
+              },
+              "Profiles": {
+                "extension": {
+                  "applicationUrl": "https://localhost:6001"
+                }
+              },
+              "templateSpecific": {
+                "nested": {
+                  "value": 42,
+                  "items": [
+                    "one",
+                    {
+                      "enabled": true
+                    }
+                  ]
+                }
+              }
+            }
+            """);
+        File.WriteAllText(Path.Combine(root, "apphost.run.json"), """
+            {
+              "profiles": {
+                "mapped": {
+                  "applicationUrl": "https://localhost:7001",
+                  "environmentVariables": {
+                    "SOURCE": "legacy-run-profile"
+                  }
+                }
+              }
+            }
+            """);
+        var expectedUnknownProperty = JsonNode.Parse("""
+            {
+              "nested": {
+                "value": 42,
+                "items": [
+                  "one",
+                  {
+                    "enabled": true
+                  }
+                ]
+              }
+            }
+            """);
+
+        AspireConfigFile.LoadOrCreate(root);
+
+        var configPath = Path.Combine(root, AspireConfigFile.FileName);
+        var migratedJson = JsonNode.Parse(File.ReadAllText(configPath))!.AsObject();
+        Assert.Equal(
+            migratedJson.Count,
+            migratedJson.Select(property => property.Key).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+
+        var appHostProperty = Assert.Single(
+            migratedJson,
+            property => string.Equals(property.Key, "appHost", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("appHost", appHostProperty.Key);
+        Assert.Equal("mapped-apphost.mts", appHostProperty.Value!["path"]!.GetValue<string>());
+
+        var sdkProperty = Assert.Single(
+            migratedJson,
+            property => string.Equals(property.Key, "sdk", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("sdk", sdkProperty.Key);
+        Assert.Equal("13.2.0", sdkProperty.Value!["version"]!.GetValue<string>());
+
+        var profilesProperty = Assert.Single(
+            migratedJson,
+            property => string.Equals(property.Key, "profiles", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("profiles", profilesProperty.Key);
+        Assert.Equal("https://localhost:7001", profilesProperty.Value!["mapped"]!["applicationUrl"]!.GetValue<string>());
+        Assert.True(JsonNode.DeepEquals(expectedUnknownProperty, migratedJson["templateSpecific"]));
+
+        var loaded = AspireConfigFile.Load(root);
+        Assert.NotNull(loaded);
+        Assert.Equal("mapped-apphost.mts", loaded.AppHost?.Path);
+        Assert.Equal("13.2.0", loaded.SdkVersion);
+        Assert.Equal("https://localhost:7001", loaded.Profiles?["mapped"].ApplicationUrl);
+
+        loaded.Save(root);
+        var roundTrippedJson = JsonNode.Parse(File.ReadAllText(configPath))!.AsObject();
+        Assert.True(JsonNode.DeepEquals(expectedUnknownProperty, roundTrippedJson["templateSpecific"]));
+
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(configPath)
+            .Build();
+        Assert.Equal("mapped-apphost.mts", configuration["appHost:path"]);
+        Assert.Equal("13.2.0", configuration["sdk:version"]);
+        Assert.Equal("https://localhost:7001", configuration["profiles:mapped:applicationUrl"]);
+        Assert.Equal("legacy-run-profile", configuration["profiles:mapped:environmentVariables:SOURCE"]);
+        Assert.Equal("42", configuration["templateSpecific:nested:value"]);
     }
 
     [Fact]
