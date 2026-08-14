@@ -354,9 +354,26 @@ public class DotNetTemplateFactoryTests
             _ => { },
             (_, _, _, _) => Task.FromResult(new TemplateResult(CliExitCodes.Success)),
             ownsAspireConfig: ownsAspireConfig);
-        var inputs = new TemplateInputs { Source = source };
+        var inputs = new TemplateInputs
+        {
+            Source = source,
+            SourcePolicy = source is null ? PackageSourceRoutingPolicy.None : PackageSourceRoutingPolicy.ProjectLocalConfigured
+        };
 
         Assert.Equal(expected, DotNetTemplateFactory.ShouldRestoreAfterTemplate(template, inputs));
+    }
+
+    [Fact]
+    public async Task GetTemplates_OwningDotNetTemplatesDeclareRestoreSuppressionArguments()
+    {
+        var factory = CreateTemplateFactory(new TestFeatures().SetFeature(KnownFeatures.ShowAllTemplates, true));
+        var templates = (await factory.GetTemplatesAsync()).ToDictionary(t => t.Name);
+
+        Assert.Equal(["--skipRestore"], ((CallbackTemplate)templates["aspire-starter"]).RestoreSuppressionArguments);
+        Assert.Equal(["--skipRestore"], ((CallbackTemplate)templates["aspire-apphost"]).RestoreSuppressionArguments);
+
+        var initTemplate = (CallbackTemplate)(await factory.GetInitTemplatesAsync()).Single();
+        Assert.Equal(["--no-restore"], initTemplate.RestoreSuppressionArguments);
     }
 
     [Fact]
@@ -403,10 +420,12 @@ public class DotNetTemplateFactoryTests
         using var workspace = TemporaryWorkspace.CreateForCli(_outputHelper);
         var output = workspace.CreateDirectory("output");
         var projectPath = Path.Combine(output.FullName, "CustomProject.csproj");
+        string[]? newProjectArguments = null;
         var runner = new TestDotNetCliRunner
         {
-            NewProjectAsyncCallback = (_, _, outputPath, _, _, _) =>
+            NewProjectAsyncCallback = (_, _, outputPath, extraArgs, _, _) =>
             {
+                newProjectArguments = extraArgs;
                 File.WriteAllText(projectPath, "<Project />");
                 File.WriteAllText(
                     Path.Combine(outputPath, AspireConfigFile.FileName),
@@ -457,13 +476,14 @@ public class DotNetTemplateFactoryTests
                 Name = "CustomProject",
                 Output = output.FullName,
                 Source = "https://internal.example/v3/index.json",
-                SourcePolicy = TemplateSourcePolicy.ProjectLocalConfigured,
+                SourcePolicy = PackageSourceRoutingPolicy.ProjectLocalConfigured,
                 Version = "13.5.0"
             },
             new System.CommandLine.RootCommand().Parse([]),
             CancellationToken.None);
 
         Assert.Equal(CliExitCodes.FailedToBuildArtifacts, result.ExitCode);
+        Assert.Contains("--skipRestore", newProjectArguments!);
         var restoreCall = Assert.Single(restoreCalls);
         Assert.Equal(projectPath, restoreCall.FullName);
     }

@@ -63,6 +63,11 @@ internal interface ITemplate
     IReadOnlyList<string> SelectableAppHostLanguages { get; }
 
     /// <summary>
+    /// Gets the template arguments that suppress its automatic restore.
+    /// </summary>
+    IReadOnlyList<string> RestoreSuppressionArguments { get; }
+
+    /// <summary>
     /// Applies template-specific command options.
     /// </summary>
     /// <param name="command">The command to configure.</param>

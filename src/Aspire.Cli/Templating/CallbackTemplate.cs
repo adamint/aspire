@@ -17,7 +17,8 @@ internal class CallbackTemplate(
     IReadOnlyList<string>? selectableAppHostLanguages = null,
     bool isEmpty = false,
     bool showInPrompt = true,
-    bool ownsAspireConfig = true) : ITemplate
+    bool ownsAspireConfig = true,
+    IReadOnlyList<string>? restoreSuppressionArguments = null) : ITemplate
 {
     public string Name => name;
 
@@ -36,6 +37,8 @@ internal class CallbackTemplate(
     public string? LanguageId => languageId;
 
     public IReadOnlyList<string> SelectableAppHostLanguages { get; } = selectableAppHostLanguages ?? [];
+
+    public IReadOnlyList<string> RestoreSuppressionArguments { get; } = restoreSuppressionArguments ?? [];
 
     public bool SupportsLanguage(string languageId)
     {

@@ -175,30 +175,13 @@ internal sealed class TemplateNuGetConfigService(
     }
 
     /// <summary>
-    /// Creates or updates a project NuGet.config that maps Aspire packages to an explicit package source override.
-    /// </summary>
-    public async Task<bool> CreateOrUpdateNuGetConfigForSourceOverrideAsync(
-        string? sourceOverride,
-        string? channelName,
-        string outputPath,
-        CancellationToken cancellationToken)
-    {
-        return await CreateOrUpdateNuGetConfigForSourceOverrideAsync(
-            sourceOverride,
-            channelName,
-            outputPath,
-            TemplateSourcePolicy.Explicit,
-            cancellationToken);
-    }
-
-    /// <summary>
     /// Creates or updates a project NuGet.config using the source's persistence and routing policy.
     /// </summary>
     public async Task<bool> CreateOrUpdateNuGetConfigForSourceOverrideAsync(
         string? sourceOverride,
         string? channelName,
         string outputPath,
-        TemplateSourcePolicy sourcePolicy,
+        PackageSourceRoutingPolicy sourcePolicy,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(sourceOverride))
@@ -225,32 +208,13 @@ internal sealed class TemplateNuGetConfigService(
     }
 
     /// <summary>
-    /// Creates or updates a project NuGet.config that maps Aspire packages to an explicit package source override.
-    /// </summary>
-    public static async Task<bool> CreateOrUpdateNuGetConfigForSourceOverrideAsync(
-        string? sourceOverride,
-        PackageChannel? channel,
-        string outputPath,
-        CancellationToken cancellationToken,
-        string? nugetServiceIndexOverride = null)
-    {
-        return await CreateOrUpdateNuGetConfigForSourceOverrideAsync(
-            sourceOverride,
-            channel,
-            outputPath,
-            TemplateSourcePolicy.Explicit,
-            cancellationToken,
-            nugetServiceIndexOverride);
-    }
-
-    /// <summary>
     /// Creates or updates a project NuGet.config using the source's persistence and routing policy.
     /// </summary>
     public static async Task<bool> CreateOrUpdateNuGetConfigForSourceOverrideAsync(
         string? sourceOverride,
         PackageChannel? channel,
         string outputPath,
-        TemplateSourcePolicy sourcePolicy,
+        PackageSourceRoutingPolicy sourcePolicy,
         CancellationToken cancellationToken,
         string? nugetServiceIndexOverride = null)
     {
@@ -259,7 +223,7 @@ internal sealed class TemplateNuGetConfigService(
             return false;
         }
 
-        if (sourcePolicy is TemplateSourcePolicy.None or TemplateSourcePolicy.GlobalOrAmbientConfigured)
+        if (sourcePolicy is PackageSourceRoutingPolicy.None or PackageSourceRoutingPolicy.GlobalOrAmbientConfigured)
         {
             return false;
         }
@@ -271,7 +235,7 @@ internal sealed class TemplateNuGetConfigService(
             return false;
         }
 
-        var mappings = sourcePolicy is TemplateSourcePolicy.ProjectLocalConfigured
+        var mappings = sourcePolicy is PackageSourceRoutingPolicy.ProjectLocalConfigured
             ? PackageSourceOverrideMappings.CreateForPersistentConfiguredSource(sourceOverride)
             : PackageSourceOverrideMappings.Create(sourceOverride, channel, nugetServiceIndexOverride);
         await NuGetConfigMerger.CreateOrUpdateAsync(
@@ -285,23 +249,11 @@ internal sealed class TemplateNuGetConfigService(
     public static async Task<IDisposable?> CreateTemporarySourceOverrideConfigAsync(
         string? sourceOverride,
         string outputPath,
-        CancellationToken cancellationToken)
-    {
-        return await CreateTemporarySourceOverrideConfigAsync(
-            sourceOverride,
-            outputPath,
-            TemplateSourcePolicy.Explicit,
-            cancellationToken);
-    }
-
-    public static async Task<IDisposable?> CreateTemporarySourceOverrideConfigAsync(
-        string? sourceOverride,
-        string outputPath,
-        TemplateSourcePolicy sourcePolicy,
+        PackageSourceRoutingPolicy sourcePolicy,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(sourceOverride) ||
-            (sourcePolicy is not TemplateSourcePolicy.GlobalOrAmbientConfigured &&
+            (sourcePolicy is not PackageSourceRoutingPolicy.GlobalOrAmbientConfigured &&
              !PackageSourceOverrideMappings.HasCredentialMaterial(sourceOverride)))
         {
             return null;
@@ -319,11 +271,27 @@ internal sealed class TemplateNuGetConfigService(
         }
 
         var configPath = existingConfig?.FullName ?? Path.Combine(outputDirectory.FullName, "nuget.config");
-        await TemporaryNuGetConfig.GenerateAsync(
-            PackageSourceOverrideMappings.CreateForTemplateOperations(sourceOverride),
-            configPath);
+        try
+        {
+            await TemporaryNuGetConfig.GenerateAsync(
+                PackageSourceOverrideMappings.CreateForTemplateOperations(sourceOverride),
+                configPath);
 
-        return new TemporaryProjectNuGetConfig(configPath, existingContent);
+            return new TemporaryProjectNuGetConfig(configPath, existingContent);
+        }
+        catch
+        {
+            if (existingContent is null)
+            {
+                File.Delete(configPath);
+            }
+            else
+            {
+                await File.WriteAllTextAsync(configPath, existingContent, CancellationToken.None);
+            }
+
+            throw;
+        }
     }
 
     private sealed class TemporaryProjectNuGetConfig(string configPath, string? originalContent) : IDisposable

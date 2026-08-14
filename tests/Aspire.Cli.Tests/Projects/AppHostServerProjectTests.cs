@@ -8,7 +8,6 @@ using System.Xml.Linq;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Packaging;
 using Aspire.Cli.Projects;
-using Aspire.Cli.Templating;
 using Aspire.Cli.Utils;
 using Aspire.Cli.Tests.Mcp;
 using Aspire.Cli.Tests.TestServices;
@@ -58,7 +57,7 @@ public class AppHostServerProjectTests(ITestOutputHelper outputHelper) : IDispos
         };
 
         // Act
-        await project.CreateProjectFilesAsync(packages).DefaultTimeout();
+        await project.CreateProjectFilesAsync(packages, PackageSourceRoutingPolicy.None).DefaultTimeout();
 
         // Assert
         var appSettingsPath = Path.Combine(project.ProjectModelPath, "appsettings.json");
@@ -79,7 +78,7 @@ public class AppHostServerProjectTests(ITestOutputHelper outputHelper) : IDispos
         };
 
         // Act
-        await project.CreateProjectFilesAsync(packages).DefaultTimeout();
+        await project.CreateProjectFilesAsync(packages, PackageSourceRoutingPolicy.None).DefaultTimeout();
 
         // Assert
         var programCsPath = Path.Combine(project.ProjectModelPath, "Program.cs");
@@ -101,7 +100,7 @@ public class AppHostServerProjectTests(ITestOutputHelper outputHelper) : IDispos
         };
 
         // Act
-        await project.CreateProjectFilesAsync(packages).DefaultTimeout();
+        await project.CreateProjectFilesAsync(packages, PackageSourceRoutingPolicy.None).DefaultTimeout();
 
         // Assert
         var programCs = Path.Combine(project.ProjectModelPath, "Program.cs");
@@ -124,7 +123,7 @@ public class AppHostServerProjectTests(ITestOutputHelper outputHelper) : IDispos
         };
 
         // Act
-        await project.CreateProjectFilesAsync(packages).DefaultTimeout();
+        await project.CreateProjectFilesAsync(packages, PackageSourceRoutingPolicy.None).DefaultTimeout();
 
         // Assert
         var appSettingsPath = Path.Combine(project.ProjectModelPath, "appsettings.json");
@@ -148,7 +147,7 @@ public class AppHostServerProjectTests(ITestOutputHelper outputHelper) : IDispos
         };
 
         // Act
-        var (projectPath, _) = await project.CreateProjectFilesAsync(packages).DefaultTimeout();
+        var (projectPath, _) = await project.CreateProjectFilesAsync(packages, PackageSourceRoutingPolicy.None).DefaultTimeout();
 
         // Assert
         var doc = XDocument.Load(projectPath);
@@ -169,7 +168,7 @@ public class AppHostServerProjectTests(ITestOutputHelper outputHelper) : IDispos
             IntegrationReference.FromPackage("Aspire.Hosting", "13.1.0")
         };
 
-        var (projectPath, _) = await project.CreateProjectFilesAsync(packages).DefaultTimeout();
+        var (projectPath, _) = await project.CreateProjectFilesAsync(packages, PackageSourceRoutingPolicy.None).DefaultTimeout();
 
         var doc = XDocument.Load(projectPath);
         var skipAnalyzersElement = doc.Descendants("SkipAspireIntegrationAnalyzersReference").SingleOrDefault();
@@ -323,7 +322,7 @@ public class AppHostServerProjectTests(ITestOutputHelper outputHelper) : IDispos
         };
 
         // Act
-        await project.CreateProjectFilesAsync(packages).DefaultTimeout();
+        await project.CreateProjectFilesAsync(packages, PackageSourceRoutingPolicy.None).DefaultTimeout();
 
         // Dump workspace directory tree for debugging
         outputHelper.WriteLine("=== Workspace Directory Tree ===");
@@ -403,7 +402,7 @@ public class AppHostServerProjectTests(ITestOutputHelper outputHelper) : IDispos
             IntegrationReference.FromPackage("Aspire.Hosting", "13.1.0")
         };
 
-        var (projectFilePath, _) = await project.CreateProjectFilesAsync(packages, packageSourceOverride: overrideSource, cancellationToken: CancellationToken.None).DefaultTimeout();
+        var (projectFilePath, _) = await project.CreateProjectFilesAsync(packages, PackageSourceRoutingPolicy.None, packageSourceOverride: overrideSource, cancellationToken: CancellationToken.None).DefaultTimeout();
 
         var projectDoc = XDocument.Load(projectFilePath);
         var restoreSources = projectDoc.Descendants("RestoreAdditionalProjectSources").FirstOrDefault()?.Value;
@@ -421,8 +420,8 @@ public class AppHostServerProjectTests(ITestOutputHelper outputHelper) : IDispos
     public async Task CreateProjectFiles_WithPersistentConfiguredSource_UsesExclusiveTemporaryConfig(string sourceKind)
     {
         var sourcePolicy = sourceKind == "project"
-            ? TemplateSourcePolicy.ProjectLocalConfigured
-            : TemplateSourcePolicy.GlobalOrAmbientConfigured;
+            ? PackageSourceRoutingPolicy.ProjectLocalConfigured
+            : PackageSourceRoutingPolicy.GlobalOrAmbientConfigured;
         var appPath = _workspace.WorkspaceRoot.FullName;
         const string overrideSource = "https://internal.example/v3/index.json";
         var projectModelPath = Path.Combine(appPath, ".aspire_server_persistent");
@@ -486,7 +485,7 @@ public class AppHostServerProjectTests(ITestOutputHelper outputHelper) : IDispos
         };
 
         var (projectFilePath, _) = await project.CreateProjectFilesAsync(
-            packages,
+            packages, PackageSourceRoutingPolicy.None,
             packageSourceOverride: overrideSource,
             cancellationToken: CancellationToken.None).DefaultTimeout();
 
@@ -495,6 +494,77 @@ public class AppHostServerProjectTests(ITestOutputHelper outputHelper) : IDispos
 
         var nugetConfig = await File.ReadAllTextAsync(Path.Combine(projectModelPath, "nuget.config"));
         Assert.Contains("sig=secret", nugetConfig);
+    }
+
+    [Fact]
+    public async Task PrepareAsync_RemovesStaleSourceConfigWhenSourceIsRemoved()
+    {
+        var appPath = _workspace.WorkspaceRoot.FullName;
+        var projectModelPath = Path.Combine(appPath, ".aspire_server_stale_source");
+        var runner = new TestDotNetCliRunner
+        {
+            BuildAsyncCallback = (_, _, _, _) => 0
+        };
+        var project = new DotNetBasedAppHostServerProject(
+            appPath,
+            "test.sock",
+            appPath,
+            runner,
+            MockPackagingServiceFactory.Create(),
+            new TestProcessExecutionFactory(),
+            new TestEnvironment(),
+            NullLogger<DotNetBasedAppHostServerProject>.Instance,
+            projectModelPath);
+        var packages = new[] { IntegrationReference.FromPackage("Aspire.Hosting", "13.1.0") };
+
+        await project.CreateProjectFilesAsync(
+            packages,
+            PackageSourceRoutingPolicy.ProjectLocalConfigured,
+            packageSourceOverride: "https://internal.example/v3/index.json",
+            cancellationToken: CancellationToken.None);
+        Assert.True(File.Exists(Path.Combine(projectModelPath, "nuget.config")));
+
+        await project.PrepareAsync(
+            "13.2.0",
+            packages,
+            requestedChannel: null,
+            packageSourceOverride: null,
+            PackageSourceRoutingPolicy.None,
+            CancellationToken.None);
+
+        Assert.False(File.Exists(Path.Combine(projectModelPath, "nuget.config")));
+    }
+
+    [Fact]
+    public async Task PrepareAsync_CleansCredentialSourceConfigWhenBuildThrows()
+    {
+        var appPath = _workspace.WorkspaceRoot.FullName;
+        var projectModelPath = Path.Combine(appPath, ".aspire_server_failed_source");
+        var runner = new TestDotNetCliRunner
+        {
+            BuildAsyncCallback = (_, _, _, _) => throw new InvalidOperationException("build failed")
+        };
+        var project = new DotNetBasedAppHostServerProject(
+            appPath,
+            "test.sock",
+            appPath,
+            runner,
+            MockPackagingServiceFactory.Create(),
+            new TestProcessExecutionFactory(),
+            new TestEnvironment(),
+            NullLogger<DotNetBasedAppHostServerProject>.Instance,
+            projectModelPath);
+        var packages = new[] { IntegrationReference.FromPackage("Aspire.Hosting", "13.1.0") };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => project.PrepareAsync(
+            "13.2.0",
+            packages,
+            requestedChannel: null,
+            packageSourceOverride: "https://internal.example/v3/index.json?sig=secret",
+            PackageSourceRoutingPolicy.Explicit,
+            CancellationToken.None));
+
+        Assert.False(File.Exists(Path.Combine(projectModelPath, "nuget.config")));
     }
 
     [Fact]
@@ -539,7 +609,7 @@ public class AppHostServerProjectTests(ITestOutputHelper outputHelper) : IDispos
             IntegrationReference.FromPackage("Aspire.Hosting", "13.1.0")
         };
 
-        var (projectFilePath, _) = await project.CreateProjectFilesAsync(packages).DefaultTimeout();
+        var (projectFilePath, _) = await project.CreateProjectFilesAsync(packages, PackageSourceRoutingPolicy.None).DefaultTimeout();
 
         var projectDoc = XDocument.Load(projectFilePath);
         var restoreSources = projectDoc.Descendants("RestoreAdditionalProjectSources").FirstOrDefault()?.Value;

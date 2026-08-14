@@ -56,7 +56,7 @@ public class TemplateNuGetConfigServiceTests(ITestOutputHelper outputHelper)
         var service = CreateService();
         const string sourceOverride = "/tmp/aspire-pr-hive/packages";
 
-        Assert.True(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride, channelName: null, outputDirectory.FullName, CancellationToken.None));
+        Assert.True(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride, channelName: null, outputDirectory.FullName, PackageSourceRoutingPolicy.Explicit, CancellationToken.None));
 
         var doc = XDocument.Load(Path.Combine(outputDirectory.FullName, "nuget.config"));
         Assert.Contains(doc.Root!.Element("packageSources")!.Elements("clear"), _ => true);
@@ -97,7 +97,7 @@ public class TemplateNuGetConfigServiceTests(ITestOutputHelper outputHelper)
         };
         var service = CreateService(packagingService: packagingService);
 
-        Assert.True(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride, channelName: "daily", outputDirectory.FullName, CancellationToken.None));
+        Assert.True(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride, channelName: "daily", outputDirectory.FullName, PackageSourceRoutingPolicy.Explicit, CancellationToken.None));
 
         var doc = XDocument.Load(Path.Combine(outputDirectory.FullName, "nuget.config"));
         Assert.Equal(["Aspire*"], GetPackagePatternsForSource(doc, sourceOverride));
@@ -120,7 +120,7 @@ public class TemplateNuGetConfigServiceTests(ITestOutputHelper outputHelper)
             sourceOverride,
             channelName: null,
             outputDirectory.FullName,
-            TemplateSourcePolicy.ProjectLocalConfigured,
+            PackageSourceRoutingPolicy.ProjectLocalConfigured,
             CancellationToken.None));
 
         var doc = XDocument.Load(Path.Combine(outputDirectory.FullName, "nuget.config"));
@@ -142,14 +142,14 @@ public class TemplateNuGetConfigServiceTests(ITestOutputHelper outputHelper)
             sourceOverride,
             channelName: null,
             outputDirectory.FullName,
-            TemplateSourcePolicy.GlobalOrAmbientConfigured,
+            PackageSourceRoutingPolicy.GlobalOrAmbientConfigured,
             CancellationToken.None));
         Assert.False(File.Exists(Path.Combine(outputDirectory.FullName, "nuget.config")));
 
         using (await TemplateNuGetConfigService.CreateTemporarySourceOverrideConfigAsync(
                    sourceOverride,
                    outputDirectory.FullName,
-                   TemplateSourcePolicy.GlobalOrAmbientConfigured,
+                   PackageSourceRoutingPolicy.GlobalOrAmbientConfigured,
                    CancellationToken.None))
         {
             var configPath = Path.Combine(outputDirectory.FullName, "nuget.config");
@@ -195,7 +195,7 @@ public class TemplateNuGetConfigServiceTests(ITestOutputHelper outputHelper)
         var service = CreateService();
         const string sourceOverride = "/tmp/aspire-pr-hive/packages";
 
-        Assert.True(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride, channelName: null, outputDirectory.FullName, CancellationToken.None));
+        Assert.True(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride, channelName: null, outputDirectory.FullName, PackageSourceRoutingPolicy.Explicit, CancellationToken.None));
 
         var doc = XDocument.Load(Path.Combine(outputDirectory.FullName, "nuget.config"));
         Assert.Contains(doc.Root!.Element("packageSources")!.Elements("add"), e => (string?)e.Attribute("value") == "https://project.example/v3/index.json");
@@ -214,9 +214,9 @@ public class TemplateNuGetConfigServiceTests(ITestOutputHelper outputHelper)
         };
         var service = CreateService(packagingService: packagingService);
 
-        Assert.False(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride: null, channelName: "daily", workspace.WorkspaceRoot.FullName, CancellationToken.None));
-        Assert.False(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride: "", channelName: "daily", workspace.WorkspaceRoot.FullName, CancellationToken.None));
-        Assert.False(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride: "   ", channelName: "daily", workspace.WorkspaceRoot.FullName, CancellationToken.None));
+        Assert.False(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride: null, channelName: "daily", workspace.WorkspaceRoot.FullName, PackageSourceRoutingPolicy.Explicit, CancellationToken.None));
+        Assert.False(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride: "", channelName: "daily", workspace.WorkspaceRoot.FullName, PackageSourceRoutingPolicy.Explicit, CancellationToken.None));
+        Assert.False(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride: "   ", channelName: "daily", workspace.WorkspaceRoot.FullName, PackageSourceRoutingPolicy.Explicit, CancellationToken.None));
     }
 
     [Theory]
@@ -228,7 +228,7 @@ public class TemplateNuGetConfigServiceTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var service = CreateService();
 
-        Assert.False(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride, channelName: null, workspace.WorkspaceRoot.FullName, CancellationToken.None));
+        Assert.False(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride, channelName: null, workspace.WorkspaceRoot.FullName, PackageSourceRoutingPolicy.Explicit, CancellationToken.None));
 
         Assert.False(File.Exists(Path.Combine(workspace.WorkspaceRoot.FullName, "nuget.config")));
     }
@@ -245,6 +245,7 @@ public class TemplateNuGetConfigServiceTests(ITestOutputHelper outputHelper)
         using (await TemplateNuGetConfigService.CreateTemporarySourceOverrideConfigAsync(
                    "https://example.invalid/v3/index.json?sig=token",
                    outputDirectory.FullName,
+                   PackageSourceRoutingPolicy.Explicit,
                    CancellationToken.None))
         {
             var duringRestore = await File.ReadAllTextAsync(configPath);

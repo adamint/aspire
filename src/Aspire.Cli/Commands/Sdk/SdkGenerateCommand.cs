@@ -4,6 +4,7 @@
 using System.CommandLine;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Interaction;
+using Aspire.Cli.Packaging;
 using Aspire.Cli.Projects;
 using Microsoft.Extensions.Logging;
 
@@ -139,7 +140,10 @@ internal sealed class SdkGenerateCommand : BaseCommand
             var prepareResult = await appHostServerProject.PrepareAsync(
                 ExecutionContext.IdentityVersion,
                 integrations,
-                cancellationToken: cancellationToken);
+                requestedChannel: null,
+                packageSourceOverride: null,
+                PackageSourceRoutingPolicy.None,
+                cancellationToken);
 
             if (!prepareResult.Success)
             {

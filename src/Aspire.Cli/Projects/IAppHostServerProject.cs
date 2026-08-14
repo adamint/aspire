@@ -3,8 +3,8 @@
 
 using Aspire.Cli.Configuration;
 using Aspire.Cli.DotNet;
+using Aspire.Cli.Packaging;
 using Aspire.Cli.Processes;
-using Aspire.Cli.Templating;
 using Aspire.Cli.Utils;
 
 namespace Aspire.Cli.Projects;
@@ -94,14 +94,16 @@ internal interface IAppHostServerProject
     /// <param name="integrations">The integration references (NuGet packages and/or project references) required by the app host.</param>
     /// <param name="requestedChannel">The package channel to use for this prepare operation, or <see langword="null" /> to use the project configuration.</param>
     /// <param name="packageSourceOverride">Optional package source to prefer for Aspire package restore.</param>
+    /// <param name="sourcePolicy">Routing policy for <paramref name="packageSourceOverride"/>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The preparation result indicating success/failure and any output.</returns>
     Task<AppHostServerPrepareResult> PrepareAsync(
         string sdkVersion,
         IEnumerable<IntegrationReference> integrations,
-        string? requestedChannel = null,
-        string? packageSourceOverride = null,
-        CancellationToken cancellationToken = default);
+        string? requestedChannel,
+        string? packageSourceOverride,
+        PackageSourceRoutingPolicy sourcePolicy,
+        CancellationToken cancellationToken);
 
     /// <summary>
     /// Runs the AppHost server process.
@@ -137,15 +139,4 @@ internal interface IAppHostServerProject
     /// </summary>
     /// <returns>A path that uniquely identifies this AppHost.</returns>
     string GetInstanceIdentifier();
-}
-
-internal interface IAppHostServerSourcePolicyProject
-{
-    Task<AppHostServerPrepareResult> PrepareAsync(
-        string sdkVersion,
-        IEnumerable<IntegrationReference> integrations,
-        string? requestedChannel,
-        string? packageSourceOverride,
-        TemplateSourcePolicy sourcePolicy,
-        CancellationToken cancellationToken);
 }

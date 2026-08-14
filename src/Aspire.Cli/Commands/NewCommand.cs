@@ -587,7 +587,7 @@ internal sealed class NewCommand : BaseCommand
             Output = parseResult.GetValue(s_outputOption),
             Source = source,
             SourceIsExplicit = sourceIsExplicit,
-            SourcePolicy = GetTemplateSourcePolicy(source, sourceIsExplicit, sourceResolution),
+            SourcePolicy = GetPackageSourceRoutingPolicy(source, sourceIsExplicit, sourceResolution),
             Version = version,
             Channel = resolvedChannelName,
             Language = selectedLanguageId
@@ -669,24 +669,24 @@ internal sealed class NewCommand : BaseCommand
                 IsAmbient: IsAmbientEnvironmentValue(AspireConfigFile.NuGetSourceKey, fallbackSource));
     }
 
-    private static TemplateSourcePolicy GetTemplateSourcePolicy(
+    private static PackageSourceRoutingPolicy GetPackageSourceRoutingPolicy(
         string? source,
         bool sourceIsExplicit,
         ConfigurationValueWithOrigin? sourceResolution)
     {
         if (string.IsNullOrWhiteSpace(source))
         {
-            return TemplateSourcePolicy.None;
+            return PackageSourceRoutingPolicy.None;
         }
 
         if (sourceIsExplicit)
         {
-            return TemplateSourcePolicy.Explicit;
+            return PackageSourceRoutingPolicy.Explicit;
         }
 
         return sourceResolution is { IsGlobal: true } or { IsAmbient: true }
-            ? TemplateSourcePolicy.GlobalOrAmbientConfigured
-            : TemplateSourcePolicy.ProjectLocalConfigured;
+            ? PackageSourceRoutingPolicy.GlobalOrAmbientConfigured
+            : PackageSourceRoutingPolicy.ProjectLocalConfigured;
     }
 
     private static bool IsAmbientEnvironmentValue(string key, string value)

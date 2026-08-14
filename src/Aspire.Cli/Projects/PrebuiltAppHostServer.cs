@@ -14,7 +14,6 @@ using Aspire.Cli.Layout;
 using Aspire.Cli.NuGet;
 using Aspire.Cli.Packaging;
 using Aspire.Cli.Processes;
-using Aspire.Cli.Templating;
 using Aspire.Cli.Utils;
 using Aspire.Hosting;
 using Aspire.Shared;
@@ -27,7 +26,7 @@ namespace Aspire.Cli.Projects;
 /// This is used when running in bundle mode (without .NET SDK) to avoid
 /// dynamic project generation and building.
 /// </summary>
-internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IAppHostServerSourcePolicyProject, IDisposable
+internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IDisposable
 {
     internal const string ClosureMetadataFileName = "closure-metadata.txt";
     internal const string ClosureSourcesFileName = "closure-sources.txt";
@@ -135,30 +134,13 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IAppHostSer
     }
 
     /// <inheritdoc />
-    Task<AppHostServerPrepareResult> IAppHostServerProject.PrepareAsync(
+    public async Task<AppHostServerPrepareResult> PrepareAsync(
         string sdkVersion,
         IEnumerable<IntegrationReference> integrations,
         string? requestedChannel,
         string? packageSourceOverride,
+        PackageSourceRoutingPolicy sourcePolicy,
         CancellationToken cancellationToken)
-    {
-        return PrepareAsync(
-            sdkVersion,
-            integrations,
-            requestedChannel,
-            packageSourceOverride,
-            TemplateSourcePolicy.Explicit,
-            cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public async Task<AppHostServerPrepareResult> PrepareAsync(
-        string sdkVersion,
-        IEnumerable<IntegrationReference> integrations,
-        string? requestedChannel = null,
-        string? packageSourceOverride = null,
-        TemplateSourcePolicy sourcePolicy = TemplateSourcePolicy.Explicit,
-        CancellationToken cancellationToken = default)
     {
         var integrationList = integrations.ToList();
         var packageRefs = integrationList.Where(r => r.IsPackageReference).ToList();
@@ -312,7 +294,7 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IAppHostSer
         List<IntegrationReference> packageRefs,
         string? requestedChannel,
         string? packageSourceOverride,
-        TemplateSourcePolicy sourcePolicy,
+        PackageSourceRoutingPolicy sourcePolicy,
         CancellationToken cancellationToken)
     {
         _logger.LogDebug("Restoring {Count} integration packages via bundled NuGet", packageRefs.Count);
@@ -344,7 +326,7 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IAppHostSer
         List<IntegrationReference> projectRefs,
         string? requestedChannel,
         string? packageSourceOverride,
-        TemplateSourcePolicy sourcePolicy,
+        PackageSourceRoutingPolicy sourcePolicy,
         CancellationToken cancellationToken)
     {
         var restoreDir = Path.Combine(_workingDirectory, "integration-restore");
@@ -604,7 +586,7 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IAppHostSer
         string? requestedChannel,
         string? packageSourceOverride,
         CancellationToken cancellationToken,
-        TemplateSourcePolicy sourcePolicy = TemplateSourcePolicy.Explicit)
+        PackageSourceRoutingPolicy sourcePolicy)
     {
         // Refuse to silently downgrade staging restores to the shared daily feed when the running
         // CLI cannot synthesize a real staging channel (daily/local/pr-<N>). PackagingService omits
@@ -621,7 +603,7 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IAppHostSer
         {
             sources.Add(packageSourceOverride);
 
-            if (sourcePolicy is TemplateSourcePolicy.ProjectLocalConfigured or TemplateSourcePolicy.GlobalOrAmbientConfigured)
+            if (sourcePolicy is PackageSourceRoutingPolicy.ProjectLocalConfigured or PackageSourceRoutingPolicy.GlobalOrAmbientConfigured)
             {
                 return sources;
             }
@@ -696,7 +678,7 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IAppHostSer
         string? requestedChannel,
         string? packageSourceOverride,
         CancellationToken cancellationToken,
-        TemplateSourcePolicy sourcePolicy = TemplateSourcePolicy.Explicit)
+        PackageSourceRoutingPolicy sourcePolicy)
     {
         // Keep staging refusal consistent across both temp-config branches. The project-reference
         // restore path skips GetNuGetSourcesAsync when a temp config exists, so this method must
@@ -734,7 +716,7 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IAppHostSer
                 _logger.LogWarning(ex, "Failed to get package channels while creating source override NuGet.config");
             }
 
-            var mappings = sourcePolicy is TemplateSourcePolicy.ProjectLocalConfigured or TemplateSourcePolicy.GlobalOrAmbientConfigured
+            var mappings = sourcePolicy is PackageSourceRoutingPolicy.ProjectLocalConfigured or PackageSourceRoutingPolicy.GlobalOrAmbientConfigured
                 ? PackageSourceOverrideMappings.CreateForPersistentConfiguredSource(packageSourceOverride)
                 : PackageSourceOverrideMappings.Create(
                     packageSourceOverride,

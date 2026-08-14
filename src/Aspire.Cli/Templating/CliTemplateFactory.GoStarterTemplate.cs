@@ -82,9 +82,11 @@ internal sealed partial class CliTemplateFactory
 
                     await _templateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(inputs.Source, inputs.Channel, outputPath, inputs.SourcePolicy, cancellationToken);
                     _logger.LogDebug("Generating SDK code for Go starter in '{OutputPath}'.", outputPath);
-                    var restoreSucceeded = guestProject is IGuestAppHostSourcePolicyGenerator sourcePolicyGuest
-                        ? await sourcePolicyGuest.BuildAndGenerateSdkAsync(new DirectoryInfo(outputPath), inputs.Source, inputs.SourcePolicy, cancellationToken)
-                        : await guestProject.BuildAndGenerateSdkAsync(new DirectoryInfo(outputPath), inputs.Source, cancellationToken);
+                    var restoreSucceeded = await guestProject.BuildAndGenerateSdkAsync(
+                        new DirectoryInfo(outputPath),
+                        inputs.Source,
+                        inputs.SourcePolicy,
+                        cancellationToken);
                     if (!restoreSucceeded)
                     {
                         _interactionService.DisplayError("Automatic 'aspire restore' failed for the new Go starter project. Run 'aspire restore' in the project directory for more details.");

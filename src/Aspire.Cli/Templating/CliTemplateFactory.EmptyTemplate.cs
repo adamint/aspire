@@ -79,6 +79,7 @@ internal sealed partial class CliTemplateFactory
                         var context = new ScaffoldContext(
                             language,
                             new DirectoryInfo(outputPath),
+                            inputs.SourcePolicy,
                             projectName,
                             SdkVersion: inputs.Version,
                             Channel: inputs.Channel,

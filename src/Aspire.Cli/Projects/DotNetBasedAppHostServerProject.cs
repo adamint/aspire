@@ -10,7 +10,6 @@ using Aspire.Cli.Configuration;
 using Aspire.Cli.DotNet;
 using Aspire.Cli.Packaging;
 using Aspire.Cli.Processes;
-using Aspire.Cli.Templating;
 using Aspire.Cli.Utils;
 using Aspire.Hosting;
 using Aspire.Shared;
@@ -22,7 +21,7 @@ namespace Aspire.Cli.Projects;
 /// AppHost server project for local Aspire development that uses the .NET SDK to build.
 /// Uses project references to the local Aspire repository (ASPIRE_REPO_ROOT).
 /// </summary>
-internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject, IAppHostServerSourcePolicyProject
+internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
 {
     private const string ProjectHashFileName = ".projecthash";
     private const string AppsFolder = "hosts";
@@ -264,10 +263,41 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject, I
     /// </summary>
     public async Task<(string ProjectPath, string? ChannelName)> CreateProjectFilesAsync(
         IEnumerable<IntegrationReference> integrations,
+        PackageSourceRoutingPolicy sourcePolicy,
         string? requestedChannel = null,
         string? packageSourceOverride = null,
-        CancellationToken cancellationToken = default,
-        TemplateSourcePolicy sourcePolicy = TemplateSourcePolicy.Explicit)
+        CancellationToken cancellationToken = default)
+    {
+        var temporarySourceConfig = !string.IsNullOrWhiteSpace(packageSourceOverride) &&
+            (sourcePolicy is PackageSourceRoutingPolicy.GlobalOrAmbientConfigured ||
+             PackageSourceOverrideMappings.HasCredentialMaterial(packageSourceOverride));
+
+        try
+        {
+            return await CreateProjectFilesCoreAsync(
+                integrations,
+                sourcePolicy,
+                requestedChannel,
+                packageSourceOverride,
+                cancellationToken);
+        }
+        catch
+        {
+            if (temporarySourceConfig)
+            {
+                File.Delete(Path.Combine(_projectModelPath, "nuget.config"));
+            }
+
+            throw;
+        }
+    }
+
+    private async Task<(string ProjectPath, string? ChannelName)> CreateProjectFilesCoreAsync(
+        IEnumerable<IntegrationReference> integrations,
+        PackageSourceRoutingPolicy sourcePolicy,
+        string? requestedChannel,
+        string? packageSourceOverride,
+        CancellationToken cancellationToken)
     {
         // Clean obj folder to ensure fresh NuGet restore
         var objPath = Path.Combine(_projectModelPath, "obj");
@@ -327,9 +357,8 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject, I
         string? channelName = null;
 
         var hasPersistentSource = !string.IsNullOrWhiteSpace(packageSourceOverride) &&
-            sourcePolicy is TemplateSourcePolicy.ProjectLocalConfigured or TemplateSourcePolicy.GlobalOrAmbientConfigured;
+            sourcePolicy is PackageSourceRoutingPolicy.ProjectLocalConfigured or PackageSourceRoutingPolicy.GlobalOrAmbientConfigured;
         var hasCredentialSource = !string.IsNullOrWhiteSpace(packageSourceOverride) &&
-            sourcePolicy is TemplateSourcePolicy.Explicit &&
             PackageSourceOverrideMappings.HasCredentialMaterial(packageSourceOverride);
         var hasExclusiveSource = hasPersistentSource || hasCredentialSource;
         // The generated server project is a restore staging area. For configured sources,
@@ -352,6 +381,12 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject, I
         {
             var nugetConfigPath = Path.Combine(_projectModelPath, "nuget.config");
             File.Copy(userNugetConfig, nugetConfigPath, overwrite: true);
+        }
+        else
+        {
+            // A previous run may have staged a source-specific config. Remove it when the
+            // current invocation has no exclusive source and no user config to copy.
+            File.Delete(Path.Combine(_projectModelPath, "nuget.config"));
         }
 
         var configuredChannelName = requestedChannel
@@ -470,40 +505,36 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject, I
     }
 
     /// <inheritdoc />
-    Task<AppHostServerPrepareResult> IAppHostServerProject.PrepareAsync(
+    public async Task<AppHostServerPrepareResult> PrepareAsync(
         string sdkVersion,
         IEnumerable<IntegrationReference> integrations,
         string? requestedChannel,
         string? packageSourceOverride,
+        PackageSourceRoutingPolicy sourcePolicy,
         CancellationToken cancellationToken)
     {
-        return PrepareAsync(
-            sdkVersion,
-            integrations,
-            requestedChannel,
-            packageSourceOverride,
-            TemplateSourcePolicy.Explicit,
-            cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public async Task<AppHostServerPrepareResult> PrepareAsync(
-        string sdkVersion,
-        IEnumerable<IntegrationReference> integrations,
-        string? requestedChannel = null,
-        string? packageSourceOverride = null,
-        TemplateSourcePolicy sourcePolicy = TemplateSourcePolicy.Explicit,
-        CancellationToken cancellationToken = default)
-    {
         var temporarySourceConfig = !string.IsNullOrWhiteSpace(packageSourceOverride) &&
-            (sourcePolicy is TemplateSourcePolicy.GlobalOrAmbientConfigured ||
-             (sourcePolicy is TemplateSourcePolicy.Explicit &&
-              PackageSourceOverrideMappings.HasCredentialMaterial(packageSourceOverride)));
-        var (_, channelName) = await CreateProjectFilesAsync(integrations, requestedChannel, packageSourceOverride, cancellationToken, sourcePolicy);
-        (bool Success, OutputCollector Output) buildResult;
+            (sourcePolicy is PackageSourceRoutingPolicy.GlobalOrAmbientConfigured ||
+             PackageSourceOverrideMappings.HasCredentialMaterial(packageSourceOverride));
         try
         {
-            buildResult = await BuildAsync(cancellationToken);
+            var (_, channelName) = await CreateProjectFilesAsync(integrations, sourcePolicy, requestedChannel, packageSourceOverride, cancellationToken);
+            var buildResult = await BuildAsync(cancellationToken);
+
+            if (!buildResult.Success)
+            {
+                return new AppHostServerPrepareResult(
+                    Success: false,
+                    Output: buildResult.Output,
+                    ChannelName: channelName,
+                    NeedsCodeGeneration: false);
+            }
+
+            return new AppHostServerPrepareResult(
+                Success: true,
+                Output: buildResult.Output,
+                ChannelName: channelName,
+                NeedsCodeGeneration: true);
         }
         finally
         {
@@ -512,21 +543,6 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject, I
                 File.Delete(Path.Combine(_projectModelPath, "nuget.config"));
             }
         }
-
-        if (!buildResult.Success)
-        {
-            return new AppHostServerPrepareResult(
-                Success: false,
-                Output: buildResult.Output,
-                ChannelName: channelName,
-                NeedsCodeGeneration: false);
-        }
-
-        return new AppHostServerPrepareResult(
-            Success: true,
-            Output: buildResult.Output,
-            ChannelName: channelName,
-            NeedsCodeGeneration: true);
     }
 
     /// <inheritdoc />

@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Aspire.Cli.Projects;
+using Aspire.Cli.Packaging;
 using Aspire.Cli.Utils;
 
 namespace Aspire.Cli.Tests.TestServices;
@@ -46,6 +47,8 @@ internal sealed class TestTypeScriptStarterProject(Func<DirectoryInfo, Cancellat
     public bool IsUnsupported { get; set; }
 
     public string? LastPackageSourceOverride { get; private set; }
+
+    public PackageSourceRoutingPolicy LastPackageSourcePolicy { get; private set; }
 
     public Func<AddPackageContext, CancellationToken, Task<bool>>? AddPackageAsyncCallback { get; set; }
 
@@ -117,9 +120,14 @@ internal sealed class TestTypeScriptStarterProject(Func<DirectoryInfo, Cancellat
         throw new NotImplementedException();
     }
 
-    public Task<bool> BuildAndGenerateSdkAsync(DirectoryInfo directory, string? packageSourceOverride = null, CancellationToken cancellationToken = default)
+    public Task<bool> BuildAndGenerateSdkAsync(
+        DirectoryInfo directory,
+        string? packageSourceOverride,
+        PackageSourceRoutingPolicy sourcePolicy,
+        CancellationToken cancellationToken)
     {
         LastPackageSourceOverride = packageSourceOverride;
+        LastPackageSourcePolicy = sourcePolicy;
         return buildAndGenerateSdkAsync(directory, cancellationToken, packageSourceOverride);
     }
 

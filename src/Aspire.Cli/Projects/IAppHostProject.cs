@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Aspire.Cli.Backchannel;
+using Aspire.Cli.Packaging;
 using Aspire.Cli.Utils;
 
 namespace Aspire.Cli.Projects;
@@ -79,6 +80,11 @@ internal sealed class AddPackageContext
     /// Gets or sets the optional NuGet source.
     /// </summary>
     public string? Source { get; init; }
+
+    /// <summary>
+    /// Gets the routing policy for <see cref="Source"/>.
+    /// </summary>
+    public required PackageSourceRoutingPolicy SourcePolicy { get; init; }
 
     /// <summary>
     /// Gets or sets the output collector for capturing stdout/stderr.

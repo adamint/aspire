@@ -134,7 +134,8 @@ internal class DotNetTemplateFactory(
             (ctx, projectName) => OutputPathHelper.GetUniqueDefaultOutputPath(projectName, ctx.WorkingDirectory.FullName),
             ApplyExtraAspireStarterOptions,
             (template, inputs, parseResult, ct) => ApplyTemplateAsync(template, inputs, parseResult, PromptForExtraAspireStarterOptionsAsync, ct),
-            languageId: KnownLanguageId.CSharp
+            languageId: KnownLanguageId.CSharp,
+            restoreSuppressionArguments: ["--skipRestore"]
             );
 
         yield return new CallbackTemplate(
@@ -156,7 +157,8 @@ internal class DotNetTemplateFactory(
                 ApplyDevLocalhostTldOption,
                 ApplyTemplateWithNoExtraArgsAsync,
                 languageId: KnownLanguageId.CSharp,
-                isEmpty: true
+                isEmpty: true,
+                restoreSuppressionArguments: ["--skipRestore"]
                 );
 
             yield return new CallbackTemplate(
@@ -165,7 +167,8 @@ internal class DotNetTemplateFactory(
                 (ctx, projectName) => OutputPathHelper.GetUniqueDefaultOutputPath(projectName, ctx.WorkingDirectory.FullName),
                 ApplyDevLocalhostTldOption,
                 ApplyTemplateWithNoExtraArgsAsync,
-                languageId: KnownLanguageId.CSharp
+                languageId: KnownLanguageId.CSharp,
+                restoreSuppressionArguments: ["--skipRestore"]
                 );
 
             yield return new CallbackTemplate(
@@ -245,7 +248,8 @@ internal class DotNetTemplateFactory(
             ApplyDevLocalhostTldOption,
             (template, inputs, parseResult, ct) => ApplySingleFileTemplate(template, inputs, parseResult, PromptForExtraAspireSingleFileOptionsAsync, ct),
             languageId: KnownLanguageId.CSharp,
-            isEmpty: true
+            isEmpty: true,
+            restoreSuppressionArguments: ["--no-restore"]
             );
     }
 
@@ -476,6 +480,10 @@ internal class DotNetTemplateFactory(
             // Some templates have additional arguments that need to be applied to the `dotnet new` command
             // when it is executed. This callback will get those arguments and potentially prompt for them.
             var extraArgs = await extraArgsCallback(parseResult, cancellationToken);
+            if (ShouldRestoreAfterTemplate(template, inputs))
+            {
+                extraArgs = [.. extraArgs, .. template.RestoreSuppressionArguments];
+            }
 
             var installOutcome = await templateNuGetConfigService.InstallTemplatePackageAsync(
                 selectedTemplateDetails,

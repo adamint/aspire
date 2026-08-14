@@ -126,10 +126,14 @@ internal sealed class IntegrationPackageSearchService(
     {
         if (!string.IsNullOrWhiteSpace(explicitSource))
         {
+            var resolvedExplicitSource = PackageSourceOverrideMappings.IsMalformedUriSource(explicitSource)
+                ? explicitSource
+                : PackageSourceOverrideMappings.ResolveForWorkingDirectory(explicitSource, executionContext.WorkingDirectory);
             return new PackageSourceResolution(
                 explicitSource,
-                PackageSourceOverrideMappings.ResolveForWorkingDirectory(explicitSource, executionContext.WorkingDirectory),
+                resolvedExplicitSource,
                 executionContext.WorkingDirectory,
+                PackageSourceRoutingPolicy.Explicit,
                 IsExplicit: true);
         }
 
@@ -171,13 +175,18 @@ internal sealed class IntegrationPackageSearchService(
         // Preserve configured remote paths such as \\server\share until validation rejects them.
         // Resolving first on Unix would turn the backslashes into a cwd-relative local path and
         // allow the missing-directory probe to run instead.
-        var resolvedSource = PackageSourceOverrideMappings.IsRemoteFileSystemSource(configuredSource.Value)
+        var resolvedSource = PackageSourceOverrideMappings.IsMalformedUriSource(configuredSource.Value) ||
+            PackageSourceOverrideMappings.IsRemoteFileSystemSource(configuredSource.Value)
             ? configuredSource.Value
             : PackageSourceOverrideMappings.ResolveForWorkingDirectory(configuredSource.Value, configuredSource.BaseDirectory);
+        var sourcePolicy = configuredSource.IsGlobal || configuredSource.IsAmbient
+            ? PackageSourceRoutingPolicy.GlobalOrAmbientConfigured
+            : PackageSourceRoutingPolicy.ProjectLocalConfigured;
         return new PackageSourceResolution(
             configuredSource.Value,
             resolvedSource,
             configuredSource.BaseDirectory,
+            sourcePolicy,
             IsExplicit: false);
     }
 
@@ -315,4 +324,5 @@ internal sealed record PackageSourceResolution(
     string RawValue,
     string ResolvedValue,
     DirectoryInfo BaseDirectory,
+    PackageSourceRoutingPolicy RoutingPolicy,
     bool IsExplicit);

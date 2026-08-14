@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Aspire.Cli.Projects;
+using Aspire.Cli.Packaging;
 
 namespace Aspire.Cli.Scaffolding;
 
@@ -14,9 +15,11 @@ namespace Aspire.Cli.Scaffolding;
 /// <param name="SdkVersion">Optional Aspire SDK version to use for scaffolding.</param>
 /// <param name="Channel">Optional Aspire channel to use for scaffolding.</param>
 /// <param name="PackageSourceOverride">Optional package source to prefer when restoring scaffold/code-generation packages.</param>
+/// <param name="SourcePolicy">Routing policy for <paramref name="PackageSourceOverride"/>.</param>
 internal record ScaffoldContext(
     LanguageInfo Language,
     DirectoryInfo TargetDirectory,
+    PackageSourceRoutingPolicy SourcePolicy,
     string? ProjectName = null,
     string? SdkVersion = null,
     string? Channel = null,

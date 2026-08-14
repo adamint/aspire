@@ -662,6 +662,7 @@ public class GuestAppHostProjectTests : IDisposable
                 AppHostFile = new FileInfo(appHostPath),
                 PackageId = "Aspire.Hosting.Redis",
                 PackageVersion = "2.0.0",
+                SourcePolicy = PackageSourceRoutingPolicy.None,
             },
             CancellationToken.None);
 
@@ -707,6 +708,7 @@ public class GuestAppHostProjectTests : IDisposable
                 PackageId = "Aspire.Hosting.Redis",
                 PackageVersion = "2.0.0",
                 Source = sourceOverride,
+                SourcePolicy = PackageSourceRoutingPolicy.Explicit,
             },
             CancellationToken.None);
 

@@ -9,6 +9,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Interaction;
+using Aspire.Cli.Packaging;
 using Aspire.Cli.Projects;
 using Aspire.Shared.Json;
 using Microsoft.Extensions.Logging;
@@ -178,7 +179,10 @@ internal sealed class SdkDumpCommand : BaseCommand
             var prepareResult = await appHostServerProject.PrepareAsync(
                 ExecutionContext.IdentityVersion,
                 integrations,
-                cancellationToken: cancellationToken);
+                requestedChannel: null,
+                packageSourceOverride: null,
+                PackageSourceRoutingPolicy.None,
+                cancellationToken);
 
             if (!prepareResult.Success)
             {
@@ -277,7 +281,10 @@ internal sealed class SdkDumpCommand : BaseCommand
             var prepareResult = await appHostServerProject.PrepareAsync(
                 ExecutionContext.IdentityVersion,
                 integrations,
-                cancellationToken: cancellationToken);
+                requestedChannel: null,
+                packageSourceOverride: null,
+                PackageSourceRoutingPolicy.None,
+                cancellationToken);
 
             if (!prepareResult.Success)
             {

@@ -7,6 +7,7 @@ using System.Text.Json.Nodes;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Projects;
+using Aspire.Cli.Packaging;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Utils;
 using Microsoft.Extensions.Logging;
@@ -347,7 +348,11 @@ internal sealed class TypeScriptAppHostMigration : IMigration
 
             var success = await _interactionService.ShowStatusAsync(
                 MigrationStrings.RegeneratingStatus,
-                async () => await guestProject.BuildAndGenerateSdkAsync(appHostDirectory, cancellationToken: cancellationToken),
+                async () => await guestProject.BuildAndGenerateSdkAsync(
+                    appHostDirectory,
+                    packageSourceOverride: null,
+                    PackageSourceRoutingPolicy.None,
+                    cancellationToken),
                 emoji: KnownEmojis.Gear);
 
             if (!success)
