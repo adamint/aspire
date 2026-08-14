@@ -94,7 +94,7 @@ public class ResourceSnapshotBuilderTests
         resource.Annotations.Add(SupportsDebuggingAnnotation.Create<object>(
             resource.Name,
             "python",
-            (_, _) => Task.FromResult(new object())));
+            _ => Task.FromResult(new object())));
 
         var executable = Executable.Create(resource.Name, "python");
         executable.Annotate(DcpCustomResource.ResourceNameAnnotation, resource.Name);
