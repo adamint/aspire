@@ -601,6 +601,8 @@ public class DotNetTemplateFactoryTests
             {
             }
 
+            await process.WaitForExitAsync();
+            await Task.WhenAll(standardOutputTask, standardErrorTask);
             throw new TimeoutException($"Process '{process.StartInfo.FileName}' did not exit within the timeout.");
         }
 

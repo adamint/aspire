@@ -504,8 +504,7 @@ public class ConfigurationServiceTests(ITestOutputHelper outputHelper)
                     "conflict": "target"
                   }
                 }
-              },
-              "AppHost": "invalid"
+              }
             }
             """);
 

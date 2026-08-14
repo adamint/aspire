@@ -363,31 +363,18 @@ internal static class ConfigurationHelper
 
         var direct = new JsonObject();
         var flattened = new JsonObject();
-        var directPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var flattenedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var property in element.EnumerateObject())
         {
             var path = GetNormalizedPath(property.Name, scope);
             var normalizedValue = NormalizeJsonElement(property.Value, GetChildScope(path));
-            var pathKey = string.Join('\0', path);
 
             if (path.Length == 1)
             {
-                if (!directPaths.Add(pathKey))
-                {
-                    RemoveJsonPath(direct, path);
-                }
-
                 OverlayJsonPath(direct, path, normalizedValue);
             }
             else
             {
-                if (!flattenedPaths.Add(pathKey))
-                {
-                    RemoveJsonPath(flattened, path);
-                }
-
                 OverlayJsonPath(flattened, path, normalizedValue);
             }
         }
@@ -584,26 +571,6 @@ internal static class ConfigurationHelper
             "profiles" when path.Length >= 3 && path[2].Equals("environmentVariables", StringComparison.OrdinalIgnoreCase) => NormalizationScope.Literal,
             _ => NormalizationScope.Literal
         };
-    }
-
-    private static void RemoveJsonPath(JsonObject target, string[] pathSegments)
-    {
-        var current = target;
-        for (var i = 0; i < pathSegments.Length - 1; i++)
-        {
-            if (!TryGetPropertyName(current, pathSegments[i], out var existingName) ||
-                current[existingName!] is not JsonObject existingObject)
-            {
-                return;
-            }
-
-            current = existingObject;
-        }
-
-        if (TryGetPropertyName(current, pathSegments[^1], out var finalName))
-        {
-            current.Remove(finalName!);
-        }
     }
 
     private static void OverlayJsonPath(JsonObject target, string[] pathSegments, JsonNode? value)
