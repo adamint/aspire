@@ -393,6 +393,7 @@ function createProjectEnvironment(
     launchSettings: LaunchSettings | null,
     baseProfile: LaunchProfile | null,
     profileName: string | null,
+    disableLaunchProfile: boolean,
     debugConfigurationEnvironment: { [key: string]: string } | undefined,
     runSessionEnvironment: EnvVar[],
     launchOptions: LaunchOptions,
@@ -427,7 +428,7 @@ function createProjectEnvironment(
         }
         deleteEnvironmentVariable(environment, 'DOTNET_LAUNCH_PROFILE');
     }
-    else if (launchOptions.debugSession.configuration?.debuggers?.['apphost']?.disableLaunchProfile === true) {
+    else if (disableLaunchProfile) {
         deleteEnvironmentVariable(environment, 'DOTNET_LAUNCH_PROFILE');
     }
 
@@ -557,6 +558,7 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                     launchSettings,
                     baseProfile,
                     profileName,
+                    effectiveLaunchConfig.disable_launch_profile === true,
                     debugConfiguration.env,
                     env,
                     launchOptions);
@@ -578,13 +580,14 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                     configureDotNetRunDebugConfiguration(
                         debugConfiguration,
                         createDotNetRunArguments(projectPath, baseProfile?.commandLineArgs, args),
-                        createProjectEnvironment(launchSettings, baseProfile, profileName, debugConfiguration.env, env, launchOptions));
+                        createProjectEnvironment(launchSettings, baseProfile, profileName, effectiveLaunchConfig.disable_launch_profile === true, debugConfiguration.env, env, launchOptions));
                 } else {
                     debugConfiguration.program = outputPath;
                     debugConfiguration.env = createProjectEnvironment(
                         launchSettings,
                         baseProfile,
                         profileName,
+                        effectiveLaunchConfig.disable_launch_profile === true,
                         debugConfiguration.env,
                         env,
                         launchOptions);
@@ -630,7 +633,7 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                             /* skipBuild */ !shouldBuildProject,
                             runWorkingDirectory,
                             /* suppressCliRunHook */ launchOptions.isApphost),
-                        createProjectEnvironment(launchSettings, baseProfile, profileName, debugConfiguration.env, env, launchOptions),
+                        createProjectEnvironment(launchSettings, baseProfile, profileName, effectiveLaunchConfig.disable_launch_profile === true, debugConfiguration.env, env, launchOptions),
                         projectDirectory);
                 }
                 else {
@@ -670,6 +673,7 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                         launchSettings,
                         baseProfile,
                         profileName,
+                        effectiveLaunchConfig.disable_launch_profile === true,
                         debugConfiguration.env,
                         env,
                         launchOptions,

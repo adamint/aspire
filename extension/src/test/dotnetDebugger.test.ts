@@ -783,7 +783,7 @@ suite('Dotnet Debugger Extension Tests', () => {
             const disabledDebugSessionConfig: AspireExtendedDebugConfiguration = {
                 ...debugSessionConfig,
                 debuggers: {
-                    apphost: {
+                    project: {
                         disableLaunchProfile: true
                     }
                 }
