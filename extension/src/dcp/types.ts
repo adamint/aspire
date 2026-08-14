@@ -57,6 +57,21 @@ export function isGoLaunchConfiguration(obj: any): obj is GoLaunchConfiguration 
     return obj && obj.type === 'go';
 }
 
+export interface RustCargoLaunchTarget {
+    args?: string[];
+    executable_path?: string;
+}
+
+export interface RustLaunchConfiguration extends ExecutableLaunchConfiguration {
+    type: "rust";
+    cargo?: RustCargoLaunchTarget;
+    working_directory?: string;
+}
+
+export function isRustLaunchConfiguration(obj: any): obj is RustLaunchConfiguration {
+    return obj && obj.type === 'rust';
+}
+
 export interface JavaScriptRuntimeLaunchConfiguration extends ExecutableLaunchConfiguration {
     type: "node" | "bun";
     script_path?: string;
@@ -204,6 +219,7 @@ export interface AspireResourceExtendedDebugConfiguration extends vscode.DebugCo
 }
 
 export type AspireCommandType = 'run' | 'deploy' | 'publish' | 'do';
+export type AspireOperationKind = AspireCommandType | 'test' | 'unknown';
 
 export interface AspireExtendedDebugConfiguration extends vscode.DebugConfiguration {
     program: string;
