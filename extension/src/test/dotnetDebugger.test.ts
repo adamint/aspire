@@ -14,6 +14,7 @@ import * as hotReload from '../debugger/hotReload';
 class TestDotNetService {
     private _hasDevKit: boolean;
 
+    public getDotNetAttachTargetInfoStub: sinon.SinonStub;
     public getDotNetTargetPathStub: sinon.SinonStub;
     public buildDotNetProjectStub: sinon.SinonStub;
 
@@ -23,6 +24,9 @@ class TestDotNetService {
     public runApiEnvironment: NodeJS.ProcessEnv | undefined;
 
     constructor(outputPath: string, rejectBuild: Error | null, hasDevKit: boolean) {
+        this.getDotNetAttachTargetInfoStub = sinon.stub();
+        this.getDotNetAttachTargetInfoStub.resolves({ targetPath: outputPath, useAppHost: true });
+
         this.getDotNetTargetPathStub = sinon.stub();
         this.getDotNetTargetPathStub.resolves(outputPath);
 
@@ -36,8 +40,12 @@ class TestDotNetService {
         this._hasDevKit = hasDevKit;
     }
 
-    getDotNetTargetPath(projectFile: string, configuration?: string): Promise<string> {
-        return this.getDotNetTargetPathStub(projectFile, configuration);
+    getDotNetAttachTargetInfo(projectFile: string, configuration?: string): Promise<{ targetPath: string, useAppHost: boolean }> {
+        return this.getDotNetAttachTargetInfoStub(projectFile, configuration);
+    }
+
+    getDotNetTargetPath(projectFile: string): Promise<string> {
+        return this.getDotNetTargetPathStub(projectFile);
     }
 
     buildDotNetProject(projectFile: string): Promise<void> {
@@ -98,7 +106,8 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(configuration.name, 'Attach debugger: API');
         assert.strictEqual(configuration.processId, undefined);
         assert.strictEqual(configuration.processName, 'FromTargetPath');
-        assert.ok(dotNetService.getDotNetTargetPathStub.calledOnceWithExactly('/repo/api/Api.csproj', undefined));
+        assert.ok(dotNetService.getDotNetAttachTargetInfoStub.calledOnceWithExactly('/repo/api/Api.csproj', undefined));
+        assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
     });
 
     test('attach configuration evaluates TargetPath with the launched project configuration', async () => {
@@ -118,24 +127,46 @@ suite('Dotnet Debugger Extension Tests', () => {
         });
 
         assert.strictEqual(configuration.processName, 'ReleaseApi');
-        assert.ok(dotNetService.getDotNetTargetPathStub.calledOnceWithExactly('/repo/api/Api.csproj', 'Release'));
+        assert.ok(dotNetService.getDotNetAttachTargetInfoStub.calledOnceWithExactly('/repo/api/Api.csproj', 'Release'));
+        assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
     });
 
-    test('TargetPath evaluation passes the project configuration to MSBuild', async () => {
+    test('attach configuration rejects projects launched without an apphost', async () => {
         const dotNetService = new DotNetService(undefined);
         const execFileAsync = sinon.stub(dotNetService, 'execFileAsync').resolves({
-            stdout: '/repo/bin/Release/net10.0/ReleaseApi.dll\n',
+            stdout: JSON.stringify({
+                Properties: {
+                    TargetPath: '/repo/bin/Release/net10.0/ReleaseApi.dll',
+                    UseAppHost: 'false',
+                },
+            }),
             stderr: '',
         });
+        const extension = createProjectDebuggerExtension(() => dotNetService);
 
-        const targetPath = await dotNetService.getDotNetTargetPath('/repo/api/Api.csproj', 'Release');
+        await assert.rejects(
+            extension.createAttachDebugSessionConfigurationCallback!({
+                name: 'api',
+                displayName: 'API',
+                resourceType: 'Project',
+                state: 'Running',
+                properties: {
+                    'executable.pid': '1234',
+                    'executable.path': 'dotnet',
+                    'executable.args': ['run', '--project', '/repo/api/Api.csproj', '--configuration', 'Release', '--no-launch-profile'],
+                    'project.path': '/repo/api/Api.csproj',
+                },
+            }),
+            (error: unknown) => error instanceof Error
+                && error.name === 'AttachDebuggerConfigurationError'
+                && (error as Error & { errorKind?: string }).errorKind === 'ResourceNotAttachable');
 
-        assert.strictEqual(targetPath, '/repo/bin/Release/net10.0/ReleaseApi.dll');
         assert.deepStrictEqual(execFileAsync.firstCall.args[1], [
             'msbuild',
             '/repo/api/Api.csproj',
             '-nologo',
             '-getProperty:TargetPath',
+            '-getProperty:UseAppHost',
             '-v:q',
             '-property:GenerateFullPaths=true',
             '-property:Configuration=Release',
@@ -182,7 +213,8 @@ suite('Dotnet Debugger Extension Tests', () => {
         });
 
         assert.strictEqual(configuration.processName, 'FromTargetPath');
-        assert.ok(dotNetService.getDotNetTargetPathStub.calledOnceWithExactly('/repo/api/Api.csproj', undefined));
+        assert.ok(dotNetService.getDotNetAttachTargetInfoStub.calledOnceWithExactly('/repo/api/Api.csproj', undefined));
+        assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
     });
 
     test('attach configuration rejects parented MAUI platform resources', async () => {

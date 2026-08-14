@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { extensionLogOutputChannel } from '../../utils/logging';
-import { noCsharpBuildTask, buildFailedWithExitCode, noOutputFromMsbuild, failedToGetTargetPath, invalidLaunchConfiguration, buildFailedForProjectWithError, processExitedWithCode, lookingForDevkitBuildTask, csharpDevKitNotInstalled, failedToInspectRuntimeConfig, dotNetRunFallbackDisablesDebugger, dotNetRunFileBasedExecutableProfileFallback, executableLaunchProfileMissingExecutablePath, attachDebuggerConfigurationName } from '../../loc/strings';
+import { noCsharpBuildTask, buildFailedWithExitCode, noOutputFromMsbuild, failedToGetTargetPath, invalidLaunchConfiguration, buildFailedForProjectWithError, processExitedWithCode, lookingForDevkitBuildTask, csharpDevKitNotInstalled, failedToInspectRuntimeConfig, dotNetRunFallbackDisablesDebugger, dotNetRunFileBasedExecutableProfileFallback, executableLaunchProfileMissingExecutablePath, attachDebuggerConfigurationName, attachDebuggerUnavailable } from '../../loc/strings';
 import { ChildProcessWithoutNullStreams, execFile, spawn } from 'child_process';
 import * as util from 'util';
 import * as path from 'path';
@@ -29,8 +29,14 @@ import { getHotReloadDiagnostics, logHotReloadDiagnostics, showHotReloadDisabled
 interface IDotNetService {
     getAndActivateDevKit(): Promise<boolean>
     buildDotNetProject(projectFile: string): Promise<void>;
-    getDotNetTargetPath(projectFile: string, configuration?: string): Promise<string>;
+    getDotNetAttachTargetInfo(projectFile: string, configuration?: string): Promise<DotNetAttachTargetInfo>;
+    getDotNetTargetPath(projectFile: string): Promise<string>;
     getDotNetRunApiOutput(projectFile: string, environment?: NodeJS.ProcessEnv): Promise<string>;
+}
+
+interface DotNetAttachTargetInfo {
+    targetPath: string;
+    useAppHost: boolean;
 }
 
 interface DotNetAttachDebuggerResourceInfo {
@@ -126,7 +132,52 @@ export class DotNetService implements IDotNetService {
         });
     }
 
-    async getDotNetTargetPath(projectFile: string, configuration?: string): Promise<string> {
+    async getDotNetAttachTargetInfo(projectFile: string, configuration?: string): Promise<DotNetAttachTargetInfo> {
+        const args = [
+            'msbuild',
+            projectFile,
+            '-nologo',
+            '-getProperty:TargetPath',
+            '-getProperty:UseAppHost',
+            '-v:q',
+            '-property:GenerateFullPaths=true'
+        ];
+        if (configuration) {
+            args.push(`-property:Configuration=${configuration}`);
+        }
+
+        try {
+            const { stdout } = await this.execFileAsync('dotnet', args, {
+                cwd: path.dirname(projectFile),
+                encoding: 'utf8',
+                env: createAspireCliPathProcessEnvironment()
+            });
+            // Multiple -getProperty switches return:
+            //   { "Properties": { "TargetPath": "/repo/bin/Release/net10.0/Api.dll", "UseAppHost": "false" } }
+            const payload: unknown = JSON.parse(stdout);
+            const properties = typeof payload === 'object' && payload !== null && 'Properties' in payload
+                ? (payload as { Properties?: unknown }).Properties
+                : undefined;
+            const targetPath = typeof properties === 'object' && properties !== null && 'TargetPath' in properties
+                ? (properties as { TargetPath?: unknown }).TargetPath
+                : undefined;
+            const useAppHost = typeof properties === 'object' && properties !== null && 'UseAppHost' in properties
+                ? (properties as { UseAppHost?: unknown }).UseAppHost
+                : undefined;
+            if (typeof targetPath !== 'string' || targetPath.trim().length === 0) {
+                throw new Error(noOutputFromMsbuild);
+            }
+
+            return {
+                targetPath: targetPath.trim(),
+                useAppHost: typeof useAppHost === 'string' && useAppHost.trim().toLowerCase() === 'true',
+            };
+        } catch (err) {
+            throw new Error(failedToGetTargetPath(String(err)));
+        }
+    }
+
+    async getDotNetTargetPath(projectFile: string): Promise<string> {
         const args = [
             'msbuild',
             projectFile,
@@ -135,10 +186,6 @@ export class DotNetService implements IDotNetService {
             '-v:q',
             '-property:GenerateFullPaths=true'
         ];
-        if (configuration) {
-            args.push(`-property:Configuration=${configuration}`);
-        }
-
         try {
             const { stdout } = await this.execFileAsync('dotnet', args, {
                 cwd: path.dirname(projectFile),
@@ -523,9 +570,9 @@ async function createDotNetAttachDebugSessionConfiguration(resource: DebuggableR
         throw new AttachDebuggerConfigurationError('ResourceNotAttachable', invalidLaunchConfiguration(JSON.stringify(resource)));
     }
 
-    let targetPath: string;
+    let targetInfo: DotNetAttachTargetInfo;
     try {
-        targetPath = await dotNetService.getDotNetTargetPath(attachInfo.projectPath, attachInfo.configuration);
+        targetInfo = await dotNetService.getDotNetAttachTargetInfo(attachInfo.projectPath, attachInfo.configuration);
     }
     catch (error) {
         throw new AttachDebuggerConfigurationError(
@@ -533,10 +580,16 @@ async function createDotNetAttachDebugSessionConfiguration(resource: DebuggableR
             error instanceof Error ? error.message : String(error));
     }
 
+    // Without an apphost, dotnet run starts the target DLL under another process named "dotnet".
+    // That name is not unique enough to identify this resource without introducing process-tree discovery.
+    if (!targetInfo.useAppHost) {
+        throw new AttachDebuggerConfigurationError('ResourceNotAttachable', attachDebuggerUnavailable);
+    }
+
     // `executable.pid` is the DCP launcher (`dotnet run`), not necessarily the managed
-    // application process. Use the C# debugger's process-name selector instead, deriving
-    // the name from the same TargetPath evaluation used by the normal project launch path.
-    const fileName = targetPath.trim().split(/[\\/]/).pop() ?? '';
+    // application process. Apphost-backed projects have a unique process name derived from
+    // TargetPath, which the C# debugger can select without a second process-discovery subsystem.
+    const fileName = targetInfo.targetPath.split(/[\\/]/).pop() ?? '';
     const processName = fileName.replace(/\.(dll|exe)$/i, '');
     if (processName.length === 0) {
         throw new AttachDebuggerConfigurationError('ResourceNotAttachable', noOutputFromMsbuild);
