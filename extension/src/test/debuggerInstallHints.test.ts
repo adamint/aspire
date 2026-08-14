@@ -11,7 +11,7 @@ import {
     launchConfigurationTypePropertyName,
 } from '../debugger/debuggerInstallHints';
 import { getSupportedCapabilities } from '../capabilities';
-import { debuggerInstallAction, dontShowAgainLabel } from '../loc/strings';
+import { debuggerInstallAction, dontShowAgainLabel, errorMessage } from '../loc/strings';
 import { ResourceState } from '../editor/resourceConstants';
 
 function createResource(
@@ -158,6 +158,81 @@ suite('debugger install hints', () => {
         assert.strictEqual(
             showInformationMessage.firstCall.args[0],
             'The Python debugger extension is disabled. Enable it in VS Code, then restart the AppHost to enable debugging.');
+    });
+
+    test('reports debugger installation failures as handled command failures', async () => {
+        sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
+        const showInformationMessage = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+        const showErrorMessage = sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined);
+        const error = new TypeError('Debugger installation failed.');
+        sinon.stub(vscode.commands, 'executeCommand').rejects(error);
+        const service = new DebuggerInstallHintService(createMemento());
+
+        const result = await service.installDebuggerExtension({
+            debuggerName: 'Python',
+            extensionId: 'ms-python.debugpy',
+        });
+
+        assert.deepStrictEqual(result, { success: false, errorKind: 'TypeError' });
+        assert.strictEqual(showErrorMessage.callCount, 1);
+        assert.strictEqual(showErrorMessage.firstCall.args[0], errorMessage(error));
+        assert.strictEqual(showInformationMessage.callCount, 0);
+    });
+
+    test('starts background observation only after discovering an AppHost candidate', () => {
+        const dataChanges = new vscode.EventEmitter<void>();
+        const candidatePaths: string[] = [];
+        const keepDataActive = sinon.stub().returns({ dispose: sinon.stub() });
+        const service = new DebuggerInstallHintService(createMemento());
+        const observation = service.watchForMissingDebuggers({
+            get workspaceAppHostCandidatePaths() {
+                return candidatePaths;
+            },
+            workspaceResources: [],
+            appHosts: [],
+            onDidChangeData: dataChanges.event,
+            keepDataActive,
+        });
+
+        try {
+            assert.strictEqual(keepDataActive.callCount, 0);
+
+            candidatePaths.push('/workspace/AppHost.csproj');
+            dataChanges.fire();
+
+            assert.strictEqual(keepDataActive.callCount, 1);
+        } finally {
+            observation.dispose();
+            dataChanges.dispose();
+        }
+    });
+
+    test('stops background observation after the last AppHost candidate is removed', () => {
+        const dataChanges = new vscode.EventEmitter<void>();
+        const candidatePaths = ['/workspace/AppHost.csproj'];
+        const dataLease = { dispose: sinon.stub() };
+        const service = new DebuggerInstallHintService(createMemento());
+        const observation = service.watchForMissingDebuggers({
+            get workspaceAppHostCandidatePaths() {
+                return candidatePaths;
+            },
+            workspaceResources: [],
+            appHosts: [],
+            onDidChangeData: dataChanges.event,
+            keepDataActive: sinon.stub().returns(dataLease),
+        });
+
+        try {
+            assert.strictEqual(dataLease.dispose.callCount, 0);
+
+            candidatePaths.splice(0);
+            dataChanges.fire();
+
+            assert.strictEqual(dataLease.dispose.callCount, 1);
+        } finally {
+            observation.dispose();
+            dataChanges.dispose();
+        }
     });
 
     test("Don't Show Again suppresses future sessions for that debugger", async () => {

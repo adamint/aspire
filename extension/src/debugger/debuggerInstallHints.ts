@@ -19,9 +19,22 @@ export interface DebuggerInstallHint {
     extensionId: string;
 }
 
+interface DebuggerInstallFailure {
+    success: false;
+    errorKind: string;
+}
+
 interface DebuggableResourceSnapshot {
     state: string | null;
     properties: Record<string, string | null> | null;
+}
+
+interface DebuggerInstallHintDataSource {
+    readonly workspaceAppHostCandidatePaths: readonly string[];
+    readonly workspaceResources: readonly DebuggableResourceSnapshot[];
+    readonly appHosts: readonly { resources?: readonly DebuggableResourceSnapshot[] | null }[];
+    readonly onDidChangeData: vscode.Event<void>;
+    keepDataActive(): vscode.Disposable;
 }
 
 const debuggerInstallHints = new Map<string, DebuggerInstallHint>([
@@ -45,6 +58,36 @@ export class DebuggerInstallHintService {
     constructor(private readonly _globalState: vscode.Memento) {
     }
 
+    watchForMissingDebuggers(dataSource: DebuggerInstallHintDataSource): vscode.Disposable {
+        let dataLease: vscode.Disposable | undefined;
+        const refresh = () => {
+            const hasKnownAppHost = dataSource.workspaceAppHostCandidatePaths.length > 0
+                || dataSource.appHosts.length > 0;
+            if (hasKnownAppHost && !dataLease) {
+                // AppHost discovery runs independently of the panel data lifecycle. Wait for a real
+                // candidate before keeping ps/describe active so unrelated .NET workspaces do not
+                // acquire a permanent Aspire CLI process just because the extension activated.
+                dataLease = dataSource.keepDataActive();
+            } else if (!hasKnownAppHost && dataLease) {
+                dataLease.dispose();
+                dataLease = undefined;
+            }
+
+            const resources = [
+                ...dataSource.workspaceResources,
+                ...dataSource.appHosts.flatMap(appHost => appHost.resources ?? []),
+            ];
+            void this.notifyMissingDebuggers(resources);
+        };
+
+        const dataSubscription = dataSource.onDidChangeData(refresh);
+        refresh();
+
+        return vscode.Disposable.from(
+            dataSubscription,
+            new vscode.Disposable(() => dataLease?.dispose()));
+    }
+
     async notifyMissingDebuggers(resources: Iterable<DebuggableResourceSnapshot>): Promise<void> {
         const notifications: Promise<void>[] = [];
         for (const resource of resources) {
@@ -61,7 +104,7 @@ export class DebuggerInstallHintService {
         await Promise.all(notifications);
     }
 
-    async installDebuggerExtension(hint: DebuggerInstallHint): Promise<void> {
+    async installDebuggerExtension(hint: DebuggerInstallHint): Promise<void | DebuggerInstallFailure> {
         try {
             await vscode.commands.executeCommand('workbench.extensions.installExtension', hint.extensionId);
 
@@ -76,6 +119,10 @@ export class DebuggerInstallHintService {
             await vscode.window.showInformationMessage(message);
         } catch (error) {
             await vscode.window.showErrorMessage(errorMessage(error));
+            return {
+                success: false,
+                errorKind: error instanceof Error ? error.name : 'Error',
+            };
         }
     }
 

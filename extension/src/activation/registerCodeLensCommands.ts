@@ -11,6 +11,7 @@ import { collectResourceCommandArguments } from '../views/ResourceCommandArgumen
 import { createResourceCommandArgumentLoader } from '../views/ResourceCommandArgumentsLoader';
 import { executeResourceCommand } from '../views/resourceCommandExecution';
 import { AppHostDataRepository, isMatchingAppHostPath, ResourceCommandJson } from '../data/AppHostDataRepository';
+import { DebuggerInstallHint, DebuggerInstallHintService } from '../debugger/debuggerInstallHints';
 import { registerInstrumentedCommand } from './instrumentedCommand';
 
 export function registerCodeLensCommands(
@@ -24,6 +25,12 @@ export function registerCodeLensCommands(
   const codeLensProvider = new AspireCodeLensProvider(appHostTreeProvider, dataRepository);
   const languageFilters = getSupportedLanguageIds().map(lang => ({ language: lang, scheme: 'file' }));
   const codeLensRegistration = vscode.languages.registerCodeLensProvider(languageFilters, codeLensProvider);
+  const debuggerInstallHintService = new DebuggerInstallHintService(secretWarningState);
+  const debuggerInstallHintObservation = debuggerInstallHintService.watchForMissingDebuggers(dataRepository);
+  const installDebuggerExtensionRegistration = registerInstrumentedCommand(
+    'aspire-vscode.installDebuggerExtension',
+    'codelens',
+    (hint: DebuggerInstallHint) => debuggerInstallHintService.installDebuggerExtension(hint));
   const codeLensDebugPipelineStepRegistration = registerInstrumentedCommand('aspire-vscode.codeLensDebugPipelineStep', 'codelens', (stepName: string) => editorCommandProvider.tryExecuteDoAppHost(false, stepName));
   const codeLensResourceActionRegistration = registerInstrumentedCommand('aspire-vscode.codeLensResourceAction', 'codelens', async (resourceName: string, action: string, appHostPath: string, resourceCommand?: ResourceCommandJson) => {
     const effectiveResourceCommand = getCurrentResourceCommand(dataRepository, resourceName, action, appHostPath) ?? resourceCommand;
@@ -92,6 +99,7 @@ export function registerCodeLensCommands(
 
   return [
     codeLensRegistration,
+    installDebuggerExtensionRegistration,
     codeLensDebugPipelineStepRegistration,
     codeLensResourceActionRegistration,
     codeLensViewLogsRegistration,
@@ -100,6 +108,7 @@ export function registerCodeLensCommands(
     codeLensOpenDashboardRegistration,
     codeLensViewAppHostLogsRegistration,
     codeLensProvider,
+    debuggerInstallHintObservation,
   ];
 }
 
