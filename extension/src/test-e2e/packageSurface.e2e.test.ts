@@ -122,6 +122,7 @@ suite('Aspire package contribution surface E2E', function () {
             'aspire-vscode.openInIntegratedBrowser',
             'aspire-vscode.copyEndpointUrl',
             'aspire-vscode.openResourceTerminal',
+            'aspire-vscode.attachDebuggerToResource',
         ]) {
             assert.ok(hiddenPaletteCommands.includes(commandId), `${commandId} should stay hidden from the command palette.`);
         }
@@ -554,6 +555,7 @@ function createExpectedLanguageModelTools(strings: {
 
 const expectedCommandIds = [
     'aspire-vscode.add',
+    'aspire-vscode.attachDebuggerToResource',
     'aspire-vscode.codeLensDebugPipelineStep',
     'aspire-vscode.codeLensOpenDashboard',
     'aspire-vscode.codeLensResourceAction',
@@ -644,6 +646,7 @@ const expectedViewItemContextCommands = [
     'aspire-vscode.stopResource',
     'aspire-vscode.startResource',
     'aspire-vscode.restartResource',
+    'aspire-vscode.attachDebuggerToResource',
     'aspire-vscode.executeResourceCommand',
     'aspire-vscode.executeResourceCommandItem',
     'aspire-vscode.viewResourceLogs',
