@@ -656,14 +656,15 @@ async function executeE2eControlCommand(
 
       const runId = 'e2e-resource-debug-configuration';
       try {
+        const debugSessionConfiguration = {
+          type: 'aspire',
+          request: 'launch',
+          name: 'E2E resource debug configuration',
+          program: '',
+          debuggers: command.debuggers ? { ...command.debuggers } : undefined,
+        };
         const debugConfiguration = await createDebugSessionConfiguration(
-          {
-            type: 'aspire',
-            request: 'launch',
-            name: 'E2E resource debug configuration',
-            program: '',
-            debuggers: command.debuggers ? { ...command.debuggers } : undefined,
-          },
+          debugSessionConfiguration,
           launchConfig,
           getE2eStringArray(command.args, 'args'),
           getE2eEnvVars(command.env),
@@ -673,7 +674,7 @@ async function executeE2eControlCommand(
             runId,
             debugSessionId: 'e2e-debug-session',
             isApphost,
-            debugSession: {} as AspireDebugSession
+            debugSession: { configuration: debugSessionConfiguration } as AspireDebugSession
           },
           debuggerExtension);
 

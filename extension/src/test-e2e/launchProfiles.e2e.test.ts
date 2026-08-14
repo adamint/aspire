@@ -61,15 +61,19 @@ suite('Aspire launch profiles E2E', function () {
                 { name: 'mode', value: '1' },
                 { name: 'DOTNET_LAUNCH_PROFILE', value: 'h1' },
                 { name: 'ASPNETCORE_URLS', value: 'http://localhost:15001' },
+                { name: 'EXPLICIT', value: 'from-cli' },
             ],
             debug: false,
             isApphost: true,
             debuggers: {
                 apphost: {
                     launchProfile: 'h2',
+                    env: {
+                        EXPLICIT: 'from-launch-json',
+                    },
                 },
             },
-            environmentKeys: ['mode', 'DOTNET_LAUNCH_PROFILE', 'ASPNETCORE_URLS'],
+            environmentKeys: ['mode', 'DOTNET_LAUNCH_PROFILE', 'ASPNETCORE_URLS', 'EXPLICIT'],
         }, { timeoutMs: 180000 });
         const debugConfiguration = controlStatus.result as PreparedDebugConfiguration;
 
@@ -77,6 +81,7 @@ suite('Aspire launch profiles E2E', function () {
             mode: '2',
             DOTNET_LAUNCH_PROFILE: 'h2',
             ASPNETCORE_URLS: 'http://localhost:15002',
+            EXPLICIT: 'from-launch-json',
         });
     });
 });

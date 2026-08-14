@@ -414,21 +414,25 @@ function createProjectEnvironment(
     }
 
     // Older CLIs send one flattened AppHost environment that can include the SDK default profile's
-    // values. Remove every launch-profile-owned key before applying the profile selected by launch.json,
-    // otherwise a stale default profile survives when another profile is selected or profiles are disabled.
+    // values. Remove only values owned by that default profile before applying the profile selected by
+    // launch.json. Keys from other profiles may also be legitimate ambient or explicit CLI values.
     // See https://github.com/microsoft/aspire/issues/19387.
-    for (const profile of Object.values(launchSettings?.profiles ?? {})) {
-        for (const name of Object.keys(profile.environmentVariables ?? {})) {
+    const defaultProfile = determineDefaultLaunchProfile(launchSettings).profile;
+    if (defaultProfile) {
+        for (const name of Object.keys(defaultProfile.environmentVariables ?? {})) {
             deleteEnvironmentVariable(environment, name);
         }
+        if (defaultProfile.applicationUrl) {
+            deleteEnvironmentVariable(environment, 'ASPNETCORE_URLS');
+        }
+        deleteEnvironmentVariable(environment, 'DOTNET_LAUNCH_PROFILE');
     }
-    deleteEnvironmentVariable(environment, 'DOTNET_LAUNCH_PROFILE');
-    deleteEnvironmentVariable(environment, 'ASPNETCORE_URLS');
 
-    applyEnvironmentVariables(environment, baseProfile?.environmentVariables);
     if (baseProfile?.applicationUrl) {
         setEnvironmentVariable(environment, 'ASPNETCORE_URLS', baseProfile.applicationUrl);
     }
+    applyEnvironmentVariables(environment, baseProfile?.environmentVariables);
+    applyEnvironmentVariables(environment, debugConfigurationEnvironment);
 
     // The AppHost uses DOTNET_LAUNCH_PROFILE to determine which launch profile to use for project resources.
     // The dotnet CLI sets it (see https://github.com/dotnet/sdk/pull/35029), so replicate that behavior before

@@ -591,7 +591,14 @@ suite('Dotnet Debugger Extension Tests', () => {
                         applicationUrl: 'http://localhost:15002',
                         environmentVariables: {
                             mode: '2',
-                            EXPLICIT: 'from-h2'
+                            EXPLICIT: 'from-h2',
+                            ASPNETCORE_URLS: 'http://localhost:16002'
+                        }
+                    },
+                    h3: {
+                        commandName: 'Project',
+                        environmentVariables: {
+                            UNSELECTED_ONLY: 'from-h3'
                         }
                     }
                 }
@@ -630,7 +637,8 @@ suite('Dotnet Debugger Extension Tests', () => {
                     { name: 'DOTNET_LAUNCH_PROFILE', value: 'h1' },
                     { name: 'ASPNETCORE_URLS', value: 'http://localhost:15001' },
                     { name: 'EXPLICIT', value: 'from-cli' },
-                    { name: 'CLI_PRECEDENCE', value: 'from-cli' }
+                    { name: 'CLI_PRECEDENCE', value: 'from-cli' },
+                    { name: 'UNSELECTED_ONLY', value: 'from-cli' }
                 ],
                 { debug: true, runId: '1', debugSessionId: '1', isApphost: true, debugSession: fakeAspireDebugSession },
                 extension);
@@ -641,14 +649,16 @@ suite('Dotnet Debugger Extension Tests', () => {
                 ASPNETCORE_URLS: debugConfig.env.ASPNETCORE_URLS,
                 EXPLICIT: debugConfig.env.EXPLICIT,
                 AMBIENT_ONLY: debugConfig.env.AMBIENT_ONLY,
-                CLI_PRECEDENCE: debugConfig.env.CLI_PRECEDENCE
+                CLI_PRECEDENCE: debugConfig.env.CLI_PRECEDENCE,
+                UNSELECTED_ONLY: debugConfig.env.UNSELECTED_ONLY
             }, {
                 mode: '2',
                 DOTNET_LAUNCH_PROFILE: 'h2',
-                ASPNETCORE_URLS: 'http://localhost:15002',
+                ASPNETCORE_URLS: 'http://localhost:16002',
                 EXPLICIT: 'from-launch-json',
                 AMBIENT_ONLY: 'from-process',
-                CLI_PRECEDENCE: 'from-cli'
+                CLI_PRECEDENCE: 'from-cli',
+                UNSELECTED_ONLY: 'from-cli'
             });
             assert.deepStrictEqual(
                 Object.keys(debugConfig.env).filter(name => name.toLowerCase() === 'mode'),
@@ -721,8 +731,126 @@ suite('Dotnet Debugger Extension Tests', () => {
         }
     });
 
+    test('AppHost preserves CLI environment when no default launch profile exists', async () => {
+        const fs = require('fs');
+        const tempRoot = nodePath.join(process.cwd(), '.test-temp', `dotnet-apphost-no-default-profile-${process.pid}-${Date.now()}`);
+        const projectDir = nodePath.join(tempRoot, 'AppHost');
+        const propertiesDir = nodePath.join(projectDir, 'Properties');
+        fs.mkdirSync(propertiesDir, { recursive: true });
+
+        try {
+            const projectPath = nodePath.join(projectDir, 'AppHost.csproj');
+            fs.writeFileSync(projectPath, '<Project></Project>');
+            fs.writeFileSync(nodePath.join(propertiesDir, 'launchSettings.json'), JSON.stringify({
+                profiles: {
+                    unsupported: {
+                        commandName: 'Unsupported',
+                        environmentVariables: {
+                            mode: 'profile-value'
+                        }
+                    }
+                }
+            }));
+
+            const outputPath = nodePath.join(projectDir, 'bin', 'Debug', 'net10.0', 'AppHost.dll');
+            const { extension } = createDebuggerExtension(outputPath, null, true, true);
+            const launchConfig: ProjectLaunchConfiguration = {
+                type: 'project',
+                project_path: projectPath
+            };
+            const debugSessionConfig: AspireExtendedDebugConfiguration = {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: projectPath
+            };
+            const fakeAspireDebugSession = sinon.createStubInstance(AspireDebugSession);
+            fakeAspireDebugSession.configuration = debugSessionConfig;
+
+            const debugConfig = await createDebugSessionConfiguration(
+                debugSessionConfig,
+                launchConfig,
+                undefined,
+                [
+                    { name: 'mode', value: 'from-cli' },
+                    { name: 'DOTNET_LAUNCH_PROFILE', value: 'from-cli' },
+                    { name: 'ASPNETCORE_URLS', value: 'http://localhost:15001' }
+                ],
+                { debug: true, runId: '1', debugSessionId: '1', isApphost: true, debugSession: fakeAspireDebugSession },
+                extension);
+
+            assert.strictEqual(debugConfig.env.mode, 'from-cli');
+            assert.strictEqual(debugConfig.env.DOTNET_LAUNCH_PROFILE, 'from-cli');
+            assert.strictEqual(debugConfig.env.ASPNETCORE_URLS, 'http://localhost:15001');
+        } finally {
+            fs.rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    test('AppHost project debugger environment applies before explicit AppHost environment', async () => {
+        const fs = require('fs');
+        const tempRoot = nodePath.join(process.cwd(), '.test-temp', `dotnet-apphost-project-environment-${process.pid}-${Date.now()}`);
+        const projectDir = nodePath.join(tempRoot, 'AppHost');
+        const propertiesDir = nodePath.join(projectDir, 'Properties');
+        fs.mkdirSync(propertiesDir, { recursive: true });
+
+        try {
+            const projectPath = nodePath.join(projectDir, 'AppHost.csproj');
+            fs.writeFileSync(projectPath, '<Project></Project>');
+            fs.writeFileSync(nodePath.join(propertiesDir, 'launchSettings.json'), JSON.stringify({
+                profiles: {
+                    h1: {
+                        commandName: 'Project'
+                    }
+                }
+            }));
+
+            const outputPath = nodePath.join(projectDir, 'bin', 'Debug', 'net10.0', 'AppHost.dll');
+            const { extension } = createDebuggerExtension(outputPath, null, true, true);
+            const launchConfig: ProjectLaunchConfiguration = {
+                type: 'project',
+                project_path: projectPath
+            };
+            const debugSessionConfig: AspireExtendedDebugConfiguration = {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: projectPath,
+                debuggers: {
+                    project: {
+                        env: {
+                            PROJECT_ONLY: 'from-project',
+                            SHARED: 'from-project'
+                        }
+                    },
+                    apphost: {
+                        env: {
+                            SHARED: 'from-apphost'
+                        }
+                    }
+                }
+            };
+            const fakeAspireDebugSession = sinon.createStubInstance(AspireDebugSession);
+            fakeAspireDebugSession.configuration = debugSessionConfig;
+
+            const debugConfig = await createDebugSessionConfiguration(
+                debugSessionConfig,
+                launchConfig,
+                undefined,
+                [],
+                { debug: true, runId: '1', debugSessionId: '1', isApphost: true, debugSession: fakeAspireDebugSession },
+                extension);
+
+            assert.strictEqual(debugConfig.env.PROJECT_ONLY, 'from-project');
+            assert.strictEqual(debugConfig.env.SHARED, 'from-apphost');
+        } finally {
+            fs.rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
     test('AppHost disabled profile removes inherited and old CLI profile environment', async () => {
         const fs = require('fs');
+        const platformStub = sinon.stub(process, 'platform').value('win32');
         const tempRoot = nodePath.join(process.cwd(), '.test-temp', `dotnet-apphost-disabled-profile-${process.pid}-${Date.now()}`);
         const projectDir = nodePath.join(tempRoot, 'AppHost');
         const propertiesDir = nodePath.join(projectDir, 'Properties');
@@ -784,7 +912,7 @@ suite('Dotnet Debugger Extension Tests', () => {
                 launchConfig,
                 undefined,
                 [
-                    { name: 'mode', value: '1' },
+                    { name: 'MODE', value: '1' },
                     { name: 'DOTNET_LAUNCH_PROFILE', value: 'h1' },
                     { name: 'ASPNETCORE_URLS', value: 'http://localhost:15001' },
                     { name: 'EXPLICIT', value: 'from-cli' },
@@ -798,7 +926,11 @@ suite('Dotnet Debugger Extension Tests', () => {
             assert.strictEqual(debugConfig.env.ASPNETCORE_URLS, undefined);
             assert.strictEqual(debugConfig.env.EXPLICIT, 'from-launch-json');
             assert.strictEqual(debugConfig.env.CLI_ONLY, 'from-cli');
+            assert.deepStrictEqual(
+                Object.keys(debugConfig.env).filter(name => name.toLowerCase() === 'mode'),
+                []);
         } finally {
+            platformStub.restore();
             for (const [name, value] of Object.entries(inheritedEnvironment)) {
                 restoreEnvironmentVariable(name, value);
             }
