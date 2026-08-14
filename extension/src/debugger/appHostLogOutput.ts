@@ -39,10 +39,12 @@ interface CorrelatedRecord {
 interface PendingConsoleRecord {
     record: Omit<LogRecord, 'body'>;
     body: string;
+    bodyWithoutLeadingScopes: string;
     raw: string;
     category: string;
     allowsContinuation: boolean;
     hasBodyLine: boolean;
+    hasNonScopeBodyLine: boolean;
 }
 
 interface PendingDebugRecord {
@@ -157,14 +159,20 @@ export class AppHostLogOutputCoordinator {
 
         const pending = this._pendingRecords.get(category);
         if (pending) {
-            if (pending.allowsContinuation && isConsoleLoggerContinuation(line)) {
+            const hasConsoleIndentation = isConsoleLoggerContinuation(line);
+            if (pending.allowsContinuation && (hasConsoleIndentation || isWindowsBareLfContinuation(pending))) {
                 pending.raw += line;
-                const bodyLine = removeConsoleIndentation(line);
+                const bodyLine = hasConsoleIndentation
+                    ? removeConsoleIndentation(line)
+                    : normalizeConsoleLine(line);
                 // IncludeScopes writes leading lines such as:
                 //   => RequestPath:/health => ConnectionId:0HN...
-                // They are provider-only metadata, so exclude them from correlation identity.
-                if (pending.body || !bodyLine.startsWith('=> ')) {
-                    pending.body += bodyLine;
+                // Keep them until correlation can distinguish scope metadata from a real message
+                // such as `logger.LogInformation("=> started")`.
+                pending.body += bodyLine;
+                if (pending.hasNonScopeBodyLine || !bodyLine.startsWith('=> ')) {
+                    pending.bodyWithoutLeadingScopes += bodyLine;
+                    pending.hasNonScopeBodyLine = true;
                 }
                 pending.hasBodyLine = true;
                 return;
@@ -178,10 +186,12 @@ export class AppHostLogOutputCoordinator {
             this._pendingRecords.set(category, {
                 record: multilineHeader,
                 body: '',
+                bodyWithoutLeadingScopes: '',
                 raw: line,
                 category,
                 allowsContinuation: true,
-                hasBodyLine: false
+                hasBodyLine: false,
+                hasNonScopeBodyLine: false
             });
             return;
         }
@@ -196,10 +206,12 @@ export class AppHostLogOutputCoordinator {
                     singleLine: true
                 },
                 body: singleLineRecord.body,
+                bodyWithoutLeadingScopes: singleLineRecord.body,
                 raw: line,
                 category,
                 allowsContinuation: false,
-                hasBodyLine: true
+                hasBodyLine: true,
+                hasNonScopeBodyLine: true
             });
             return;
         }
@@ -215,11 +227,9 @@ export class AppHostLogOutputCoordinator {
 
         this._pendingRecords.delete(category);
 
-        const record = createPendingRecord(pending);
-        if (!record) {
-            this.emitFallback(pending.raw, pending.category, outputs);
-            return;
-        }
+        const candidates = createPendingRecords(pending);
+        const record = candidates.find(candidate => this.hasCorrelatedTwin(candidate, 'consoleLogger'))
+            ?? candidates[0];
 
         const output = this.correlate(record, 'consoleLogger');
         if (output) {
@@ -244,8 +254,8 @@ export class AppHostLogOutputCoordinator {
                 return true;
             }
 
-            const record = parseDebugLoggerRecord(pending.raw);
-            if (startsUnrelatedDebuggerOutput(line) || record && this.hasCorrelatedTwin(record, 'debugLogger')) {
+            if (startsUnrelatedDebuggerOutput(line)
+                || !isDebugLoggerContinuation(line)) {
                 this.flushPendingDebugRecord(category, outputs);
                 return false;
             }
@@ -473,21 +483,20 @@ function createBackchannelRecord(entry: AppHostLogEntry): LogRecord {
         categoryName: escapeCategoryControlCharacters(entry.categoryName),
         logLevel: entry.logLevel,
         eventId: entry.eventId,
-        body: normalizeRecordText(entry.exception
-            ? `${entry.message}\n${entry.exception}`
-            : entry.message)
+        body: normalizeRecordText(joinRecordBody(entry.message, entry.exception))
     };
 }
 
-function createPendingRecord(pending: PendingConsoleRecord): LogRecord | undefined {
-    if (!pending.hasBodyLine) {
-        return undefined;
-    }
-
-    return {
+function createPendingRecords(pending: PendingConsoleRecord): LogRecord[] {
+    const fullBodyRecord = {
         ...pending.record,
         body: normalizeRecordText(pending.body)
     };
+    const bodyWithoutLeadingScopes = normalizeRecordText(pending.bodyWithoutLeadingScopes);
+
+    return bodyWithoutLeadingScopes === fullBodyRecord.body
+        ? [fullBodyRecord]
+        : [fullBodyRecord, { ...pending.record, body: bodyWithoutLeadingScopes }];
 }
 
 const consoleLoggerTimestampPrefix =
@@ -495,7 +504,12 @@ const consoleLoggerTimestampPrefix =
 const multilineConsoleLoggerHeaderRegex = new RegExp(
     String.raw`^${consoleLoggerTimestampPrefix}(trce|dbug|info|warn|fail|crit): (.*)\[(-?\d+)\](?:\r\n|\r|\n)$`);
 const singleLineConsoleLoggerRecordRegex = new RegExp(
-    String.raw`^${consoleLoggerTimestampPrefix}(trce|dbug|info|warn|fail|crit): (.*)\[(-?\d+)\] (.*?)(?:\r\n|\r|\n)?$`);
+    String.raw`^${consoleLoggerTimestampPrefix}(trce|dbug|info|warn|fail|crit): (.*?)\[(-?\d+)\] (.*?)(?:\r\n|\r|\n)?$`);
+const debugLoggerCategoryPattern = String.raw`[A-Za-z_]\w*(?:\.\w+)+`;
+const debugLoggerRecordRegex = new RegExp(
+    String.raw`^(${debugLoggerCategoryPattern})(?:\[(-?\d+)\])?: (Trace|Debug|Information|Warning|Error|Critical): ([\s\S]*)$`);
+const debugLoggerHeaderRegex = new RegExp(
+    String.raw`^${debugLoggerCategoryPattern}(?:\[-?\d+\])?: (Trace|Debug|Information|Warning|Error|Critical): .*(?:\r\n|\r|\n)?$`);
 
 function parseMultilineConsoleLoggerHeader(line: string): Omit<LogRecord, 'body'> | undefined {
     // SimpleConsoleFormatter's default multiline record begins as:
@@ -540,7 +554,7 @@ function parseDebugLoggerRecord(output: string): LogRecord | undefined {
     // It doesn't include the event ID, so correlation treats a missing ID as a wildcard
     // while still requiring category, level, and the complete normalized body to match.
     const normalized = normalizeRecordText(output.replace(/(?:\r\n|\r|\n)$/, ''));
-    const match = /^(.+?)(?:\[(-?\d+)\])?: (Trace|Debug|Information|Warning|Error|Critical): ([\s\S]*)$/.exec(normalized);
+    const match = debugLoggerRecordRegex.exec(normalized);
     if (!match) {
         return undefined;
     }
@@ -550,12 +564,26 @@ function parseDebugLoggerRecord(output: string): LogRecord | undefined {
         categoryName: escapeCategoryControlCharacters(match[1]),
         logLevel: match[3] as AppHostLogLevel,
         eventId: match[2] === undefined ? undefined : Number(match[2]),
-        body: normalizeRecordText(exception ? `${message}\n${exception}` : message)
+        body: normalizeRecordText(joinRecordBody(message, exception))
     };
 }
 
 function isDebugLoggerHeader(line: string): boolean {
-    return /^.+?(?:\[-?\d+\])?: (Trace|Debug|Information|Warning|Error|Critical): .*(?:\r\n|\r|\n)?$/.test(line);
+    return debugLoggerHeaderRegex.test(line);
+}
+
+function isDebugLoggerContinuation(line: string): boolean {
+    const content = line.replace(/(?:\r\n|\r|\n)$/, '');
+    const trimmedLine = content.trim();
+
+    // DebugLogger continuation lines are ambiguous with arbitrary Debug.WriteLine output.
+    // Continue only shapes that are part of an exception or visibly indented so an unrelated
+    // console line cannot change the pending record's correlation identity.
+    return !content
+        || /^\s/.test(content)
+        || isDebugLoggerExceptionStart(trimmedLine)
+        || /^---> /.test(trimmedLine)
+        || /^--- End of /.test(trimmedLine);
 }
 
 function startsUnrelatedDebuggerOutput(line: string): boolean {
@@ -571,21 +599,20 @@ function startsUnrelatedDebuggerOutput(line: string): boolean {
 
 function splitMessageAndException(value: string): { message: string; exception?: string } {
     const lines = value.replace(/\r\n|\r/g, '\n').split('\n');
-    const exceptionIndex = lines.findIndex(line =>
-        /^(?:[A-Za-z_][\w`]*(?:\.[A-Za-z_][\w`]*)*(?:Exception|Error)(?: \([^)]*\))?:|Unhandled exception\.)/.test(line));
+    const exceptionIndex = lines.findIndex((line, index) =>
+        index > 0 && lines[index - 1] === '' && isDebugLoggerExceptionStart(line));
     if (exceptionIndex < 0) {
         return { message: value };
     }
 
-    const messageLines = lines.slice(0, exceptionIndex);
-    if (messageLines.at(-1) === '') {
-        messageLines.pop();
-    }
-
     return {
-        message: messageLines.join('\n'),
+        message: lines.slice(0, exceptionIndex - 1).join('\n'),
         exception: lines.slice(exceptionIndex).join('\n')
     };
+}
+
+function isDebugLoggerExceptionStart(line: string): boolean {
+    return /^(?:[A-Za-z_][\w`]*(?:\.[A-Za-z_][\w`]*)*(?:Exception|Error)(?: \([^)]*\))?:|Unhandled exception\.)/.test(line);
 }
 
 function isConsoleLoggerContinuation(line: string): boolean {
@@ -593,8 +620,20 @@ function isConsoleLoggerContinuation(line: string): boolean {
     return content.startsWith('      ');
 }
 
+function isWindowsBareLfContinuation(pending: PendingConsoleRecord): boolean {
+    // On Windows SimpleConsoleFormatter only indents Environment.NewLine (`\r\n`).
+    // A bare LF embedded in the message therefore leaves the following line unindented.
+    return pending.raw.includes('\r\n')
+        && pending.raw.endsWith('\n')
+        && !pending.raw.endsWith('\r\n');
+}
+
 function removeConsoleIndentation(line: string): string {
     return line.slice(6).replace(/\r\n|\r/g, '\n');
+}
+
+function normalizeConsoleLine(line: string): string {
+    return line.replace(/\r\n|\r/g, '\n');
 }
 
 function findLastCompletedLineBreak(text: string): number {
@@ -644,6 +683,12 @@ function formatRecord(raw: string, logLevel: AppHostLogLevel, category: 'stdout'
 
 function normalizeRecordText(value: string): string {
     return value.replace(/\r\n|\r/g, '\n').replace(/[ \t\n]+$/, '');
+}
+
+function joinRecordBody(message: string, exception?: string | null): string {
+    return [message, exception]
+        .filter((part): part is string => !!part)
+        .join('\n');
 }
 
 function escapeCategoryControlCharacters(value: string): string {

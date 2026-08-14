@@ -148,6 +148,64 @@ suite('AppHost log output coordinator', () => {
         assert.deepStrictEqual(coordinator.flush(), []);
     });
 
+    test('replays a captured AppHost transcript with one output per log record', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const outputs: AppHostParentOutput[] = [];
+        const append = (items: AppHostParentOutput[]) => outputs.push(...items);
+        const appendEntry = (entry: AppHostLogEntry) => {
+            const output = coordinator.handleBackchannelEntry(entry);
+            if (output) {
+                outputs.push(output);
+            }
+        };
+
+        appendEntry(createEntry({ sequenceNumber: 1, message: 'Application started.' }));
+        append(coordinator.handleDebugAdapterOutput('info: Example.Cate', 'stdout'));
+        append(coordinator.handleDebugAdapterOutput('gory[7]\r\n      Application started.\r\n', 'stdout'));
+        append(coordinator.handleDebugAdapterOutput('Example.Category: Information: Application started.\r\n', 'console'));
+
+        append(coordinator.handleDebugAdapterOutput('Example.Category: Warning: Port is busy.\r\n', 'console'));
+        appendEntry(createEntry({ sequenceNumber: 2, logLevel: 'Warning', message: 'Port is busy.' }));
+        append(coordinator.handleDebugAdapterOutput('warn: Example.Category[7]\r\n      Port is busy.\r\n', 'stdout'));
+
+        appendEntry(createEntry({
+            sequenceNumber: 3,
+            logLevel: 'Error',
+            message: 'Request failed.',
+            exception: 'System.InvalidOperationException: boom\n   at Example.Run()'
+        }));
+        append(coordinator.handleDebugAdapterOutput(
+            'fail: Example.Category[7]\r\n'
+            + '      Request failed.\r\n'
+            + '      System.InvalidOperationException: boom\r\n'
+            + '         at Example.Run()\r\n',
+            'stdout'));
+        append(coordinator.handleDebugAdapterOutput(
+            'Example.Category: Error: Request failed.\r\n'
+            + '\r\n'
+            + 'System.InvalidOperationException: boom\r\n'
+            + '   at Example.Run()\r\n',
+            'console'));
+        append(coordinator.flush());
+
+        assert.deepStrictEqual(outputs, [
+            {
+                output: 'Example.Category: Information: Application started.\n',
+                category: 'stdout'
+            },
+            {
+                output: '\x1b[33mExample.Category: Warning: Port is busy.\x1b[0m\n',
+                category: 'stdout'
+            },
+            {
+                output: 'Example.Category: Error: Request failed.\n'
+                    + 'System.InvalidOperationException: boom\n'
+                    + '   at Example.Run()\n',
+                category: 'stderr'
+            }
+        ]);
+    });
+
     test('matches single-line SimpleConsoleFormatter output with an exception', () => {
         const coordinator = new AppHostLogOutputCoordinator();
         const entry = createEntry({
@@ -165,6 +223,32 @@ suite('AppHost log output coordinator', () => {
             category: 'stderr'
         });
         assert.deepStrictEqual(coordinator.flush(), []);
+    });
+
+    test('matches a single-line message containing an event-id-shaped value', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const entry = createEntry({ message: 'Processing order [42] now' });
+
+        assert.deepStrictEqual(coordinator.handleBackchannelEntry(entry), {
+            output: 'Example.Category: Information: Processing order [42] now\n',
+            category: 'stdout'
+        });
+        assert.deepStrictEqual(
+            renderConsole(coordinator, 'info: Example.Category[7] Processing order [42] now\n', 'stdout'),
+            []);
+    });
+
+    test('matches Windows multiline output containing a bare LF', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const entry = createEntry({ message: 'first\nsecond' });
+
+        assert.deepStrictEqual(coordinator.handleBackchannelEntry(entry), {
+            output: 'Example.Category: Information: first\nsecond\n',
+            category: 'stdout'
+        });
+        assert.deepStrictEqual(
+            renderConsole(coordinator, 'info: Example.Category[7]\r\n      first\nsecond\r\n', 'stdout'),
+            []);
     });
 
     test('matches timestamped multiline output with scopes', () => {
@@ -185,9 +269,21 @@ suite('AppHost log output coordinator', () => {
         assert.deepStrictEqual(coordinator.flush(), []);
     });
 
+    test('keeps a message that begins with the scope marker', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(coordinator.handleBackchannelEntry(createEntry({ message: '=> started' })), {
+            output: 'Example.Category: Information: => started\n',
+            category: 'stdout'
+        });
+        assert.deepStrictEqual(
+            renderConsole(coordinator, 'info: Example.Category[7]\n      => started\n', 'stdout'),
+            []);
+    });
+
     test('deduplicates an empty log message', () => {
         const coordinator = new AppHostLogOutputCoordinator();
-        const raw = 'info: Example.Category[7]\n      \n';
+        const raw = 'info: Example.Category[7]\n';
 
         assert.deepStrictEqual(coordinator.handleDebugAdapterOutput(raw, 'stdout'), []);
         assert.deepStrictEqual(coordinator.handleBackchannelEntry(createEntry({ message: '' })), {
@@ -195,6 +291,26 @@ suite('AppHost log output coordinator', () => {
             category: 'stdout'
         });
         assert.deepStrictEqual(coordinator.flush(), []);
+    });
+
+    test('does not add a leading blank line to an empty message with an exception', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const entry = createEntry({
+            logLevel: 'Error',
+            message: '',
+            exception: 'System.InvalidOperationException: boom'
+        });
+
+        assert.deepStrictEqual(coordinator.handleBackchannelEntry(entry), {
+            output: 'Example.Category: Error: System.InvalidOperationException: boom\n',
+            category: 'stderr'
+        });
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Error: \n\nSystem.InvalidOperationException: boom\n',
+                'console'),
+            []);
     });
 
     test('correlates DebugLogger output and preserves fallback filtering elsewhere', () => {
@@ -206,6 +322,46 @@ suite('AppHost log output coordinator', () => {
         assert.deepStrictEqual(
             renderConsole(coordinator, 'Example.Category[7]: Error: Failed.\n', 'console'),
             [{ output: 'Example.Category: Error: Failed.\n', category: 'stderr' }]);
+    });
+
+    test('does not parse arbitrary console text as a DebugLogger category', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(renderConsole(coordinator, 'Status: Error: connection refused\n', 'console'), []);
+        assert.deepStrictEqual(renderConsole(coordinator, 'step 3: Debug: cache miss\n', 'console'), []);
+    });
+
+    test('does not append unrelated console output to a pending DebugLogger record', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Information: Logged.\nprocessing\n',
+                'console'),
+            [{
+                output: 'Example.Category: Information: Logged.\n',
+                category: 'stdout'
+            }]);
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message: 'Logged.' })),
+            undefined);
+    });
+
+    test('keeps an exception-shaped one-line DebugLogger message intact', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const expected = {
+            output: 'Example.Category: Error: ValidationError: invalid input\n',
+            category: 'stderr' as const
+        };
+
+        assert.deepStrictEqual(
+            renderConsole(coordinator, 'Example.Category: Error: ValidationError: invalid input\n', 'console'),
+            [expected]);
+        assert.strictEqual(coordinator.handleBackchannelEntry(createEntry({
+            logLevel: 'Error',
+            message: 'ValidationError: invalid input'
+        })), undefined);
     });
 
     test('does not parse arbitrary text before a ConsoleLogger level token', () => {
