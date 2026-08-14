@@ -541,9 +541,11 @@ internal static class AtsContextFilter
     private static HashSet<string> GetKnownAssemblyNames(AtsContext context, HashSet<string> assemblyNames)
     {
         var knownAssemblyNames = new HashSet<string>(assemblyNames, StringComparer.OrdinalIgnoreCase);
+        var capabilityIds = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var capability in context.Capabilities)
         {
+            capabilityIds.Add(capability.CapabilityId);
             AddAssemblyNameFromId(knownAssemblyNames, capability.CapabilityId);
         }
 
@@ -569,14 +571,20 @@ internal static class AtsContextFilter
             AddAssemblyName(knownAssemblyNames, exportedValue.OwningAssemblyName);
         }
 
-        foreach (var method in context.Methods.Values)
+        foreach (var (capabilityId, method) in context.Methods)
         {
-            AddAssemblyName(knownAssemblyNames, method.DeclaringType?.Assembly);
+            if (capabilityIds.Contains(capabilityId))
+            {
+                AddAssemblyName(knownAssemblyNames, method.DeclaringType?.Assembly);
+            }
         }
 
-        foreach (var property in context.Properties.Values)
+        foreach (var (capabilityId, property) in context.Properties)
         {
-            AddAssemblyName(knownAssemblyNames, property.DeclaringType?.Assembly);
+            if (capabilityIds.Contains(capabilityId))
+            {
+                AddAssemblyName(knownAssemblyNames, property.DeclaringType?.Assembly);
+            }
         }
 
         return knownAssemblyNames;

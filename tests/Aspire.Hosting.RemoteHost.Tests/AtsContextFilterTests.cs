@@ -71,6 +71,37 @@ public class AtsContextFilterTests
         Assert.Empty(AtsContextFilter.FilterByExportingAssemblies(context, ["contoso.not.loaded"]).HandleTypes);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TryResolveCanonicalAssemblyName_IgnoresRegistryEntriesForRemovedCapabilities(bool useProperty)
+    {
+        var context = new AtsContext
+        {
+            Capabilities = [],
+            HandleTypes = [],
+            DtoTypes = [],
+            EnumTypes = []
+        };
+
+        string assemblyName;
+        if (useProperty)
+        {
+            var property = typeof(AtsContext).GetProperty(nameof(AtsContext.Capabilities))!;
+            context.Properties["removed"] = property;
+            assemblyName = property.DeclaringType!.Assembly.GetName().Name!;
+        }
+        else
+        {
+            var method = typeof(AtsContextFilterTests).GetMethod(nameof(TryResolveCanonicalAssemblyName_ReportsAnUnmatchedName))!;
+            context.Methods["removed"] = method;
+            assemblyName = method.DeclaringType!.Assembly.GetName().Name!;
+        }
+
+        Assert.False(AtsContextFilter.TryResolveCanonicalAssemblyName(context, assemblyName, out var resolvedName));
+        Assert.Null(resolvedName);
+    }
+
     /// <summary>Casing variants exercised by <see cref="TryResolveCanonicalAssemblyName_ReturnsTheSpellingTheAssemblyCarries"/>.</summary>
     public enum NameCasing
     {
