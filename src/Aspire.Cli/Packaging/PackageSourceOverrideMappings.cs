@@ -44,7 +44,7 @@ internal static class PackageSourceOverrideMappings
 
     public static bool SourcesMatch(string left, string right, IEnvironment environment)
     {
-        if (string.Equals(left, right, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(left, right, StringComparison.Ordinal))
         {
             return true;
         }
@@ -62,7 +62,7 @@ internal static class PackageSourceOverrideMappings
                     rightUri,
                     UriComponents.SchemeAndServer | UriComponents.PathAndQuery,
                     UriFormat.Unescaped,
-                    StringComparison.OrdinalIgnoreCase) == 0;
+                    StringComparison.Ordinal) == 0;
         }
 
         if (Uri.TryCreate(left, UriKind.Absolute, out var leftFileUri) && leftFileUri.IsFile)

@@ -70,4 +70,41 @@ public class PackageSourceOverrideMappingsTests(ITestOutputHelper outputHelper)
 
         Assert.True(result);
     }
+
+    [Fact]
+    public void SourcesMatch_LocalPathsDifferOnlyByCaseOnLinux_ReturnsFalse()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var upperCaseSource = Path.Combine(workspace.WorkspaceRoot.FullName, "Release");
+        var lowerCaseSource = Path.Combine(workspace.WorkspaceRoot.FullName, "release");
+
+        var result = PackageSourceOverrideMappings.SourcesMatch(
+            upperCaseSource,
+            lowerCaseSource,
+            TestEnvironment.CreateLinux());
+
+        Assert.False(result);
+    }
+
+    [Fact]
+    public void SourcesMatch_HttpPathsDifferOnlyByCase_ReturnsFalse()
+    {
+        var result = PackageSourceOverrideMappings.SourcesMatch(
+            "https://packages.example/feeds/Release/index.json",
+            "https://packages.example/feeds/release/index.json",
+            TestEnvironment.CreateLinux());
+
+        Assert.False(result);
+    }
+
+    [Fact]
+    public void SourcesMatch_HttpSchemeAndHostDifferOnlyByCase_ReturnsTrue()
+    {
+        var result = PackageSourceOverrideMappings.SourcesMatch(
+            "HTTPS://PACKAGES.EXAMPLE/feeds/release/index.json",
+            "https://packages.example/feeds/release/index.json",
+            TestEnvironment.CreateLinux());
+
+        Assert.True(result);
+    }
 }
