@@ -84,21 +84,38 @@ internal sealed class AssemblyLoader
 
         foreach (var assembly in _packageProbeManifest.ManagedAssemblies)
         {
-            if (assembly.Culture is not null ||
-                !TryGetPackageIdentityFromAssetPath(assembly.Path, out var pathPackageId, out var pathPackageVersion) ||
-                !string.Equals(pathPackageId, packageId, StringComparison.OrdinalIgnoreCase) ||
-                !string.Equals(pathPackageVersion, packageVersion, StringComparison.OrdinalIgnoreCase))
+            if (assembly.Culture is not null)
             {
                 continue;
             }
 
             if (assembly.PackageId is not null &&
-                string.Equals(assembly.PackageId, packageId, StringComparison.OrdinalIgnoreCase))
+                assembly.PackageVersion is not null)
             {
-                canonicalPackageId ??= assembly.PackageId;
+                if (string.Equals(assembly.PackageId, packageId, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(assembly.PackageVersion, packageVersion, StringComparison.OrdinalIgnoreCase))
+                {
+                    canonicalPackageId ??= assembly.PackageId;
+                    names.Add(assembly.Name);
+                }
+
+                continue;
             }
 
-            names.Add(assembly.Name);
+            // Older manifests do not record package versions, so package ownership must be
+            // recovered from the conventional global-packages path when possible.
+            if (TryGetPackageIdentityFromAssetPath(assembly.Path, out var pathPackageId, out var pathPackageVersion) &&
+                string.Equals(pathPackageId, packageId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(pathPackageVersion, packageVersion, StringComparison.OrdinalIgnoreCase))
+            {
+                if (assembly.PackageId is not null &&
+                    string.Equals(assembly.PackageId, packageId, StringComparison.OrdinalIgnoreCase))
+                {
+                    canonicalPackageId ??= assembly.PackageId;
+                }
+
+                names.Add(assembly.Name);
+            }
         }
 
         assemblyNames = names.ToList();

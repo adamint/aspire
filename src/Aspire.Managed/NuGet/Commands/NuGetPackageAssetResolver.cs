@@ -28,6 +28,8 @@ internal sealed class NuGetPackageAsset
 {
     public required string PackageId { get; init; }
 
+    public required string PackageVersion { get; init; }
+
     public required string SourcePath { get; init; }
 
     public required string RelativePath { get; init; }
@@ -153,10 +155,10 @@ internal static class NuGetPackageAssetResolver
         // Synthetic restores can leave the base lib assembly in the target even when the package
         // contains a compatible portable runtime asset. Prefer the runtime asset for probing.
         var runtimeAssemblyOverrides = GetRuntimeAssemblyOverrides(packageLibrary, targetFramework, runtimeIdentifiers);
-        AddRuntimeAssemblies(assets, libraryName, library.RuntimeAssemblies, packagePath, runtimeAssemblyOverrides);
-        AddRuntimeTargets(assets, libraryName, library.RuntimeTargets, packagePath);
-        AddResourceAssemblies(assets, libraryName, library.ResourceAssemblies, packagePath);
-        AddNativeLibraries(assets, libraryName, library.NativeLibraries, packagePath);
+        AddRuntimeAssemblies(assets, libraryName, libraryVersion, library.RuntimeAssemblies, packagePath, runtimeAssemblyOverrides);
+        AddRuntimeTargets(assets, libraryName, libraryVersion, library.RuntimeTargets, packagePath);
+        AddResourceAssemblies(assets, libraryName, libraryVersion, library.ResourceAssemblies, packagePath);
+        AddNativeLibraries(assets, libraryName, libraryVersion, library.NativeLibraries, packagePath);
 
         return (assets, 0);
     }
@@ -164,6 +166,7 @@ internal static class NuGetPackageAssetResolver
     private static void AddRuntimeAssemblies(
         List<NuGetPackageAsset> assets,
         string packageId,
+        string packageVersion,
         IEnumerable<LockFileItem> runtimeAssemblies,
         string packagePath,
         IReadOnlyDictionary<string, string> runtimeAssemblyOverrides)
@@ -179,17 +182,18 @@ internal static class NuGetPackageAssetResolver
             if (!relativePath.StartsWith("runtimes/", StringComparison.OrdinalIgnoreCase) &&
                 runtimeAssemblyOverrides.TryGetValue(GetFileName(relativePath), out var overridePath))
             {
-                AddRuntimeAssembly(assets, packageId, packagePath, overridePath);
+                AddRuntimeAssembly(assets, packageId, packageVersion, packagePath, overridePath);
                 continue;
             }
 
-            AddRuntimeAssembly(assets, packageId, packagePath, relativePath);
+            AddRuntimeAssembly(assets, packageId, packageVersion, packagePath, relativePath);
         }
     }
 
     private static void AddRuntimeAssembly(
         List<NuGetPackageAsset> assets,
         string packageId,
+        string packageVersion,
         string packagePath,
         string relativePath)
     {
@@ -200,17 +204,17 @@ internal static class NuGetPackageAssetResolver
         }
 
         var fileName = Path.GetFileName(sourcePath);
-        AddAsset(assets, packageId, sourcePath, fileName, isManagedAssembly: IsManagedAssembly(sourcePath), isNativeLibrary: false);
+        AddAsset(assets, packageId, packageVersion, sourcePath, fileName, isManagedAssembly: IsManagedAssembly(sourcePath), isNativeLibrary: false);
 
         if (relativePath.StartsWith("runtimes/", StringComparison.OrdinalIgnoreCase))
         {
-            AddAsset(assets, packageId, sourcePath, relativePath, isManagedAssembly: IsManagedAssembly(sourcePath), isNativeLibrary: false);
+            AddAsset(assets, packageId, packageVersion, sourcePath, relativePath, isManagedAssembly: IsManagedAssembly(sourcePath), isNativeLibrary: false);
         }
 
         var xmlSourcePath = Path.ChangeExtension(sourcePath, ".xml");
         if (File.Exists(xmlSourcePath))
         {
-            AddAsset(assets, packageId, xmlSourcePath, Path.ChangeExtension(fileName, ".xml"), isManagedAssembly: false, isNativeLibrary: false);
+            AddAsset(assets, packageId, packageVersion, xmlSourcePath, Path.ChangeExtension(fileName, ".xml"), isManagedAssembly: false, isNativeLibrary: false);
         }
     }
 
@@ -314,6 +318,7 @@ internal static class NuGetPackageAssetResolver
     private static void AddRuntimeTargets(
         List<NuGetPackageAsset> assets,
         string packageId,
+        string packageVersion,
         IEnumerable<LockFileRuntimeTarget> runtimeTargets,
         string packagePath)
     {
@@ -333,6 +338,7 @@ internal static class NuGetPackageAssetResolver
             AddAsset(
                 assets,
                 packageId,
+                packageVersion,
                 sourcePath,
                 runtimeTarget.Path,
                 isManagedAssembly: string.Equals(runtimeTarget.AssetType, "runtime", StringComparison.OrdinalIgnoreCase) && IsManagedAssembly(sourcePath),
@@ -343,6 +349,7 @@ internal static class NuGetPackageAssetResolver
     private static void AddResourceAssemblies(
         List<NuGetPackageAsset> assets,
         string packageId,
+        string packageVersion,
         IEnumerable<LockFileItem> resourceAssemblies,
         string packagePath)
     {
@@ -371,6 +378,7 @@ internal static class NuGetPackageAssetResolver
             AddAsset(
                 assets,
                 packageId,
+                packageVersion,
                 sourcePath,
                 Path.Combine(locale, Path.GetFileName(sourcePath)),
                 isManagedAssembly: IsManagedAssembly(sourcePath),
@@ -382,6 +390,7 @@ internal static class NuGetPackageAssetResolver
     private static void AddNativeLibraries(
         List<NuGetPackageAsset> assets,
         string packageId,
+        string packageVersion,
         IEnumerable<LockFileItem> nativeLibraries,
         string packagePath)
     {
@@ -398,14 +407,15 @@ internal static class NuGetPackageAssetResolver
                 continue;
             }
 
-            AddAsset(assets, packageId, sourcePath, Path.GetFileName(sourcePath), isManagedAssembly: false, isNativeLibrary: true);
-            AddAsset(assets, packageId, sourcePath, nativeLib.Path, isManagedAssembly: false, isNativeLibrary: true);
+            AddAsset(assets, packageId, packageVersion, sourcePath, Path.GetFileName(sourcePath), isManagedAssembly: false, isNativeLibrary: true);
+            AddAsset(assets, packageId, packageVersion, sourcePath, nativeLib.Path, isManagedAssembly: false, isNativeLibrary: true);
         }
     }
 
     private static void AddAsset(
         List<NuGetPackageAsset> assets,
         string packageId,
+        string packageVersion,
         string sourcePath,
         string relativePath,
         bool isManagedAssembly,
@@ -415,6 +425,7 @@ internal static class NuGetPackageAssetResolver
         assets.Add(new NuGetPackageAsset
         {
             PackageId = packageId,
+            PackageVersion = packageVersion,
             SourcePath = sourcePath,
             RelativePath = NormalizeRelativePath(relativePath),
             IsManagedAssembly = isManagedAssembly,
