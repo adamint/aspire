@@ -26,6 +26,11 @@ internal interface ITemplate
     bool IsEmpty { get; }
 
     /// <summary>
+    /// Gets a value indicating whether this template owns the generated Aspire project configuration.
+    /// </summary>
+    bool OwnsAspireConfig { get; }
+
+    /// <summary>
     /// Gets a value indicating whether this template should be shown in the interactive template picker.
     /// </summary>
     bool ShowInPrompt { get; }

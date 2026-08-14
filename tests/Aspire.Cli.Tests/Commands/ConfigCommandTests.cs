@@ -110,6 +110,29 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal("bar", settings["foo"]?.ToString());
     }
 
+    [Theory]
+    [InlineData("https://user:password@example/v3/index.json")]
+    [InlineData("https://example/v3/index.json?token=secret")]
+    [InlineData("https://example/v3/index.json#fragment")]
+    [InlineData("http://bad host/feed")]
+    public async Task ConfigSetCommand_RejectsUnsafeOrMalformedNuGetSource(string source)
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<Aspire.Cli.Commands.RootCommand>();
+        var exitCode = await command.Parse($"config set nugetSource \"{source}\"").InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
+        var settingsPath = Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire", "settings.json");
+        if (File.Exists(settingsPath))
+        {
+            var settings = JsonNode.Parse(await File.ReadAllTextAsync(settingsPath))!.AsObject();
+            Assert.Null(settings["nugetSource"]);
+        }
+    }
+
     [Fact]
     public async Task DocsSourceUrls_CanBeConfiguredViaAspireConfig()
     {
@@ -792,6 +815,9 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
         // Loading configuration should succeed after normalizing the corrupted file
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
         using var provider = services.BuildServiceProvider();
+        var command = provider.GetRequiredService<Aspire.Cli.Commands.RootCommand>();
+        var result = command.Parse("config set channel daily");
+        Assert.Equal(0, await result.InvokeAsync().DefaultTimeout());
 
         // Verify the file was normalized - flat key should be gone, existing nested value preserved
         var json = await File.ReadAllTextAsync(settingsPath);

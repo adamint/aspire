@@ -165,6 +165,14 @@ namespace Aspire.Cli.Resources {
             }
         }
 
+        public static string InvalidSource
+        {
+            get
+            {
+                return ResourceManager.GetString("InvalidSource", resourceCulture);
+            }
+        }
+
         public static string AllArgumentDescription
         {
             get

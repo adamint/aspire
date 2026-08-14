@@ -1390,6 +1390,56 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task NewCommandWithGlobalSourceDoesNotPersistSourceInProjectConfig()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        const string globalSource = "https://global.example/v3/index.json";
+        var globalSettingsDirectory = workspace.CreateDirectory(AspireJsonConfiguration.SettingsFolder);
+        await File.WriteAllTextAsync(
+            Path.Combine(globalSettingsDirectory.FullName, "settings.global.json"),
+            $$"""
+            {
+              "nugetSource": "{{globalSource}}"
+            }
+            """);
+
+        string? observedSource = null;
+        var services = CreateServiceCollection(workspace);
+        services.AddSingleton<IScaffoldingService>(new TestScaffoldingService
+        {
+            ScaffoldAsyncCallback = (context, _) =>
+            {
+                observedSource = context.PackageSourceOverride;
+                File.WriteAllText(Path.Combine(context.TargetDirectory.FullName, "apphost.mts"), "// test apphost");
+                File.WriteAllText(
+                    Path.Combine(context.TargetDirectory.FullName, AspireConfigFile.FileName),
+                    """
+                    {
+                      "appHost": {
+                        "path": "apphost.mts",
+                        "language": "typescript/nodejs"
+                      }
+                    }
+                    """);
+                return Task.FromResult(true);
+            }
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var command = provider.GetRequiredService<NewCommand>();
+        var exitCode = await command.Parse(
+            "new aspire-empty --name TestApp --output ./output --language typescript --localhost-tld false --suppress-agent-init")
+            .InvokeAsync()
+            .DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Equal(globalSource, observedSource);
+        var config = JsonNode.Parse(
+            await File.ReadAllTextAsync(Path.Combine(workspace.WorkspaceRoot.FullName, "output", AspireConfigFile.FileName)))!.AsObject();
+        Assert.False(config.ContainsKey(AspireConfigFile.NuGetSourceKey));
+    }
+
+    [Fact]
     public async Task NewCommandWithConfiguredSourceMigratesLegacyTemplateConfigBeforePersistingSource()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
@@ -1526,7 +1576,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         const string configuredSource = "https://configured.example/v3/index.json";
-        const string explicitSource = "https://explicit.example/v3/index.json";
+        const string explicitSource = "https://explicit.example/v3/index.json?token=secret";
         string? discoveryAspireSource = null;
         string? discoveryFallbackSource = null;
 
@@ -1705,7 +1755,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
     [InlineData("https://user:token@example.invalid/v3/index.json")]
     [InlineData("https://example.invalid/v3/index.json?sig=token")]
     [InlineData("https://example.invalid/v3/index.json#token")]
-    public async Task NewCommandWithCredentialBearingHttpSourceFailsBeforeCreatingProject(string sourceOverride)
+    public async Task NewCommandWithConfiguredCredentialBearingHttpSourceFailsBeforeCreatingProject(string sourceOverride)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var scaffoldingInvoked = false;
@@ -1715,6 +1765,14 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         {
             options.InteractionServiceFactory = _ => interactionService = new TestInteractionService();
         });
+
+        await File.WriteAllTextAsync(
+            Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName),
+            $$"""
+            {
+              "nugetSource": "{{sourceOverride}}"
+            }
+            """);
 
         services.AddSingleton<IScaffoldingService>(new TestScaffoldingService
         {
@@ -1727,7 +1785,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
 
         using var provider = services.BuildServiceProvider();
         var command = provider.GetRequiredService<NewCommand>();
-        var result = command.Parse($"new aspire-empty --name TestApp --output ./output --language typescript --localhost-tld false --suppress-agent-init --source {sourceOverride}");
+        var result = command.Parse("new aspire-empty --name TestApp --output ./output --language typescript --localhost-tld false --suppress-agent-init");
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 

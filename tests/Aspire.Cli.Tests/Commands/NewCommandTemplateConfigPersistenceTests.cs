@@ -83,10 +83,10 @@ public class NewCommandTemplateConfigPersistenceTests(ITestOutputHelper outputHe
         PrDogfoodNewTemplateCase.CliConfig(KnownTemplateId.PythonStarter, ["--localhost-tld", "false", "--use-redis-cache", "false"]),
         PrDogfoodNewTemplateCase.CliConfig(KnownTemplateId.GoStarter, ["--localhost-tld", "false"]),
         PrDogfoodNewTemplateCase.DotNet("aspire-starter", ["--localhost-tld", "false", "--use-redis-cache", "false"]),
-        PrDogfoodNewTemplateCase.DotNet("aspire-ts-cs-starter", ["--localhost-tld", "false", "--use-redis-cache", "false"]),
+        PrDogfoodNewTemplateCase.DotNetWithoutAspireConfig("aspire-ts-cs-starter", ["--localhost-tld", "false", "--use-redis-cache", "false"]),
         PrDogfoodNewTemplateCase.DotNet(KnownTemplateId.DotNetEmptyAppHost, ["--localhost-tld", "false"]),
         PrDogfoodNewTemplateCase.DotNet("aspire-apphost", ["--localhost-tld", "false"]),
-        PrDogfoodNewTemplateCase.DotNet("aspire-servicedefaults"),
+        PrDogfoodNewTemplateCase.DotNetWithoutAspireConfig("aspire-servicedefaults"),
     ];
 
     private static readonly PrDogfoodNewTemplateExclusion[] s_prDogfoodNewTemplateExclusions =
@@ -328,6 +328,11 @@ public class NewCommandTemplateConfigPersistenceTests(ITestOutputHelper outputHe
                 Assert.Contains(packagesDirectory.FullName.Replace('\\', '/'), dotNetNuGetConfig);
                 break;
 
+            case PrDogfoodNewTemplateContract.NoAspireConfig:
+                Assert.Equal((int)CliExitCodes.Success, exitCode);
+                Assert.False(File.Exists(Path.Combine(outputDirectory, AspireConfigFile.FileName)));
+                break;
+
             default:
                 throw new InvalidOperationException($"Unknown template contract: {testCase.Contract}");
         }
@@ -552,6 +557,11 @@ public class NewCommandTemplateConfigPersistenceTests(ITestOutputHelper outputHe
             return new(templateId, LanguageId: null, PrDogfoodNewTemplateContract.DotNetTemplate, extraArguments ?? []);
         }
 
+        public static PrDogfoodNewTemplateCase DotNetWithoutAspireConfig(string templateId, string[]? extraArguments = null)
+        {
+            return new(templateId, LanguageId: null, PrDogfoodNewTemplateContract.NoAspireConfig, extraArguments ?? []);
+        }
+
         public override string ToString()
         {
             return CoverageKey;
@@ -566,6 +576,7 @@ public class NewCommandTemplateConfigPersistenceTests(ITestOutputHelper outputHe
     {
         CSharpEmptyAppHost,
         AspireConfig,
-        DotNetTemplate
+        DotNetTemplate,
+        NoAspireConfig
     }
 }

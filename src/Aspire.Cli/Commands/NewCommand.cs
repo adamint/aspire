@@ -481,7 +481,13 @@ internal sealed class NewCommand : BaseCommand
         var sourceIsExplicit = !string.IsNullOrWhiteSpace(parseResult.GetValue(s_sourceOption));
         var sourceResolution = await ResolveSourceAsync(parseResult, cancellationToken).ConfigureAwait(false);
         var source = sourceResolution?.Value;
-        if (!string.IsNullOrWhiteSpace(source) && PackageSourceOverrideMappings.HasCredentialMaterial(source))
+        if (!string.IsNullOrWhiteSpace(source) &&
+            PackageSourceOverrideMappings.IsMalformedUriSource(source))
+        {
+            InteractionService.DisplayError(NewCommandStrings.InvalidSource);
+            return CommandResult.Failure(CliExitCodes.InvalidCommand);
+        }
+        if (!sourceIsExplicit && !string.IsNullOrWhiteSpace(source) && PackageSourceOverrideMappings.HasCredentialMaterial(source))
         {
             InteractionService.DisplayError(NewCommandStrings.SourceWithCredentialsCannotBePersisted);
             return CommandResult.Failure(CliExitCodes.InvalidCommand);
@@ -580,6 +586,7 @@ internal sealed class NewCommand : BaseCommand
             Name = parseResult.GetValue(s_nameOption),
             Output = parseResult.GetValue(s_outputOption),
             Source = source,
+            SourceIsExplicit = sourceIsExplicit,
             Version = version,
             Channel = resolvedChannelName,
             Language = selectedLanguageId
@@ -590,7 +597,10 @@ internal sealed class NewCommand : BaseCommand
         // extraction. Ensure the bundle is ready instead of relying on best-effort prefetching.
         if (templateResult.ExitCode == CliExitCodes.Success)
         {
-            if (!sourceIsExplicit && !string.IsNullOrWhiteSpace(source))
+            if (!sourceIsExplicit &&
+                sourceResolution?.IsGlobal is not true &&
+                !string.IsNullOrWhiteSpace(source) &&
+                template.OwnsAspireConfig)
             {
                 var outputPath = templateResult.OutputPath ?? ExecutionContext.WorkingDirectory.FullName;
                 var configPath = Path.Combine(outputPath, AspireConfigFile.FileName);

@@ -123,6 +123,22 @@ public class PackageSourceOverrideMappingsTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public void Create_AllowsCredentialMaterialWhenSourceIsExplicit()
+    {
+        const string source = "https://user:password@example.test/v3/index.json?token=secret";
+
+        var mappings = PackageSourceOverrideMappings.Create(
+            source,
+            requestedChannel: null,
+            nugetServiceIndexOverride: null,
+            allowCredentialMaterial: true);
+
+        Assert.Equal(
+            [source, PackageSources.NuGetOrg],
+            mappings.Select(static mapping => mapping.Source));
+    }
+
+    [Fact]
     [PlatformSpecific(TestPlatforms.Windows)]
     public void ExtendedLocalDrivePath_IsNotRebasedDuringResolutionOrValidation()
     {

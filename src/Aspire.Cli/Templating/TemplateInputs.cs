@@ -24,6 +24,11 @@ internal sealed class TemplateInputs
     public string? Source { get; init; }
 
     /// <summary>
+    /// Gets a value indicating whether <see cref="Source"/> came from an explicit one-shot command option.
+    /// </summary>
+    public bool SourceIsExplicit { get; init; }
+
+    /// <summary>
     /// Gets the version (from --version option).
     /// </summary>
     public string? Version { get; init; }

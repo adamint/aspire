@@ -547,6 +547,27 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task TryCreateTemporaryNuGetConfig_WithCredentialBearingPackageSourceOverride_AllowsTransientConfig()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        const string packageSourceOverride = "https://example.test/v3/index.json?token=secret";
+        var packagingService = new TestPackagingService
+        {
+            GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>([])
+        };
+        var server = CreateServerWithPackagingService(workspace, packagingService);
+
+        using var result = await InvokeTryCreateTemporaryNuGetConfigAsync(
+            server,
+            requestedChannel: null,
+            packageSourceOverride: packageSourceOverride);
+
+        Assert.NotNull(result);
+        var doc = XDocument.Load(result.ConfigFile.FullName);
+        Assert.Equal(["Aspire*"], GetPackagePatternsForSource(doc, packageSourceOverride));
+    }
+
+    [Fact]
     public async Task TryCreateTemporaryNuGetConfig_WithPackageSourceOverrideWithoutRequestedChannel_DoesNotMergeExplicitChannelAspireMappings()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);

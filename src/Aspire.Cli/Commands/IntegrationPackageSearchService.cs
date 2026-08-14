@@ -142,7 +142,10 @@ internal sealed class IntegrationPackageSearchService(
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
             if (configuredSource is null &&
-                !string.Equals(executionContext.WorkingDirectory.FullName, workingDirectory.FullName, StringComparison.OrdinalIgnoreCase))
+                !string.Equals(
+                    executionContext.WorkingDirectory.FullName,
+                    workingDirectory.FullName,
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
             {
                 configuredSource = await configurationService.GetLocalConfigurationFromDirectoryWithOriginAsync(
                     AspireConfigFile.NuGetSourceKey,
@@ -185,7 +188,12 @@ internal sealed class IntegrationPackageSearchService(
             return null;
         }
 
-        if (PackageSourceOverrideMappings.HasCredentialMaterial(packageSource.ResolvedValue))
+        if (PackageSourceOverrideMappings.IsMalformedUriSource(packageSource.RawValue))
+        {
+            return AddCommandStrings.InvalidSource;
+        }
+
+        if (!packageSource.IsExplicit && PackageSourceOverrideMappings.HasCredentialMaterial(packageSource.RawValue))
         {
             return AddCommandStrings.SourceWithCredentialsNotSupported;
         }

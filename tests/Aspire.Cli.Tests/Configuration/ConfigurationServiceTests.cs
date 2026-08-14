@@ -308,6 +308,7 @@ public class ConfigurationServiceTests(ITestOutputHelper outputHelper)
         Assert.NotNull(result);
         Assert.Equal("feed", result.Value);
         Assert.Equal(new FileInfo(settingsFilePath).Directory!.FullName, result.BaseDirectory.FullName);
+        Assert.False(result.IsGlobal);
     }
 
     [Fact]
@@ -332,6 +333,35 @@ public class ConfigurationServiceTests(ITestOutputHelper outputHelper)
         Assert.NotNull(result);
         Assert.Equal("global-feed", result.Value);
         Assert.Equal(workspace.WorkspaceRoot.FullName, result.BaseDirectory.Parent!.FullName);
+        Assert.True(result.IsGlobal);
+    }
+
+    [Fact]
+    public async Task GetConfigurationFromDirectoryWithOriginAsync_ContinuesToGlobalWhenNearestConfigOmitsKey()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName),
+            "{}");
+
+        Directory.CreateDirectory(Path.GetDirectoryName(GetGlobalSettingsFilePath(workspace))!);
+        await File.WriteAllTextAsync(
+            GetGlobalSettingsFilePath(workspace),
+            """
+            {
+              "nugetSource": "global-feed"
+            }
+            """);
+
+        var (service, _) = CreateService(workspace);
+        var result = await service.GetConfigurationFromDirectoryWithOriginAsync(
+            AspireConfigFile.NuGetSourceKey,
+            workspace.WorkspaceRoot);
+
+        Assert.NotNull(result);
+        Assert.Equal("global-feed", result.Value);
+        Assert.True(result.IsGlobal);
     }
 
     [Fact]

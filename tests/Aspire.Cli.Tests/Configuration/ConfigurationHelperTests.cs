@@ -111,6 +111,67 @@ public class ConfigurationHelperTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public void RegisterSettingsFiles_RepairsCaseInsensitiveDuplicateKeysBeforeProviderLoad()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        var config = BuildConfigurationFromSettingsFile(workspace, """
+            {
+              "NuGetSource": "https://first.example/v3/index.json",
+              "nugetsource": "https://second.example/v3/index.json"
+            }
+            """);
+
+        Assert.Equal("https://second.example/v3/index.json", config["nugetSource"]);
+        var settings = JsonNode.Parse(File.ReadAllText(Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName)))!.AsObject();
+        Assert.Single(settings);
+        Assert.Equal("https://second.example/v3/index.json", settings["nugetsource"]?.ToString());
+    }
+
+    [Fact]
+    public void RegisterSettingsFiles_RepairsExactDuplicateKeysBeforeProviderLoad()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        var config = BuildConfigurationFromSettingsFile(workspace, """
+            {
+              "channel": "stable",
+              "channel": "daily"
+            }
+            """);
+
+        Assert.Equal("daily", config["channel"]);
+        var settings = JsonNode.Parse(File.ReadAllText(Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName)))!.AsObject();
+        Assert.Single(settings);
+        Assert.Equal("daily", settings["channel"]?.ToString());
+    }
+
+    [Fact]
+    public void RegisterSettingsFiles_MergesFlattenedObjectPathsBeforeProviderLoad()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        var config = BuildConfigurationFromSettingsFile(workspace, """
+            {
+              "docs:api": {
+                "sitemapUrl": "old",
+                "other": "keep"
+              },
+              "docs": {
+                "api": {
+                  "sitemapUrl": "new"
+                }
+              }
+            }
+            """);
+
+        Assert.Equal("new", config["docs:api:sitemapUrl"]);
+        Assert.Equal("keep", config["docs:api:other"]);
+        var settings = JsonNode.Parse(File.ReadAllText(Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName)))!.AsObject();
+        Assert.False(settings.ContainsKey("docs:api"));
+    }
+
+    [Fact]
     public void TryNormalizeSettingsFile_PreservesBooleanTypes()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);

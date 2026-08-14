@@ -2565,8 +2565,8 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Theory]
-    [MemberData(nameof(InvalidConfiguredHttpSources))]
-    public async Task AddCommandRejectsInvalidExplicitSourceBeforeDiscovery(string explicitSource, string expectedError)
+    [MemberData(nameof(ExplicitHttpSources))]
+    public async Task AddCommandAllowsExplicitSourceWithCredentialMaterialBeforeDiscovery(string explicitSource)
     {
         var discoveryCalled = false;
         var installationCalled = false;
@@ -2607,10 +2607,9 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
-        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
-        Assert.False(discoveryCalled);
+        Assert.NotEqual(CliExitCodes.InvalidCommand, exitCode);
+        Assert.True(discoveryCalled);
         Assert.False(installationCalled);
-        Assert.Contains(expectedError, interactionService.DisplayedErrors);
     }
 
     [Theory]
@@ -4235,6 +4234,20 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
         ];
         yield return ["https://example.test/v3/index.json?token=abc", expectedError];
         yield return ["https://example.test/v3/index.json#fragment", expectedError];
+    }
+
+    public static IEnumerable<object[]> ExplicitHttpSources()
+    {
+        yield return
+        [
+            new UriBuilder(Uri.UriSchemeHttps, "example.test")
+            {
+                Path = "/v3/index.json",
+                UserName = "user"
+            }.Uri.AbsoluteUri
+        ];
+        yield return ["https://example.test/v3/index.json?token=abc"];
+        yield return ["https://example.test/v3/index.json#fragment"];
     }
 
     private static FileInfo CreateAppHostProject(DirectoryInfo directory, string fileName = "AppHost.csproj")

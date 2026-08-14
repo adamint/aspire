@@ -52,6 +52,11 @@
         <target state="translated">Nombre de proyecto no válido.</target>
         <note />
       </trans-unit>
+      <trans-unit id="InvalidSource">
+        <source>The NuGet source is not a valid HTTP(S) or file URI. Correct the source value or pass a valid local directory.</source>
+        <target state="new">The NuGet source is not a valid HTTP(S) or file URI. Correct the source value or pass a valid local directory.</target>
+        <note />
+      </trans-unit>
       <trans-unit id="LanguageOptionDescription">
         <source>The programming language for the AppHost</source>
         <target state="new">The programming language for the AppHost</target>

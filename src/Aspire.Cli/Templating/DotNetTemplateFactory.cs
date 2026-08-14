@@ -143,7 +143,8 @@ internal class DotNetTemplateFactory(
             (ctx, projectName) => OutputPathHelper.GetUniqueDefaultOutputPath(projectName, ctx.WorkingDirectory.FullName),
             ApplyExtraAspireJsFrontendStarterOptions,
             (template, inputs, parseResult, ct) => ApplyTemplateAsync(template, inputs, parseResult, PromptForExtraAspireJsFrontendStarterOptionsAsync, ct),
-            languageId: KnownLanguageId.CSharp
+            languageId: KnownLanguageId.CSharp,
+            ownsAspireConfig: false
             );
 
         if (showAllTemplates)
@@ -173,7 +174,8 @@ internal class DotNetTemplateFactory(
                 (ctx, projectName) => OutputPathHelper.GetUniqueDefaultOutputPath(projectName, ctx.WorkingDirectory.FullName),
                 _ => { },
                 ApplyTemplateWithNoExtraArgsAsync,
-                languageId: KnownLanguageId.CSharp
+                languageId: KnownLanguageId.CSharp,
+                ownsAspireConfig: false
                 );
         }
 
@@ -184,7 +186,8 @@ internal class DotNetTemplateFactory(
             (ctx, projectName) => OutputPathHelper.GetUniqueDefaultOutputPath(projectName, ctx.WorkingDirectory.FullName),
             _ => { },
             ApplyTemplateWithNoExtraArgsAsync,
-            languageId: KnownLanguageId.CSharp
+            languageId: KnownLanguageId.CSharp,
+            ownsAspireConfig: false
             );
 
         // Folded into the last yielded template.
@@ -194,7 +197,8 @@ internal class DotNetTemplateFactory(
             (ctx, projectName) => OutputPathHelper.GetUniqueDefaultOutputPath(projectName, ctx.WorkingDirectory.FullName),
             _ => { },
             ApplyTemplateWithNoExtraArgsAsync,
-            languageId: KnownLanguageId.CSharp
+            languageId: KnownLanguageId.CSharp,
+            ownsAspireConfig: false
             );
 
         // Folded into the last yielded template.
@@ -204,7 +208,8 @@ internal class DotNetTemplateFactory(
             (ctx, projectName) => OutputPathHelper.GetUniqueDefaultOutputPath(projectName, ctx.WorkingDirectory.FullName),
             _ => { },
             (template, inputs, parseResult, ct) => ApplyTemplateAsync(template, inputs, parseResult, PromptForExtraAspireXUnitOptionsAsync, ct),
-            languageId: KnownLanguageId.CSharp
+            languageId: KnownLanguageId.CSharp,
+            ownsAspireConfig: false
             );
 
         // Prepends a test framework selection step then calls the
@@ -226,7 +231,8 @@ internal class DotNetTemplateFactory(
                     var testCallbackTemplate = (CallbackTemplate)testTemplate;
                     return await testCallbackTemplate.ApplyTemplateAsync(inputs, parseResult, ct);
                 },
-                languageId: KnownLanguageId.CSharp);
+                languageId: KnownLanguageId.CSharp,
+                ownsAspireConfig: false);
         }
     }
 
@@ -470,6 +476,10 @@ internal class DotNetTemplateFactory(
             // Some templates have additional arguments that need to be applied to the `dotnet new` command
             // when it is executed. This callback will get those arguments and potentially prompt for them.
             var extraArgs = await extraArgsCallback(parseResult, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(inputs.Source))
+            {
+                extraArgs = [.. extraArgs, "--skipRestore"];
+            }
 
             var installOutcome = await templateNuGetConfigService.InstallTemplatePackageAsync(
                 selectedTemplateDetails,
@@ -538,7 +548,7 @@ internal class DotNetTemplateFactory(
             // excludes it): its packages live on nuget.org, so `aspire add`/`aspire restore`
             // continue to use the ambient NuGet config without a per-project pin. Mirrors the
             // TypeScript starter behavior in CliTemplateFactory.TypeScriptStarterTemplate.
-            if (selectedTemplateDetails.Channel.ShouldPersistChannelName())
+            if (template.OwnsAspireConfig && selectedTemplateDetails.Channel.ShouldPersistChannelName())
             {
                 var config = AspireConfigFile.LoadOrCreate(outputPath);
                 config.Channel = selectedTemplateDetails.Channel.Name;
@@ -550,7 +560,13 @@ internal class DotNetTemplateFactory(
             // newly created project's output directory. The `stable` channel is skipped inside
             // PromptToCreateOrUpdateNuGetConfigAsync (ShouldCreateNuGetConfig) because its packages
             // are on nuget.org and a <clear/>-based config would clobber the user's ambient sources.
-            if (!await TemplateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(inputs.Source, selectedTemplateDetails.Channel, outputPath, cancellationToken, executionContext.NuGetServiceIndexOverride))
+            if (!await TemplateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(
+                inputs.Source,
+                selectedTemplateDetails.Channel,
+                outputPath,
+                cancellationToken,
+                executionContext.NuGetServiceIndexOverride,
+                inputs.SourceIsExplicit))
             {
                 await templateNuGetConfigService.PromptToCreateOrUpdateNuGetConfigAsync(selectedTemplateDetails.Channel, outputPath, cancellationToken);
             }

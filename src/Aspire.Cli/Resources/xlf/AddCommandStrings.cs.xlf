@@ -102,6 +102,11 @@
         <target state="new">The integration search query.</target>
         <note />
       </trans-unit>
+      <trans-unit id="InvalidSource">
+        <source>The NuGet source is not a valid HTTP(S) or file URI. Correct the source value or pass a valid local directory.</source>
+        <target state="new">The NuGet source is not a valid HTTP(S) or file URI. Correct the source value or pass a valid local directory.</target>
+        <note />
+      </trans-unit>
       <trans-unit id="NoIntegrationPackagesFound">
         <source>No integration packages were found. Please check your internet connection or NuGet source configuration.</source>
         <target state="translated">Nenašly se žádné integrační balíčky. Zkontrolujte prosím připojení k internetu nebo zdrojovou konfiguraci NuGet.</target>

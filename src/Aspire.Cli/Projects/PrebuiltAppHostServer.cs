@@ -699,7 +699,11 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IDisposable
             }
 
             return await TemporaryNuGetConfig.CreateAsync(
-                PackageSourceOverrideMappings.Create(packageSourceOverride, matchedChannel, _executionContext.NuGetServiceIndexOverride),
+                PackageSourceOverrideMappings.Create(
+                    packageSourceOverride,
+                    matchedChannel,
+                    _executionContext.NuGetServiceIndexOverride,
+                    allowCredentialMaterial: PackageSourceOverrideMappings.HasCredentialMaterial(packageSourceOverride)),
                 configureGlobalPackagesFolder,
                 configureGlobalPackagesFolder ? ResolveStableGlobalPackagesFolder(packageSourceOverride) : null);
         }

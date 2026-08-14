@@ -16,13 +16,16 @@ internal class CallbackTemplate(
     Func<string, bool>? supportsLanguageCallback = null,
     IReadOnlyList<string>? selectableAppHostLanguages = null,
     bool isEmpty = false,
-    bool showInPrompt = true) : ITemplate
+    bool showInPrompt = true,
+    bool ownsAspireConfig = true) : ITemplate
 {
     public string Name => name;
 
     public string Description => description;
 
     public bool IsEmpty => isEmpty;
+
+    public bool OwnsAspireConfig => ownsAspireConfig;
 
     public bool ShowInPrompt => showInPrompt;
 

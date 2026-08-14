@@ -181,7 +181,8 @@ internal sealed class TemplateNuGetConfigService(
         string? sourceOverride,
         string? channelName,
         string outputPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowCredentialMaterial = false)
     {
         if (string.IsNullOrWhiteSpace(sourceOverride))
         {
@@ -197,7 +198,13 @@ internal sealed class TemplateNuGetConfigService(
                 string.Equals(c.Name, channelName, StringComparison.OrdinalIgnoreCase));
         }
 
-        return await CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride, matchingChannel, outputPath, cancellationToken, executionContext.NuGetServiceIndexOverride);
+        return await CreateOrUpdateNuGetConfigForSourceOverrideAsync(
+            sourceOverride,
+            matchingChannel,
+            outputPath,
+            cancellationToken,
+            executionContext.NuGetServiceIndexOverride,
+            allowCredentialMaterial);
     }
 
     /// <summary>
@@ -208,14 +215,19 @@ internal sealed class TemplateNuGetConfigService(
         PackageChannel? channel,
         string outputPath,
         CancellationToken cancellationToken,
-        string? nugetServiceIndexOverride = null)
+        string? nugetServiceIndexOverride = null,
+        bool allowCredentialMaterial = false)
     {
         if (string.IsNullOrWhiteSpace(sourceOverride))
         {
             return false;
         }
 
-        var mappings = PackageSourceOverrideMappings.Create(sourceOverride, channel, nugetServiceIndexOverride);
+        var mappings = PackageSourceOverrideMappings.Create(
+            sourceOverride,
+            channel,
+            nugetServiceIndexOverride,
+            allowCredentialMaterial);
         await NuGetConfigMerger.CreateOrUpdateAsync(
             new DirectoryInfo(outputPath),
             mappings,

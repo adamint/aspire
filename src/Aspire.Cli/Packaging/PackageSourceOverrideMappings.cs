@@ -128,10 +128,14 @@ internal static class PackageSourceOverrideMappings
             : Path.GetFullPath(localDirectory!);
     }
 
-    public static PackageMapping[] Create(string packageSourceOverride, PackageChannel? requestedChannel, string? nugetServiceIndexOverride)
+    public static PackageMapping[] Create(
+        string packageSourceOverride,
+        PackageChannel? requestedChannel,
+        string? nugetServiceIndexOverride,
+        bool allowCredentialMaterial = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(packageSourceOverride);
-        if (HasCredentialMaterial(packageSourceOverride))
+        if (!allowCredentialMaterial && HasCredentialMaterial(packageSourceOverride))
         {
             throw new ArgumentException("Credential-bearing HTTP sources cannot be persisted.", nameof(packageSourceOverride));
         }
@@ -186,10 +190,35 @@ internal static class PackageSourceOverrideMappings
     {
         return Uri.TryCreate(source.Trim(), UriKind.Absolute, out var uri) &&
             (uri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
-                uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)) &&
+                uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
+                uri.Scheme.Equals(Uri.UriSchemeFile, StringComparison.OrdinalIgnoreCase)) &&
             (!string.IsNullOrEmpty(uri.UserInfo) ||
                 !string.IsNullOrEmpty(uri.Query) ||
                 !string.IsNullOrEmpty(uri.Fragment));
+    }
+
+    /// <summary>
+    /// Returns whether a value that claims to be an HTTP(S) or file URI is syntactically invalid.
+    /// Such values must not fall through to local-path resolution.
+    /// </summary>
+    public static bool IsMalformedUriSource(string source)
+    {
+        var trimmedSource = source.Trim();
+        if (trimmedSource.StartsWith("http:", StringComparison.OrdinalIgnoreCase) ||
+            trimmedSource.StartsWith("https:", StringComparison.OrdinalIgnoreCase))
+        {
+            return !Uri.TryCreate(trimmedSource, UriKind.Absolute, out var uri) ||
+                (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
+                    string.IsNullOrEmpty(uri.Host));
+        }
+
+        if (trimmedSource.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        {
+            return !Uri.TryCreate(trimmedSource, UriKind.Absolute, out var uri) || !uri.IsFile;
+        }
+
+        return false;
     }
 
     private static PackageSourceKind ClassifySource(string source, out string? localDirectory)

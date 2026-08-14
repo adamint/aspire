@@ -187,8 +187,8 @@ internal static class ConfigurationHelper
                 return false;
             }
 
-            var node = JsonNode.Parse(content, documentOptions: ParseOptions);
-            if (node is not JsonObject)
+            var node = ParseSettingsObject(content);
+            if (node is null)
             {
                 return false;
             }
@@ -263,7 +263,7 @@ internal static class ConfigurationHelper
         try
         {
             var content = File.ReadAllText(filePath);
-            var node = JsonNode.Parse(content, documentOptions: ParseOptions);
+            var node = ParseSettingsObject(content);
             if (node is not null)
             {
                 var cleanJson = node.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
@@ -296,83 +296,14 @@ internal static class ConfigurationHelper
                 return false;
             }
 
-            var settings = JsonNode.Parse(content, documentOptions: ParseOptions)?.AsObject();
-
-            if (settings is null)
+            using var document = JsonDocument.Parse(content, ParseOptions);
+            if (document.RootElement.ValueKind is not JsonValueKind.Object ||
+                !NeedsNormalization(document.RootElement))
             {
                 return false;
             }
 
-            // Find all colon-separated keys at root level
-            var colonKeys = new List<(string key, JsonNode? value)>();
-
-            foreach (var kvp in settings)
-            {
-                if (kvp.Key.Contains(':'))
-                {
-                    // DeepClone preserves the original JSON type (boolean, number, etc.)
-                    // instead of converting to string via ToString().
-                    colonKeys.Add((kvp.Key, kvp.Value?.DeepClone()));
-                }
-            }
-
-            if (colonKeys.Count == 0)
-            {
-                return false;
-            }
-
-            // Remove colon keys and re-add them as nested structure
-            foreach (var (key, value) in colonKeys)
-            {
-                settings.Remove(key);
-
-                // Convert "a:b:c" to nested {"a": {"b": {"c": value}}}
-                var parts = key.Split(':');
-                var currentObject = settings;
-                var pathConflict = false;
-
-                // Walk all but the last segment, creating objects as needed.
-                for (int i = 0; i < parts.Length - 1; i++)
-                {
-                    var part = parts[i];
-
-                    if (!currentObject.ContainsKey(part) || currentObject[part] is null)
-                    {
-                        currentObject[part] = new JsonObject();
-                    }
-                    else if (currentObject[part] is JsonObject)
-                    {
-                        currentObject = currentObject[part]!.AsObject();
-                        continue;
-                    }
-                    else
-                    {
-                        // Existing non-object value conflicts with the desired nested structure.
-                        // Prefer the existing nested value and drop the flat key.
-                        pathConflict = true;
-                        break;
-                    }
-
-                    currentObject = currentObject[part]!.AsObject();
-                }
-
-                if (pathConflict)
-                {
-                    continue;
-                }
-
-                var finalKey = parts[parts.Length - 1];
-
-                // If the final key already exists, keep its value and drop the flat key.
-                if (currentObject.ContainsKey(finalKey) && currentObject[finalKey] is not null)
-                {
-                    continue;
-                }
-
-                currentObject[finalKey] = value;
-            }
-
-            WriteSettingsFile(filePath, settings);
+            WriteSettingsFile(filePath, NormalizeSettingsObject(document.RootElement));
 
             return true;
         }
@@ -380,5 +311,227 @@ internal static class ConfigurationHelper
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Parses a settings JSON document while normalizing the case-insensitive configuration
+    /// hierarchy before Microsoft.Extensions.Configuration sees it.
+    /// </summary>
+    /// <remarks>
+    /// JSON permits duplicate property names, while the configuration provider treats keys
+    /// case-insensitively. Enumerating with <see cref="JsonDocument"/> preserves duplicate
+    /// properties long enough to merge them deterministically instead of letting the provider
+    /// throw for inputs such as <c>{"NuGetSource":"a","nugetsource":"b"}</c>.
+    /// </remarks>
+    internal static JsonObject? ParseSettingsObject(string content)
+    {
+        using var document = JsonDocument.Parse(content, ParseOptions);
+        return document.RootElement.ValueKind is JsonValueKind.Object
+            ? NormalizeSettingsObject(document.RootElement)
+            : null;
+    }
+
+    private static JsonObject NormalizeSettingsObject(JsonElement element)
+    {
+        var normalized = new JsonObject();
+        var properties = element.EnumerateObject().ToArray();
+
+        foreach (var property in properties)
+        {
+            if (!property.Name.Contains(':', StringComparison.Ordinal))
+            {
+                OverlayJsonPath(normalized, property.Name.Split(':'), NormalizeJsonElement(property.Value));
+            }
+        }
+
+        // A nested JSON object is the authoritative representation when a file contains both
+        // "features":{"flag":false} and "features:flag":true. Process flat entries in reverse
+        // order so duplicate flat keys still use the last value, while existing nested leaves
+        // and their disjoint children are preserved.
+        for (var i = properties.Length - 1; i >= 0; i--)
+        {
+            var property = properties[i];
+            if (property.Name.Contains(':', StringComparison.Ordinal))
+            {
+                OverlayJsonPathPreservingExisting(
+                    normalized,
+                    property.Name.Split(':'),
+                    NormalizeJsonElement(property.Value));
+            }
+        }
+
+        return normalized;
+    }
+
+    private static JsonNode? NormalizeJsonElement(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.Object => NormalizeSettingsObject(element),
+            JsonValueKind.Array => NormalizeJsonArray(element),
+            JsonValueKind.Null => null,
+            _ => JsonNode.Parse(element.GetRawText())
+        };
+    }
+
+    private static JsonArray NormalizeJsonArray(JsonElement element)
+    {
+        var normalized = new JsonArray();
+        foreach (var item in element.EnumerateArray())
+        {
+            normalized.Add(NormalizeJsonElement(item));
+        }
+
+        return normalized;
+    }
+
+    private static bool NeedsNormalization(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.Object => NeedsObjectNormalization(element),
+            JsonValueKind.Array => element.EnumerateArray().Any(NeedsNormalization),
+            _ => false
+        };
+    }
+
+    private static bool NeedsObjectNormalization(JsonElement element)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var property in element.EnumerateObject())
+        {
+            if (property.Name.Contains(':', StringComparison.Ordinal) ||
+                !names.Add(property.Name) ||
+                NeedsNormalization(property.Value))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void OverlayJsonPath(JsonObject target, string[] pathSegments, JsonNode? value)
+    {
+        var current = target;
+        for (var i = 0; i < pathSegments.Length - 1; i++)
+        {
+            var pathSegment = pathSegments[i];
+            if (TryGetPropertyName(current, pathSegment, out var existingName) &&
+                current[existingName!] is JsonObject existingObject)
+            {
+                if (!string.Equals(existingName, pathSegment, StringComparison.Ordinal))
+                {
+                    current.Remove(existingName!);
+                    current[pathSegment] = existingObject;
+                }
+
+                current = existingObject;
+            }
+            else
+            {
+                if (existingName is not null)
+                {
+                    current.Remove(existingName!);
+                }
+
+                var child = new JsonObject();
+                current[pathSegment] = child;
+                current = child;
+            }
+        }
+
+        var finalSegment = pathSegments[^1];
+        if (TryGetPropertyName(current, finalSegment, out var finalName))
+        {
+            if (current[finalName!] is JsonObject existingObject && value is JsonObject sourceObject)
+            {
+                if (!string.Equals(finalName, finalSegment, StringComparison.Ordinal))
+                {
+                    current.Remove(finalName!);
+                    current[finalSegment] = existingObject;
+                }
+
+                OverlayJsonObject(existingObject, sourceObject);
+                return;
+            }
+
+            if (current[finalName!] is JsonObject)
+            {
+                return;
+            }
+
+            current.Remove(finalName!);
+        }
+
+        current[finalSegment] = value?.DeepClone();
+    }
+
+    private static void OverlayJsonObject(JsonObject target, JsonObject source)
+    {
+        foreach (var (propertyName, value) in source)
+        {
+            OverlayJsonPath(target, propertyName.Split(':'), value);
+        }
+    }
+
+    private static void OverlayJsonPathPreservingExisting(JsonObject target, string[] pathSegments, JsonNode? value)
+    {
+        var current = target;
+        for (var i = 0; i < pathSegments.Length - 1; i++)
+        {
+            var pathSegment = pathSegments[i];
+            if (TryGetPropertyName(current, pathSegment, out var existingName))
+            {
+                if (current[existingName!] is not JsonObject existingObject)
+                {
+                    return;
+                }
+
+                current = existingObject;
+            }
+            else
+            {
+                var child = new JsonObject();
+                current[pathSegment] = child;
+                current = child;
+            }
+        }
+
+        var finalSegment = pathSegments[^1];
+        if (TryGetPropertyName(current, finalSegment, out var finalName))
+        {
+            if (current[finalName!] is JsonObject existingObject && value is JsonObject sourceObject)
+            {
+                OverlayJsonObjectPreservingExisting(existingObject, sourceObject);
+            }
+
+            return;
+        }
+
+        current[finalSegment] = value?.DeepClone();
+    }
+
+    private static void OverlayJsonObjectPreservingExisting(JsonObject target, JsonObject source)
+    {
+        foreach (var (propertyName, value) in source)
+        {
+            OverlayJsonPathPreservingExisting(target, propertyName.Split(':'), value);
+        }
+    }
+
+    private static bool TryGetPropertyName(JsonObject jsonObject, string propertyName, out string? existingName)
+    {
+        foreach (var property in jsonObject)
+        {
+            if (string.Equals(property.Key, propertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                existingName = property.Key;
+                return true;
+            }
+        }
+
+        existingName = null;
+        return false;
     }
 }

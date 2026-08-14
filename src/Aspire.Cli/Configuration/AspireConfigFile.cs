@@ -8,6 +8,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Aspire.Cli.Documentation.ApiDocs;
 using Aspire.Cli.Documentation.Docs;
+using Aspire.Cli.Packaging;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Utils;
 using Aspire.Hosting.Utils;
@@ -153,7 +154,9 @@ internal sealed class AspireConfigFile
         try
         {
             var json = File.ReadAllText(filePath);
-            return JsonSerializer.Deserialize(json, JsonSourceGenerationContext.Default.AspireConfigFile)
+            var normalizedJson = ConfigurationHelper.ParseSettingsObject(json)
+                ?? throw new JsonException("The configuration root must be a JSON object.");
+            return normalizedJson.Deserialize(JsonSourceGenerationContext.Default.AspireConfigFile)
                 ?? new AspireConfigFile();
         }
         catch (JsonException ex)
@@ -432,7 +435,11 @@ internal sealed class AspireConfigFile
             }
 
             mappedConfig.Channel = settings.Channel;
-            mappedConfig.NuGetSource = settings.NuGetSource;
+            mappedConfig.NuGetSource = settings.NuGetSource is { } nugetSource &&
+                !PackageSourceOverrideMappings.HasCredentialMaterial(nugetSource) &&
+                !PackageSourceOverrideMappings.IsMalformedUriSource(nugetSource)
+                ? nugetSource
+                : null;
             mappedConfig.Features = settings.Features;
             mappedConfig.Packages = settings.Packages;
         }

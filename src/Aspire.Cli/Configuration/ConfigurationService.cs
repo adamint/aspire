@@ -36,7 +36,7 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
             // Handle empty files or whitespace-only content
             settings = string.IsNullOrWhiteSpace(existingContent)
                 ? new JsonObject()
-                : JsonNode.Parse(existingContent, nodeOptions: null, ConfigurationHelper.ParseOptions)?.AsObject() ?? new JsonObject();
+                : ConfigurationHelper.ParseSettingsObject(existingContent) ?? new JsonObject();
         }
         else
         {
@@ -68,7 +68,7 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
                 return false;
             }
 
-            var settings = JsonNode.Parse(existingContent, nodeOptions: null, ConfigurationHelper.ParseOptions)?.AsObject();
+            var settings = ConfigurationHelper.ParseSettingsObject(existingContent);
 
             if (settings is null)
             {
@@ -194,7 +194,7 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
                 return;
             }
 
-            var settings = JsonNode.Parse(content, nodeOptions: null, ConfigurationHelper.ParseOptions)?.AsObject();
+            var settings = ConfigurationHelper.ParseSettingsObject(content);
 
             if (settings is not null)
             {
@@ -511,7 +511,8 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
             var globalValue = globalConfig[configKey];
             if (!string.IsNullOrWhiteSpace(globalValue))
             {
-                return Task.FromResult<ConfigurationValueWithOrigin?>(new ConfigurationValueWithOrigin(globalValue, GetBaseDirectoryForSettingsFile(globalSettingsFile)));
+                return Task.FromResult<ConfigurationValueWithOrigin?>(
+                    new ConfigurationValueWithOrigin(globalValue, GetBaseDirectoryForSettingsFile(globalSettingsFile), IsGlobal: true));
             }
         }
 
@@ -572,10 +573,10 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
             return new ConfigurationBuilder().Build();
         }
 
-        JsonNode? node;
+        JsonObject? node;
         try
         {
-            node = JsonNode.Parse(content, documentOptions: ConfigurationHelper.ParseOptions);
+            node = ConfigurationHelper.ParseSettingsObject(content);
         }
         catch (JsonException ex)
         {
@@ -584,7 +585,7 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
                 ex);
         }
 
-        if (node is not JsonObject)
+        if (node is null)
         {
             return new ConfigurationBuilder().Build();
         }

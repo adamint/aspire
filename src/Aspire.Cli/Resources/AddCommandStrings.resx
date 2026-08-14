@@ -159,6 +159,9 @@
   <data name="SourceWithCredentialsNotSupported" xml:space="preserve">
     <value>The NuGet source includes credentials, a query string, or a fragment. Configure authentication with a NuGet credential provider, then use the feed URL without embedded secrets.</value>
   </data>
+  <data name="InvalidSource" xml:space="preserve">
+    <value>The NuGet source is not a valid HTTP(S) or file URI. Correct the source value or pass a valid local directory.</value>
+  </data>
   <data name="AllArgumentDescription" xml:space="preserve">
     <value>Include all integrations, even those not marked compatible with the AppHost language</value>
   </data>
