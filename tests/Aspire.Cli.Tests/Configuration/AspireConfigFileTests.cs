@@ -583,26 +583,25 @@ public class AspireConfigFileTests(ITestOutputHelper outputHelper)
     [InlineData("https://[invalid")]
     [InlineData("https://example/v3/index.json?token=secret")]
     [InlineData("https://example/v3/index.json#fragment")]
-    public void LoadOrCreate_MigratesLegacy_OmitsUnsafeNuGetSource(string unsafeSource)
+    public void LoadOrCreate_RejectsUnsafeLegacyNuGetSourceWithoutWritingModernConfig(string unsafeSource)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var root = workspace.WorkspaceRoot.FullName;
 
-        File.WriteAllText(Path.Combine(root, ".aspire", "settings.json"), $$"""
+        var legacyPath = Path.Combine(root, ".aspire", "settings.json");
+        var legacyContent = $$"""
             {
               "channel": "daily",
               "nugetSource": "{{unsafeSource}}"
             }
-            """);
+            """;
+        File.WriteAllText(legacyPath, legacyContent);
 
-        var config = AspireConfigFile.LoadOrCreate(root);
-        var saved = AspireConfigFile.Load(root);
+        var exception = Assert.Throws<InvalidOperationException>(() => AspireConfigFile.LoadOrCreate(root));
 
-        Assert.Equal("daily", config.Channel);
-        Assert.Null(config.NuGetSource);
-        Assert.NotNull(saved);
-        Assert.Null(saved.NuGetSource);
-        Assert.DoesNotContain("nugetSource", File.ReadAllText(Path.Combine(root, AspireConfigFile.FileName)), StringComparison.OrdinalIgnoreCase);
+        Assert.NotEmpty(exception.Message);
+        Assert.False(File.Exists(Path.Combine(root, AspireConfigFile.FileName)));
+        Assert.Equal(legacyContent, File.ReadAllText(legacyPath));
     }
 
     [Fact]

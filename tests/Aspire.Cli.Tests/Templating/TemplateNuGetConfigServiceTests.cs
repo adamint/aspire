@@ -169,15 +169,35 @@ public class TemplateNuGetConfigServiceTests(ITestOutputHelper outputHelper)
     [InlineData("https://user:token@example.invalid/v3/index.json")]
     [InlineData("https://example.invalid/v3/index.json?sig=token")]
     [InlineData("https://example.invalid/v3/index.json#token")]
-    public async Task CreateOrUpdateNuGetConfigForSourceOverrideAsync_CredentialBearingHttpSourceThrows(string sourceOverride)
+    public async Task CreateOrUpdateNuGetConfigForSourceOverrideAsync_CredentialBearingHttpSourceIsNotPersisted(string sourceOverride)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var service = CreateService();
 
-        await Assert.ThrowsAsync<ArgumentException>(
-            async () => await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride, channelName: null, workspace.WorkspaceRoot.FullName, CancellationToken.None));
+        Assert.False(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride, channelName: null, workspace.WorkspaceRoot.FullName, CancellationToken.None));
 
         Assert.False(File.Exists(Path.Combine(workspace.WorkspaceRoot.FullName, "nuget.config")));
+    }
+
+    [Fact]
+    public async Task CreateTemporarySourceOverrideConfigAsync_RestoresExistingConfigWithoutPersistingCredentials()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var outputDirectory = workspace.WorkspaceRoot.CreateSubdirectory("output");
+        var configPath = Path.Combine(outputDirectory.FullName, "nuget.config");
+        const string originalContent = "<configuration><packageSources /></configuration>";
+        await File.WriteAllTextAsync(configPath, originalContent);
+
+        using (await TemplateNuGetConfigService.CreateTemporarySourceOverrideConfigAsync(
+                   "https://example.invalid/v3/index.json?sig=token",
+                   outputDirectory.FullName,
+                   CancellationToken.None))
+        {
+            var duringRestore = await File.ReadAllTextAsync(configPath);
+            Assert.Contains("sig=token", duringRestore);
+        }
+
+        Assert.Equal(originalContent, await File.ReadAllTextAsync(configPath));
     }
 
     [Fact]

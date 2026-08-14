@@ -9,4 +9,5 @@ namespace Aspire.Cli.Configuration;
 internal sealed record ConfigurationValueWithOrigin(
     string Value,
     DirectoryInfo BaseDirectory,
-    bool IsGlobal = false);
+    bool IsGlobal = false,
+    bool IsAmbient = false);

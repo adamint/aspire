@@ -111,7 +111,7 @@ public class ConfigurationHelperTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public void RegisterSettingsFiles_RepairsCaseInsensitiveDuplicateKeysBeforeProviderLoad()
+    public void RegisterSettingsFiles_NormalizesCaseInsensitiveDuplicateKeysWithoutWriting()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
 
@@ -123,13 +123,13 @@ public class ConfigurationHelperTests(ITestOutputHelper outputHelper)
             """);
 
         Assert.Equal("https://second.example/v3/index.json", config["nugetSource"]);
-        var settings = JsonNode.Parse(File.ReadAllText(Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName)))!.AsObject();
-        Assert.Single(settings);
-        Assert.Equal("https://second.example/v3/index.json", settings["nugetsource"]?.ToString());
+        var settings = File.ReadAllText(Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName));
+        Assert.Contains("\"NuGetSource\"", settings);
+        Assert.Contains("\"nugetsource\"", settings);
     }
 
     [Fact]
-    public void RegisterSettingsFiles_RepairsExactDuplicateKeysBeforeProviderLoad()
+    public void RegisterSettingsFiles_NormalizesExactDuplicateKeysWithoutWriting()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
 
@@ -141,13 +141,12 @@ public class ConfigurationHelperTests(ITestOutputHelper outputHelper)
             """);
 
         Assert.Equal("daily", config["channel"]);
-        var settings = JsonNode.Parse(File.ReadAllText(Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName)))!.AsObject();
-        Assert.Single(settings);
-        Assert.Equal("daily", settings["channel"]?.ToString());
+        var settings = File.ReadAllText(Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName));
+        Assert.Equal(2, settings.Split("\"channel\"", StringSplitOptions.None).Length - 1);
     }
 
     [Fact]
-    public void RegisterSettingsFiles_MergesFlattenedObjectPathsBeforeProviderLoad()
+    public void RegisterSettingsFiles_MergesFlattenedObjectPathsInMemory()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
 
@@ -167,8 +166,86 @@ public class ConfigurationHelperTests(ITestOutputHelper outputHelper)
 
         Assert.Equal("new", config["docs:api:sitemapUrl"]);
         Assert.Equal("keep", config["docs:api:other"]);
-        var settings = JsonNode.Parse(File.ReadAllText(Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName)))!.AsObject();
-        Assert.False(settings.ContainsKey("docs:api"));
+        var settings = File.ReadAllText(Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName));
+        Assert.Contains("\"docs:api\"", settings);
+    }
+
+    [Fact]
+    public void RegisterSettingsFiles_UsesLastValueForDuplicateObjectAndScalarKeys()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        var config = BuildConfigurationFromSettingsFile(workspace, """
+            {
+              "channel": { "name": "old" },
+              "CHANNEL": "daily",
+              "docs:api": { "sitemapUrl": "flat" },
+              "docs": {
+                "api": {
+                  "sitemapUrl": "nested",
+                  "other": "keep"
+                }
+              }
+            }
+            """);
+
+        Assert.Equal("daily", config["channel"]);
+        Assert.Equal("nested", config["docs:api:sitemapUrl"]);
+        Assert.Equal("keep", config["docs:api:other"]);
+    }
+
+    [Fact]
+    public void RegisterSettingsFiles_PreservesUnknownNestedColonKeys()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        var config = BuildConfigurationFromSettingsFile(workspace, """
+            {
+              "extension": {
+                "package:metadata": {
+                  "asset:type": "value"
+                }
+              }
+            }
+            """);
+
+        Assert.Equal("value", config["extension:package:metadata:asset:type"]);
+        var loaded = AspireConfigFile.Load(workspace.WorkspaceRoot.FullName);
+        Assert.NotNull(loaded?.ExtensionData);
+        var extension = loaded.ExtensionData["extension"];
+        Assert.Equal(JsonValueKind.Object, extension.ValueKind);
+        Assert.True(extension.GetProperty("package:metadata").GetProperty("asset:type").ValueEquals("value"));
+    }
+
+    [Fact]
+    public void RegisterSettingsFiles_PreservesCommentsAndLiteralColonKeysWithoutWriting()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        var content = """
+            {
+              // Keep this comment in read-only commands.
+              "profiles": {
+                "https": {
+                  "environmentVariables": {
+                    "Logging:LogLevel:Default": "Information"
+                  }
+                }
+              },
+              "custom": {
+                "literal:key": "value"
+              }
+            }
+            """;
+        var settingsPath = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
+        File.WriteAllText(settingsPath, content);
+
+        var config = BuildConfigurationFromSettingsFile(workspace, content);
+
+        Assert.Equal(content, File.ReadAllText(settingsPath));
+        Assert.Equal("Information", AspireConfigFile.Load(workspace.WorkspaceRoot.FullName)!.Profiles!["https"].EnvironmentVariables!["Logging:LogLevel:Default"]);
+        Assert.Contains("\"literal:key\"", File.ReadAllText(settingsPath));
+        Assert.Equal("Information", config["profiles:https:environmentVariables:Logging:LogLevel:Default"]);
     }
 
     [Fact]

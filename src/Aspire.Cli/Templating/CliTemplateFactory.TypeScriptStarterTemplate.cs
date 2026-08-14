@@ -79,6 +79,7 @@ internal sealed partial class CliTemplateFactory
                         return new TemplateResult((int)CliExitCodes.FailedToBuildArtifacts, outputPath);
                     }
 
+                    await _templateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(inputs.Source, inputs.Channel, outputPath, cancellationToken);
                     _logger.LogDebug("Generating SDK code for TypeScript starter in '{OutputPath}'.", outputPath);
                     var restoreSucceeded = await guestProject.BuildAndGenerateSdkAsync(new DirectoryInfo(outputPath), packageSourceOverride: inputs.Source, cancellationToken: cancellationToken);
                     if (!restoreSucceeded)
@@ -86,7 +87,6 @@ internal sealed partial class CliTemplateFactory
                         _interactionService.DisplayError("Automatic 'aspire restore' failed for the new TypeScript starter project. Run 'aspire restore' in the project directory for more details.");
                         return new TemplateResult((int)CliExitCodes.FailedToBuildArtifacts, outputPath);
                     }
-                    await _templateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(inputs.Source, inputs.Channel, outputPath, cancellationToken, inputs.SourceIsExplicit);
 
                     return new TemplateResult((int)CliExitCodes.Success, outputPath);
                 }), emoji: KnownEmojis.Rocket);

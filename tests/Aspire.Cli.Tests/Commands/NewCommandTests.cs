@@ -1637,7 +1637,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal(explicitSource, discoveryAspireSource);
         Assert.Equal(explicitSource, discoveryFallbackSource);
         var outputPath = Path.Combine(workspace.WorkspaceRoot.FullName, "output");
-        AssertSourceOverrideNuGetConfig(outputPath, explicitSource);
+        Assert.False(File.Exists(Path.Combine(outputPath, "nuget.config")));
         Assert.Null(AspireConfigFile.Load(outputPath)?.NuGetSource);
     }
 

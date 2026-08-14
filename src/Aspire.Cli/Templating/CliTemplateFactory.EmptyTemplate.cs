@@ -56,7 +56,8 @@ internal sealed partial class CliTemplateFactory
             if (isCsharp)
             {
                 // Do this first so there is no prompt while status is displayed for creating project.
-                if (!await _templateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(inputs.Source, inputs.Channel, outputPath, cancellationToken, inputs.SourceIsExplicit))
+                var sourceConfigCreated = await _templateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(inputs.Source, inputs.Channel, outputPath, cancellationToken);
+                if (!sourceConfigCreated && string.IsNullOrWhiteSpace(inputs.Source))
                 {
                     await _templateNuGetConfigService.PromptToCreateOrUpdateNuGetConfigAsync(inputs.Channel, outputPath, cancellationToken);
                 }
@@ -74,6 +75,7 @@ internal sealed partial class CliTemplateFactory
                     else
                     {
                         _logger.LogDebug("Using scaffolding service for language '{LanguageDisplayName}' in '{OutputPath}'.", language.DisplayName, outputPath);
+                        await _templateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(inputs.Source, inputs.Channel, outputPath, cancellationToken);
                         var context = new ScaffoldContext(
                             language,
                             new DirectoryInfo(outputPath),
@@ -100,10 +102,6 @@ internal sealed partial class CliTemplateFactory
                 return templateResult;
             }
 
-            if (!isCsharp)
-            {
-                await _templateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(inputs.Source, inputs.Channel, outputPath, cancellationToken, inputs.SourceIsExplicit);
-            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

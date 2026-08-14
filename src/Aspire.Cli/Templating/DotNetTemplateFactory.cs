@@ -476,10 +476,6 @@ internal class DotNetTemplateFactory(
             // Some templates have additional arguments that need to be applied to the `dotnet new` command
             // when it is executed. This callback will get those arguments and potentially prompt for them.
             var extraArgs = await extraArgsCallback(parseResult, cancellationToken);
-            if (!string.IsNullOrWhiteSpace(inputs.Source))
-            {
-                extraArgs = [.. extraArgs, "--skipRestore"];
-            }
 
             var installOutcome = await templateNuGetConfigService.InstallTemplatePackageAsync(
                 selectedTemplateDetails,
@@ -497,6 +493,21 @@ internal class DotNetTemplateFactory(
             }
 
             interactionService.DisplayMessage(KnownEmojis.Package, string.Format(CultureInfo.CurrentCulture, TemplatingStrings.UsingProjectTemplatesVersion, installOutcome.TemplateVersion));
+
+            // dotnet new restores project templates as part of project creation. Create the
+            // source-specific config before invoking it so the restore cannot fall back to
+            // nuget.org. Credential-bearing explicit sources use a project-local config only
+            // for this process and are restored immediately after the command finishes.
+            await TemplateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(
+                inputs.Source,
+                selectedTemplateDetails.Channel,
+                outputPath,
+                cancellationToken,
+                executionContext.NuGetServiceIndexOverride);
+            using var temporarySourceConfig = await TemplateNuGetConfigService.CreateTemporarySourceOverrideConfigAsync(
+                inputs.Source,
+                outputPath,
+                cancellationToken);
 
             var newProjectCollector = new OutputCollector();
             var newProjectExitCode = await interactionService.ShowStatusAsync(
@@ -555,18 +566,45 @@ internal class DotNetTemplateFactory(
                 config.Save(outputPath);
             }
 
+            if (template.OwnsAspireConfig &&
+                FindAppHostRestoreTarget(outputPath) is { } restoreTarget)
+            {
+                var restoreCollector = new OutputCollector();
+                var restoreExitCode = await interactionService.ShowStatusAsync(
+                    TemplatingStrings.CreatingNewProject,
+                    () => runner.RestoreAsync(
+                        restoreTarget,
+                        new ProcessInvocationOptions
+                        {
+                            StandardOutputCallback = restoreCollector.AppendOutput,
+                            StandardErrorCallback = restoreCollector.AppendOutput
+                        },
+                        cancellationToken),
+                    emoji: KnownEmojis.Package);
+
+                if (restoreExitCode != 0)
+                {
+                    interactionService.DisplayLines(restoreCollector.GetLines());
+                    interactionService.DisplayError(string.Format(
+                        CultureInfo.CurrentCulture,
+                        TemplatingStrings.ProjectCreationFailed,
+                        restoreExitCode));
+                    return new TemplateResult(CliExitCodes.FailedToBuildArtifacts, outputPath);
+                }
+            }
+
             // For channels that route Aspire packages to a custom feed, optionally create or update
             // a NuGet.config. If none exists in the current working directory, create one in the
             // newly created project's output directory. The `stable` channel is skipped inside
             // PromptToCreateOrUpdateNuGetConfigAsync (ShouldCreateNuGetConfig) because its packages
             // are on nuget.org and a <clear/>-based config would clobber the user's ambient sources.
-            if (!await TemplateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(
+            var sourceConfigCreated = await TemplateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(
                 inputs.Source,
                 selectedTemplateDetails.Channel,
                 outputPath,
                 cancellationToken,
-                executionContext.NuGetServiceIndexOverride,
-                inputs.SourceIsExplicit))
+                executionContext.NuGetServiceIndexOverride);
+            if (!sourceConfigCreated && string.IsNullOrWhiteSpace(inputs.Source))
             {
                 await templateNuGetConfigService.PromptToCreateOrUpdateNuGetConfigAsync(selectedTemplateDetails.Channel, outputPath, cancellationToken);
             }
@@ -603,6 +641,25 @@ internal class DotNetTemplateFactory(
             interactionService.DisplayError(ex.Message);
             return new TemplateResult(CliExitCodes.FailedToCreateNewProject);
         }
+    }
+
+    private static FileInfo? FindAppHostRestoreTarget(string outputPath)
+    {
+        if (!Directory.Exists(outputPath))
+        {
+            return null;
+        }
+
+        var appHostProject = Directory.EnumerateFiles(outputPath, "*AppHost*.csproj", SearchOption.AllDirectories)
+            .FirstOrDefault();
+        if (appHostProject is not null)
+        {
+            return new FileInfo(appHostProject);
+        }
+
+        var appHostFile = Directory.EnumerateFiles(outputPath, "*.cs", SearchOption.TopDirectoryOnly)
+            .FirstOrDefault(path => string.Equals(Path.GetFileName(path), "apphost.cs", StringComparison.OrdinalIgnoreCase));
+        return appHostFile is null ? null : new FileInfo(appHostFile);
     }
 
     private async Task<string> GetProjectNameAsync(TemplateInputs inputs, string templateName, ParseResult parseResult, CancellationToken cancellationToken)

@@ -203,6 +203,7 @@ internal sealed class AspireConfigFile
         var legacyConfig = AspireJsonConfiguration.Load(directory);
         if (legacyConfig is not null)
         {
+            ValidateLegacyNuGetSource(legacyConfig.NuGetSource);
             var profiles = ReadApphostRunProfiles(Path.Combine(directory, "apphost.run.json"));
             config = FromLegacy(legacyConfig, profiles);
 
@@ -234,6 +235,24 @@ internal sealed class AspireConfigFile
         }
 
         return config;
+    }
+
+    private static void ValidateLegacyNuGetSource(string? nugetSource)
+    {
+        if (string.IsNullOrWhiteSpace(nugetSource))
+        {
+            return;
+        }
+
+        if (PackageSourceOverrideMappings.IsMalformedUriSource(nugetSource))
+        {
+            throw new InvalidOperationException(AddCommandStrings.InvalidSource);
+        }
+
+        if (PackageSourceOverrideMappings.HasCredentialMaterial(nugetSource))
+        {
+            throw new InvalidOperationException(NewCommandStrings.SourceWithCredentialsCannotBePersisted);
+        }
     }
 
     /// <summary>
@@ -461,85 +480,18 @@ internal sealed class AspireConfigFile
 
     private static JsonObject NormalizeExtensionData(Dictionary<string, JsonElement>? extensionData)
     {
-        var normalized = new JsonObject();
         if (extensionData is null)
         {
-            return normalized;
+            return new JsonObject();
         }
 
-        // Process extension properties in their JSON/input order. Later properties and explicit
-        // colon-delimited paths win conflicts, but object/object overlays retain disjoint children.
+        var raw = new JsonObject();
         foreach (var (propertyName, propertyValue) in extensionData)
         {
-            var normalizedValue = NormalizeJsonNode(JsonNode.Parse(propertyValue.GetRawText()));
-            OverlayJsonPath(normalized, propertyName.Split(':'), normalizedValue);
+            raw[propertyName] = JsonNode.Parse(propertyValue.GetRawText());
         }
 
-        return normalized;
-    }
-
-    private static JsonNode? NormalizeJsonNode(JsonNode? node)
-    {
-        if (node is JsonObject jsonObject)
-        {
-            var normalized = new JsonObject();
-            foreach (var (propertyName, propertyValue) in jsonObject)
-            {
-                OverlayJsonPath(
-                    normalized,
-                    propertyName.Split(':'),
-                    NormalizeJsonNode(propertyValue));
-            }
-
-            return normalized;
-        }
-
-        if (node is JsonArray jsonArray)
-        {
-            var normalized = new JsonArray();
-            foreach (var item in jsonArray)
-            {
-                normalized.Add(NormalizeJsonNode(item));
-            }
-
-            return normalized;
-        }
-
-        return node?.DeepClone();
-    }
-
-    private static void OverlayJsonPath(JsonObject target, string[] pathSegments, JsonNode? value)
-    {
-        var current = target;
-        for (var i = 0; i < pathSegments.Length - 1; i++)
-        {
-            var pathSegment = pathSegments[i];
-            var hasExistingProperty = TryGetPropertyName(current, pathSegment, out var existingName);
-            if (hasExistingProperty &&
-                current[existingName] is JsonObject existingObject)
-            {
-                if (!string.Equals(existingName, pathSegment, StringComparison.Ordinal))
-                {
-                    current.Remove(existingName);
-                    current[pathSegment] = existingObject;
-                }
-
-                current = existingObject;
-            }
-            else
-            {
-                if (hasExistingProperty)
-                {
-                    current.Remove(existingName);
-                }
-
-                var child = new JsonObject();
-                current[pathSegment] = child;
-                current = child;
-            }
-        }
-
-        OverlayJsonProperty(current, pathSegments[^1], value);
+        return ConfigurationHelper.ParseSettingsObject(raw.ToJsonString()) ?? raw;
     }
 
     private static void OverlayJsonObject(JsonObject target, JsonObject source)

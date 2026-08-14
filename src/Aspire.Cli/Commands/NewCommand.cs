@@ -599,6 +599,7 @@ internal sealed class NewCommand : BaseCommand
         {
             if (!sourceIsExplicit &&
                 sourceResolution?.IsGlobal is not true &&
+                sourceResolution?.IsAmbient is not true &&
                 !string.IsNullOrWhiteSpace(source) &&
                 template.OwnsAspireConfig)
             {
@@ -661,7 +662,25 @@ internal sealed class NewCommand : BaseCommand
         var fallbackSource = _configuration[AspireConfigFile.NuGetSourceKey];
         return string.IsNullOrWhiteSpace(fallbackSource)
             ? null
-            : new ConfigurationValueWithOrigin(fallbackSource, ExecutionContext.WorkingDirectory);
+            : new ConfigurationValueWithOrigin(
+                fallbackSource,
+                ExecutionContext.WorkingDirectory,
+                IsAmbient: IsAmbientEnvironmentValue(AspireConfigFile.NuGetSourceKey, fallbackSource));
+    }
+
+    private static bool IsAmbientEnvironmentValue(string key, string value)
+    {
+        foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
+        {
+            if (entry.Key is string environmentKey &&
+                string.Equals(environmentKey, key, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(entry.Value?.ToString(), value, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool ShouldResolveCliTemplateVersion(ITemplate template)

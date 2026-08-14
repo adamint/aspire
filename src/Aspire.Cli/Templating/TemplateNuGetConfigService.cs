@@ -181,8 +181,7 @@ internal sealed class TemplateNuGetConfigService(
         string? sourceOverride,
         string? channelName,
         string outputPath,
-        CancellationToken cancellationToken,
-        bool allowCredentialMaterial = false)
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(sourceOverride))
         {
@@ -203,8 +202,7 @@ internal sealed class TemplateNuGetConfigService(
             matchingChannel,
             outputPath,
             cancellationToken,
-            executionContext.NuGetServiceIndexOverride,
-            allowCredentialMaterial);
+            executionContext.NuGetServiceIndexOverride);
     }
 
     /// <summary>
@@ -215,10 +213,16 @@ internal sealed class TemplateNuGetConfigService(
         PackageChannel? channel,
         string outputPath,
         CancellationToken cancellationToken,
-        string? nugetServiceIndexOverride = null,
-        bool allowCredentialMaterial = false)
+        string? nugetServiceIndexOverride = null)
     {
         if (string.IsNullOrWhiteSpace(sourceOverride))
+        {
+            return false;
+        }
+
+        // Explicit credential-bearing sources are valid for one-shot discovery and restore,
+        // but must never be copied into a project NuGet.config.
+        if (PackageSourceOverrideMappings.HasCredentialMaterial(sourceOverride))
         {
             return false;
         }
@@ -226,14 +230,66 @@ internal sealed class TemplateNuGetConfigService(
         var mappings = PackageSourceOverrideMappings.Create(
             sourceOverride,
             channel,
-            nugetServiceIndexOverride,
-            allowCredentialMaterial);
+            nugetServiceIndexOverride);
         await NuGetConfigMerger.CreateOrUpdateAsync(
             new DirectoryInfo(outputPath),
             mappings,
             channel?.ConfigureGlobalPackagesFolder ?? false,
             cancellationToken: cancellationToken);
         return true;
+    }
+
+    public static async Task<IDisposable?> CreateTemporarySourceOverrideConfigAsync(
+        string? sourceOverride,
+        string outputPath,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(sourceOverride) ||
+            !PackageSourceOverrideMappings.HasCredentialMaterial(sourceOverride))
+        {
+            return null;
+        }
+
+        var outputDirectory = new DirectoryInfo(outputPath);
+        outputDirectory.Create();
+
+        FileInfo? existingConfig = null;
+        string? existingContent = null;
+        if (NuGetConfigMerger.TryFindNuGetConfigInDirectory(outputDirectory, out var foundConfig))
+        {
+            existingConfig = foundConfig;
+            existingContent = await File.ReadAllTextAsync(foundConfig.FullName, cancellationToken);
+        }
+
+        var configPath = existingConfig?.FullName ?? Path.Combine(outputDirectory.FullName, "nuget.config");
+        await TemporaryNuGetConfig.GenerateAsync(
+            PackageSourceOverrideMappings.CreateForTemplateOperations(sourceOverride),
+            configPath);
+
+        return new TemporaryProjectNuGetConfig(configPath, existingContent);
+    }
+
+    private sealed class TemporaryProjectNuGetConfig(string configPath, string? originalContent) : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            if (originalContent is null)
+            {
+                File.Delete(configPath);
+            }
+            else
+            {
+                File.WriteAllText(configPath, originalContent);
+            }
+        }
     }
 
     /// <summary>

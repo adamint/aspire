@@ -830,7 +830,33 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task ConfigSetCommand_WithCorruptedFile_PreservesExistingNestedValueOverFlatKey()
+    public async Task ConfigListCommand_WithCorruptedFileDoesNotRewriteIt()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        var settingsDir = Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire");
+        Directory.CreateDirectory(settingsDir);
+        var settingsPath = Path.Combine(settingsDir, "settings.json");
+        var original = """
+            {
+              // Preserve comments for read-only commands.
+              "channel": "daily",
+              "CHANNEL": "daily"
+            }
+            """;
+        await File.WriteAllTextAsync(settingsPath, original);
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+        var command = provider.GetRequiredService<Aspire.Cli.Commands.RootCommand>();
+        var result = command.Parse("config list");
+
+        Assert.Equal(0, await result.InvokeAsync().DefaultTimeout());
+        Assert.Equal(original, await File.ReadAllTextAsync(settingsPath));
+    }
+
+    [Fact]
+    public async Task ConfigReadOnlyBootstrap_WithCorruptedFilePreservesBytes()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
 
@@ -839,26 +865,21 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
         var settingsDir = Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire");
         Directory.CreateDirectory(settingsDir);
         var settingsPath = Path.Combine(settingsDir, "settings.json");
-        await File.WriteAllTextAsync(settingsPath, """
+        var original = """
             {
               "features": {
                 "polyglotSupportEnabled": "nested-value"
               },
               "features:polyglotSupportEnabled": "flat-value"
             }
-            """);
+            """;
+        await File.WriteAllTextAsync(settingsPath, original);
 
-        // Loading configuration triggers normalization
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
         using var provider = services.BuildServiceProvider();
+        _ = provider.GetRequiredService<Aspire.Cli.Commands.RootCommand>();
 
-        // The existing nested value should be preserved; the flat key value should be dropped
-        var json = await File.ReadAllTextAsync(settingsPath);
-        var settings = JsonNode.Parse(json)?.AsObject();
-        Assert.NotNull(settings);
-        Assert.False(settings.ContainsKey("features:polyglotSupportEnabled"));
-        var featuresObject = settings["features"]!.AsObject();
-        Assert.Equal("nested-value", featuresObject["polyglotSupportEnabled"]?.ToString());
+        Assert.Equal(original, await File.ReadAllTextAsync(settingsPath));
     }
 
     [Theory]

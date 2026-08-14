@@ -252,11 +252,6 @@ internal static class ConfigurationHelper
 
     private static void AddSettingsFile(IConfigurationBuilder configuration, string filePath)
     {
-        // Proactively normalize the settings file to prevent duplicate key errors.
-        // This handles files corrupted by mixing colon and dot notation
-        // (e.g., both "features:key" flat entry and "features" nested object).
-        TryNormalizeSettingsFile(filePath);
-
         // Pre-process the file to handle comments and trailing commas.
         // Microsoft.Extensions.Configuration.Json doesn't support JSON comments,
         // so we parse with comment support and load the clean JSON via stream.
@@ -331,55 +326,85 @@ internal static class ConfigurationHelper
             : null;
     }
 
-    private static JsonObject NormalizeSettingsObject(JsonElement element)
+    private enum NormalizationScope
     {
-        var normalized = new JsonObject();
-        var properties = element.EnumerateObject().ToArray();
-
-        foreach (var property in properties)
-        {
-            if (!property.Name.Contains(':', StringComparison.Ordinal))
-            {
-                OverlayJsonPath(normalized, property.Name.Split(':'), NormalizeJsonElement(property.Value));
-            }
-        }
-
-        // A nested JSON object is the authoritative representation when a file contains both
-        // "features":{"flag":false} and "features:flag":true. Process flat entries in reverse
-        // order so duplicate flat keys still use the last value, while existing nested leaves
-        // and their disjoint children are preserved.
-        for (var i = properties.Length - 1; i >= 0; i--)
-        {
-            var property = properties[i];
-            if (property.Name.Contains(':', StringComparison.Ordinal))
-            {
-                OverlayJsonPathPreservingExisting(
-                    normalized,
-                    property.Name.Split(':'),
-                    NormalizeJsonElement(property.Value));
-            }
-        }
-
-        return normalized;
+        Root,
+        AppHost,
+        Sdk,
+        Docs,
+        DocsApi,
+        Profiles,
+        Profile,
+        Literal
     }
 
-    private static JsonNode? NormalizeJsonElement(JsonElement element)
+    private static JsonObject NormalizeSettingsObject(JsonElement element)
+    {
+        return NormalizeObject(element, NormalizationScope.Root);
+    }
+
+    private static JsonObject NormalizeObject(JsonElement element, NormalizationScope scope)
+    {
+        if (scope is NormalizationScope.Literal)
+        {
+            return JsonNode.Parse(element.GetRawText())!.AsObject();
+        }
+
+        var direct = new JsonObject();
+        var flattened = new JsonObject();
+        var directPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var flattenedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var property in element.EnumerateObject())
+        {
+            var path = GetNormalizedPath(property.Name, scope);
+            var normalizedValue = NormalizeJsonElement(property.Value, GetChildScope(path));
+            var pathKey = string.Join('\0', path);
+
+            if (path.Length == 1)
+            {
+                if (!directPaths.Add(pathKey))
+                {
+                    RemoveJsonPath(direct, path);
+                }
+
+                OverlayJsonPath(direct, path, normalizedValue);
+            }
+            else
+            {
+                if (!flattenedPaths.Add(pathKey))
+                {
+                    RemoveJsonPath(flattened, path);
+                }
+
+                OverlayJsonPath(flattened, path, normalizedValue);
+            }
+        }
+
+        // Explicit nested objects win over their flattened aliases, while flattened
+        // representations still contribute disjoint children.
+        OverlayJsonObjectPreservingExisting(direct, flattened);
+        return direct;
+    }
+
+    private static JsonNode? NormalizeJsonElement(JsonElement element, NormalizationScope scope)
     {
         return element.ValueKind switch
         {
-            JsonValueKind.Object => NormalizeSettingsObject(element),
-            JsonValueKind.Array => NormalizeJsonArray(element),
+            JsonValueKind.Object => NormalizeObject(element, scope),
+            JsonValueKind.Array when scope is NormalizationScope.Literal => JsonNode.Parse(element.GetRawText()),
+            JsonValueKind.Array => NormalizeJsonArray(element, scope),
             JsonValueKind.Null => null,
             _ => JsonNode.Parse(element.GetRawText())
         };
     }
 
-    private static JsonArray NormalizeJsonArray(JsonElement element)
+    private static JsonArray NormalizeJsonArray(JsonElement element, NormalizationScope scope)
     {
         var normalized = new JsonArray();
         foreach (var item in element.EnumerateArray())
         {
-            normalized.Add(NormalizeJsonElement(item));
+            normalized.Add(NormalizeJsonElement(item, scope));
         }
 
         return normalized;
@@ -387,28 +412,166 @@ internal static class ConfigurationHelper
 
     private static bool NeedsNormalization(JsonElement element)
     {
-        return element.ValueKind switch
-        {
-            JsonValueKind.Object => NeedsObjectNormalization(element),
-            JsonValueKind.Array => element.EnumerateArray().Any(NeedsNormalization),
-            _ => false
-        };
+        return NeedsNormalization(element, NormalizationScope.Root);
     }
 
-    private static bool NeedsObjectNormalization(JsonElement element)
+    private static bool NeedsNormalization(JsonElement element, NormalizationScope scope)
     {
+        if (scope is NormalizationScope.Literal)
+        {
+            return false;
+        }
+
+        if (element.ValueKind is JsonValueKind.Array)
+        {
+            return element.EnumerateArray().Any(item => NeedsNormalization(item, scope));
+        }
+
+        if (element.ValueKind is not JsonValueKind.Object)
+        {
+            return false;
+        }
+
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var property in element.EnumerateObject())
         {
-            if (property.Name.Contains(':', StringComparison.Ordinal) ||
-                !names.Add(property.Name) ||
-                NeedsNormalization(property.Value))
+            var path = GetNormalizedPath(property.Name, scope);
+            if (!names.Add(string.Join('\0', path)) ||
+                path.Length > 1 ||
+                NeedsNormalization(property.Value, GetChildScope(path)))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    private static string[] GetNormalizedPath(string propertyName, NormalizationScope scope)
+    {
+        if (!propertyName.Contains(':', StringComparison.Ordinal))
+        {
+            return [propertyName];
+        }
+
+        var segments = propertyName.Split(':');
+        return scope switch
+        {
+            NormalizationScope.Root => GetRootPath(segments, propertyName),
+            NormalizationScope.AppHost => GetKnownPath(segments, propertyName, "path", "language"),
+            NormalizationScope.Sdk => GetKnownPath(segments, propertyName, "version"),
+            NormalizationScope.Docs => GetKnownPath(segments, propertyName, "llmsTxtUrl", "api", "sitemapUrl"),
+            NormalizationScope.DocsApi => GetKnownPath(segments, propertyName, "sitemapUrl"),
+            NormalizationScope.Profile => GetProfilePath(segments, propertyName),
+            _ => [propertyName]
+        };
+    }
+
+    private static string[] GetRootPath(string[] segments, string originalName)
+    {
+        if (segments.Length == 0)
+        {
+            return [originalName];
+        }
+
+        if (segments[0].Equals("features", StringComparison.OrdinalIgnoreCase) ||
+            segments[0].Equals("packages", StringComparison.OrdinalIgnoreCase))
+        {
+            return [segments[0], string.Join(':', segments.Skip(1))];
+        }
+
+        if (segments[0].Equals("profiles", StringComparison.OrdinalIgnoreCase))
+        {
+            if (segments.Length >= 3 &&
+                segments[2].Equals("environmentVariables", StringComparison.OrdinalIgnoreCase))
+            {
+                return [segments[0], segments[1], segments[2], string.Join(':', segments.Skip(3))];
+            }
+
+            if (segments.Length is 2 or 3 &&
+                (segments.Length == 2 ||
+                 segments[2].Equals("applicationUrl", StringComparison.OrdinalIgnoreCase)))
+            {
+                return segments;
+            }
+        }
+
+        if (segments[0].Equals("appHost", StringComparison.OrdinalIgnoreCase) ||
+            segments[0].Equals("sdk", StringComparison.OrdinalIgnoreCase) ||
+            segments[0].Equals("docs", StringComparison.OrdinalIgnoreCase))
+        {
+            return segments;
+        }
+
+        return [originalName];
+    }
+
+    private static string[] GetKnownPath(string[] segments, string originalName, params string[] knownNames)
+    {
+        if (segments.Length > 0 &&
+            knownNames.Any(name => segments[0].Equals(name, StringComparison.OrdinalIgnoreCase)))
+        {
+            return segments;
+        }
+
+        return [originalName];
+    }
+
+    private static string[] GetProfilePath(string[] segments, string originalName)
+    {
+        if (segments.Length >= 2 &&
+            segments[0].Equals("environmentVariables", StringComparison.OrdinalIgnoreCase))
+        {
+            return [segments[0], string.Join(':', segments.Skip(1))];
+        }
+
+        if (segments.Length == 1 &&
+            segments[0].Equals("applicationUrl", StringComparison.OrdinalIgnoreCase))
+        {
+            return segments;
+        }
+
+        return [originalName];
+    }
+
+    private static NormalizationScope GetChildScope(string[] path)
+    {
+        if (path.Length == 0)
+        {
+            return NormalizationScope.Literal;
+        }
+
+        return path[0].ToLowerInvariant() switch
+        {
+            "apphost" when path.Length == 1 => NormalizationScope.AppHost,
+            "sdk" when path.Length == 1 => NormalizationScope.Sdk,
+            "docs" when path.Length == 1 => NormalizationScope.Docs,
+            "docs" when path.Length == 2 && path[1].Equals("api", StringComparison.OrdinalIgnoreCase) => NormalizationScope.DocsApi,
+            "profiles" when path.Length == 1 => NormalizationScope.Profiles,
+            "profiles" when path.Length == 2 => NormalizationScope.Profile,
+            "profiles" when path.Length >= 3 && path[2].Equals("environmentVariables", StringComparison.OrdinalIgnoreCase) => NormalizationScope.Literal,
+            _ => NormalizationScope.Literal
+        };
+    }
+
+    private static void RemoveJsonPath(JsonObject target, string[] pathSegments)
+    {
+        var current = target;
+        for (var i = 0; i < pathSegments.Length - 1; i++)
+        {
+            if (!TryGetPropertyName(current, pathSegments[i], out var existingName) ||
+                current[existingName!] is not JsonObject existingObject)
+            {
+                return;
+            }
+
+            current = existingObject;
+        }
+
+        if (TryGetPropertyName(current, pathSegments[^1], out var finalName))
+        {
+            current.Remove(finalName!);
+        }
     }
 
     private static void OverlayJsonPath(JsonObject target, string[] pathSegments, JsonNode? value)
@@ -456,11 +619,6 @@ internal static class ConfigurationHelper
                 return;
             }
 
-            if (current[finalName!] is JsonObject)
-            {
-                return;
-            }
-
             current.Remove(finalName!);
         }
 
@@ -475,48 +633,49 @@ internal static class ConfigurationHelper
         }
     }
 
-    private static void OverlayJsonPathPreservingExisting(JsonObject target, string[] pathSegments, JsonNode? value)
-    {
-        var current = target;
-        for (var i = 0; i < pathSegments.Length - 1; i++)
-        {
-            var pathSegment = pathSegments[i];
-            if (TryGetPropertyName(current, pathSegment, out var existingName))
-            {
-                if (current[existingName!] is not JsonObject existingObject)
-                {
-                    return;
-                }
-
-                current = existingObject;
-            }
-            else
-            {
-                var child = new JsonObject();
-                current[pathSegment] = child;
-                current = child;
-            }
-        }
-
-        var finalSegment = pathSegments[^1];
-        if (TryGetPropertyName(current, finalSegment, out var finalName))
-        {
-            if (current[finalName!] is JsonObject existingObject && value is JsonObject sourceObject)
-            {
-                OverlayJsonObjectPreservingExisting(existingObject, sourceObject);
-            }
-
-            return;
-        }
-
-        current[finalSegment] = value?.DeepClone();
-    }
-
     private static void OverlayJsonObjectPreservingExisting(JsonObject target, JsonObject source)
     {
         foreach (var (propertyName, value) in source)
         {
-            OverlayJsonPathPreservingExisting(target, propertyName.Split(':'), value);
+            var path = propertyName.Split(':');
+            JsonObject? current = target;
+            for (var i = 0; i < path.Length - 1; i++)
+            {
+                if (TryGetPropertyName(current, path[i], out var existingName))
+                {
+                    if (current[existingName!] is not JsonObject existingObject)
+                    {
+                        current = null;
+                        break;
+                    }
+
+                    current = existingObject;
+                }
+                else
+                {
+                    var child = new JsonObject();
+                    current[path[i]] = child;
+                    current = child;
+                }
+            }
+
+            if (current is null)
+            {
+                continue;
+            }
+
+            var finalSegment = path[^1];
+            if (TryGetPropertyName(current, finalSegment, out var finalName))
+            {
+                if (current[finalName!] is JsonObject existingObject && value is JsonObject sourceObject)
+                {
+                    OverlayJsonObjectPreservingExisting(existingObject, sourceObject);
+                }
+
+                continue;
+            }
+
+            current[finalSegment] = value?.DeepClone();
         }
     }
 
