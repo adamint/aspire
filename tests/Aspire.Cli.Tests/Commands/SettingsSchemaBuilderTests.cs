@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Aspire.Cli.Commands;
+using Aspire.Cli.Configuration;
 using Aspire.Cli.Documentation.ApiDocs;
 using Aspire.Cli.Documentation.Docs;
 
@@ -39,6 +40,16 @@ public class SettingsSchemaBuilderTests
         Assert.Equal("string", sitemapProperty.Type);
         Assert.Contains(ApiDocsSourceConfiguration.DefaultSitemapUrl, sitemapProperty.Description, StringComparison.Ordinal);
         Assert.Contains("override", sitemapProperty.Description, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildConfigFileSchema_IncludesNuGetSource()
+    {
+        var schema = SettingsSchemaBuilder.BuildConfigFileSchema(excludeLocalOnly: false);
+
+        var nugetSourceProperty = Assert.Single(schema.Properties, static property => property.Name == AspireConfigFile.NuGetSourceKey);
+        Assert.Equal("string", nugetSourceProperty.Type);
+        Assert.Contains("NuGet source", nugetSourceProperty.Description, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
