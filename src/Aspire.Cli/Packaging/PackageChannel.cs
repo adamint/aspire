@@ -14,7 +14,7 @@ using NuGetPackage = Aspire.Shared.NuGetPackageCli;
 
 namespace Aspire.Cli.Packaging;
 
-internal class PackageChannel(string name, PackageChannelQuality quality, PackageMapping[]? mappings, INuGetPackageCache nuGetPackageCache, IFeatures features, ILogger logger, bool configureGlobalPackagesFolder = false, string? cliDownloadBaseUrl = null, string? pinnedVersion = null, string? currentCliVersion = null, Action? validateTemplatePackageMetadataPrefetching = null)
+internal class PackageChannel(string name, PackageChannelQuality quality, PackageMapping[]? mappings, INuGetPackageCache nuGetPackageCache, IFeatures features, ILogger logger, bool configureGlobalPackagesFolder = false, string? cliDownloadBaseUrl = null, string? pinnedVersion = null, string? currentCliVersion = null, Action? validateTemplatePackageMetadataPrefetching = null, PackageMapping[]? operationMappings = null)
 {
     // Threaded so the local-folder integration listing can honor the same
     // ShowDeprecatedPackages flag that NuGetPackageCache honors on the feed-based path.
@@ -64,7 +64,9 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
     public string? CliDownloadBaseUrl { get; } = cliDownloadBaseUrl;
     public string? PinnedVersion { get; } = pinnedVersion;
 
-    public string SourceDetails { get; } = ComputeSourceDetails(mappings);
+    private PackageMapping[]? EffectiveMappings => operationMappings ?? Mappings;
+
+    public string SourceDetails { get; } = ComputeSourceDetails(operationMappings ?? mappings);
 
     public bool ShouldPersistChannelName() =>
         Type is PackageChannelType.Explicit && !string.Equals(Name, PackageChannelNames.Stable, StringComparisons.ChannelName);
@@ -128,7 +130,7 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
 
     public Task<IEnumerable<NuGetPackage>> GetTemplatePackagesAsync(DirectoryInfo workingDirectory, CancellationToken cancellationToken)
     {
-        return GetTemplatePackagesAsync(workingDirectory, Mappings, cancellationToken);
+        return GetTemplatePackagesAsync(workingDirectory, EffectiveMappings, cancellationToken);
     }
 
     /// <summary>
@@ -191,7 +193,8 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
 
         var tasks = new List<Task<IEnumerable<NuGetPackage>>>();
 
-        using var tempNuGetConfig = Type is PackageChannelType.Explicit ? await TemporaryNuGetConfig.CreateAsync(Mappings!) : null;
+        var mappings = EffectiveMappings;
+        using var tempNuGetConfig = mappings is not null ? await TemporaryNuGetConfig.CreateAsync(mappings) : null;
 
         if (Quality is PackageChannelQuality.Stable || Quality is PackageChannelQuality.Both)
         {
@@ -231,12 +234,13 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
 
     private DirectoryInfo? GetLocalAspirePackageSource()
     {
-        if (Type is not PackageChannelType.Explicit || Mappings is null)
+        var mappings = EffectiveMappings;
+        if (mappings is null)
         {
             return null;
         }
 
-        foreach (var mapping in Mappings)
+        foreach (var mapping in mappings)
         {
             if (IsScopedAspireMapping(mapping) && Directory.Exists(mapping.Source))
             {
@@ -314,7 +318,8 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
             return GetPolyglotCompatiblePackageIdsFromLocalPackageSource(localPackageSource, cancellationToken);
         }
 
-        using var tempNuGetConfig = Type is PackageChannelType.Explicit ? await TemporaryNuGetConfig.CreateAsync(Mappings!) : null;
+        var mappings = EffectiveMappings;
+        using var tempNuGetConfig = mappings is not null ? await TemporaryNuGetConfig.CreateAsync(mappings) : null;
 
         var tasks = new List<Task<IEnumerable<NuGetPackage>>>();
 
@@ -413,7 +418,8 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
 
         var tasks = new List<Task<IEnumerable<NuGetPackage>>>();
 
-        using var tempNuGetConfig = Type is PackageChannelType.Explicit ? await TemporaryNuGetConfig.CreateAsync(Mappings!) : null;
+        var mappings = EffectiveMappings;
+        using var tempNuGetConfig = mappings is not null ? await TemporaryNuGetConfig.CreateAsync(mappings) : null;
 
         if (Quality is PackageChannelQuality.Stable || Quality is PackageChannelQuality.Both)
         {
@@ -504,7 +510,8 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
     {
         var tasks = new List<Task<IEnumerable<NuGetPackage>>>();
 
-        using var tempNuGetConfig = Type is PackageChannelType.Explicit ? await TemporaryNuGetConfig.CreateAsync(Mappings!) : null;
+        var mappings = EffectiveMappings;
+        using var tempNuGetConfig = mappings is not null ? await TemporaryNuGetConfig.CreateAsync(mappings) : null;
 
         if (Quality is PackageChannelQuality.Stable || Quality is PackageChannelQuality.Both)
         {
@@ -572,7 +579,7 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
     {
         ArgumentNullException.ThrowIfNull(mappings);
 
-        return new PackageChannel(Name, Quality, mappings, nuGetPackageCache, _features, logger, ConfigureGlobalPackagesFolder, CliDownloadBaseUrl, PinnedVersion, _currentCliVersion, validateTemplatePackageMetadataPrefetching);
+        return new PackageChannel(Name, Quality, Mappings, nuGetPackageCache, _features, logger, ConfigureGlobalPackagesFolder, CliDownloadBaseUrl, PinnedVersion, _currentCliVersion, validateTemplatePackageMetadataPrefetching, mappings);
     }
 
     public PackageChannel CreateScopedChannelForPackages(IEnumerable<string> packageIds)
@@ -599,7 +606,7 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
             .SelectMany(mapping => CreateScopedMappings(mapping, requestedPackageIds, logger))
             .ToArray();
 
-        return new PackageChannel(Name, Quality, scopedMappings, nuGetPackageCache, _features, logger, ConfigureGlobalPackagesFolder, CliDownloadBaseUrl, PinnedVersion, _currentCliVersion, validateTemplatePackageMetadataPrefetching);
+        return new PackageChannel(Name, Quality, scopedMappings, nuGetPackageCache, _features, logger, ConfigureGlobalPackagesFolder, CliDownloadBaseUrl, PinnedVersion, _currentCliVersion, validateTemplatePackageMetadataPrefetching, operationMappings);
     }
 
     private static IEnumerable<PackageMapping> CreateScopedMappings(PackageMapping mapping, IReadOnlyCollection<string> packageIds, ILogger logger)

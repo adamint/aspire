@@ -17,7 +17,8 @@ internal sealed class IntegrationPackageSearchService(
     IProjectLocator projectLocator,
     IInteractionService interactionService,
     CliExecutionContext executionContext,
-    IAppHostProjectFactory projectFactory)
+    IAppHostProjectFactory projectFactory,
+    IConfigurationService configurationService)
 {
     private const double FuzzyMatchThreshold = 0.3;
 
@@ -118,7 +119,10 @@ internal sealed class IntegrationPackageSearchService(
         return channels.Select(channel => channel.WithMappings(mappings));
     }
 
-    public async Task<(DirectoryInfo WorkingDirectory, string? ConfiguredChannel, string? LanguageId, int? ExitCode)> GetPackageSearchContextAsync(FileInfo? passedAppHostProjectFile, CancellationToken cancellationToken)
+    public async Task<(DirectoryInfo WorkingDirectory, string? ConfiguredChannel, string? ConfiguredSource, string? LanguageId, int? ExitCode)> GetPackageSearchContextAsync(
+        FileInfo? passedAppHostProjectFile,
+        string? invocationConfiguredSource,
+        CancellationToken cancellationToken)
     {
         FileInfo? appHostProjectFile;
         if (passedAppHostProjectFile is not null)
@@ -138,13 +142,58 @@ internal sealed class IntegrationPackageSearchService(
 
         if (appHostProjectFile is null)
         {
-            return (executionContext.WorkingDirectory, ConfiguredChannel: null, LanguageId: null, ExitCode: null);
+            return (
+                executionContext.WorkingDirectory,
+                ConfiguredChannel: null,
+                ConfiguredSource: NormalizeSource(invocationConfiguredSource),
+                LanguageId: null,
+                ExitCode: null);
         }
 
         var project = projectFactory.GetProject(appHostProjectFile);
         var (configuredChannel, exitCode) = GetConfiguredChannel(appHostProjectFile, project);
-        return (appHostProjectFile.Directory!, configuredChannel, project.LanguageId, exitCode);
+        var configuredSource = await GetConfiguredNuGetSourceAsync(
+            appHostProjectFile,
+            appHostWasExplicitlyPassed: passedAppHostProjectFile is not null,
+            invocationConfiguredSource,
+            cancellationToken);
+        return (appHostProjectFile.Directory!, configuredChannel, configuredSource, project.LanguageId, exitCode);
     }
+
+    public async Task<string?> GetConfiguredNuGetSourceAsync(
+        FileInfo appHostProjectFile,
+        bool appHostWasExplicitlyPassed,
+        string? invocationConfiguredSource,
+        CancellationToken cancellationToken)
+    {
+        var targetSource = NormalizeSource(await configurationService.GetConfigurationFromDirectoryAsync(
+            AspireConfigFile.NuGetSourceKey,
+            appHostProjectFile.Directory!,
+            cancellationToken: cancellationToken));
+
+        if (appHostWasExplicitlyPassed)
+        {
+            return targetSource ?? NormalizeSource(invocationConfiguredSource);
+        }
+
+        var invocationSource = NormalizeSource(invocationConfiguredSource);
+        if (invocationSource is null)
+        {
+            return targetSource;
+        }
+
+        var globalConfiguration = await configurationService.GetGlobalConfigurationAsync(cancellationToken);
+        globalConfiguration.TryGetValue(AspireConfigFile.NuGetSourceKey, out var globalSource);
+
+        // A process-level value that differs from the global file came from the selecting
+        // workspace or a higher-precedence provider and should continue to select the target.
+        return !string.Equals(invocationSource, NormalizeSource(globalSource), StringComparison.Ordinal)
+            ? invocationSource
+            : targetSource ?? invocationSource;
+    }
+
+    private static string? NormalizeSource(string? source)
+        => string.IsNullOrWhiteSpace(source) ? null : source;
 
     public (string? ConfiguredChannel, int? ExitCode) GetConfiguredChannel(FileInfo appHostProjectFile, IAppHostProject project)
     {

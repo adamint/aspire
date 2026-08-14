@@ -2,12 +2,14 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.IO.Compression;
+using System.Xml.Linq;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Packaging;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Tests.TestServices;
 using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.Logging.Abstractions;
+using NuGetPackage = Aspire.Shared.NuGetPackageCli;
 
 namespace Aspire.Cli.Tests.Packaging;
 
@@ -130,6 +132,42 @@ public class PackageChannelTests(ITestOutputHelper outputHelper)
         Assert.Equal(pinnedVersion, package.Version);
         Assert.Equal(sourceOverride, package.Source);
         Assert.Equal(channelSource, channel.SourceDetails);
+    }
+
+    [Fact]
+    public async Task WithMappings_PreservesChannelIdentityAndUsesMappingsForDiscovery()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        const string sourceOverride = "https://proxy.example/v3/index.json";
+        string? discoveredSource = null;
+        var cache = new FakeNuGetPackageCache
+        {
+            GetIntegrationPackagesAsyncCallback = (_, _, nugetConfig, _) =>
+            {
+                Assert.NotNull(nugetConfig);
+                discoveredSource = (string?)XDocument.Load(nugetConfig.FullName).Root!
+                    .Element("packageSources")!
+                    .Elements("add")
+                    .Single()
+                    .Attribute("value");
+
+                return Task.FromResult<IEnumerable<NuGetPackage>>(
+                    [new NuGetPackage { Id = "Aspire.Hosting.Redis", Source = sourceOverride, Version = "9.2.0" }]);
+            }
+        };
+        var channel = PackageChannel.CreateImplicitChannel(cache, new TestFeatures(), NullLogger.Instance);
+
+        var overriddenChannel = channel.WithMappings(
+            PackageSourceOverrideMappings.CreateForTemplateOperations(sourceOverride));
+        var package = Assert.Single(await overriddenChannel.GetIntegrationPackagesAsync(
+            workspace.WorkspaceRoot,
+            CancellationToken.None));
+
+        Assert.Equal(PackageChannelType.Implicit, overriddenChannel.Type);
+        Assert.Null(overriddenChannel.Mappings);
+        Assert.Equal(sourceOverride, overriddenChannel.SourceDetails);
+        Assert.Equal(sourceOverride, discoveredSource);
+        Assert.Equal("Aspire.Hosting.Redis", package.Id);
     }
 
     [Fact]

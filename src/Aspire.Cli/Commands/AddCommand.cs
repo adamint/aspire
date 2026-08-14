@@ -11,6 +11,7 @@ using Aspire.Cli.Packaging;
 using Aspire.Cli.Projects;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Telemetry;
+using Aspire.Cli.Templating;
 using Aspire.Cli.Utils;
 using Microsoft.Extensions.Configuration;
 using Semver;
@@ -107,7 +108,11 @@ internal sealed class AddCommand : BaseCommand
             var integrationName = parseResult.GetValue(s_integrationArgument);
             var passedAppHostProjectFile = parseResult.GetValue(s_appHostOption);
             var version = parseResult.GetValue(s_versionOption);
-            var source = parseResult.GetValue(s_sourceOption) ?? _configuration[AspireConfigFile.NuGetSourceKey];
+            var explicitSource = parseResult.GetValue(s_sourceOption);
+            explicitSource = string.IsNullOrWhiteSpace(explicitSource) ? null : explicitSource;
+            var invocationConfiguredSource = _configuration[AspireConfigFile.NuGetSourceKey];
+            invocationConfiguredSource = string.IsNullOrWhiteSpace(invocationConfiguredSource) ? null : invocationConfiguredSource;
+            var source = explicitSource ?? invocationConfiguredSource;
             var includeAllIntegrations = parseResult.GetValue(s_allOption);
             addActivity = _profilingTelemetry.StartAddCommand(integrationName, version, source, passedAppHostProjectFile);
 
@@ -124,6 +129,16 @@ internal sealed class AddCommand : BaseCommand
             if (effectiveAppHostProjectFile is null)
             {
                 return AddCommandFailure(CliExitCodes.FailedToFindProject);
+            }
+
+            source = explicitSource ?? await _integrationPackageSearchService.GetConfiguredNuGetSourceAsync(
+                effectiveAppHostProjectFile,
+                appHostWasExplicitlyPassed: passedAppHostProjectFile is not null,
+                invocationConfiguredSource,
+                cancellationToken);
+            if (source is not null)
+            {
+                source = PackageSourceOverrideMappings.ResolveForWorkingDirectory(source, effectiveAppHostProjectFile.Directory!);
             }
 
             // Get the appropriate project handler
@@ -362,7 +377,8 @@ internal sealed class AddCommand : BaseCommand
                 AppHostFile = effectiveAppHostProjectFile,
                 PackageId = selectedNuGetPackage.Package.Id,
                 PackageVersion = selectedNuGetPackage.Package.Version,
-                Source = source
+                Source = source,
+                UseSourceForPackageInstall = explicitSource is not null
             };
 
             // Stop any running AppHost instance before adding the package.
@@ -385,6 +401,16 @@ internal sealed class AddCommand : BaseCommand
             else if (runningInstanceResult == RunningInstanceResult.StopFailed)
             {
                 return AddCommandFailure(CliExitCodes.FailedToAddPackage, AddCommandStrings.UnableToStopRunningInstances);
+            }
+
+            if (explicitSource is null && source is not null)
+            {
+                await TemplateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(
+                    source,
+                    selectedNuGetPackage.Channel,
+                    effectiveAppHostProjectFile.Directory!.FullName,
+                    cancellationToken,
+                    ExecutionContext.NuGetServiceIndexOverride);
             }
 
             bool success;

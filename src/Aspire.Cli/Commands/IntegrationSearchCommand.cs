@@ -61,9 +61,12 @@ internal abstract class IntegrationDiscoveryCommand : BaseCommand
             var passedAppHostProjectFile = parseResult.GetValue(_appHostOption);
             var format = parseResult.GetValue(_formatOption);
             var includeAllIntegrations = parseResult.GetValue(_allOption);
-            var source = _configuration[AspireConfigFile.NuGetSourceKey];
+            var invocationConfiguredSource = _configuration[AspireConfigFile.NuGetSourceKey];
 
-            var (workingDirectory, configuredChannel, languageId, contextExitCode) = await _integrationPackageSearchService.GetPackageSearchContextAsync(passedAppHostProjectFile, cancellationToken);
+            var (workingDirectory, configuredChannel, source, languageId, contextExitCode) = await _integrationPackageSearchService.GetPackageSearchContextAsync(
+                passedAppHostProjectFile,
+                invocationConfiguredSource,
+                cancellationToken);
             if (contextExitCode is { } exitCode)
             {
                 return CommandResult.FromExitCode(exitCode);

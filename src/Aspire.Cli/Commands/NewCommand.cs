@@ -121,7 +121,7 @@ internal sealed class NewCommand : BaseCommand
 
         foreach (var template in _templates)
         {
-            var templateCommand = new TemplateCommand(template, ExecuteAsync, services);
+            var templateCommand = new TemplateCommand(template, ExecuteAsync, configuration, services);
             Subcommands.Add(templateCommand);
         }
     }
@@ -146,7 +146,7 @@ internal sealed class NewCommand : BaseCommand
 
     internal override void PrepareForExecution(ParseResult parseResult)
     {
-        if (!string.IsNullOrWhiteSpace(GetEffectiveSource(parseResult, _configuration)))
+        if (GetEffectiveSource(parseResult, _configuration) is not null)
         {
             // The foreground template lookup applies either --source or the configured source.
             // Background prefetch does not know about either input and could contact fallback feeds.

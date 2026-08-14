@@ -2376,7 +2376,7 @@ internal sealed partial class DotNetAppHostProject : IAppHostProject
             context.AppHostFile,
             context.PackageId,
             context.PackageVersion,
-            context.Source,
+            context.UseSourceForPackageInstall ? context.Source : null,
             noRestore: false,
             options,
             cancellationToken);
