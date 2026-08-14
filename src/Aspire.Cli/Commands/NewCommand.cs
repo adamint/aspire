@@ -6,7 +6,6 @@ using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Aspire.Cli.Bundles;
-using Aspire.Cli.Configuration;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.NuGet;
 using Aspire.Cli.Packaging;
@@ -35,8 +34,6 @@ internal sealed class NewCommand : BaseCommand
     private readonly IPackagingService _packagingService;
     private readonly AgentInitCommand _agentInitCommand;
     private readonly ICliHostEnvironment _hostEnvironment;
-    private readonly IConfiguration _configuration;
-    private readonly IConfigurationService _configurationService;
 
     internal static readonly Option<string?> s_nameOption = new("--name", "-n")
     {
@@ -76,7 +73,6 @@ internal sealed class NewCommand : BaseCommand
         AgentInitCommand agentInitCommand,
         ICliHostEnvironment hostEnvironment,
         IConfiguration configuration,
-        IConfigurationService configurationService,
         CommonCommandServices services)
         : base("new", NewCommandStrings.Description, services)
     {
@@ -86,8 +82,6 @@ internal sealed class NewCommand : BaseCommand
         _packagingService = packagingService;
         _agentInitCommand = agentInitCommand;
         _hostEnvironment = hostEnvironment;
-        _configuration = configuration;
-        _configurationService = configurationService;
 
         Options.Add(s_nameOption);
         Options.Add(s_outputOption);
@@ -124,21 +118,9 @@ internal sealed class NewCommand : BaseCommand
 
         foreach (var template in _templates)
         {
-            var templateCommand = new TemplateCommand(template, ExecuteAsync, configuration, services);
+            var templateCommand = new TemplateCommand(template, ExecuteAsync, services);
             Subcommands.Add(templateCommand);
         }
-    }
-
-    internal static string? GetEffectiveSource(ParseResult parseResult, IConfiguration configuration)
-    {
-        var explicitSource = parseResult.GetValue(s_sourceOption);
-        if (!string.IsNullOrWhiteSpace(explicitSource))
-        {
-            return explicitSource;
-        }
-
-        var configuredSource = configuration[AspireConfigFile.NuGetSourceKey];
-        return string.IsNullOrWhiteSpace(configuredSource) ? null : configuredSource;
     }
 
     private string? ParseExplicitLanguageId(ParseResult parseResult)
@@ -149,11 +131,10 @@ internal sealed class NewCommand : BaseCommand
 
     internal override void PrepareForExecution(ParseResult parseResult)
     {
-        if (!string.IsNullOrWhiteSpace(GetEffectiveSource(parseResult, _configuration)))
+        if (!string.IsNullOrWhiteSpace(parseResult.GetValue(s_sourceOption)))
         {
-            // The foreground template lookup applies either an explicit --source or a configured
-            // nugetSource. Background prefetch does not know about either input, so letting it run
-            // would still contact fallback feeds.
+            // The foreground template lookup applies --source. Background prefetch does not know
+            // about invocation options, so letting it run would still contact fallback feeds.
             DisableTemplatePackageMetadataPrefetchingForInvocation();
         }
     }
@@ -478,41 +459,15 @@ internal sealed class NewCommand : BaseCommand
     {
         using var activity = Telemetry.StartDiagnosticActivity(this.Name);
 
-        var sourceIsExplicit = !string.IsNullOrWhiteSpace(parseResult.GetValue(s_sourceOption));
-        var sourceResolution = await ResolveSourceAsync(parseResult, cancellationToken).ConfigureAwait(false);
-        var source = sourceResolution?.Value;
-        if (!string.IsNullOrWhiteSpace(source) &&
-            PackageSourceOverrideMappings.IsMalformedUriSource(source))
-        {
-            InteractionService.DisplayError(NewCommandStrings.InvalidSource);
-            return CommandResult.Failure(CliExitCodes.InvalidCommand);
-        }
-        if (!sourceIsExplicit && !string.IsNullOrWhiteSpace(source) && PackageSourceOverrideMappings.HasCredentialMaterial(source))
+        var source = parseResult.GetValue(s_sourceOption);
+        if (!string.IsNullOrWhiteSpace(source) && PackageSourceOverrideMappings.HasCredentialMaterial(source))
         {
             InteractionService.DisplayError(NewCommandStrings.SourceWithCredentialsCannotBePersisted);
             return CommandResult.Failure(CliExitCodes.InvalidCommand);
         }
-        if (!sourceIsExplicit &&
-            !string.IsNullOrWhiteSpace(source) &&
-            PackageSourceOverrideMappings.IsRemoteFileSystemSource(source))
-        {
-            InteractionService.DisplayError(NewCommandStrings.ConfiguredRemoteSourceNotSupported);
-            return CommandResult.Failure(CliExitCodes.InvalidCommand);
-        }
         if (!string.IsNullOrWhiteSpace(source))
         {
-            source = PackageSourceOverrideMappings.ResolveForWorkingDirectory(source, sourceResolution!.BaseDirectory);
-            if (!sourceIsExplicit && PackageSourceOverrideMappings.IsRemoteFileSystemSource(source))
-            {
-                InteractionService.DisplayError(NewCommandStrings.ConfiguredRemoteSourceNotSupported);
-                return CommandResult.Failure(CliExitCodes.InvalidCommand);
-            }
-            if (!sourceIsExplicit &&
-                PackageSourceOverrideMappings.GetFirstReparsePoint(sourceResolution.Value, sourceResolution.BaseDirectory) is not null)
-            {
-                InteractionService.DisplayError(NewCommandStrings.ConfiguredLinkedSourceNotSupported);
-                return CommandResult.Failure(CliExitCodes.InvalidCommand);
-            }
+            source = PackageSourceOverrideMappings.ResolveForWorkingDirectory(source, ExecutionContext.WorkingDirectory);
             if (PackageSourceOverrideMappings.GetMissingLocalDirectory(source) is { } missingDirectory)
             {
                 InteractionService.DisplayError(string.Format(
@@ -586,8 +541,6 @@ internal sealed class NewCommand : BaseCommand
             Name = parseResult.GetValue(s_nameOption),
             Output = parseResult.GetValue(s_outputOption),
             Source = source,
-            SourceIsExplicit = sourceIsExplicit,
-            SourcePolicy = GetPackageSourceRoutingPolicy(source, sourceIsExplicit, sourceResolution),
             Version = version,
             Channel = resolvedChannelName,
             Language = selectedLanguageId
@@ -598,30 +551,6 @@ internal sealed class NewCommand : BaseCommand
         // extraction. Ensure the bundle is ready instead of relying on best-effort prefetching.
         if (templateResult.ExitCode == CliExitCodes.Success)
         {
-            if (!sourceIsExplicit &&
-                sourceResolution?.IsGlobal is not true &&
-                sourceResolution?.IsAmbient is not true &&
-                !string.IsNullOrWhiteSpace(source) &&
-                template.OwnsAspireConfig)
-            {
-                var outputPath = templateResult.OutputPath ?? ExecutionContext.WorkingDirectory.FullName;
-                var configPath = Path.Combine(outputPath, AspireConfigFile.FileName);
-
-                // A legacy template may emit only .aspire/settings.json and apphost.run.json.
-                // Migrate those files before creating aspire.config.json so the persisted source
-                // does not shadow the template's AppHost, SDK, package, and profile settings.
-                if (!File.Exists(configPath))
-                {
-                    _ = AspireConfigFile.LoadOrCreate(outputPath);
-                }
-
-                await ConfigurationService.SetConfigurationInFileAsync(
-                    configPath,
-                    AspireConfigFile.NuGetSourceKey,
-                    source,
-                    cancellationToken).ConfigureAwait(false);
-            }
-
             await _bundleService.EnsureExtractedAsync(cancellationToken);
         }
 
@@ -639,69 +568,6 @@ internal sealed class NewCommand : BaseCommand
         }
 
         return CommandResult.FromExitCode(agentInitResult.ExitCode);
-    }
-
-    private async Task<ConfigurationValueWithOrigin?> ResolveSourceAsync(ParseResult parseResult, CancellationToken cancellationToken)
-    {
-        var explicitSource = parseResult.GetValue(s_sourceOption);
-        if (!string.IsNullOrWhiteSpace(explicitSource))
-        {
-            return new ConfigurationValueWithOrigin(explicitSource, ExecutionContext.WorkingDirectory);
-        }
-
-        var configuredSource = await _configurationService.GetConfigurationFromDirectoryWithOriginAsync(
-            AspireConfigFile.NuGetSourceKey,
-            ExecutionContext.WorkingDirectory,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
-        if (configuredSource is not null)
-        {
-            return configuredSource;
-        }
-
-        // In-memory test providers and other non-file-backed IConfiguration sources do not
-        // carry file provenance. Keep the historical cwd-relative behavior for that fallback.
-        var fallbackSource = _configuration[AspireConfigFile.NuGetSourceKey];
-        return string.IsNullOrWhiteSpace(fallbackSource)
-            ? null
-            : new ConfigurationValueWithOrigin(
-                fallbackSource,
-                ExecutionContext.WorkingDirectory,
-                IsAmbient: IsAmbientEnvironmentValue(AspireConfigFile.NuGetSourceKey, fallbackSource));
-    }
-
-    private static PackageSourceRoutingPolicy GetPackageSourceRoutingPolicy(
-        string? source,
-        bool sourceIsExplicit,
-        ConfigurationValueWithOrigin? sourceResolution)
-    {
-        if (string.IsNullOrWhiteSpace(source))
-        {
-            return PackageSourceRoutingPolicy.None;
-        }
-
-        if (sourceIsExplicit)
-        {
-            return PackageSourceRoutingPolicy.Explicit;
-        }
-
-        return sourceResolution is { IsGlobal: true } or { IsAmbient: true }
-            ? PackageSourceRoutingPolicy.GlobalOrAmbientConfigured
-            : PackageSourceRoutingPolicy.ProjectLocalConfigured;
-    }
-
-    private static bool IsAmbientEnvironmentValue(string key, string value)
-    {
-        foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
-        {
-            if (entry.Key is string environmentKey &&
-                string.Equals(environmentKey, key, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(entry.Value?.ToString(), value, StringComparison.Ordinal))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static bool ShouldResolveCliTemplateVersion(ITemplate template)

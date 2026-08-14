@@ -245,10 +245,6 @@
       },
       "additionalProperties": false
     },
-    "nugetSource": {
-      "description": "The default NuGet source for package and template operations. Explicit --source arguments override this value.",
-      "type": "string"
-    },
     "packages": {
       "description": "Package references for non-first-class languages. Key is package name, value is version. A value ending in \".csproj\" is treated as a project reference.",
       "type": "object",

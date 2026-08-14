@@ -104,9 +104,9 @@ internal sealed class AddCommand : BaseCommand
             var integrationName = parseResult.GetValue(s_integrationArgument);
             var passedAppHostProjectFile = parseResult.GetValue(s_appHostOption);
             var version = parseResult.GetValue(s_versionOption);
-            var explicitSource = parseResult.GetValue(s_sourceOption);
+            var source = parseResult.GetValue(s_sourceOption);
             var includeAllIntegrations = parseResult.GetValue(s_allOption);
-            addActivity = _profilingTelemetry.StartAddCommand(integrationName, version, explicitSource, passedAppHostProjectFile);
+            addActivity = _profilingTelemetry.StartAddCommand(integrationName, version, source, passedAppHostProjectFile);
 
             AppHostProjectSearchResult searchResult;
             using (var findAppHostActivity = _profilingTelemetry.StartAddFindAppHost(passedAppHostProjectFile))
@@ -156,25 +156,6 @@ internal sealed class AddCommand : BaseCommand
                 return AddCommandFromExitCode(exitCode);
             }
 
-            var sourceResolution = await _integrationPackageSearchService.ResolvePackageSourceAsync(
-                explicitSource,
-                effectiveAppHostProjectFile.Directory!,
-                useInvocationConfig: passedAppHostProjectFile is null,
-                cancellationToken: cancellationToken);
-            if (IntegrationPackageSearchService.GetPackageSourceValidationError(sourceResolution) is { } sourceValidationError)
-            {
-                return AddCommandFailure(CliExitCodes.InvalidCommand, sourceValidationError);
-            }
-
-            var source = sourceResolution?.ResolvedValue;
-
-            // Package discovery and any later version lookup must resolve against the same source override.
-            // Reusing one mapping set prevents version selection from silently falling back to the channel feed
-            // after discovery already proved the package exists behind the approved source.
-            var sourceOverrideMappings = string.IsNullOrWhiteSpace(source)
-                ? null
-                : PackageSourceOverrideMappings.CreateForTemplateOperations(source);
-
             // For non-C# (polyglot) AppHosts, only integrations with ATS export coverage are usable: a
             // TypeScript/Python/Go/Java/Rust AppHost gets a generated SDK only for packages carrying the
             // `polyglot` NuGet tag. The tag is added by default to Aspire.Hosting integrations that run the
@@ -200,7 +181,7 @@ internal sealed class AddCommand : BaseCommand
                 {
                     var (discoveredPackages, discoveredPolyglotIds) = await InteractionService.ShowStatusAsync(
                         AddCommandStrings.SearchingForAspirePackages,
-                        async () => await _integrationPackageSearchService.GetIntegrationPackagesWithPolyglotCompatibilityAsync(effectiveAppHostProjectFile.Directory!, configuredChannel, source, cancellationToken));
+                        async () => await _integrationPackageSearchService.GetIntegrationPackagesWithPolyglotCompatibilityAsync(effectiveAppHostProjectFile.Directory!, configuredChannel, cancellationToken));
                     packagesWithChannels = discoveredPackages as List<(NuGetPackage Package, PackageChannel Channel)> ?? discoveredPackages.ToList();
                     polyglotCompatibleIds = discoveredPolyglotIds;
                 }
@@ -208,7 +189,7 @@ internal sealed class AddCommand : BaseCommand
                 {
                     var discoveredPackages = await InteractionService.ShowStatusAsync(
                         AddCommandStrings.SearchingForAspirePackages,
-                        async () => await _integrationPackageSearchService.GetIntegrationPackagesWithChannelsAsync(effectiveAppHostProjectFile.Directory!, configuredChannel, source, cancellationToken));
+                        async () => await _integrationPackageSearchService.GetIntegrationPackagesWithChannelsAsync(effectiveAppHostProjectFile.Directory!, configuredChannel, cancellationToken));
                     packagesWithChannels = discoveredPackages as List<(NuGetPackage Package, PackageChannel Channel)> ?? discoveredPackages.ToList();
                 }
 
@@ -232,8 +213,7 @@ internal sealed class AddCommand : BaseCommand
             if (applyPolyglotFilter)
             {
                 bool MatchesIntegrationName((string FriendlyName, NuGetPackage Package, PackageChannel Channel) p)
-                    => string.Equals(p.FriendlyName, integrationName, StringComparisons.UserTextSearch) ||
-                        string.Equals(p.Package.Id, integrationName, StringComparisons.NuGetPackageId);
+                    => p.FriendlyName == integrationName || p.Package.Id == integrationName;
 
                 // If the user named a specific integration that exists but is not polyglot-compatible, give a
                 // precise, actionable error rather than silently dropping it and fuzzy-matching something else.
@@ -263,9 +243,7 @@ internal sealed class AddCommand : BaseCommand
             }
 
             var filteredPackagesWithShortName = packagesWithShortName
-                .Where(p =>
-                    string.Equals(p.FriendlyName, integrationName, StringComparisons.UserTextSearch) ||
-                    string.Equals(p.Package.Id, integrationName, StringComparisons.NuGetPackageId))
+                .Where(p => p.FriendlyName == integrationName || p.Package.Id == integrationName)
                 .ToList();
             var packageMatchKind = filteredPackagesWithShortName.Count > 0
                 ? ProfilingTelemetry.Values.AddPackageMatchKindExact
@@ -315,7 +293,6 @@ internal sealed class AddCommand : BaseCommand
                     integrationName,
                     version,
                     configuredChannel,
-                    sourceOverrideMappings,
                     cancellationToken,
                     promptForSinglePackage: integrationName is not null),
                 1 when packageMatchKind == ProfilingTelemetry.Values.AddPackageMatchKindExact
@@ -326,7 +303,6 @@ internal sealed class AddCommand : BaseCommand
                     filteredPackagesWithShortName,
                     version,
                     configuredChannel,
-                    sourceOverrideMappings,
                     cancellationToken,
                     promptForSingleFuzzyPackage)
             };
@@ -383,8 +359,7 @@ internal sealed class AddCommand : BaseCommand
                 AppHostFile = effectiveAppHostProjectFile,
                 PackageId = selectedNuGetPackage.Package.Id,
                 PackageVersion = selectedNuGetPackage.Package.Version,
-                Source = source,
-                SourcePolicy = sourceResolution?.RoutingPolicy ?? PackageSourceRoutingPolicy.None
+                Source = source
             };
 
             // Stop any running AppHost instance before adding the package.
@@ -470,9 +445,9 @@ internal sealed class AddCommand : BaseCommand
         }
     }
 
-    private static async Task<IEnumerable<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)>> GetAllPackageVersions(DirectoryInfo workingDirectory, IEnumerable<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)> possiblePackages, PackageMapping[]? sourceOverrideMappings, CancellationToken cancellationToken)
+    private static async Task<IEnumerable<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)>> GetAllPackageVersions(DirectoryInfo workingDirectory, IEnumerable<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)> possiblePackages, CancellationToken cancellationToken)
     {
-        var distinctPackageIds = possiblePackages.DistinctBy(package => package.Package.Id, StringComparers.NuGetPackageId);
+        var distinctPackageIds = possiblePackages.DistinctBy(package => package.Package.Id);
         var channels = possiblePackages.Select(package => package.Channel).Distinct();
 
         var versions = new List<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)>();
@@ -480,7 +455,7 @@ internal sealed class AddCommand : BaseCommand
         {
             foreach (var package in distinctPackageIds)
             {
-                var packages = await channel.GetPackageVersionsAsync(package.Package.Id, workingDirectory, sourceOverrideMappings, cancellationToken);
+                var packages = await channel.GetPackageVersionsAsync(package.Package.Id, workingDirectory, cancellationToken);
                 versions.AddRange(packages.Select(p => (FriendlyName: package.FriendlyName, Package: p, Channel: channel)));
             }
         }
@@ -492,11 +467,10 @@ internal sealed class AddCommand : BaseCommand
         IEnumerable<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)> possiblePackages,
         string? preferredVersion,
         string? configuredChannel,
-        PackageMapping[]? sourceOverrideMappings,
         CancellationToken cancellationToken,
         bool promptForSinglePackage = false)
     {
-        var distinctPackages = possiblePackages.DistinctBy(p => p.Package.Id, StringComparers.NuGetPackageId).ToArray();
+        var distinctPackages = possiblePackages.DistinctBy(p => p.Package.Id).ToArray();
 
         // Exact matches can skip the package prompt when one package remains. Fuzzy/no-match
         // fallbacks opt into prompting so interactive users confirm the candidate first.
@@ -510,9 +484,7 @@ internal sealed class AddCommand : BaseCommand
             _ => throw new InvalidOperationException(AddCommandStrings.UnexpectedNumberOfPackagesFound)
         };
 
-        var packageVersions = possiblePackages
-            .Where(p => string.Equals(p.Package.Id, selectedPackage.Package.Id, StringComparisons.NuGetPackageId))
-            .ToArray();
+        var packageVersions = possiblePackages.Where(p => p.Package.Id == selectedPackage.Package.Id).ToArray();
 
         // If any of the package versions are an exact match for the preferred version
         // then we can skip the version prompt and just use that version.
@@ -526,7 +498,7 @@ internal sealed class AddCommand : BaseCommand
 
             var allVersions = await InteractionService.ShowStatusAsync(
                 string.Format(CultureInfo.CurrentCulture, AddCommandStrings.SearchingForSpecifiedPackageVersion, selectedPackage.Package.Id, preferredVersion),
-                async () => await GetAllPackageVersions(workingDirectory, packageVersions, sourceOverrideMappings, cancellationToken));
+                async () => await GetAllPackageVersions(workingDirectory, packageVersions, cancellationToken));
             var matchedPreferredVersionPackage = allVersions.FirstOrDefault(packageVersion => packageVersion.Package.Version == preferredVersion);
             if (matchedPreferredVersionPackage.Package is not null)
             {
@@ -607,7 +579,6 @@ internal sealed class AddCommand : BaseCommand
         string? searchTerm,
         string? preferredVersion,
         string? configuredChannel,
-        PackageMapping[]? sourceOverrideMappings,
         CancellationToken cancellationToken,
         bool promptForSinglePackage = false)
     {
@@ -616,7 +587,7 @@ internal sealed class AddCommand : BaseCommand
             InteractionService.DisplaySubtleMessage(string.Format(CultureInfo.CurrentCulture, AddCommandStrings.NoPackagesMatchedSearchTerm, searchTerm));
         }
 
-        return await GetPackageByInteractiveFlow(workingDirectory, possiblePackages, preferredVersion, configuredChannel, sourceOverrideMappings, cancellationToken, promptForSinglePackage);
+        return await GetPackageByInteractiveFlow(workingDirectory, possiblePackages, preferredVersion, configuredChannel, cancellationToken, promptForSinglePackage);
     }
 
 }
@@ -763,7 +734,7 @@ internal class AddCommandPrompter(IInteractionService interactionService) : IAdd
     {
         // Filter to show only the highest version for each package ID
         var filteredPackages = packages
-            .GroupBy(p => p.Package.Id, StringComparers.NuGetPackageId)
+            .GroupBy(p => p.Package.Id)
             .Select(g => g.OrderByDescending(p => SemVersion.Parse(p.Package.Version), SemVersion.PrecedenceComparer).First())
             .ToArray();
 

@@ -110,29 +110,6 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal("bar", settings["foo"]?.ToString());
     }
 
-    [Theory]
-    [InlineData("https://user:password@example/v3/index.json")]
-    [InlineData("https://example/v3/index.json?token=secret")]
-    [InlineData("https://example/v3/index.json#fragment")]
-    [InlineData("http://bad host/feed")]
-    public async Task ConfigSetCommand_RejectsUnsafeOrMalformedNuGetSource(string source)
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
-        using var provider = services.BuildServiceProvider();
-
-        var command = provider.GetRequiredService<Aspire.Cli.Commands.RootCommand>();
-        var exitCode = await command.Parse($"config set nugetSource \"{source}\"").InvokeAsync().DefaultTimeout();
-
-        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
-        var settingsPath = Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire", "settings.json");
-        if (File.Exists(settingsPath))
-        {
-            var settings = JsonNode.Parse(await File.ReadAllTextAsync(settingsPath))!.AsObject();
-            Assert.Null(settings["nugetSource"]);
-        }
-    }
-
     [Fact]
     public async Task DocsSourceUrls_CanBeConfiguredViaAspireConfig()
     {
@@ -815,9 +792,6 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
         // Loading configuration should succeed after normalizing the corrupted file
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
         using var provider = services.BuildServiceProvider();
-        var command = provider.GetRequiredService<Aspire.Cli.Commands.RootCommand>();
-        var result = command.Parse("config set channel daily");
-        Assert.Equal(0, await result.InvokeAsync().DefaultTimeout());
 
         // Verify the file was normalized - flat key should be gone, existing nested value preserved
         var json = await File.ReadAllTextAsync(settingsPath);
@@ -830,33 +804,7 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task ConfigListCommand_WithCorruptedFileDoesNotRewriteIt()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-
-        var settingsDir = Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire");
-        Directory.CreateDirectory(settingsDir);
-        var settingsPath = Path.Combine(settingsDir, "settings.json");
-        var original = """
-            {
-              // Preserve comments for read-only commands.
-              "channel": "daily",
-              "CHANNEL": "daily"
-            }
-            """;
-        await File.WriteAllTextAsync(settingsPath, original);
-
-        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
-        using var provider = services.BuildServiceProvider();
-        var command = provider.GetRequiredService<Aspire.Cli.Commands.RootCommand>();
-        var result = command.Parse("config list");
-
-        Assert.Equal(0, await result.InvokeAsync().DefaultTimeout());
-        Assert.Equal(original, await File.ReadAllTextAsync(settingsPath));
-    }
-
-    [Fact]
-    public async Task ConfigReadOnlyBootstrap_WithCorruptedFilePreservesBytes()
+    public async Task ConfigSetCommand_WithCorruptedFile_PreservesExistingNestedValueOverFlatKey()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
 
@@ -865,21 +813,26 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
         var settingsDir = Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire");
         Directory.CreateDirectory(settingsDir);
         var settingsPath = Path.Combine(settingsDir, "settings.json");
-        var original = """
+        await File.WriteAllTextAsync(settingsPath, """
             {
               "features": {
                 "polyglotSupportEnabled": "nested-value"
               },
               "features:polyglotSupportEnabled": "flat-value"
             }
-            """;
-        await File.WriteAllTextAsync(settingsPath, original);
+            """);
 
+        // Loading configuration triggers normalization
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
         using var provider = services.BuildServiceProvider();
-        _ = provider.GetRequiredService<Aspire.Cli.Commands.RootCommand>();
 
-        Assert.Equal(original, await File.ReadAllTextAsync(settingsPath));
+        // The existing nested value should be preserved; the flat key value should be dropped
+        var json = await File.ReadAllTextAsync(settingsPath);
+        var settings = JsonNode.Parse(json)?.AsObject();
+        Assert.NotNull(settings);
+        Assert.False(settings.ContainsKey("features:polyglotSupportEnabled"));
+        var featuresObject = settings["features"]!.AsObject();
+        Assert.Equal("nested-value", featuresObject["polyglotSupportEnabled"]?.ToString());
     }
 
     [Theory]
@@ -1050,7 +1003,7 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
     }
 }
 
-internal sealed class TestConfigurationService : IConfigurationService
+public class TestConfigurationService : IConfigurationService
 {
     public Task SetConfigurationAsync(string key, string value, bool isGlobal = false, CancellationToken cancellationToken = default)
     {
@@ -1092,17 +1045,6 @@ internal sealed class TestConfigurationService : IConfigurationService
     public Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
     {
         return GetConfigurationAsync(key, cancellationToken);
-    }
-
-    public async Task<ConfigurationValueWithOrigin?> GetConfigurationFromDirectoryWithOriginAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
-    {
-        var value = await GetConfigurationAsync(key, cancellationToken);
-        return string.IsNullOrWhiteSpace(value) ? null : new ConfigurationValueWithOrigin(value, startDirectory);
-    }
-
-    public Task<ConfigurationValueWithOrigin?> GetLocalConfigurationFromDirectoryWithOriginAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
-    {
-        return GetConfigurationFromDirectoryWithOriginAsync(key, startDirectory, continueSearchWhenKeyMissing, cancellationToken);
     }
 
     public string GetSettingsFilePath(bool isGlobal)

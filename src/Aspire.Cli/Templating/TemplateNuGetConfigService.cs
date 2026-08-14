@@ -175,13 +175,12 @@ internal sealed class TemplateNuGetConfigService(
     }
 
     /// <summary>
-    /// Creates or updates a project NuGet.config using the source's persistence and routing policy.
+    /// Creates or updates a project NuGet.config that maps Aspire packages to an explicit package source override.
     /// </summary>
     public async Task<bool> CreateOrUpdateNuGetConfigForSourceOverrideAsync(
         string? sourceOverride,
         string? channelName,
         string outputPath,
-        PackageSourceRoutingPolicy sourcePolicy,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(sourceOverride))
@@ -198,23 +197,16 @@ internal sealed class TemplateNuGetConfigService(
                 string.Equals(c.Name, channelName, StringComparison.OrdinalIgnoreCase));
         }
 
-        return await CreateOrUpdateNuGetConfigForSourceOverrideAsync(
-            sourceOverride,
-            matchingChannel,
-            outputPath,
-            sourcePolicy,
-            cancellationToken,
-            executionContext.NuGetServiceIndexOverride);
+        return await CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride, matchingChannel, outputPath, cancellationToken, executionContext.NuGetServiceIndexOverride);
     }
 
     /// <summary>
-    /// Creates or updates a project NuGet.config using the source's persistence and routing policy.
+    /// Creates or updates a project NuGet.config that maps Aspire packages to an explicit package source override.
     /// </summary>
     public static async Task<bool> CreateOrUpdateNuGetConfigForSourceOverrideAsync(
         string? sourceOverride,
         PackageChannel? channel,
         string outputPath,
-        PackageSourceRoutingPolicy sourcePolicy,
         CancellationToken cancellationToken,
         string? nugetServiceIndexOverride = null)
     {
@@ -223,98 +215,13 @@ internal sealed class TemplateNuGetConfigService(
             return false;
         }
 
-        if (sourcePolicy is PackageSourceRoutingPolicy.None or PackageSourceRoutingPolicy.GlobalOrAmbientConfigured)
-        {
-            return false;
-        }
-
-        // Explicit credential-bearing sources are valid for one-shot discovery and restore,
-        // but must never be copied into a project NuGet.config.
-        if (PackageSourceOverrideMappings.HasCredentialMaterial(sourceOverride))
-        {
-            return false;
-        }
-
-        var mappings = sourcePolicy is PackageSourceRoutingPolicy.ProjectLocalConfigured
-            ? PackageSourceOverrideMappings.CreateForPersistentConfiguredSource(sourceOverride)
-            : PackageSourceOverrideMappings.Create(sourceOverride, channel, nugetServiceIndexOverride);
+        var mappings = PackageSourceOverrideMappings.Create(sourceOverride, channel, nugetServiceIndexOverride);
         await NuGetConfigMerger.CreateOrUpdateAsync(
             new DirectoryInfo(outputPath),
             mappings,
             channel?.ConfigureGlobalPackagesFolder ?? false,
             cancellationToken: cancellationToken);
         return true;
-    }
-
-    public static async Task<IDisposable?> CreateTemporarySourceOverrideConfigAsync(
-        string? sourceOverride,
-        string outputPath,
-        PackageSourceRoutingPolicy sourcePolicy,
-        CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(sourceOverride) ||
-            (sourcePolicy is not PackageSourceRoutingPolicy.GlobalOrAmbientConfigured &&
-             !PackageSourceOverrideMappings.HasCredentialMaterial(sourceOverride)))
-        {
-            return null;
-        }
-
-        var outputDirectory = new DirectoryInfo(outputPath);
-        outputDirectory.Create();
-
-        FileInfo? existingConfig = null;
-        string? existingContent = null;
-        if (NuGetConfigMerger.TryFindNuGetConfigInDirectory(outputDirectory, out var foundConfig))
-        {
-            existingConfig = foundConfig;
-            existingContent = await File.ReadAllTextAsync(foundConfig.FullName, cancellationToken);
-        }
-
-        var configPath = existingConfig?.FullName ?? Path.Combine(outputDirectory.FullName, "nuget.config");
-        try
-        {
-            await TemporaryNuGetConfig.GenerateAsync(
-                PackageSourceOverrideMappings.CreateForTemplateOperations(sourceOverride),
-                configPath);
-
-            return new TemporaryProjectNuGetConfig(configPath, existingContent);
-        }
-        catch
-        {
-            if (existingContent is null)
-            {
-                File.Delete(configPath);
-            }
-            else
-            {
-                await File.WriteAllTextAsync(configPath, existingContent, CancellationToken.None);
-            }
-
-            throw;
-        }
-    }
-
-    private sealed class TemporaryProjectNuGetConfig(string configPath, string? originalContent) : IDisposable
-    {
-        private bool _disposed;
-
-        public void Dispose()
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            _disposed = true;
-            if (originalContent is null)
-            {
-                File.Delete(configPath);
-            }
-            else
-            {
-                File.WriteAllText(configPath, originalContent);
-            }
-        }
     }
 
     /// <summary>

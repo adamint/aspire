@@ -54,12 +54,6 @@
         }
       ]
     },
-    "no-restore": {
-      "type": "parameter",
-      "datatype": "bool",
-      "description": "If specified, skips the automatic restore of the project on create.",
-      "defaultValue": "false"
-    },
     "appHostHttpPort": {
       "type": "parameter",
       "datatype": "integer",

@@ -547,46 +547,6 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task TryCreateTemporaryNuGetConfig_WithPersistentConfiguredSource_IsExclusive()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        const string packageSourceOverride = "https://internal.example/v3/index.json";
-        var server = CreatePrebuiltAppHostServer(workspace);
-
-        using var result = await InvokeTryCreateTemporaryNuGetConfigAsync(
-            server,
-            requestedChannel: null,
-            packageSourceOverride: packageSourceOverride,
-            sourcePolicy: PackageSourceRoutingPolicy.ProjectLocalConfigured);
-
-        Assert.NotNull(result);
-        var doc = XDocument.Load(result.ConfigFile.FullName);
-        Assert.Equal(["Aspire*", PackageMapping.AllPackages], GetPackagePatternsForSource(doc, packageSourceOverride));
-        Assert.DoesNotContain(NuGetOrgSource, doc.Descendants("add").Select(e => (string?)e.Attribute("value")));
-    }
-
-    [Fact]
-    public async Task TryCreateTemporaryNuGetConfig_WithCredentialBearingPackageSourceOverride_AllowsTransientConfig()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        const string packageSourceOverride = "https://example.test/v3/index.json?token=secret";
-        var packagingService = new TestPackagingService
-        {
-            GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>([])
-        };
-        var server = CreateServerWithPackagingService(workspace, packagingService);
-
-        using var result = await InvokeTryCreateTemporaryNuGetConfigAsync(
-            server,
-            requestedChannel: null,
-            packageSourceOverride: packageSourceOverride);
-
-        Assert.NotNull(result);
-        var doc = XDocument.Load(result.ConfigFile.FullName);
-        Assert.Equal(["Aspire*"], GetPackagePatternsForSource(doc, packageSourceOverride));
-    }
-
-    [Fact]
     public async Task TryCreateTemporaryNuGetConfig_WithPackageSourceOverrideWithoutRequestedChannel_DoesNotMergeExplicitChannelAspireMappings()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
@@ -789,22 +749,6 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task GetNuGetSources_WithPersistentConfiguredSource_IsExclusive()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        const string packageSourceOverride = "https://internal.example/v3/index.json";
-        var server = CreatePrebuiltAppHostServer(workspace);
-
-        var sources = await InvokeGetNuGetSourcesAsync(
-            server,
-            requestedChannel: "staging",
-            packageSourceOverride: packageSourceOverride,
-            sourcePolicy: PackageSourceRoutingPolicy.GlobalOrAmbientConfigured);
-
-        Assert.Equal([packageSourceOverride], sources);
-    }
-
-    [Fact]
     public async Task GetNuGetSources_WithPackageSourceOverrideAndMatchedChannelNonAspireMapping_KeepsChannelSourceAndAddsNuGetOrgFallback()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
@@ -915,7 +859,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
         var server = CreateServerWithUnavailableStagingChannel(workspace, executionContext, unavailableReason);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => server.GetNuGetSourcesAsync("staging", packageSourceOverride: null, CancellationToken.None, PackageSourceRoutingPolicy.None));
+            () => server.GetNuGetSourcesAsync("staging", packageSourceOverride: null, CancellationToken.None));
         Assert.Equal(unavailableReason, ex.Message);
     }
 
@@ -942,7 +886,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
 
         var server = CreatePrebuiltAppHostServer(workspace, packagingService: packagingService, executionContext: executionContext);
 
-        var sources = await server.GetNuGetSourcesAsync("daily", packageSourceOverride: null, CancellationToken.None, PackageSourceRoutingPolicy.None);
+        var sources = await server.GetNuGetSourcesAsync("daily", packageSourceOverride: null, CancellationToken.None);
 
         Assert.NotNull(sources);
         Assert.Contains("https://pkgs.dev.azure.com/fake/v3/index.json", sources);
@@ -1059,30 +1003,28 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
     private static async Task<TemporaryNuGetConfig?> InvokeTryCreateTemporaryNuGetConfigAsync(
         PrebuiltAppHostServer server,
         string? requestedChannel,
-        string? packageSourceOverride = null,
-        PackageSourceRoutingPolicy sourcePolicy = PackageSourceRoutingPolicy.Explicit)
+        string? packageSourceOverride = null)
     {
         var method = typeof(PrebuiltAppHostServer).GetMethod(
             "TryCreateTemporaryNuGetConfigAsync",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
         Assert.NotNull(method);
 
-        var task = (Task<TemporaryNuGetConfig?>)method.Invoke(server, [requestedChannel, packageSourceOverride, CancellationToken.None, sourcePolicy])!;
+        var task = (Task<TemporaryNuGetConfig?>)method.Invoke(server, [requestedChannel, packageSourceOverride, CancellationToken.None])!;
         return await task;
     }
 
     private static async Task<IReadOnlyList<string>?> InvokeGetNuGetSourcesAsync(
         PrebuiltAppHostServer server,
         string? requestedChannel,
-        string? packageSourceOverride = null,
-        PackageSourceRoutingPolicy sourcePolicy = PackageSourceRoutingPolicy.Explicit)
+        string? packageSourceOverride = null)
     {
         var method = typeof(PrebuiltAppHostServer).GetMethod(
             "GetNuGetSourcesAsync",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
         Assert.NotNull(method);
 
-        var task = (Task<IEnumerable<string>?>)method.Invoke(server, [requestedChannel, packageSourceOverride, CancellationToken.None, sourcePolicy])!;
+        var task = (Task<IEnumerable<string>?>)method.Invoke(server, [requestedChannel, packageSourceOverride, CancellationToken.None])!;
         var result = await task;
         return result?.ToList();
     }
@@ -1117,7 +1059,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
 
         try
         {
-            var result = await server.PrepareAsync("13.2.0", [], requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+            var result = await server.PrepareAsync("13.2.0", []);
 
             Assert.True(result.Success);
             Assert.Null(server.SelectedProjectLayoutPath);
@@ -1146,7 +1088,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
         {
             var result = await server.PrepareAsync(
                 "13.2.0",
-                [IntegrationReference.FromPackage("Aspire.Hosting.Redis", "13.2.0")], requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+                [IntegrationReference.FromPackage("Aspire.Hosting.Redis", "13.2.0")]);
 
             Assert.True(result.Success);
             Assert.Null(server.SelectedProjectLayoutPath);
@@ -1194,7 +1136,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
                     IntegrationReference.FromPackage("Aspire.Hosting.CodeGeneration.TypeScript", "13.4.0-pr.17141.gf142085f"),
                     IntegrationReference.FromPackage("CommunityToolkit.Aspire.Hosting.Redis", "1.0.0")
                 ],
-                packageSourceOverride: packageSourceOverride, requestedChannel: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+                packageSourceOverride: packageSourceOverride);
 
             Assert.True(result.Success);
             Assert.NotNull(restoreArgs);
@@ -1235,7 +1177,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
                     IntegrationReference.FromPackage("Aspire.Hosting.CodeGeneration.TypeScript", "13.4.0-pr.17141.gf142085f"),
                     IntegrationReference.FromPackage("CommunityToolkit.Aspire.Hosting.Redis", "1.0.0")
                 ],
-                packageSourceOverride: packageSourceOverride, requestedChannel: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+                packageSourceOverride: packageSourceOverride);
 
             Assert.True(result.Success);
             Assert.NotNull(restoreArgs);
@@ -1293,7 +1235,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
                 [
                     IntegrationReference.FromPackage("Aspire.Hosting.CodeGeneration.TypeScript", "13.4.0-pr.17141.gf142085f"),
                     IntegrationReference.FromPackage("CommunityToolkit.Aspire.Hosting.Redis", "1.0.0")
-                ], requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+                ]);
 
             Assert.True(result.Success);
             Assert.NotNull(restoreArgs);
@@ -1355,7 +1297,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
             var result = await server.PrepareAsync(
                 "13.4.0-pr.17141.gf142085f",
                 [IntegrationReference.FromPackage("Aspire.Hosting.CodeGeneration.TypeScript", "13.4.0-pr.17141.gf142085f")],
-                packageSourceOverride: explicitPackageSource.FullName, requestedChannel: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+                packageSourceOverride: explicitPackageSource.FullName);
 
             Assert.True(result.Success);
             Assert.NotNull(restoreArgs);
@@ -1409,7 +1351,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
         {
             var result = await server.PrepareAsync(
                 "13.4.0-pr.17141.gf142085f",
-                [IntegrationReference.FromPackage("Aspire.Hosting.CodeGeneration.TypeScript", "13.4.0-pr.17141.gf142085f")], requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+                [IntegrationReference.FromPackage("Aspire.Hosting.CodeGeneration.TypeScript", "13.4.0-pr.17141.gf142085f")]);
 
             Assert.True(result.Success);
             Assert.NotNull(restoreArgs);
@@ -1463,7 +1405,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
         {
             var result = await server.PrepareAsync(
                 "13.4.0-pr.17141.gf142085f",
-                [IntegrationReference.FromPackage("Aspire.Hosting.CodeGeneration.TypeScript", "13.4.0-pr.17141.gf142085f")], requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+                [IntegrationReference.FromPackage("Aspire.Hosting.CodeGeneration.TypeScript", "13.4.0-pr.17141.gf142085f")]);
 
             Assert.True(result.Success);
             Assert.NotNull(restoreArgs);
@@ -1524,7 +1466,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
         {
             var result = await server.PrepareAsync(
                 "13.4.0-pr.17141.gf142085f",
-                [IntegrationReference.FromPackage("Aspire.Hosting.CodeGeneration.TypeScript", "13.4.0-pr.17141.gf142085f")], requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+                [IntegrationReference.FromPackage("Aspire.Hosting.CodeGeneration.TypeScript", "13.4.0-pr.17141.gf142085f")]);
 
             Assert.True(result.Success);
             Assert.NotNull(restoreArgs);
@@ -1611,7 +1553,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
             var result = await server.PrepareAsync(
                 "13.4.0-pr.17141.gf142085f",
                 [IntegrationReference.FromPackage("Aspire.Hosting.CodeGeneration.TypeScript", "13.4.0-pr.17141.gf142085f")],
-                packageSourceOverride: packageSourceOverride, requestedChannel: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+                packageSourceOverride: packageSourceOverride);
 
             Assert.True(result.Success);
             Assert.Equal("daily", result.ChannelName);
@@ -1658,7 +1600,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
             var result = await server.PrepareAsync(
                 "13.4.0-pr.17141.gf142085f",
                 [IntegrationReference.FromPackage("Aspire.Hosting.CodeGeneration.TypeScript", "13.4.0-pr.17141.gf142085f")],
-                packageSourceOverride: packageSourceOverride, requestedChannel: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+                packageSourceOverride: packageSourceOverride);
 
             Assert.False(result.Success);
             Assert.NotNull(result.Output);
@@ -1697,7 +1639,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
             var result = await server.PrepareAsync(
                 "13.4.0-pr.17141.gf142085f",
                 packages,
-                packageSourceOverride: packageSourceOverride, requestedChannel: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+                packageSourceOverride: packageSourceOverride);
 
             Assert.False(result.Success);
             Assert.NotNull(result.Output);
@@ -1773,7 +1715,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
                 [
                     IntegrationReference.FromPackage("Aspire.Hosting.Redis", "13.4.0-pr.17141.gf142085f"),
                     IntegrationReference.FromProject("MyIntegration", "/path/to/MyIntegration.csproj")
-                ], requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+                ]);
 
             Assert.True(result.Success);
             Assert.NotNull(generatedProject);
@@ -1837,7 +1779,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
         {
             var result = await server.PrepareAsync(
                 "13.4.0-pr.12345.gabcdef00",
-                [IntegrationReference.FromPackage("Aspire.Hosting.CodeGeneration.TypeScript", "13.4.0-pr.12345.gabcdef00")], requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+                [IntegrationReference.FromPackage("Aspire.Hosting.CodeGeneration.TypeScript", "13.4.0-pr.12345.gabcdef00")]);
 
             Assert.False(result.Success);
             Assert.NotNull(result.Output);
@@ -1904,7 +1846,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
                     IntegrationReference.FromPackage("CommunityToolkit.Aspire.Hosting.Redis", "1.0.0"),
                     IntegrationReference.FromProject("MyIntegration", "/path/to/MyIntegration.csproj")
                 ],
-                packageSourceOverride: packageSourceOverride, requestedChannel: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+                packageSourceOverride: packageSourceOverride);
 
             Assert.True(result.Success);
             Assert.NotNull(generatedProject);
@@ -1992,7 +1934,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
         {
             var result = await server.PrepareAsync(
                 "13.2.0",
-                [IntegrationReference.FromPackage("Aspire.Hosting.Redis", "13.2.0")], requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+                [IntegrationReference.FromPackage("Aspire.Hosting.Redis", "13.2.0")]);
 
             Assert.True(result.Success);
             Assert.Equal(PackageChannelNames.Staging, result.ChannelName);
@@ -2028,7 +1970,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
         {
             var result = await server.PrepareAsync(
                 "13.2.0",
-                [IntegrationReference.FromProject("MyIntegration", "/path/to/MyIntegration.csproj")], requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+                [IntegrationReference.FromProject("MyIntegration", "/path/to/MyIntegration.csproj")]);
 
             Assert.True(result.Success);
             Assert.Null(server.IntegrationProbeManifestPath);
@@ -2063,12 +2005,12 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
 
         try
         {
-            var firstResult = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations(), requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+            var firstResult = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations());
             Assert.True(firstResult.Success);
 
             var firstLayoutPath = Assert.IsType<string>(server.SelectedProjectLayoutPath);
 
-            var secondResult = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations(), requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+            var secondResult = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations());
             Assert.True(secondResult.Success);
             Assert.Equal(firstLayoutPath, server.SelectedProjectLayoutPath);
             Assert.Single(Directory.GetDirectories(Path.Combine(workingDirectory, "project-layouts", "items")));
@@ -2096,7 +2038,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
 
         try
         {
-            var result = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations(), requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+            var result = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations());
             Assert.True(result.Success);
 
             var layoutPath = Assert.IsType<string>(server.SelectedProjectLayoutPath);
@@ -2148,7 +2090,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
 
         try
         {
-            var result = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations(), requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+            var result = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations());
             Assert.True(result.Success);
 
             var layoutPath = Assert.IsType<string>(server.SelectedProjectLayoutPath);
@@ -2201,14 +2143,14 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
 
         try
         {
-            var firstResult = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations(), requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+            var firstResult = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations());
             Assert.True(firstResult.Success);
 
             var firstLayoutPath = Assert.IsType<string>(server.SelectedProjectLayoutPath);
 
             closureFiles["MyIntegration.dll"] = "integration-v2";
 
-            var secondResult = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations(), requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+            var secondResult = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations());
             Assert.True(secondResult.Success);
 
             var secondLayoutPath = Assert.IsType<string>(server.SelectedProjectLayoutPath);
@@ -2239,14 +2181,14 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
 
         try
         {
-            var firstResult = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations(), requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+            var firstResult = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations());
             Assert.True(firstResult.Success);
 
             var layoutPath = Assert.IsType<string>(server.SelectedProjectLayoutPath);
             var copiedFilePath = Path.Combine(layoutPath, "libs", "MyIntegration.dll");
             await File.WriteAllTextAsync(copiedFilePath, "corrupt");
 
-            var secondResult = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations(), requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+            var secondResult = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations());
             Assert.True(secondResult.Success);
 
             Assert.Equal(layoutPath, server.SelectedProjectLayoutPath);
@@ -2276,7 +2218,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
 
         try
         {
-            var firstResult = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations(), requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+            var firstResult = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations());
             Assert.True(firstResult.Success);
 
             var firstLayoutPath = Assert.IsType<string>(server.SelectedProjectLayoutPath);
@@ -2286,7 +2228,7 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
             {
                 closureFiles["MyIntegration.dll"] = "integration-v2";
 
-                var secondResult = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations(), requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+                var secondResult = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations());
                 Assert.True(secondResult.Success);
 
                 var secondLayoutPath = Assert.IsType<string>(server.SelectedProjectLayoutPath);
@@ -2413,14 +2355,14 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
 
         try
         {
-            var firstResult = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations(), requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+            var firstResult = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations());
             Assert.True(firstResult.Success);
 
             var firstLayoutPath = Assert.IsType<string>(server.SelectedProjectLayoutPath);
             var packageSourcePath = Path.Combine(workingDirectory, "integration-restore", "closure-sources", "Aspire.Hosting.Redis.dll");
             File.SetLastWriteTimeUtc(packageSourcePath, File.GetLastWriteTimeUtc(packageSourcePath).AddMinutes(5));
 
-            var secondResult = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations(), requestedChannel: null, packageSourceOverride: null, sourcePolicy: PackageSourceRoutingPolicy.None, cancellationToken: CancellationToken.None);
+            var secondResult = await server.PrepareAsync("13.2.0", CreateProjectReferenceIntegrations());
             Assert.True(secondResult.Success);
             Assert.Equal(firstLayoutPath, server.SelectedProjectLayoutPath);
             Assert.Single(Directory.GetDirectories(Path.Combine(workingDirectory, "project-layouts", "items")));

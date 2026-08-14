@@ -7,7 +7,6 @@ using System.Text.Json;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.DotNet;
 using Aspire.Cli.Interaction;
-using Aspire.Cli.Packaging;
 using Aspire.Cli.Projects;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Utils;
@@ -98,11 +97,7 @@ internal sealed class RestoreCommand : BaseCommand
 
                 var success = await _interactionService.ShowStatusAsync(
                     RestoreCommandStrings.RestoringSdkCode,
-                    async () => await configOnlyGuestProject.BuildAndGenerateSdkAsync(
-                        configOnlyProjectDirectory,
-                        packageSourceOverride: null,
-                        PackageSourceRoutingPolicy.None,
-                        cancellationToken),
+                    async () => await configOnlyGuestProject.BuildAndGenerateSdkAsync(configOnlyProjectDirectory, cancellationToken: cancellationToken),
                     emoji: KnownEmojis.Gear);
 
                 if (success)
@@ -159,11 +154,7 @@ internal sealed class RestoreCommand : BaseCommand
 
                 var success = await _interactionService.ShowStatusAsync(
                     RestoreCommandStrings.RestoringSdkCode,
-                    async () => await guestProject.BuildAndGenerateSdkAsync(
-                        directory,
-                        packageSourceOverride: null,
-                        PackageSourceRoutingPolicy.None,
-                        cancellationToken),
+                    async () => await guestProject.BuildAndGenerateSdkAsync(directory, cancellationToken: cancellationToken),
                     emoji: KnownEmojis.Gear);
 
                 if (success)

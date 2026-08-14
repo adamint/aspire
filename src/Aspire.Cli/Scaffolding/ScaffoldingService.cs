@@ -136,13 +136,7 @@ internal sealed class ScaffoldingService : IScaffoldingService
 
         var prepareResult = await _interactionService.ShowStatusAsync(
             "Preparing Aspire server...",
-            () => appHostServerProject.PrepareAsync(
-                prepareSdkVersion,
-                integrations,
-                requestedChannel: context.Channel,
-                packageSourceOverride: context.PackageSourceOverride,
-                sourcePolicy: context.SourcePolicy,
-                cancellationToken: cancellationToken),
+            () => appHostServerProject.PrepareAsync(prepareSdkVersion, integrations, requestedChannel: context.Channel, packageSourceOverride: context.PackageSourceOverride, cancellationToken: cancellationToken),
             emoji: KnownEmojis.Gear);
         if (!prepareResult.Success)
         {

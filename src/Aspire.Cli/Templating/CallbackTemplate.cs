@@ -16,17 +16,13 @@ internal class CallbackTemplate(
     Func<string, bool>? supportsLanguageCallback = null,
     IReadOnlyList<string>? selectableAppHostLanguages = null,
     bool isEmpty = false,
-    bool showInPrompt = true,
-    bool ownsAspireConfig = true,
-    IReadOnlyList<string>? restoreSuppressionArguments = null) : ITemplate
+    bool showInPrompt = true) : ITemplate
 {
     public string Name => name;
 
     public string Description => description;
 
     public bool IsEmpty => isEmpty;
-
-    public bool OwnsAspireConfig => ownsAspireConfig;
 
     public bool ShowInPrompt => showInPrompt;
 
@@ -37,8 +33,6 @@ internal class CallbackTemplate(
     public string? LanguageId => languageId;
 
     public IReadOnlyList<string> SelectableAppHostLanguages { get; } = selectableAppHostLanguages ?? [];
-
-    public IReadOnlyList<string> RestoreSuppressionArguments { get; } = restoreSuppressionArguments ?? [];
 
     public bool SupportsLanguage(string languageId)
     {

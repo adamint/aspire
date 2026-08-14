@@ -2,7 +2,6 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Aspire.Cli.Configuration;
-using Aspire.Cli.Packaging;
 using Aspire.Cli.Projects;
 
 namespace Aspire.Cli.Tests.TestServices;
@@ -20,21 +19,15 @@ internal sealed class FakeFailingAppHostServerProject(string appDirectoryPath) :
 
     public bool Disposed { get; private set; }
 
-    public string? LastPackageSourceOverride { get; private set; }
-
     public string GetInstanceIdentifier() => AppDirectoryPath;
 
     public Task<AppHostServerPrepareResult> PrepareAsync(
         string sdkVersion,
         IEnumerable<IntegrationReference> integrations,
-        string? requestedChannel,
-        string? packageSourceOverride,
-        PackageSourceRoutingPolicy sourcePolicy,
-        CancellationToken cancellationToken)
-    {
-        LastPackageSourceOverride = packageSourceOverride;
-        return Task.FromResult(new AppHostServerPrepareResult(Success: false, Output: null));
-    }
+        string? requestedChannel = null,
+        string? packageSourceOverride = null,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(new AppHostServerPrepareResult(Success: false, Output: null));
 
     public Task<AppHostServerRunResult> RunAsync(
         int hostPid,

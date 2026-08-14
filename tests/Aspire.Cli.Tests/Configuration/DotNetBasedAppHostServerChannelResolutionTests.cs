@@ -31,8 +31,7 @@ public class DotNetBasedAppHostServerChannelResolutionTests(ITestOutputHelper ou
         var project = CreateProject(appPath, MockPackagingServiceFactory.Create());
 
         var (_, channelName) = await project.CreateProjectFilesAsync(
-            [IntegrationReference.FromPackage("Aspire.Hosting", "13.1.0")],
-            PackageSourceRoutingPolicy.None);
+            [IntegrationReference.FromPackage("Aspire.Hosting", "13.1.0")]);
 
         // No per-project channel + only an Implicit channel registered → no name to pin.
         // Before the fallback was removed, the resolver would have consulted the global
@@ -53,8 +52,7 @@ public class DotNetBasedAppHostServerChannelResolutionTests(ITestOutputHelper ou
         var project = CreateProject(appPath, CreatePackagingServiceWithExplicitChannels("staging", "daily"));
 
         var (_, channelName) = await project.CreateProjectFilesAsync(
-            [IntegrationReference.FromPackage("Aspire.Hosting", "13.1.0")],
-            PackageSourceRoutingPolicy.None);
+            [IntegrationReference.FromPackage("Aspire.Hosting", "13.1.0")]);
 
         Assert.Equal("staging", channelName);
     }
@@ -76,8 +74,7 @@ public class DotNetBasedAppHostServerChannelResolutionTests(ITestOutputHelper ou
         var project = CreateProject(appPath, CreatePackagingServiceWithExplicitChannels("staging", "daily"));
 
         var (_, channelName) = await project.CreateProjectFilesAsync(
-            [IntegrationReference.FromPackage("Aspire.Hosting", "13.1.0")],
-            PackageSourceRoutingPolicy.None);
+            [IntegrationReference.FromPackage("Aspire.Hosting", "13.1.0")]);
 
         Assert.Equal("daily", channelName);
     }
@@ -100,8 +97,7 @@ public class DotNetBasedAppHostServerChannelResolutionTests(ITestOutputHelper ou
         var project = CreateProject(appPath, CreatePackagingServiceWithExplicitChannels("staging", "daily"));
 
         var (_, channelName) = await project.CreateProjectFilesAsync(
-            [IntegrationReference.FromPackage("Aspire.Hosting", "13.1.0")],
-            PackageSourceRoutingPolicy.None);
+            [IntegrationReference.FromPackage("Aspire.Hosting", "13.1.0")]);
 
         Assert.Equal("staging", channelName);
     }

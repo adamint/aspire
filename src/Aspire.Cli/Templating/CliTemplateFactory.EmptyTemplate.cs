@@ -56,8 +56,7 @@ internal sealed partial class CliTemplateFactory
             if (isCsharp)
             {
                 // Do this first so there is no prompt while status is displayed for creating project.
-                var sourceConfigCreated = await _templateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(inputs.Source, inputs.Channel, outputPath, inputs.SourcePolicy, cancellationToken);
-                if (!sourceConfigCreated && string.IsNullOrWhiteSpace(inputs.Source))
+                if (!await _templateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(inputs.Source, inputs.Channel, outputPath, cancellationToken))
                 {
                     await _templateNuGetConfigService.PromptToCreateOrUpdateNuGetConfigAsync(inputs.Channel, outputPath, cancellationToken);
                 }
@@ -75,11 +74,9 @@ internal sealed partial class CliTemplateFactory
                     else
                     {
                         _logger.LogDebug("Using scaffolding service for language '{LanguageDisplayName}' in '{OutputPath}'.", language.DisplayName, outputPath);
-                        await _templateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(inputs.Source, inputs.Channel, outputPath, inputs.SourcePolicy, cancellationToken);
                         var context = new ScaffoldContext(
                             language,
                             new DirectoryInfo(outputPath),
-                            inputs.SourcePolicy,
                             projectName,
                             SdkVersion: inputs.Version,
                             Channel: inputs.Channel,
@@ -103,6 +100,10 @@ internal sealed partial class CliTemplateFactory
                 return templateResult;
             }
 
+            if (!isCsharp)
+            {
+                await _templateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(inputs.Source, inputs.Channel, outputPath, cancellationToken);
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

@@ -263,41 +263,9 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
     /// </summary>
     public async Task<(string ProjectPath, string? ChannelName)> CreateProjectFilesAsync(
         IEnumerable<IntegrationReference> integrations,
-        PackageSourceRoutingPolicy sourcePolicy,
         string? requestedChannel = null,
         string? packageSourceOverride = null,
         CancellationToken cancellationToken = default)
-    {
-        var temporarySourceConfig = !string.IsNullOrWhiteSpace(packageSourceOverride) &&
-            (sourcePolicy is PackageSourceRoutingPolicy.GlobalOrAmbientConfigured ||
-             PackageSourceOverrideMappings.HasCredentialMaterial(packageSourceOverride));
-
-        try
-        {
-            return await CreateProjectFilesCoreAsync(
-                integrations,
-                sourcePolicy,
-                requestedChannel,
-                packageSourceOverride,
-                cancellationToken);
-        }
-        catch
-        {
-            if (temporarySourceConfig)
-            {
-                File.Delete(Path.Combine(_projectModelPath, "nuget.config"));
-            }
-
-            throw;
-        }
-    }
-
-    private async Task<(string ProjectPath, string? ChannelName)> CreateProjectFilesCoreAsync(
-        IEnumerable<IntegrationReference> integrations,
-        PackageSourceRoutingPolicy sourcePolicy,
-        string? requestedChannel,
-        string? packageSourceOverride,
-        CancellationToken cancellationToken)
     {
         // Clean obj folder to ensure fresh NuGet restore
         var objPath = Path.Combine(_projectModelPath, "obj");
@@ -356,37 +324,11 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
         // Handle NuGet config and channel resolution
         string? channelName = null;
 
-        var hasPersistentSource = !string.IsNullOrWhiteSpace(packageSourceOverride) &&
-            sourcePolicy is PackageSourceRoutingPolicy.ProjectLocalConfigured or PackageSourceRoutingPolicy.GlobalOrAmbientConfigured;
-        var hasCredentialSource = !string.IsNullOrWhiteSpace(packageSourceOverride) &&
-            PackageSourceOverrideMappings.HasCredentialMaterial(packageSourceOverride);
-        var hasExclusiveSource = hasPersistentSource || hasCredentialSource;
-        // The generated server project is a restore staging area. For configured sources,
-        // give it the same exclusive mapping as the template operation without copying the
-        // source into the user's project when the value came from global or ambient config.
-        var userNugetConfig = hasExclusiveSource ? null : FindNuGetConfig(_appPath);
-        if (hasPersistentSource)
-        {
-            await TemporaryNuGetConfig.GenerateAsync(
-                PackageSourceOverrideMappings.CreateForPersistentConfiguredSource(packageSourceOverride!),
-                Path.Combine(_projectModelPath, "nuget.config"));
-        }
-        else if (hasCredentialSource)
-        {
-            await TemporaryNuGetConfig.GenerateAsync(
-                PackageSourceOverrideMappings.CreateForTemplateOperations(packageSourceOverride!),
-                Path.Combine(_projectModelPath, "nuget.config"));
-        }
-        else if (userNugetConfig is not null)
+        var userNugetConfig = FindNuGetConfig(_appPath);
+        if (userNugetConfig is not null)
         {
             var nugetConfigPath = Path.Combine(_projectModelPath, "nuget.config");
             File.Copy(userNugetConfig, nugetConfigPath, overwrite: true);
-        }
-        else
-        {
-            // A previous run may have staged a source-specific config. Remove it when the
-            // current invocation has no exclusive source and no user config to copy.
-            File.Delete(Path.Combine(_projectModelPath, "nuget.config"));
         }
 
         var configuredChannelName = requestedChannel
@@ -397,44 +339,37 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
         // Resolve channel sources and add them via RestoreAdditionalProjectSources
         // This is additive — it preserves the user's nuget.config and adds channel-specific sources
         var channelSources = new List<string>();
-        if (hasPersistentSource)
-        {
-            channelSources.Add(packageSourceOverride!);
-        }
-        else if (!hasCredentialSource)
-        {
-            var matchedChannels = !string.IsNullOrEmpty(configuredChannelName)
-                ? channels.Where(c => string.Equals(c.Name, configuredChannelName, StringComparison.OrdinalIgnoreCase))
-                : channels.Where(c => c.Type == PackageChannelType.Explicit);
+        var matchedChannels = !string.IsNullOrEmpty(configuredChannelName)
+            ? channels.Where(c => string.Equals(c.Name, configuredChannelName, StringComparison.OrdinalIgnoreCase))
+            : channels.Where(c => c.Type == PackageChannelType.Explicit);
 
-            foreach (var ch in matchedChannels)
+        foreach (var ch in matchedChannels)
+        {
+            channelName ??= ch.Name;
+            if (ch.Mappings is not null)
             {
-                channelName ??= ch.Name;
-                if (ch.Mappings is not null)
+                foreach (var mapping in ch.Mappings)
                 {
-                    foreach (var mapping in ch.Mappings)
+                    if (!channelSources.Contains(mapping.Source, StringComparer.OrdinalIgnoreCase))
                     {
-                        if (!channelSources.Contains(mapping.Source, StringComparer.OrdinalIgnoreCase))
-                        {
-                            channelSources.Add(mapping.Source);
-                        }
+                        channelSources.Add(mapping.Source);
                     }
                 }
             }
+        }
 
-            // Thread an explicit `--source` override into the restore sources so the dogfood
-            // `aspire new --source <pr-hive>` flow is honored in dev mode (in-repo). Prepending
-            // makes the override the first source NuGet evaluates, which matters when the same
-            // Aspire package version exists in both the hive and a channel feed. Note: unlike
-            // PrebuiltAppHostServer this path does not emit Package Source Mappings, so NuGet
-            // may still consult other sources if the override does not satisfy a request — the
-            // override is best-effort here, sufficient for the in-repo developer scenario where
-            // most Aspire.* dependencies come from ProjectReference, not PackageReference.
-            if (!string.IsNullOrWhiteSpace(packageSourceOverride) &&
-                !channelSources.Contains(packageSourceOverride, StringComparer.OrdinalIgnoreCase))
-            {
-                channelSources.Insert(0, packageSourceOverride);
-            }
+        // Thread an explicit `--source` override into the restore sources so the dogfood
+        // `aspire new --source <pr-hive>` flow is honored in dev mode (in-repo). Prepending
+        // makes the override the first source NuGet evaluates, which matters when the same
+        // Aspire package version exists in both the hive and a channel feed. Note: unlike
+        // PrebuiltAppHostServer this path does not emit Package Source Mappings, so NuGet
+        // may still consult other sources if the override does not satisfy a request — the
+        // override is best-effort here, sufficient for the in-repo developer scenario where
+        // most Aspire.* dependencies come from ProjectReference, not PackageReference.
+        if (!string.IsNullOrWhiteSpace(packageSourceOverride) &&
+            !channelSources.Contains(packageSourceOverride, StringComparer.OrdinalIgnoreCase))
+        {
+            channelSources.Insert(0, packageSourceOverride);
         }
 
         // Create the project file
@@ -508,41 +443,27 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
     public async Task<AppHostServerPrepareResult> PrepareAsync(
         string sdkVersion,
         IEnumerable<IntegrationReference> integrations,
-        string? requestedChannel,
-        string? packageSourceOverride,
-        PackageSourceRoutingPolicy sourcePolicy,
-        CancellationToken cancellationToken)
+        string? requestedChannel = null,
+        string? packageSourceOverride = null,
+        CancellationToken cancellationToken = default)
     {
-        var temporarySourceConfig = !string.IsNullOrWhiteSpace(packageSourceOverride) &&
-            (sourcePolicy is PackageSourceRoutingPolicy.GlobalOrAmbientConfigured ||
-             PackageSourceOverrideMappings.HasCredentialMaterial(packageSourceOverride));
-        try
+        var (_, channelName) = await CreateProjectFilesAsync(integrations, requestedChannel, packageSourceOverride, cancellationToken);
+        var (buildSuccess, buildOutput) = await BuildAsync(cancellationToken);
+
+        if (!buildSuccess)
         {
-            var (_, channelName) = await CreateProjectFilesAsync(integrations, sourcePolicy, requestedChannel, packageSourceOverride, cancellationToken);
-            var buildResult = await BuildAsync(cancellationToken);
-
-            if (!buildResult.Success)
-            {
-                return new AppHostServerPrepareResult(
-                    Success: false,
-                    Output: buildResult.Output,
-                    ChannelName: channelName,
-                    NeedsCodeGeneration: false);
-            }
-
             return new AppHostServerPrepareResult(
-                Success: true,
-                Output: buildResult.Output,
+                Success: false,
+                Output: buildOutput,
                 ChannelName: channelName,
-                NeedsCodeGeneration: true);
+                NeedsCodeGeneration: false);
         }
-        finally
-        {
-            if (temporarySourceConfig)
-            {
-                File.Delete(Path.Combine(_projectModelPath, "nuget.config"));
-            }
-        }
+
+        return new AppHostServerPrepareResult(
+            Success: true,
+            Output: buildOutput,
+            ChannelName: channelName,
+            NeedsCodeGeneration: true);
     }
 
     /// <inheritdoc />

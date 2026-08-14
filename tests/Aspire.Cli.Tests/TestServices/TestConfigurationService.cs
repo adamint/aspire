@@ -8,7 +8,7 @@ namespace Aspire.Cli.Tests.TestServices;
 /// <summary>
 /// Test implementation of IConfigurationService that tracks SetConfigurationAsync, DeleteConfigurationAsync, and GetConfigurationAsync calls.
 /// </summary>
-internal sealed class TestConfigurationService : IConfigurationService
+public sealed class TestConfigurationService : IConfigurationService
 {
     public Action<string, string, bool>? OnSetConfiguration { get; set; }
     public Action<string, bool>? OnDeleteConfiguration { get; set; }
@@ -57,29 +57,7 @@ internal sealed class TestConfigurationService : IConfigurationService
         return Task.FromResult(result);
     }
 
-    public Task<ConfigurationValueWithOrigin?> GetConfigurationFromDirectoryWithOriginAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
-    {
-        if (OnGetConfigurationFromDirectoryWithOrigin is not null)
-        {
-            return Task.FromResult(OnGetConfigurationFromDirectoryWithOrigin.Invoke(key, startDirectory));
-        }
-
-        var result = OnGetConfigurationFromDirectory is not null
-            ? OnGetConfigurationFromDirectory.Invoke(key, startDirectory)
-            : OnGetConfiguration?.Invoke(key);
-
-        return Task.FromResult(string.IsNullOrWhiteSpace(result)
-            ? null
-            : new ConfigurationValueWithOrigin(result, startDirectory));
-    }
-
-    public Task<ConfigurationValueWithOrigin?> GetLocalConfigurationFromDirectoryWithOriginAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
-    {
-        return GetConfigurationFromDirectoryWithOriginAsync(key, startDirectory, continueSearchWhenKeyMissing, cancellationToken);
-    }
-
     public Func<string, DirectoryInfo, string?>? OnGetConfigurationFromDirectory { get; set; }
-    public Func<string, DirectoryInfo, ConfigurationValueWithOrigin?>? OnGetConfigurationFromDirectoryWithOrigin { get; set; }
 
     public string SettingsFilePath { get; set; } = string.Empty;
 

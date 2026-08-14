@@ -2,7 +2,6 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Aspire.Cli.Configuration;
-using Aspire.Cli.Packaging;
 using Aspire.Cli.Projects;
 using Aspire.Cli.Scaffolding;
 using Aspire.Cli.Telemetry;
@@ -54,7 +53,6 @@ public class ChannelReseedTests(ITestOutputHelper outputHelper)
         var ctx = new ScaffoldContext(
             Language: s_testLanguage,
             TargetDirectory: workspace.WorkspaceRoot,
-            SourcePolicy: PackageSourceRoutingPolicy.None,
             ProjectName: "test",
             SdkVersion: null,
             Channel: contextChannel);
@@ -98,7 +96,6 @@ public class ChannelReseedTests(ITestOutputHelper outputHelper)
         var context = new ScaffoldContext(
             Language: language,
             TargetDirectory: workspace.WorkspaceRoot,
-            SourcePolicy: PackageSourceRoutingPolicy.Explicit,
             ProjectName: "test",
             SdkVersion: "13.4.0-pr.17141.gf142085f",
             PackageSourceOverride: packageSourceOverride);
@@ -141,10 +138,9 @@ public class ChannelReseedTests(ITestOutputHelper outputHelper)
         public Task<AppHostServerPrepareResult> PrepareAsync(
             string sdkVersion,
             IEnumerable<IntegrationReference> integrations,
-            string? requestedChannel,
-            string? packageSourceOverride,
-            PackageSourceRoutingPolicy sourcePolicy,
-            CancellationToken cancellationToken)
+            string? requestedChannel = null,
+            string? packageSourceOverride = null,
+            CancellationToken cancellationToken = default)
         {
             PackageSourceOverride = packageSourceOverride;
             return Task.FromResult(new AppHostServerPrepareResult(Success: false, Output: null));

@@ -4,11 +4,9 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Aspire.Cli.Documentation.ApiDocs;
 using Aspire.Cli.Documentation.Docs;
-using Aspire.Cli.Packaging;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Utils;
 using Aspire.Hosting.Utils;
@@ -55,7 +53,6 @@ namespace Aspire.Cli.Configuration;
 internal sealed class AspireConfigFile
 {
     public const string FileName = "aspire.config.json";
-    public const string NuGetSourceKey = "nugetSource";
 
     /// <summary>
     /// The JSON Schema URL for this configuration file.
@@ -98,13 +95,6 @@ internal sealed class AspireConfigFile
     public string? Channel { get; set; }
 
     /// <summary>
-    /// The default NuGet source for package and template operations.
-    /// </summary>
-    [JsonPropertyName(NuGetSourceKey)]
-    [Description("The default NuGet source for package and template operations. Explicit --source arguments override this value.")]
-    public string? NuGetSource { get; set; }
-
-    /// <summary>
     /// Feature flags.
     /// </summary>
     [JsonPropertyName("features")]
@@ -133,12 +123,6 @@ internal sealed class AspireConfigFile
     public Dictionary<string, string>? Packages { get; set; }
 
     /// <summary>
-    /// Captures additional properties so newer or template-specific configuration survives load and save operations.
-    /// </summary>
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
-
-    /// <summary>
     /// Loads aspire.config.json from the specified directory.
     /// </summary>
     /// <returns>The deserialized config, or <c>null</c> if the file does not exist.</returns>
@@ -154,9 +138,7 @@ internal sealed class AspireConfigFile
         try
         {
             var json = File.ReadAllText(filePath);
-            var normalizedJson = ConfigurationHelper.ParseSettingsObject(json)
-                ?? throw new JsonException("The configuration root must be a JSON object.");
-            return normalizedJson.Deserialize(JsonSourceGenerationContext.Default.AspireConfigFile)
+            return JsonSerializer.Deserialize(json, JsonSourceGenerationContext.Default.AspireConfigFile)
                 ?? new AspireConfigFile();
         }
         catch (JsonException ex)
@@ -203,7 +185,6 @@ internal sealed class AspireConfigFile
         var legacyConfig = AspireJsonConfiguration.Load(directory);
         if (legacyConfig is not null)
         {
-            ValidateLegacyNuGetSource(legacyConfig.NuGetSource);
             var profiles = ReadApphostRunProfiles(Path.Combine(directory, "apphost.run.json"));
             config = FromLegacy(legacyConfig, profiles);
 
@@ -235,24 +216,6 @@ internal sealed class AspireConfigFile
         }
 
         return config;
-    }
-
-    private static void ValidateLegacyNuGetSource(string? nugetSource)
-    {
-        if (string.IsNullOrWhiteSpace(nugetSource))
-        {
-            return;
-        }
-
-        if (PackageSourceOverrideMappings.IsMalformedUriSource(nugetSource))
-        {
-            throw new InvalidOperationException(AddCommandStrings.InvalidSource);
-        }
-
-        if (PackageSourceOverrideMappings.HasCredentialMaterial(nugetSource))
-        {
-            throw new InvalidOperationException(NewCommandStrings.SourceWithCredentialsCannotBePersisted);
-        }
     }
 
     /// <summary>
@@ -435,14 +398,11 @@ internal sealed class AspireConfigFile
     /// </summary>
     public static AspireConfigFile FromLegacy(AspireJsonConfiguration? settings, Dictionary<string, AspireConfigProfile>? profiles)
     {
-        var mappedConfig = new AspireConfigFile
-        {
-            Profiles = profiles
-        };
+        var config = new AspireConfigFile();
 
         if (settings is not null)
         {
-            mappedConfig.AppHost = new AspireConfigAppHost
+            config.AppHost = new AspireConfigAppHost
             {
                 Path = settings.AppHostPath,
                 Language = settings.Language
@@ -450,96 +410,17 @@ internal sealed class AspireConfigFile
 
             if (!string.IsNullOrEmpty(settings.SdkVersion))
             {
-                mappedConfig.Sdk = new AspireConfigSdk { Version = settings.SdkVersion };
+                config.Sdk = new AspireConfigSdk { Version = settings.SdkVersion };
             }
 
-            mappedConfig.Channel = settings.Channel;
-            mappedConfig.NuGetSource = settings.NuGetSource is { } nugetSource &&
-                !PackageSourceOverrideMappings.HasCredentialMaterial(nugetSource) &&
-                !PackageSourceOverrideMappings.IsMalformedUriSource(nugetSource)
-                ? nugetSource
-                : null;
-            mappedConfig.Features = settings.Features;
-            mappedConfig.Packages = settings.Packages;
+            config.Channel = settings.Channel;
+            config.Features = settings.Features;
+            config.Packages = settings.Packages;
         }
 
-        // Legacy extension data can contain both nested objects and flattened configuration keys:
-        //   { "Docs": { "llmsTxtUrl": "..." }, "docs:api:sitemapUrl": "..." }
-        // Normalize those paths case-insensitively first, then overlay mapped legacy values. The
-        // mapped source wins leaf and type conflicts, while object/object merges retain disjoint
-        // forward-authored fields and use the mapped source's canonical property casing.
-        var mergedJson = NormalizeExtensionData(settings?.ExtensionData);
-        var mappedJson = JsonSerializer.SerializeToNode(
-            mappedConfig,
-            JsonSourceGenerationContext.Default.AspireConfigFile)!.AsObject();
-        OverlayJsonObject(mergedJson, mappedJson);
+        config.Profiles = profiles;
 
-        return mergedJson.Deserialize(JsonSourceGenerationContext.Default.AspireConfigFile)
-            ?? new AspireConfigFile();
-    }
-
-    private static JsonObject NormalizeExtensionData(Dictionary<string, JsonElement>? extensionData)
-    {
-        if (extensionData is null)
-        {
-            return new JsonObject();
-        }
-
-        var raw = new JsonObject();
-        foreach (var (propertyName, propertyValue) in extensionData)
-        {
-            raw[propertyName] = JsonNode.Parse(propertyValue.GetRawText());
-        }
-
-        return ConfigurationHelper.ParseSettingsObject(raw.ToJsonString()) ?? raw;
-    }
-
-    private static void OverlayJsonObject(JsonObject target, JsonObject source)
-    {
-        foreach (var (propertyName, sourceValue) in source)
-        {
-            OverlayJsonProperty(target, propertyName, sourceValue);
-        }
-    }
-
-    private static void OverlayJsonProperty(JsonObject target, string propertyName, JsonNode? sourceValue)
-    {
-        var hasExistingProperty = TryGetPropertyName(target, propertyName, out var existingName);
-        if (hasExistingProperty &&
-            target[existingName] is JsonObject targetObject &&
-            sourceValue is JsonObject sourceObject)
-        {
-            if (!string.Equals(existingName, propertyName, StringComparison.Ordinal))
-            {
-                target.Remove(existingName);
-                target[propertyName] = targetObject;
-            }
-
-            OverlayJsonObject(targetObject, sourceObject);
-            return;
-        }
-
-        if (hasExistingProperty)
-        {
-            target.Remove(existingName);
-        }
-
-        target[propertyName] = sourceValue?.DeepClone();
-    }
-
-    private static bool TryGetPropertyName(JsonObject jsonObject, string propertyName, out string existingName)
-    {
-        foreach (var property in jsonObject)
-        {
-            if (string.Equals(property.Key, propertyName, StringComparison.OrdinalIgnoreCase))
-            {
-                existingName = property.Key;
-                return true;
-            }
-        }
-
-        existingName = string.Empty;
-        return false;
+        return config;
     }
 }
 

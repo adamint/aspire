@@ -137,10 +137,9 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IDisposable
     public async Task<AppHostServerPrepareResult> PrepareAsync(
         string sdkVersion,
         IEnumerable<IntegrationReference> integrations,
-        string? requestedChannel,
-        string? packageSourceOverride,
-        PackageSourceRoutingPolicy sourcePolicy,
-        CancellationToken cancellationToken)
+        string? requestedChannel = null,
+        string? packageSourceOverride = null,
+        CancellationToken cancellationToken = default)
     {
         var integrationList = integrations.ToList();
         var packageRefs = integrationList.Where(r => r.IsPackageReference).ToList();
@@ -186,7 +185,6 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IDisposable
                     projectRefs,
                     requestedChannel,
                     effectivePackageSourceOverride,
-                    sourcePolicy,
                     cancellationToken).ConfigureAwait(false);
 
                 if (closureManifest.Entries.Any(static entry => entry.IsPackageBacked))
@@ -212,7 +210,7 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IDisposable
                 {
                     // NuGet-only — use the bundled NuGet service (no SDK required)
                     _integrationProbeManifestPath = await RestoreNuGetPackagesAsync(
-                        packageRefs, requestedChannel, effectivePackageSourceOverride, sourcePolicy, cancellationToken);
+                        packageRefs, requestedChannel, effectivePackageSourceOverride, cancellationToken);
                 }
 
                 var appSettingsContent = CreateAppSettingsContent(packageRefs, []);
@@ -294,7 +292,6 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IDisposable
         List<IntegrationReference> packageRefs,
         string? requestedChannel,
         string? packageSourceOverride,
-        PackageSourceRoutingPolicy sourcePolicy,
         CancellationToken cancellationToken)
     {
         _logger.LogDebug("Restoring {Count} integration packages via bundled NuGet", packageRefs.Count);
@@ -303,8 +300,8 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IDisposable
         var packages = packageRefs
             .Select(r => (r.Name, Version: GetRestoreVersion(r.Name, r.Version!, useExactPackageVersions)))
             .ToList();
-        using var temporaryNuGetConfig = await TryCreateTemporaryNuGetConfigAsync(requestedChannel, packageSourceOverride, cancellationToken, sourcePolicy);
-        var sources = await GetNuGetSourcesAsync(requestedChannel, packageSourceOverride, cancellationToken, sourcePolicy);
+        using var temporaryNuGetConfig = await TryCreateTemporaryNuGetConfigAsync(requestedChannel, packageSourceOverride, cancellationToken);
+        var sources = await GetNuGetSourcesAsync(requestedChannel, packageSourceOverride, cancellationToken);
 
         return await _nugetService.RestorePackagesAsync(
             packages,
@@ -326,7 +323,6 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IDisposable
         List<IntegrationReference> projectRefs,
         string? requestedChannel,
         string? packageSourceOverride,
-        PackageSourceRoutingPolicy sourcePolicy,
         CancellationToken cancellationToken)
     {
         var restoreDir = Path.Combine(_workingDirectory, "integration-restore");
@@ -339,10 +335,10 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IDisposable
         // RestoreAdditionalProjectSources so private/internal feeds the user has configured
         // remain reachable for non-Aspire transitives during project-ref restore.
         using var temporaryNuGetConfig = !string.IsNullOrWhiteSpace(packageSourceOverride)
-            ? await TryCreateTemporaryNuGetConfigAsync(requestedChannel, packageSourceOverride, cancellationToken, sourcePolicy)
+            ? await TryCreateTemporaryNuGetConfigAsync(requestedChannel, packageSourceOverride, cancellationToken)
             : null;
         var channelSources = temporaryNuGetConfig is null
-            ? await GetNuGetSourcesAsync(requestedChannel, packageSourceOverride: null, cancellationToken, sourcePolicy)
+            ? await GetNuGetSourcesAsync(requestedChannel, packageSourceOverride: null, cancellationToken)
             : null;
         var projectContent = GenerateIntegrationProjectFile(
             packageRefs,
@@ -582,11 +578,7 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IDisposable
     /// <summary>
     /// Gets NuGet sources from the resolved channel for bundled restore.
     /// </summary>
-    internal async Task<IEnumerable<string>?> GetNuGetSourcesAsync(
-        string? requestedChannel,
-        string? packageSourceOverride,
-        CancellationToken cancellationToken,
-        PackageSourceRoutingPolicy sourcePolicy)
+    internal async Task<IEnumerable<string>?> GetNuGetSourcesAsync(string? requestedChannel, string? packageSourceOverride, CancellationToken cancellationToken)
     {
         // Refuse to silently downgrade staging restores to the shared daily feed when the running
         // CLI cannot synthesize a real staging channel (daily/local/pr-<N>). PackagingService omits
@@ -602,11 +594,6 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IDisposable
         if (!string.IsNullOrWhiteSpace(packageSourceOverride))
         {
             sources.Add(packageSourceOverride);
-
-            if (sourcePolicy is PackageSourceRoutingPolicy.ProjectLocalConfigured or PackageSourceRoutingPolicy.GlobalOrAmbientConfigured)
-            {
-                return sources;
-            }
         }
 
         try
@@ -674,11 +661,7 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IDisposable
         return sources.Count > 0 ? sources : null;
     }
 
-    internal async Task<TemporaryNuGetConfig?> TryCreateTemporaryNuGetConfigAsync(
-        string? requestedChannel,
-        string? packageSourceOverride,
-        CancellationToken cancellationToken,
-        PackageSourceRoutingPolicy sourcePolicy)
+    internal async Task<TemporaryNuGetConfig?> TryCreateTemporaryNuGetConfigAsync(string? requestedChannel, string? packageSourceOverride, CancellationToken cancellationToken)
     {
         // Keep staging refusal consistent across both temp-config branches. The project-reference
         // restore path skips GetNuGetSourcesAsync when a temp config exists, so this method must
@@ -688,9 +671,8 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IDisposable
         if (!string.IsNullOrWhiteSpace(packageSourceOverride))
         {
             // Treat an explicit --source value as the preferred source for Aspire packages.
-            // Persistent configured sources use an exclusive catch-all because enterprise
-            // configuration must not fall back to NuGet.org. Explicit one-shot sources retain
-            // their compatibility fallback for non-Aspire dependencies.
+            // Build a temporary NuGet.config that routes Aspire* there, optionally preserves
+            // non-Aspire channel mappings, and leaves a fallback source for non-Aspire deps.
             PackageChannel? matchedChannel = null;
             var configureGlobalPackagesFolder = false;
 
@@ -716,16 +698,8 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IDisposable
                 _logger.LogWarning(ex, "Failed to get package channels while creating source override NuGet.config");
             }
 
-            var mappings = sourcePolicy is PackageSourceRoutingPolicy.ProjectLocalConfigured or PackageSourceRoutingPolicy.GlobalOrAmbientConfigured
-                ? PackageSourceOverrideMappings.CreateForPersistentConfiguredSource(packageSourceOverride)
-                : PackageSourceOverrideMappings.Create(
-                    packageSourceOverride,
-                    matchedChannel,
-                    _executionContext.NuGetServiceIndexOverride,
-                    allowCredentialMaterial: PackageSourceOverrideMappings.HasCredentialMaterial(packageSourceOverride));
-
             return await TemporaryNuGetConfig.CreateAsync(
-                mappings,
+                PackageSourceOverrideMappings.Create(packageSourceOverride, matchedChannel, _executionContext.NuGetServiceIndexOverride),
                 configureGlobalPackagesFolder,
                 configureGlobalPackagesFolder ? ResolveStableGlobalPackagesFolder(packageSourceOverride) : null);
         }

@@ -2,7 +2,6 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Globalization;
-using System.Text.Json.Nodes;
 using System.Xml.Linq;
 using Aspire.Cli.Agents;
 using Aspire.Cli.Utils;
@@ -714,31 +713,16 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         return runner;
     }
 
-    private static void AssertSourceOverrideNuGetConfig(string outputPath, string sourceOverride, bool exclusiveConfiguredSource = false)
+    private static void AssertSourceOverrideNuGetConfig(string outputPath, string sourceOverride)
     {
         var doc = XDocument.Load(Path.Combine(outputPath, "nuget.config"));
         var packageSources = doc.Root!.Element("packageSources")!;
 
         Assert.Contains(packageSources.Elements("clear"), _ => true);
         Assert.Contains(packageSources.Elements("add"), e => (string?)e.Attribute("value") == sourceOverride);
-        if (exclusiveConfiguredSource)
-        {
-            Assert.DoesNotContain(packageSources.Elements("add"), e => (string?)e.Attribute("value") == PackageSources.NuGetOrg);
-            Assert.Equal(["Aspire*", PackageMapping.AllPackages], GetPackagePatternsForSource(doc, sourceOverride));
-        }
-        else
-        {
-            Assert.Contains(packageSources.Elements("add"), e => (string?)e.Attribute("value") == PackageSources.NuGetOrg);
-            Assert.Equal(["Aspire*"], GetPackagePatternsForSource(doc, sourceOverride));
-            Assert.Equal([PackageMapping.AllPackages], GetPackagePatternsForSource(doc, PackageSources.NuGetOrg));
-        }
-    }
-
-    private static string CreateLocalTemplateFeed(string feedPath)
-    {
-        Directory.CreateDirectory(feedPath);
-        File.WriteAllText(Path.Combine(feedPath, "Aspire.ProjectTemplates.9.2.0.nupkg"), string.Empty);
-        return feedPath;
+        Assert.Contains(packageSources.Elements("add"), e => (string?)e.Attribute("value") == PackageSources.NuGetOrg);
+        Assert.Equal(["Aspire*"], GetPackagePatternsForSource(doc, sourceOverride));
+        Assert.Equal([PackageMapping.AllPackages], GetPackagePatternsForSource(doc, PackageSources.NuGetOrg));
     }
 
     private static string[] GetPackagePatternsForSource(XDocument doc, string source)
@@ -1213,7 +1197,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             : sourceOverride;
         if (isRelative)
         {
-            CreateLocalTemplateFeed(expectedSource);
+            Directory.CreateDirectory(expectedSource);
         }
 
         string? discoveryAspireSource = null;
@@ -1269,406 +1253,9 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
         Assert.Equal(CliExitCodes.Success, exitCode);
-        if (isRelative)
-        {
-            Assert.Null(discoveryAspireSource);
-            Assert.Null(discoveryFallbackSource);
-        }
-        else
-        {
-            Assert.Equal(expectedSource, discoveryAspireSource);
-            Assert.Equal(expectedSource, discoveryFallbackSource);
-        }
+        Assert.Equal(expectedSource, discoveryAspireSource);
+        Assert.Equal(expectedSource, discoveryFallbackSource);
         AssertSourceOverrideNuGetConfig(Path.Combine(workspace.WorkspaceRoot.FullName, "output"), expectedSource);
-    }
-
-    [Fact]
-    public async Task NewCommandWithConfiguredSourceUsesSourceForTemplateDiscovery()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        const string configuredSource = "https://configured.example/v3/index.json";
-        string? discoveryAspireSource = null;
-        string? discoveryFallbackSource = null;
-
-        var cache = new FakeNuGetPackageCache
-        {
-            GetTemplatePackagesAsyncCallback = (_, _, nugetConfig, _) =>
-            {
-                Assert.NotNull(nugetConfig);
-
-                var document = XDocument.Load(nugetConfig.FullName);
-                var sourceMappings = document.Root!
-                    .Element("packageSourceMapping")!
-                    .Elements("packageSource")
-                    .ToArray();
-                discoveryAspireSource = (string?)sourceMappings
-                    .Single(source => source
-                        .Elements("package")
-                        .Any(package => (string?)package.Attribute("pattern") == "Aspire*"))
-                    .Attribute("key");
-                discoveryFallbackSource = (string?)sourceMappings
-                    .Single(source => source
-                        .Elements("package")
-                        .Any(package => (string?)package.Attribute("pattern") == PackageMapping.AllPackages))
-                    .Attribute("key");
-
-                return Task.FromResult<IEnumerable<NuGetPackage>>(
-                    [new NuGetPackage { Id = "Aspire.ProjectTemplates", Source = configuredSource, Version = "9.2.0" }]);
-            }
-        };
-        var channel = PackageChannel.CreateExplicitChannel(
-            PackageChannelNames.Staging,
-            PackageChannelQuality.Stable,
-            [
-                new PackageMapping("Aspire*", "https://channel.example/v3/index.json"),
-                new PackageMapping(PackageMapping.AllPackages, PackageSources.NuGetOrg)
-            ],
-            cache,
-            new TestFeatures(),
-            NullLogger.Instance);
-        var services = CreateServiceCollection(workspace, options =>
-        {
-            options.ConfigurationCallback += config => config[AspireConfigFile.NuGetSourceKey] = configuredSource;
-            options.PackagingServiceFactory = _ => new TestPackagingService
-            {
-                GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>([channel])
-            };
-        });
-
-        using var provider = services.BuildServiceProvider();
-        var command = provider.GetRequiredService<NewCommand>();
-        var result = command.Parse("new aspire-empty --name TestApp --output ./output --language csharp --localhost-tld false --suppress-agent-init --channel staging");
-
-        var exitCode = await result.InvokeAsync().DefaultTimeout();
-
-        Assert.Equal(CliExitCodes.Success, exitCode);
-        Assert.Equal(configuredSource, discoveryAspireSource);
-        Assert.Equal(configuredSource, discoveryFallbackSource);
-        AssertSourceOverrideNuGetConfig(Path.Combine(workspace.WorkspaceRoot.FullName, "output"), configuredSource, exclusiveConfiguredSource: true);
-    }
-
-    [Fact]
-    public async Task NewCommandWithConfiguredSourcePreservesExistingConfigProperties()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        const string configuredSource = "https://configured.example/v3/index.json";
-
-        var services = CreateServiceCollection(workspace, options =>
-        {
-            options.ConfigurationCallback += config => config[AspireConfigFile.NuGetSourceKey] = configuredSource;
-        });
-        services.AddSingleton<IScaffoldingService>(new TestScaffoldingService
-        {
-            ScaffoldAsyncCallback = (context, _) =>
-            {
-                File.WriteAllText(Path.Combine(context.TargetDirectory.FullName, "apphost.mts"), "// test apphost");
-                File.WriteAllText(
-                    Path.Combine(context.TargetDirectory.FullName, AspireConfigFile.FileName),
-                    """
-                    {
-                      "appHost": {
-                        "path": "apphost.mts",
-                        "language": "typescript/nodejs"
-                      },
-                      "templateSpecific": {
-                        "nested": {
-                          "value": 42
-                        }
-                      }
-                    }
-                    """);
-                return Task.FromResult(true);
-            }
-        });
-
-        using var provider = services.BuildServiceProvider();
-        var command = provider.GetRequiredService<NewCommand>();
-        var result = command.Parse("new aspire-empty --name TestApp --output ./output --language typescript --localhost-tld false --suppress-agent-init");
-
-        var exitCode = await result.InvokeAsync().DefaultTimeout();
-
-        Assert.Equal(CliExitCodes.Success, exitCode);
-        var configPath = Path.Combine(workspace.WorkspaceRoot.FullName, "output", AspireConfigFile.FileName);
-        var config = JsonNode.Parse(await File.ReadAllTextAsync(configPath))!.AsObject();
-        Assert.Equal(configuredSource, config[AspireConfigFile.NuGetSourceKey]!.GetValue<string>());
-        Assert.Equal("apphost.mts", config["appHost"]!["path"]!.GetValue<string>());
-        Assert.Equal("typescript/nodejs", config["appHost"]!["language"]!.GetValue<string>());
-        var templateSpecific = Assert.IsType<JsonObject>(config["templateSpecific"]);
-        Assert.Equal(42, templateSpecific["nested"]!["value"]!.GetValue<int>());
-    }
-
-    [Fact]
-    public async Task NewCommandWithGlobalSourceDoesNotPersistSourceInProjectConfig()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        const string globalSource = "https://global.example/v3/index.json";
-        var globalSettingsDirectory = workspace.CreateDirectory(AspireJsonConfiguration.SettingsFolder);
-        await File.WriteAllTextAsync(
-            Path.Combine(globalSettingsDirectory.FullName, "settings.global.json"),
-            $$"""
-            {
-              "nugetSource": "{{globalSource}}"
-            }
-            """);
-
-        string? observedSource = null;
-        var services = CreateServiceCollection(workspace);
-        services.AddSingleton<IScaffoldingService>(new TestScaffoldingService
-        {
-            ScaffoldAsyncCallback = (context, _) =>
-            {
-                observedSource = context.PackageSourceOverride;
-                File.WriteAllText(Path.Combine(context.TargetDirectory.FullName, "apphost.mts"), "// test apphost");
-                File.WriteAllText(
-                    Path.Combine(context.TargetDirectory.FullName, AspireConfigFile.FileName),
-                    """
-                    {
-                      "appHost": {
-                        "path": "apphost.mts",
-                        "language": "typescript/nodejs"
-                      }
-                    }
-                    """);
-                return Task.FromResult(true);
-            }
-        });
-
-        using var provider = services.BuildServiceProvider();
-        var command = provider.GetRequiredService<NewCommand>();
-        var exitCode = await command.Parse(
-            "new aspire-empty --name TestApp --output ./output --language typescript --localhost-tld false --suppress-agent-init")
-            .InvokeAsync()
-            .DefaultTimeout();
-
-        Assert.Equal(CliExitCodes.Success, exitCode);
-        Assert.Equal(globalSource, observedSource);
-        var config = JsonNode.Parse(
-            await File.ReadAllTextAsync(Path.Combine(workspace.WorkspaceRoot.FullName, "output", AspireConfigFile.FileName)))!.AsObject();
-        Assert.False(config.ContainsKey(AspireConfigFile.NuGetSourceKey));
-        Assert.False(File.Exists(Path.Combine(workspace.WorkspaceRoot.FullName, "output", "nuget.config")));
-    }
-
-    [Fact]
-    public async Task NewCommandWithConfiguredSourceMigratesLegacyTemplateConfigBeforePersistingSource()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        const string configuredSource = "https://configured.example/v3/index.json";
-
-        var services = CreateServiceCollection(workspace, options =>
-        {
-            options.ConfigurationCallback += config => config[AspireConfigFile.NuGetSourceKey] = configuredSource;
-        });
-        services.AddSingleton<IScaffoldingService>(new TestScaffoldingService
-        {
-            ScaffoldAsyncCallback = (context, _) =>
-            {
-                File.WriteAllText(Path.Combine(context.TargetDirectory.FullName, "apphost.mts"), "// test apphost");
-
-                var legacySettingsDirectory = context.TargetDirectory.CreateSubdirectory(AspireJsonConfiguration.SettingsFolder);
-                File.WriteAllText(
-                    Path.Combine(legacySettingsDirectory.FullName, AspireJsonConfiguration.FileName),
-                    """
-                    {
-                      "appHostPath": "../apphost.mts",
-                      "language": "typescript/nodejs",
-                      "channel": "daily",
-                      "sdkVersion": "13.1.2",
-                      "packages": {
-                        "Aspire.Hosting.Redis": "13.1.2"
-                      },
-                      "templateSpecific": {
-                        "nested": {
-                          "value": 42,
-                          "modes": [
-                            "fast",
-                            "safe"
-                          ]
-                        }
-                      }
-                    }
-                    """);
-                File.WriteAllText(
-                    Path.Combine(context.TargetDirectory.FullName, "apphost.run.json"),
-                    """
-                    {
-                      "profiles": {
-                        "default": {
-                          "applicationUrl": "https://localhost:17000",
-                          "environmentVariables": {
-                            "ASPNETCORE_ENVIRONMENT": "Development"
-                          }
-                        }
-                      }
-                    }
-                    """);
-
-                return Task.FromResult(true);
-            }
-        });
-
-        using var provider = services.BuildServiceProvider();
-        var command = provider.GetRequiredService<NewCommand>();
-        var result = command.Parse("new aspire-empty --name TestApp --output ./output --language typescript --localhost-tld false --suppress-agent-init");
-
-        var exitCode = await result.InvokeAsync().DefaultTimeout();
-
-        Assert.Equal(CliExitCodes.Success, exitCode);
-        var outputPath = Path.Combine(workspace.WorkspaceRoot.FullName, "output");
-        var config = AspireConfigFile.Load(outputPath);
-        Assert.NotNull(config);
-        Assert.Equal("apphost.mts", config.AppHost?.Path);
-        Assert.Equal("typescript/nodejs", config.AppHost?.Language);
-        Assert.Equal("daily", config.Channel);
-        Assert.Equal("13.1.2", config.SdkVersion);
-        Assert.Equal(configuredSource, config.NuGetSource);
-        Assert.Equal("13.1.2", config.Packages?["Aspire.Hosting.Redis"]);
-        var profile = Assert.Single(config.Profiles!);
-        Assert.Equal("default", profile.Key);
-        Assert.Equal("https://localhost:17000", profile.Value.ApplicationUrl);
-        Assert.Equal("Development", profile.Value.EnvironmentVariables?["ASPNETCORE_ENVIRONMENT"]);
-
-        var persistedJson = JsonNode.Parse(
-            await File.ReadAllTextAsync(Path.Combine(outputPath, AspireConfigFile.FileName)))!.AsObject();
-        Assert.Equal(configuredSource, persistedJson[AspireConfigFile.NuGetSourceKey]!.GetValue<string>());
-        Assert.True(JsonNode.DeepEquals(
-            JsonNode.Parse("""
-                {
-                  "nested": {
-                    "value": 42,
-                    "modes": [
-                      "fast",
-                      "safe"
-                    ]
-                  }
-                }
-                """),
-            persistedJson["templateSpecific"]));
-    }
-
-    [Fact]
-    public async Task NewCommandWithRelativeConfiguredSourceResolvesAgainstConfigDirectory()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-
-        var workspaceConfigPath = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
-        await File.WriteAllTextAsync(
-            workspaceConfigPath,
-            """
-            {
-              "nugetSource": "feed"
-            }
-            """);
-
-        var expectedSource = Path.Combine(workspace.WorkspaceRoot.FullName, "feed");
-        CreateLocalTemplateFeed(expectedSource);
-
-        var nestedWorkingDirectory = workspace.CreateDirectory("nested");
-        var services = CreateServiceCollection(workspace, options =>
-        {
-            options.WorkingDirectory = nestedWorkingDirectory;
-        });
-
-        using var provider = services.BuildServiceProvider();
-        var command = provider.GetRequiredService<NewCommand>();
-        var result = command.Parse("new aspire-empty --name TestApp --output ./output --language csharp --localhost-tld false --suppress-agent-init");
-
-        var exitCode = await result.InvokeAsync().DefaultTimeout();
-
-        Assert.Equal(CliExitCodes.Success, exitCode);
-        var outputPath = Path.Combine(nestedWorkingDirectory.FullName, "output");
-        AssertSourceOverrideNuGetConfig(outputPath, expectedSource, exclusiveConfiguredSource: true);
-        Assert.Equal(expectedSource, AspireConfigFile.Load(outputPath)?.NuGetSource);
-    }
-
-    [Fact]
-    public async Task NewCommandWithExplicitSourceOverridesConfiguredSource()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        const string configuredSource = "https://configured.example/v3/index.json";
-        const string explicitSource = "https://explicit.example/v3/index.json?token=secret";
-        string? discoveryAspireSource = null;
-        string? discoveryFallbackSource = null;
-
-        var cache = new FakeNuGetPackageCache
-        {
-            GetTemplatePackagesAsyncCallback = (_, _, nugetConfig, _) =>
-            {
-                Assert.NotNull(nugetConfig);
-
-                var document = XDocument.Load(nugetConfig.FullName);
-                var sourceMappings = document.Root!
-                    .Element("packageSourceMapping")!
-                    .Elements("packageSource")
-                    .ToArray();
-                discoveryAspireSource = (string?)sourceMappings
-                    .Single(source => source
-                        .Elements("package")
-                        .Any(package => (string?)package.Attribute("pattern") == "Aspire*"))
-                    .Attribute("key");
-                discoveryFallbackSource = (string?)sourceMappings
-                    .Single(source => source
-                        .Elements("package")
-                        .Any(package => (string?)package.Attribute("pattern") == PackageMapping.AllPackages))
-                    .Attribute("key");
-
-                return Task.FromResult<IEnumerable<NuGetPackage>>(
-                    [new NuGetPackage { Id = "Aspire.ProjectTemplates", Source = explicitSource, Version = "9.2.0" }]);
-            }
-        };
-        var channel = PackageChannel.CreateExplicitChannel(
-            PackageChannelNames.Staging,
-            PackageChannelQuality.Stable,
-            [
-                new PackageMapping("Aspire*", "https://channel.example/v3/index.json"),
-                new PackageMapping(PackageMapping.AllPackages, PackageSources.NuGetOrg)
-            ],
-            cache,
-            new TestFeatures(),
-            NullLogger.Instance);
-        var services = CreateServiceCollection(workspace, options =>
-        {
-            options.ConfigurationCallback += config => config[AspireConfigFile.NuGetSourceKey] = configuredSource;
-            options.PackagingServiceFactory = _ => new TestPackagingService
-            {
-                GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>([channel])
-            };
-        });
-
-        using var provider = services.BuildServiceProvider();
-        var command = provider.GetRequiredService<NewCommand>();
-        var result = command.Parse(
-            $"new aspire-empty --name TestApp --output ./output --language csharp --localhost-tld false " +
-            $"--suppress-agent-init --channel staging --source {explicitSource}");
-
-        var exitCode = await result.InvokeAsync().DefaultTimeout();
-
-        Assert.Equal(CliExitCodes.Success, exitCode);
-        Assert.Equal(explicitSource, discoveryAspireSource);
-        Assert.Equal(explicitSource, discoveryFallbackSource);
-        var outputPath = Path.Combine(workspace.WorkspaceRoot.FullName, "output");
-        Assert.False(File.Exists(Path.Combine(outputPath, "nuget.config")));
-        Assert.Null(AspireConfigFile.Load(outputPath)?.NuGetSource);
-    }
-
-    [Fact]
-    public void TemplateCommandWithConfiguredSourceDisablesTemplateMetadataPrefetch()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        const string configuredSource = "https://configured.example/v3/index.json";
-
-        var services = CreateServiceCollection(workspace, options =>
-        {
-            options.ConfigurationCallback += config => config[AspireConfigFile.NuGetSourceKey] = configuredSource;
-        });
-
-        using var provider = services.BuildServiceProvider();
-        var command = provider.GetRequiredService<NewCommand>();
-        var templateCommand = Assert.IsType<TemplateCommand>(command.Subcommands.Single(subcommand => subcommand.Name == KnownTemplateId.CSharpEmptyAppHost));
-        var parseResult = command.Parse("new aspire-empty");
-
-        templateCommand.SelectForExecution(parseResult);
-
-        Assert.False(templateCommand.PrefetchesTemplatePackageMetadataForInvocation);
     }
 
     [Theory]
@@ -1680,7 +1267,8 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
     public async Task NewCommandWithEmptyTemplateAndSourceOverridePersistsSourceForLaterRestore(string language, string? featureFlag, string scaffoldFileName)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var sourceOverride = CreateLocalTemplateFeed(Path.Combine(workspace.WorkspaceRoot.FullName, "source-feed"));
+        var sourceOverride = Path.Combine(workspace.WorkspaceRoot.FullName, "source-feed");
+        Directory.CreateDirectory(sourceOverride);
         string? capturedPackageSourceOverride = null;
         TestInteractionService? interactionService = null;
 
@@ -1726,27 +1314,8 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
     public async Task NewCommandWithCSharpEmptyTemplateAndSourceOverridePersistsSourceForLaterRestore()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var sourceOverride = CreateLocalTemplateFeed(Path.Combine(workspace.WorkspaceRoot.FullName, "source-feed"));
-
-        var services = CreateServiceCollection(workspace);
-
-        using var provider = services.BuildServiceProvider();
-        var command = provider.GetRequiredService<NewCommand>();
-        var result = command.Parse($"new aspire-empty --name TestApp --output ./output --language csharp --localhost-tld false --suppress-agent-init --source \"{sourceOverride}\"");
-
-        var exitCode = await result.InvokeAsync().DefaultTimeout();
-
-        Assert.Equal(CliExitCodes.Success, exitCode);
-        AssertSourceOverrideNuGetConfig(Path.Combine(workspace.WorkspaceRoot.FullName, "output"), sourceOverride);
-    }
-
-    [Fact]
-    public async Task NewCommandWithExplicitLinkedSourceCreatesProject()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var target = CreateLocalTemplateFeed(Path.Combine(workspace.WorkspaceRoot.FullName, "target-feed"));
         var sourceOverride = Path.Combine(workspace.WorkspaceRoot.FullName, "source-feed");
-        ReparsePoint.CreateOrReplace(sourceOverride, target);
+        Directory.CreateDirectory(sourceOverride);
 
         var services = CreateServiceCollection(workspace);
 
@@ -1764,7 +1333,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
     [InlineData("https://user:token@example.invalid/v3/index.json")]
     [InlineData("https://example.invalid/v3/index.json?sig=token")]
     [InlineData("https://example.invalid/v3/index.json#token")]
-    public async Task NewCommandWithConfiguredCredentialBearingHttpSourceFailsBeforeCreatingProject(string sourceOverride)
+    public async Task NewCommandWithCredentialBearingHttpSourceFailsBeforeCreatingProject(string sourceOverride)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var scaffoldingInvoked = false;
@@ -1775,14 +1344,6 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             options.InteractionServiceFactory = _ => interactionService = new TestInteractionService();
         });
 
-        await File.WriteAllTextAsync(
-            Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName),
-            $$"""
-            {
-              "nugetSource": "{{sourceOverride}}"
-            }
-            """);
-
         services.AddSingleton<IScaffoldingService>(new TestScaffoldingService
         {
             ScaffoldAsyncCallback = (_, _) =>
@@ -1794,7 +1355,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
 
         using var provider = services.BuildServiceProvider();
         var command = provider.GetRequiredService<NewCommand>();
-        var result = command.Parse("new aspire-empty --name TestApp --output ./output --language typescript --localhost-tld false --suppress-agent-init");
+        var result = command.Parse($"new aspire-empty --name TestApp --output ./output --language typescript --localhost-tld false --suppress-agent-init --source {sourceOverride}");
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
@@ -1803,169 +1364,6 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         Assert.False(Directory.Exists(Path.Combine(workspace.WorkspaceRoot.FullName, "output")));
         Assert.NotNull(interactionService);
         Assert.Contains(NewCommandStrings.SourceWithCredentialsCannotBePersisted, interactionService!.DisplayedErrors);
-    }
-
-    [Fact]
-    public async Task NewCommandWithConfiguredRemoteFileSourceFailsBeforeCreatingProject()
-    {
-        var expectedError = NewCommandStrings.ConfiguredRemoteSourceNotSupported;
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var templateDiscoveryInvoked = false;
-        var scaffoldingInvoked = false;
-        var interactionService = new TestInteractionService();
-
-        await File.WriteAllTextAsync(
-            Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName),
-            """
-            {
-              "nugetSource": "file://example.test/share"
-            }
-            """);
-
-        var cache = new FakeNuGetPackageCache
-        {
-            GetTemplatePackagesAsyncCallback = (_, _, _, _) =>
-            {
-                templateDiscoveryInvoked = true;
-                return Task.FromResult<IEnumerable<NuGetPackage>>([]);
-            }
-        };
-        var services = CreateServiceCollection(workspace, options =>
-        {
-            options.InteractionServiceFactory = _ => interactionService;
-            options.NuGetPackageCacheFactory = _ => cache;
-        });
-
-        services.AddSingleton<IScaffoldingService>(new TestScaffoldingService
-        {
-            ScaffoldAsyncCallback = (_, _) =>
-            {
-                scaffoldingInvoked = true;
-                return Task.FromResult(true);
-            }
-        });
-
-        using var provider = services.BuildServiceProvider();
-        var command = provider.GetRequiredService<NewCommand>();
-        var result = command.Parse("new aspire-empty --name TestApp --output ./output --language typescript --localhost-tld false --suppress-agent-init");
-
-        var exitCode = await result.InvokeAsync().DefaultTimeout();
-
-        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
-        Assert.False(templateDiscoveryInvoked);
-        Assert.False(scaffoldingInvoked);
-        Assert.False(Directory.Exists(Path.Combine(workspace.WorkspaceRoot.FullName, "output")));
-        Assert.Equal([expectedError], interactionService.DisplayedErrors);
-    }
-
-    [Fact]
-    public async Task NewCommandWithConfiguredLinkedSourceFailsBeforeCreatingProject()
-    {
-        var expectedError = NewCommandStrings.ConfiguredLinkedSourceNotSupported;
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var target = workspace.CreateDirectory("target-feed");
-        var link = Path.Combine(workspace.WorkspaceRoot.FullName, "feed");
-        ReparsePoint.CreateOrReplace(link, target.FullName);
-        var templateDiscoveryInvoked = false;
-        var scaffoldingInvoked = false;
-        var interactionService = new TestInteractionService();
-
-        await File.WriteAllTextAsync(
-            Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName),
-            """
-            {
-              "nugetSource": "feed"
-            }
-            """);
-
-        var cache = new FakeNuGetPackageCache
-        {
-            GetTemplatePackagesAsyncCallback = (_, _, _, _) =>
-            {
-                templateDiscoveryInvoked = true;
-                return Task.FromResult<IEnumerable<NuGetPackage>>([]);
-            }
-        };
-        var services = CreateServiceCollection(workspace, options =>
-        {
-            options.InteractionServiceFactory = _ => interactionService;
-            options.NuGetPackageCacheFactory = _ => cache;
-        });
-
-        services.AddSingleton<IScaffoldingService>(new TestScaffoldingService
-        {
-            ScaffoldAsyncCallback = (_, _) =>
-            {
-                scaffoldingInvoked = true;
-                return Task.FromResult(true);
-            }
-        });
-
-        using var provider = services.BuildServiceProvider();
-        var command = provider.GetRequiredService<NewCommand>();
-        var result = command.Parse("new aspire-empty --name TestApp --output ./output --language typescript --localhost-tld false --suppress-agent-init");
-
-        var exitCode = await result.InvokeAsync().DefaultTimeout();
-
-        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
-        Assert.False(templateDiscoveryInvoked);
-        Assert.False(scaffoldingInvoked);
-        Assert.False(Directory.Exists(Path.Combine(workspace.WorkspaceRoot.FullName, "output")));
-        Assert.Equal([expectedError], interactionService.DisplayedErrors);
-    }
-
-    [Fact]
-    [PlatformSpecific(TestPlatforms.Windows)]
-    public async Task NewCommandWithRelativeConfiguredSourceResolvedFromRemoteBaseFailsBeforeCreatingProject()
-    {
-        var expectedError = NewCommandStrings.ConfiguredRemoteSourceNotSupported;
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var templateDiscoveryInvoked = false;
-        var scaffoldingInvoked = false;
-        var interactionService = new TestInteractionService();
-        var configurationService = new Aspire.Cli.Tests.TestServices.TestConfigurationService
-        {
-            OnGetConfigurationFromDirectoryWithOrigin = (key, _) =>
-                key == AspireConfigFile.NuGetSourceKey
-                    ? new ConfigurationValueWithOrigin(".", new DirectoryInfo($@"\\?\{workspace.WorkspaceRoot.FullName}"))
-                    : null
-        };
-
-        var cache = new FakeNuGetPackageCache
-        {
-            GetTemplatePackagesAsyncCallback = (_, _, _, _) =>
-            {
-                templateDiscoveryInvoked = true;
-                return Task.FromResult<IEnumerable<NuGetPackage>>([]);
-            }
-        };
-        var services = CreateServiceCollection(workspace, options =>
-        {
-            options.ConfigurationServiceFactory = _ => configurationService;
-            options.InteractionServiceFactory = _ => interactionService;
-            options.NuGetPackageCacheFactory = _ => cache;
-        });
-
-        services.AddSingleton<IScaffoldingService>(new TestScaffoldingService
-        {
-            ScaffoldAsyncCallback = (_, _) =>
-            {
-                scaffoldingInvoked = true;
-                return Task.FromResult(true);
-            }
-        });
-
-        using var provider = services.BuildServiceProvider();
-        var command = provider.GetRequiredService<NewCommand>();
-        var result = command.Parse("new aspire-empty --name TestApp --output ./output --language typescript --localhost-tld false --suppress-agent-init");
-
-        var exitCode = await result.InvokeAsync().DefaultTimeout();
-
-        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
-        Assert.False(templateDiscoveryInvoked);
-        Assert.False(scaffoldingInvoked);
-        Assert.False(Directory.Exists(Path.Combine(workspace.WorkspaceRoot.FullName, "output")));
-        Assert.Equal([expectedError], interactionService.DisplayedErrors);
     }
 
     [Fact]
@@ -2644,7 +2042,8 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
     public async Task NewCommandWithTypeScriptStarterAndSourceOverridePersistsSourceAndPlumbsOverride()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var sourceOverride = CreateLocalTemplateFeed(Path.Combine(workspace.WorkspaceRoot.FullName, "source-feed"));
+        var sourceOverride = Path.Combine(workspace.WorkspaceRoot.FullName, "source-feed");
+        Directory.CreateDirectory(sourceOverride);
         TestInteractionService? interactionService = null;
         var services = CreateServiceCollection(workspace, options =>
         {
@@ -2750,7 +2149,8 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         // restore would just add noise behind a more prominent error. Pin that the starter path
         // mirrors the empty-template path here.
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var sourceOverride = CreateLocalTemplateFeed(Path.Combine(workspace.WorkspaceRoot.FullName, "source-feed"));
+        var sourceOverride = Path.Combine(workspace.WorkspaceRoot.FullName, "source-feed");
+        Directory.CreateDirectory(sourceOverride);
 
         TestInteractionService? interactionService = null;
         var services = CreateServiceCollection(workspace, options =>

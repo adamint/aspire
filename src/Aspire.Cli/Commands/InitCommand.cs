@@ -518,12 +518,7 @@ internal sealed class InitCommand : BaseCommand
             }
         }
 
-        var context = new ScaffoldContext(
-            language,
-            workingDirectory,
-            PackageSourceRoutingPolicy.None,
-            workingDirectory.Name,
-            Channel: resolvedChannel);
+        var context = new ScaffoldContext(language, workingDirectory, workingDirectory.Name, Channel: resolvedChannel);
         var scaffolded = await _scaffoldingService.ScaffoldAsync(context, cancellationToken);
         if (!scaffolded)
         {

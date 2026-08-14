@@ -7,7 +7,6 @@ using Aspire.Cli.Configuration;
 using Aspire.Cli.DotNet;
 using Aspire.Cli.Layout;
 using Aspire.Cli.NuGet;
-using Aspire.Cli.Packaging;
 using Aspire.Cli.Processes;
 using Aspire.Cli.Projects;
 using Aspire.Cli.Telemetry;
@@ -595,10 +594,9 @@ public class AppHostServerSessionTests(ITestOutputHelper outputHelper)
         public Task<AppHostServerPrepareResult> PrepareAsync(
             string sdkVersion,
             IEnumerable<IntegrationReference> integrations,
-            string? requestedChannel,
-            string? packageSourceOverride,
-            PackageSourceRoutingPolicy sourcePolicy,
-            CancellationToken cancellationToken) =>
+            string? requestedChannel = null,
+            string? packageSourceOverride = null,
+            CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
         public async Task<AppHostServerRunResult> RunAsync(
@@ -640,10 +638,9 @@ public class AppHostServerSessionTests(ITestOutputHelper outputHelper)
         public Task<AppHostServerPrepareResult> PrepareAsync(
             string sdkVersion,
             IEnumerable<IntegrationReference> integrations,
-            string? requestedChannel,
-            string? packageSourceOverride,
-            PackageSourceRoutingPolicy sourcePolicy,
-            CancellationToken cancellationToken) =>
+            string? requestedChannel = null,
+            string? packageSourceOverride = null,
+            CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
         public async Task<AppHostServerRunResult> RunAsync(
@@ -691,10 +688,9 @@ public class AppHostServerSessionTests(ITestOutputHelper outputHelper)
         public Task<AppHostServerPrepareResult> PrepareAsync(
             string sdkVersion,
             IEnumerable<IntegrationReference> integrations,
-            string? requestedChannel,
-            string? packageSourceOverride,
-            PackageSourceRoutingPolicy sourcePolicy,
-            CancellationToken cancellationToken) =>
+            string? requestedChannel = null,
+            string? packageSourceOverride = null,
+            CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
         public Task<AppHostServerRunResult> RunAsync(

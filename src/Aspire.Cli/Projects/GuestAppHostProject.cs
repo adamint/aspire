@@ -258,17 +258,10 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         string sdkVersion,
         List<IntegrationReference> integrations,
         string? requestedChannel,
-        string? packageSourceOverride,
-        PackageSourceRoutingPolicy sourcePolicy,
-        CancellationToken cancellationToken)
+        string? packageSourceOverride = null,
+        CancellationToken cancellationToken = default)
     {
-        var result = await appHostServerProject.PrepareAsync(
-            sdkVersion,
-            integrations,
-            requestedChannel,
-            packageSourceOverride,
-            sourcePolicy,
-            cancellationToken);
+        var result = await appHostServerProject.PrepareAsync(sdkVersion, integrations, requestedChannel, packageSourceOverride, cancellationToken);
         return (result.Success, result.Output, result.ChannelName, result.NeedsCodeGeneration);
     }
 
@@ -276,22 +269,13 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
     /// Builds the AppHost server project and generates SDK code.
     /// </summary>
     /// <returns><see langword="true"/> if the code was generated successfully; otherwise, <see langword="false"/>.</returns>
-    internal async Task<bool> BuildAndGenerateSdkAsync(
-        DirectoryInfo directory,
-        string? packageSourceOverride,
-        PackageSourceRoutingPolicy sourcePolicy,
-        CancellationToken cancellationToken)
+    internal async Task<bool> BuildAndGenerateSdkAsync(DirectoryInfo directory, string? packageSourceOverride = null, CancellationToken cancellationToken = default)
     {
         var config = LoadConfiguration(directory);
-        return await BuildAndGenerateSdkAsync(directory, config, packageSourceOverride, sourcePolicy, cancellationToken);
+        return await BuildAndGenerateSdkAsync(directory, config, packageSourceOverride, cancellationToken);
     }
 
-    private async Task<bool> BuildAndGenerateSdkAsync(
-        DirectoryInfo directory,
-        AspireConfigFile config,
-        string? packageSourceOverride,
-        PackageSourceRoutingPolicy sourcePolicy,
-        CancellationToken cancellationToken)
+    private async Task<bool> BuildAndGenerateSdkAsync(DirectoryInfo directory, AspireConfigFile config, string? packageSourceOverride = null, CancellationToken cancellationToken = default)
     {
         var appHostServerProject = await _appHostServerProjectFactory.CreateAsync(directory.FullName, cancellationToken);
 
@@ -301,7 +285,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         var integrations = await GetIntegrationReferencesAsync(config, directory, cancellationToken);
         var sdkVersion = GetPrepareSdkVersion(config);
 
-        var (buildSuccess, buildOutput, _, _) = await PrepareAppHostServerAsync(appHostServerProject, sdkVersion, integrations, config.Channel, packageSourceOverride, sourcePolicy, cancellationToken);
+        var (buildSuccess, buildOutput, _, _) = await PrepareAppHostServerAsync(appHostServerProject, sdkVersion, integrations, config.Channel, packageSourceOverride, cancellationToken);
         if (!buildSuccess)
         {
             if (buildOutput is not null)
@@ -339,13 +323,9 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         return true;
     }
 
-    Task<bool> IGuestAppHostSdkGenerator.BuildAndGenerateSdkAsync(
-        DirectoryInfo directory,
-        string? packageSourceOverride,
-        PackageSourceRoutingPolicy sourcePolicy,
-        CancellationToken cancellationToken)
+    Task<bool> IGuestAppHostSdkGenerator.BuildAndGenerateSdkAsync(DirectoryInfo directory, string? packageSourceOverride, CancellationToken cancellationToken)
     {
-        return BuildAndGenerateSdkAsync(directory, packageSourceOverride, sourcePolicy, cancellationToken);
+        return BuildAndGenerateSdkAsync(directory, packageSourceOverride, cancellationToken);
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -427,14 +407,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
                 async () =>
                 {
                     // Prepare the AppHost server (build for dev mode, restore for prebuilt)
-                    var (prepareSuccess, prepareOutput, channelName, needsCodeGen) = await PrepareAppHostServerAsync(
-                        appHostServerProject,
-                        sdkVersion,
-                        integrations,
-                        config.Channel,
-                        packageSourceOverride: null,
-                        PackageSourceRoutingPolicy.None,
-                        cancellationToken);
+                    var (prepareSuccess, prepareOutput, channelName, needsCodeGen) = await PrepareAppHostServerAsync(appHostServerProject, sdkVersion, integrations, config.Channel, cancellationToken: cancellationToken);
                     if (!prepareSuccess)
                     {
                         return (Success: false, Output: prepareOutput, Error: "Failed to prepare app host.", ChannelName: (string?)null, NeedsCodeGen: false);
@@ -1038,14 +1011,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
             var sdkVersion = GetPrepareSdkVersion(config);
 
             // Prepare the AppHost server (build for dev mode, restore for prebuilt)
-            var (prepareSuccess, prepareOutput, _, needsCodeGen) = await PrepareAppHostServerAsync(
-                appHostServerProject,
-                sdkVersion,
-                integrations,
-                config.Channel,
-                packageSourceOverride: null,
-                PackageSourceRoutingPolicy.None,
-                cancellationToken);
+            var (prepareSuccess, prepareOutput, _, needsCodeGen) = await PrepareAppHostServerAsync(appHostServerProject, sdkVersion, integrations, config.Channel, cancellationToken: cancellationToken);
             if (!prepareSuccess)
             {
                 // Set OutputCollector so PipelineCommandBase can display errors
@@ -1404,7 +1370,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         config.AddOrUpdatePackage(context.PackageId, context.PackageVersion);
 
         // Build and regenerate SDK code with the new package
-        var regenerateSuccess = await BuildAndGenerateSdkAsync(directory, config, context.Source, context.SourcePolicy, cancellationToken);
+        var regenerateSuccess = await BuildAndGenerateSdkAsync(directory, config, cancellationToken: cancellationToken);
         if (!regenerateSuccess)
         {
             return false;
@@ -1534,12 +1500,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
             UpdateCommandStrings.RegeneratingSdkCode,
             async () =>
             {
-                var regenerateSuccess = await BuildAndGenerateSdkAsync(
-                    directory,
-                    config,
-                    packageSourceOverride: null,
-                    sourcePolicy: PackageSourceRoutingPolicy.None,
-                    cancellationToken: cancellationToken);
+                var regenerateSuccess = await BuildAndGenerateSdkAsync(directory, config, cancellationToken: cancellationToken);
 
                 if (!regenerateSuccess)
                 {

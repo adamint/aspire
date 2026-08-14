@@ -3,12 +3,10 @@
 
 using System.CommandLine;
 using Microsoft.AspNetCore.InternalTesting;
-using System.Diagnostics;
 using System.Text.Json;
 using Aspire.Cli.Backchannel;
 using Aspire.Cli.Certificates;
 using Aspire.Cli.Commands;
-using Aspire.Cli.Configuration;
 using Aspire.Cli.DotNet;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Packaging;
@@ -342,201 +340,12 @@ public class DotNetTemplateFactoryTests
         Assert.Empty(templates);
     }
 
-    [Theory]
-    [InlineData(true, null, false)]
-    [InlineData(false, "https://internal.example/v3/index.json", false)]
-    [InlineData(true, "https://internal.example/v3/index.json", true)]
-    public void ShouldRestoreAfterTemplate_OnlyRestoresSourceBackedOwningTemplates(bool ownsAspireConfig, string? source, bool expected)
-    {
-        var template = new CallbackTemplate(
-            "test",
-            "test",
-            (_, _) => string.Empty,
-            _ => { },
-            (_, _, _, _) => Task.FromResult(new TemplateResult(CliExitCodes.Success)),
-            ownsAspireConfig: ownsAspireConfig);
-        var inputs = new TemplateInputs
-        {
-            Source = source,
-            SourcePolicy = source is null ? PackageSourceRoutingPolicy.None : PackageSourceRoutingPolicy.ProjectLocalConfigured
-        };
-
-        Assert.Equal(expected, DotNetTemplateFactory.ShouldRestoreAfterTemplate(template, inputs));
-    }
-
-    [Fact]
-    public async Task GetTemplates_OwningDotNetTemplatesDeclareRestoreSuppressionArguments()
-    {
-        var factory = CreateTemplateFactory(new TestFeatures().SetFeature(KnownFeatures.ShowAllTemplates, true));
-        var templates = (await factory.GetTemplatesAsync()).ToDictionary(t => t.Name);
-
-        Assert.Equal(["--skipRestore"], ((CallbackTemplate)templates["aspire-starter"]).RestoreSuppressionArguments);
-        Assert.Equal(["--no-restore"], ((CallbackTemplate)templates["aspire"]).RestoreSuppressionArguments);
-        Assert.Equal(["--no-restore"], ((CallbackTemplate)templates["aspire-apphost"]).RestoreSuppressionArguments);
-
-        var initTemplate = (CallbackTemplate)(await factory.GetInitTemplatesAsync()).Single();
-        Assert.Equal(["--no-restore"], initTemplate.RestoreSuppressionArguments);
-    }
-
-    [Theory]
-    [InlineData("aspire-starter", "aspire-starter", "--skipRestore")]
-    [InlineData("aspire-apphost", "aspire-apphost", "--no-restore")]
-    [InlineData("aspire-empty", "aspire", "--no-restore")]
-    [InlineData("aspire-apphost-singlefile", "aspire-apphost-singlefile", "--no-restore")]
-    public async Task ActualTemplateEngine_ExposesExpectedRestoreAlias(
-        string templateDirectoryName,
-        string templateName,
-        string expectedRestoreArgument)
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(_outputHelper);
-        var hive = workspace.CreateDirectory("template-hive");
-        var templatePath = Path.Combine(
-            GetRepoRoot(),
-            "src",
-            "Aspire.ProjectTemplates",
-            "templates",
-            templateDirectoryName);
-
-        var installResult = await RunDotNetAsync(
-            ["new", "install", templatePath, "--debug:custom-hive", hive.FullName],
-            workspace.Path);
-        Assert.Equal(0, installResult.ExitCode);
-
-        var helpResult = await RunDotNetAsync(
-            ["new", templateName, "--help", "--debug:custom-hive", hive.FullName],
-            workspace.Path);
-        Assert.Equal(0, helpResult.ExitCode);
-        Assert.Contains(expectedRestoreArgument, helpResult.Output);
-
-        var unexpectedRestoreArgument = expectedRestoreArgument == "--skipRestore"
-            ? "--no-restore"
-            : "--skipRestore";
-        Assert.DoesNotContain(unexpectedRestoreArgument, helpResult.Output);
-    }
-
-    [Fact]
-    public void FindAppHostRestoreTarget_UsesConfiguredEntryPointForArbitraryProjectName()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(_outputHelper);
-        var output = workspace.CreateDirectory("output");
-        var projectDirectory = output.CreateSubdirectory("src");
-        var projectPath = Path.Combine(projectDirectory.FullName, "CustomProject.csproj");
-        var entryPointPath = Path.Combine(projectDirectory.FullName, "CustomEntry.cs");
-        File.WriteAllText(projectPath, "<Project />");
-        File.WriteAllText(entryPointPath, "public class CustomEntry { }");
-        File.WriteAllText(
-            Path.Combine(output.FullName, AspireConfigFile.FileName),
-            """
-            {
-              "appHost": {
-                "path": "src/CustomEntry.cs"
-              }
-            }
-            """);
-
-        var target = DotNetTemplateFactory.FindAppHostRestoreTarget(output.FullName);
-
-        Assert.Equal(projectPath, target?.FullName);
-    }
-
-    [Fact]
-    public void FindAppHostRestoreTarget_UsesSingleFilePrimaryOutput()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(_outputHelper);
-        var output = workspace.CreateDirectory("output");
-        var appHostPath = Path.Combine(output.FullName, "custom-entry.cs");
-        File.WriteAllText(appHostPath, "Console.WriteLine(\"hello\");");
-
-        var target = DotNetTemplateFactory.FindAppHostRestoreTarget(output.FullName);
-
-        Assert.Equal(appHostPath, target?.FullName);
-    }
-
-    [Fact]
-    public async Task ApplyTemplateAsync_WithConfiguredSource_PropagatesRestoreFailureAndUsesResolvedTarget()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(_outputHelper);
-        var output = workspace.CreateDirectory("output");
-        var projectPath = Path.Combine(output.FullName, "CustomProject.csproj");
-        string[]? newProjectArguments = null;
-        var runner = new TestDotNetCliRunner
-        {
-            NewProjectAsyncCallback = (_, _, outputPath, extraArgs, _, _) =>
-            {
-                newProjectArguments = extraArgs;
-                File.WriteAllText(projectPath, "<Project />");
-                File.WriteAllText(
-                    Path.Combine(outputPath, AspireConfigFile.FileName),
-                    """
-                    {
-                      "appHost": {
-                        "path": "CustomProject.csproj"
-                      }
-                    }
-                    """);
-                return 0;
-            }
-        };
-        var restoreCalls = new List<FileInfo>();
-        runner.RestoreAsyncCallback = (projectFile, _, _) =>
-        {
-            restoreCalls.Add(projectFile);
-            return 7;
-        };
-        var packageCache = new FakeNuGetPackageCache
-        {
-            GetTemplatePackagesAsyncCallback = (_, _, _, _) => Task.FromResult<IEnumerable<Aspire.Shared.NuGetPackageCli>>(
-            [
-                new Aspire.Shared.NuGetPackageCli
-                {
-                    Id = TemplateNuGetConfigService.TemplatesPackageName,
-                    Version = "13.5.0",
-                    Source = "https://internal.example/v3/index.json"
-                }
-            ])
-        };
-        var packagingService = new TestPackagingService
-        {
-            GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>(
-            [
-                PackageChannel.CreateImplicitChannel(packageCache, new TestFeatures(), NullLogger.Instance)
-            ])
-        };
-        var factory = CreateTemplateFactory(
-            new TestFeatures().SetFeature(KnownFeatures.ShowAllTemplates, true),
-            runner: runner,
-            packagingService: packagingService);
-        var template = (CallbackTemplate)factory.GetTemplates().Single(t => t.Name == "aspire-apphost");
-
-        var result = await template.ApplyTemplateAsync(
-            new TemplateInputs
-            {
-                Name = "CustomProject",
-                Output = output.FullName,
-                Source = "https://internal.example/v3/index.json",
-                SourcePolicy = PackageSourceRoutingPolicy.ProjectLocalConfigured,
-                Version = "13.5.0"
-            },
-            new System.CommandLine.RootCommand().Parse([]),
-            CancellationToken.None);
-
-        Assert.Equal(CliExitCodes.FailedToBuildArtifacts, result.ExitCode);
-        Assert.Contains("--no-restore", newProjectArguments!);
-        var restoreCall = Assert.Single(restoreCalls);
-        Assert.Equal(projectPath, restoreCall.FullName);
-    }
-
-    private static DotNetTemplateFactory CreateTemplateFactory(
-        TestFeatures features,
-        bool nonInteractive = false,
-        TestDotNetSdkInstaller? sdkInstaller = null,
-        TestDotNetCliRunner? runner = null,
-        TestPackagingService? packagingService = null)
+    private static DotNetTemplateFactory CreateTemplateFactory(TestFeatures features, bool nonInteractive = false, TestDotNetSdkInstaller? sdkInstaller = null)
     {
         var interactionService = new TestInteractionService();
-        runner ??= new TestDotNetCliRunner();
+        var runner = new TestDotNetCliRunner();
         var certificateService = new TestCertificateService();
-        packagingService ??= new TestPackagingService();
+        var packagingService = new TestPackagingService();
         var prompter = new TestNewCommandPrompter();
         var workingDirectory = new DirectoryInfo("/tmp");
         var executionContext = TestExecutionContextHelper.CreateExecutionContext(workingDirectory);
@@ -557,73 +366,6 @@ public class DotNetTemplateFactoryTests
             hostEnvironment,
             templateNuGetConfigService,
             new HostEnvironment());
-    }
-
-    private static async Task<(int ExitCode, string Output)> RunDotNetAsync(
-        IReadOnlyList<string> arguments,
-        string workingDirectory)
-    {
-        using var process = new Process
-        {
-            StartInfo = new ProcessStartInfo("dotnet")
-            {
-                WorkingDirectory = workingDirectory,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            }
-        };
-
-        foreach (var argument in arguments)
-        {
-            process.StartInfo.ArgumentList.Add(argument);
-        }
-
-        Assert.True(process.Start());
-
-        // Read both streams concurrently so a template-engine diagnostic cannot fill a pipe
-        // while the test waits for the process to exit.
-        var standardOutputTask = process.StandardOutput.ReadToEndAsync();
-        var standardErrorTask = process.StandardError.ReadToEndAsync();
-        using var timeout = AsyncTestHelpers.CreateDefaultTimeoutTokenSource(TestConstants.LongTimeoutDuration);
-        try
-        {
-            await process.WaitForExitAsync(timeout.Token);
-        }
-        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
-        {
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch (InvalidOperationException)
-            {
-            }
-
-            await process.WaitForExitAsync();
-            await Task.WhenAll(standardOutputTask, standardErrorTask);
-            throw new TimeoutException($"Process '{process.StartInfo.FileName}' did not exit within the timeout.");
-        }
-
-        var output = await standardOutputTask + await standardErrorTask;
-        return (process.ExitCode, output);
-    }
-
-    private static string GetRepoRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            if (File.Exists(Path.Combine(directory.FullName, "global.json")))
-            {
-                return directory.FullName;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new InvalidOperationException("Could not locate the Aspire repository root.");
     }
 
     private sealed class TestInteractionService : IInteractionService
@@ -647,7 +389,7 @@ public class DotNetTemplateFactoryTests
             => throw new NotImplementedException();
 
         public Task<TResult> ShowStatusAsync<TResult>(string message, Func<Task<TResult>> work, KnownEmoji? emoji = null, bool allowMarkup = false)
-            => work();
+            => throw new NotImplementedException();
 
         public Task<TResult> ShowDynamicStatusAsync<TResult>(string initialStatusText, Func<Action<string>, Task<TResult>> action, KnownEmoji? emoji = null)
             => throw new NotImplementedException();
@@ -678,24 +420,14 @@ public class DotNetTemplateFactoryTests
 
     private sealed class TestDotNetCliRunner : IDotNetCliRunner
     {
-        public Func<string, string, FileInfo?, string?, bool, ProcessInvocationOptions, CancellationToken, (int ExitCode, string? TemplateVersion)>? InstallTemplateAsyncCallback { get; set; }
-        public Func<string, string, string, string[], ProcessInvocationOptions, CancellationToken, int>? NewProjectAsyncCallback { get; set; }
-        public Func<FileInfo, ProcessInvocationOptions, CancellationToken, int>? RestoreAsyncCallback { get; set; }
-
         public Task<(int ExitCode, string? TemplateVersion)> InstallTemplateAsync(string packageName, string version, FileInfo? nugetConfigFile, string? nugetSource, bool force, ProcessInvocationOptions options, CancellationToken cancellationToken)
-            => Task.FromResult(InstallTemplateAsyncCallback is not null
-                ? InstallTemplateAsyncCallback(packageName, version, nugetConfigFile, nugetSource, force, options, cancellationToken)
-                : (0, version));
+            => throw new NotImplementedException();
 
         public Task<int> NewProjectAsync(string templateName, string projectName, string outputPath, string[] extraArgs, ProcessInvocationOptions? options, CancellationToken cancellationToken)
-            => NewProjectAsyncCallback is not null
-                ? Task.FromResult(NewProjectAsyncCallback(templateName, projectName, outputPath, extraArgs, options!, cancellationToken))
-                : throw new NotImplementedException();
+            => throw new NotImplementedException();
 
         public Task<int> RestoreAsync(FileInfo projectFile, ProcessInvocationOptions options, CancellationToken cancellationToken)
-            => RestoreAsyncCallback is not null
-                ? Task.FromResult(RestoreAsyncCallback(projectFile, options, cancellationToken))
-                : Task.FromResult(0);
+            => throw new NotImplementedException();
 
         public Task<int> BuildAsync(FileInfo projectFile, bool noRestore, ProcessInvocationOptions options, CancellationToken cancellationToken)
             => throw new NotImplementedException();

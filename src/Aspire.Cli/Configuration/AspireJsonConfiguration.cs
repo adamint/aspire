@@ -51,13 +51,6 @@ internal sealed class AspireJsonConfiguration
     public string? Channel { get; set; }
 
     /// <summary>
-    /// The default NuGet source for package and template operations.
-    /// </summary>
-    [JsonPropertyName(AspireConfigFile.NuGetSourceKey)]
-    [Description("The default NuGet source for package and template operations. Explicit --source arguments override this value.")]
-    public string? NuGetSource { get; set; }
-
-    /// <summary>
     /// The Aspire SDK version used for this polyglot AppHost project.
     /// Determines the version of Aspire.Hosting packages to use.
     /// </summary>

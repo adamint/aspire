@@ -6,7 +6,6 @@ using System.Diagnostics;
 using System.Globalization;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Interaction;
-using Aspire.Cli.Packaging;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Utils;
 using Aspire.Hosting;
@@ -173,20 +172,6 @@ internal sealed class ConfigCommand : BaseCommand
             if (isGlobal && !AppHostPathConfigurationPolicy.IsGloballySettableKey(key))
             {
                 InteractionService.DisplayError(ErrorStrings.GlobalAppHostPathCannotBeSetWithConfigCommand);
-                return CliExitCodes.InvalidCommand;
-            }
-
-            if (string.Equals(key.Replace(':', '.'), AspireConfigFile.NuGetSourceKey, StringComparison.OrdinalIgnoreCase) &&
-                PackageSourceOverrideMappings.IsMalformedUriSource(value))
-            {
-                InteractionService.DisplayError(AddCommandStrings.InvalidSource);
-                return CliExitCodes.InvalidCommand;
-            }
-
-            if (string.Equals(key.Replace(':', '.'), AspireConfigFile.NuGetSourceKey, StringComparison.OrdinalIgnoreCase) &&
-                PackageSourceOverrideMappings.HasCredentialMaterial(value))
-            {
-                InteractionService.DisplayError(NewCommandStrings.SourceWithCredentialsCannotBePersisted);
                 return CliExitCodes.InvalidCommand;
             }
 

@@ -1,13 +1,11 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Globalization;
 using System.Text.Json;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Packaging;
 using Aspire.Cli.Projects;
-using Aspire.Cli.Resources;
 using Aspire.Cli.Utils;
 using Semver;
 using NuGetPackage = Aspire.Shared.NuGetPackageCli;
@@ -19,27 +17,21 @@ internal sealed class IntegrationPackageSearchService(
     IProjectLocator projectLocator,
     IInteractionService interactionService,
     CliExecutionContext executionContext,
-    IConfigurationService configurationService,
     IAppHostProjectFactory projectFactory)
 {
     private const double FuzzyMatchThreshold = 0.3;
 
-    public async Task<IEnumerable<(NuGetPackage Package, PackageChannel Channel)>> GetIntegrationPackagesWithChannelsAsync(DirectoryInfo workingDirectory, string? configuredChannel, string? packageSource, CancellationToken cancellationToken)
+    public async Task<IEnumerable<(NuGetPackage Package, PackageChannel Channel)>> GetIntegrationPackagesWithChannelsAsync(DirectoryInfo workingDirectory, string? configuredChannel, CancellationToken cancellationToken)
     {
         var channels = await GetSearchChannelsAsync(configuredChannel, cancellationToken);
-        var sourceOverrideMappings = string.IsNullOrWhiteSpace(packageSource)
-            ? null
-            : PackageSourceOverrideMappings.CreateForTemplateOperations(packageSource);
 
         var packages = new List<(NuGetPackage Package, PackageChannel Channel)>();
         var packagesLock = new object();
 
         await Parallel.ForEachAsync(channels, cancellationToken, async (channel, ct) =>
         {
-            var channelMappings = sourceOverrideMappings ?? channel.Mappings;
             var integrationPackages = await channel.GetIntegrationPackagesAsync(
                 workingDirectory: workingDirectory,
-                mappings: channelMappings,
                 cancellationToken: ct);
             lock (packagesLock)
             {
@@ -60,12 +52,9 @@ internal sealed class IntegrationPackageSearchService(
     /// Resolving both lists together avoids re-resolving the channel set and lets each channel's integration
     /// search and its <c>tags:polyglot</c> lookup run concurrently, rather than as two serial discovery passes.
     /// </remarks>
-    public async Task<(IReadOnlyList<(NuGetPackage Package, PackageChannel Channel)> Packages, IReadOnlySet<string> PolyglotCompatibleIds)> GetIntegrationPackagesWithPolyglotCompatibilityAsync(DirectoryInfo workingDirectory, string? configuredChannel, string? packageSource, CancellationToken cancellationToken)
+    public async Task<(IReadOnlyList<(NuGetPackage Package, PackageChannel Channel)> Packages, IReadOnlySet<string> PolyglotCompatibleIds)> GetIntegrationPackagesWithPolyglotCompatibilityAsync(DirectoryInfo workingDirectory, string? configuredChannel, CancellationToken cancellationToken)
     {
         var channels = await GetSearchChannelsAsync(configuredChannel, cancellationToken);
-        var sourceOverrideMappings = string.IsNullOrWhiteSpace(packageSource)
-            ? null
-            : PackageSourceOverrideMappings.CreateForTemplateOperations(packageSource);
 
         var packages = new List<(NuGetPackage Package, PackageChannel Channel)>();
         var polyglotIds = new HashSet<string>(StringComparers.NuGetPackageId);
@@ -73,12 +62,10 @@ internal sealed class IntegrationPackageSearchService(
 
         await Parallel.ForEachAsync(channels, cancellationToken, async (channel, ct) =>
         {
-            var channelMappings = sourceOverrideMappings ?? channel.Mappings;
-
             // Resolve the integration list and the polyglot allow-list for this channel concurrently so the
             // compatibility lookup runs alongside the integration search instead of as a second serial pass.
-            var integrationPackagesTask = channel.GetIntegrationPackagesAsync(workingDirectory: workingDirectory, mappings: channelMappings, cancellationToken: ct);
-            var polyglotIdsTask = channel.GetPolyglotCompatiblePackageIdsAsync(workingDirectory: workingDirectory, mappings: channelMappings, cancellationToken: ct);
+            var integrationPackagesTask = channel.GetIntegrationPackagesAsync(workingDirectory: workingDirectory, cancellationToken: ct);
+            var polyglotIdsTask = channel.GetPolyglotCompatiblePackageIdsAsync(workingDirectory: workingDirectory, cancellationToken: ct);
             await Task.WhenAll(integrationPackagesTask, polyglotIdsTask);
 
             lock (gate)
@@ -120,109 +107,6 @@ internal sealed class IntegrationPackageSearchService(
         return hasHives || !string.IsNullOrEmpty(configuredChannel)
             ? allChannels
             : allChannels.Where(c => c.Type is PackageChannelType.Implicit);
-    }
-
-    public async Task<PackageSourceResolution?> ResolvePackageSourceAsync(string? explicitSource, DirectoryInfo workingDirectory, bool useInvocationConfig, CancellationToken cancellationToken)
-    {
-        if (!string.IsNullOrWhiteSpace(explicitSource))
-        {
-            var resolvedExplicitSource = PackageSourceOverrideMappings.IsMalformedUriSource(explicitSource)
-                ? explicitSource
-                : PackageSourceOverrideMappings.ResolveForWorkingDirectory(explicitSource, executionContext.WorkingDirectory);
-            return new PackageSourceResolution(
-                explicitSource,
-                resolvedExplicitSource,
-                executionContext.WorkingDirectory,
-                PackageSourceRoutingPolicy.Explicit,
-                IsExplicit: true);
-        }
-
-        ConfigurationValueWithOrigin? configuredSource;
-        if (useInvocationConfig)
-        {
-            configuredSource = await configurationService.GetLocalConfigurationFromDirectoryWithOriginAsync(
-                AspireConfigFile.NuGetSourceKey,
-                executionContext.WorkingDirectory,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-
-            if (configuredSource is null &&
-                !string.Equals(
-                    executionContext.WorkingDirectory.FullName,
-                    workingDirectory.FullName,
-                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
-            {
-                configuredSource = await configurationService.GetLocalConfigurationFromDirectoryWithOriginAsync(
-                    AspireConfigFile.NuGetSourceKey,
-                    workingDirectory,
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
-            }
-        }
-        else
-        {
-            configuredSource = null;
-        }
-
-        configuredSource ??= await configurationService.GetConfigurationFromDirectoryWithOriginAsync(
-            AspireConfigFile.NuGetSourceKey,
-            workingDirectory,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
-
-        if (string.IsNullOrWhiteSpace(configuredSource?.Value))
-        {
-            return null;
-        }
-
-        // Preserve configured remote paths such as \\server\share until validation rejects them.
-        // Resolving first on Unix would turn the backslashes into a cwd-relative local path and
-        // allow the missing-directory probe to run instead.
-        var resolvedSource = PackageSourceOverrideMappings.IsMalformedUriSource(configuredSource.Value) ||
-            PackageSourceOverrideMappings.IsRemoteFileSystemSource(configuredSource.Value)
-            ? configuredSource.Value
-            : PackageSourceOverrideMappings.ResolveForWorkingDirectory(configuredSource.Value, configuredSource.BaseDirectory);
-        var sourcePolicy = configuredSource.IsGlobal || configuredSource.IsAmbient
-            ? PackageSourceRoutingPolicy.GlobalOrAmbientConfigured
-            : PackageSourceRoutingPolicy.ProjectLocalConfigured;
-        return new PackageSourceResolution(
-            configuredSource.Value,
-            resolvedSource,
-            configuredSource.BaseDirectory,
-            sourcePolicy,
-            IsExplicit: false);
-    }
-
-    public static string? GetPackageSourceValidationError(PackageSourceResolution? packageSource)
-    {
-        if (packageSource is null)
-        {
-            return null;
-        }
-
-        if (PackageSourceOverrideMappings.IsMalformedUriSource(packageSource.RawValue))
-        {
-            return AddCommandStrings.InvalidSource;
-        }
-
-        if (!packageSource.IsExplicit && PackageSourceOverrideMappings.HasCredentialMaterial(packageSource.RawValue))
-        {
-            return AddCommandStrings.SourceWithCredentialsNotSupported;
-        }
-
-        if (!packageSource.IsExplicit &&
-            (PackageSourceOverrideMappings.IsRemoteFileSystemSource(packageSource.RawValue) ||
-                PackageSourceOverrideMappings.IsRemoteFileSystemSource(packageSource.ResolvedValue)))
-        {
-            return AddCommandStrings.ConfiguredRemoteSourceNotSupported;
-        }
-
-        if (!packageSource.IsExplicit &&
-            PackageSourceOverrideMappings.GetFirstReparsePoint(packageSource.RawValue, packageSource.BaseDirectory) is not null)
-        {
-            return AddCommandStrings.ConfiguredLinkedSourceNotSupported;
-        }
-
-        return PackageSourceOverrideMappings.GetMissingLocalDirectory(packageSource.ResolvedValue) is { } missingDirectory
-            ? string.Format(CultureInfo.CurrentCulture, AddCommandStrings.SourceDirectoryNotFound, missingDirectory)
-            : null;
     }
 
     public async Task<(DirectoryInfo WorkingDirectory, string? ConfiguredChannel, string? LanguageId, int? ExitCode)> GetPackageSearchContextAsync(FileInfo? passedAppHostProjectFile, CancellationToken cancellationToken)
@@ -316,13 +200,3 @@ internal sealed class IntegrationPackageSearchService(
             StringUtils.CalculateFuzzyScore(searchTerm, package.Package.Id));
     }
 }
-
-/// <summary>
-/// Preserves a package source's configured value and resolution origin for validation.
-/// </summary>
-internal sealed record PackageSourceResolution(
-    string RawValue,
-    string ResolvedValue,
-    DirectoryInfo BaseDirectory,
-    PackageSourceRoutingPolicy RoutingPolicy,
-    bool IsExplicit);

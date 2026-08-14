@@ -2,7 +2,6 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Aspire.Cli.Packaging;
-using Aspire.Cli.Utils;
 
 namespace Aspire.Cli.Tests.Packaging;
 
@@ -53,104 +52,5 @@ public class PackageSourceOverrideMappingsTests(ITestOutputHelper outputHelper)
         var result = PackageSourceOverrideMappings.ResolveForWorkingDirectory(source, workspace.WorkspaceRoot);
 
         Assert.Equal(source, result);
-    }
-
-    [Theory]
-    [InlineData("file:///local/feed", false)]
-    [InlineData("file://localhost/local/feed", false)]
-    [InlineData("file://example.test/share", true)]
-    [InlineData("file:///%5C%5Cexample.test%5Cshare", true)]
-    [InlineData("file:///%2F%2Fexample.test/share", true)]
-    [InlineData("file:///%2Fattacker.example/share", true)]
-    [InlineData("file:///%2F%3F%2FUNC/example.test/share", true)]
-    [InlineData("file:///%3F%3F/UNC/attacker/share", true)]
-    [InlineData("file:///%3F%3F%5CUNC%5Cattacker%5Cshare", true)]
-    [InlineData("file:///C:/feed", false)]
-    [InlineData("file:///usr/feed", false)]
-    public void IsRemoteFileSystemSource_FileUri_ReturnsExpectedResult(string source, bool expected)
-    {
-        Assert.Equal(expected, PackageSourceOverrideMappings.IsRemoteFileSystemSource(source));
-    }
-
-    [Theory]
-    [InlineData(@"C:\feed", false)]
-    [InlineData("/usr/feed", false)]
-    [InlineData(@"\\?\C:\feed", false)]
-    [InlineData(@"\\?\C:/feed", false)]
-    [InlineData(@"\\example.test\share", true)]
-    [InlineData("//example.test/share", true)]
-    [InlineData(@"/\attacker\share", true)]
-    [InlineData(@"\/attacker/share", true)]
-    [InlineData(@"\\?\UNC\attacker\share", true)]
-    [InlineData(@"\\.\C:\feed", true)]
-    [InlineData(@"\??\UNC\attacker\share", true)]
-    [InlineData("/??/UNC/attacker/share", true)]
-    [InlineData(@"\??/UNC\attacker\share", true)]
-    [InlineData(@"/??\UNC/attacker/share", true)]
-    public void IsRemoteFileSystemSource_LocalPath_ReturnsExpectedResult(string source, bool expected)
-    {
-        Assert.Equal(expected, PackageSourceOverrideMappings.IsRemoteFileSystemSource(source));
-    }
-
-    [Fact]
-    public void GetFirstReparsePoint_RelativeSourceRootIsLink_ReturnsLink()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var target = workspace.CreateDirectory("target");
-        var link = Path.Combine(workspace.WorkspaceRoot.FullName, "feed");
-        ReparsePoint.CreateOrReplace(link, target.FullName);
-
-        var result = PackageSourceOverrideMappings.GetFirstReparsePoint("feed", workspace.WorkspaceRoot);
-
-        Assert.Equal(link, result);
-    }
-
-    [Fact]
-    public void GetFirstReparsePoint_RelativeSourceContainsLink_ReturnsFirstLink()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var target = workspace.CreateDirectory("target");
-        Directory.CreateDirectory(Path.Combine(target.FullName, "subdir"));
-        var feed = workspace.CreateDirectory("feed");
-        var link = Path.Combine(feed.FullName, "link");
-        ReparsePoint.CreateOrReplace(link, target.FullName);
-
-        var result = PackageSourceOverrideMappings.GetFirstReparsePoint(
-            Path.Combine("feed", "link", "subdir"),
-            workspace.WorkspaceRoot);
-
-        Assert.Equal(link, result);
-    }
-
-    [Fact]
-    public void Create_AllowsCredentialMaterialWhenSourceIsExplicit()
-    {
-        const string source = "https://user:password@example.test/v3/index.json?token=secret";
-
-        var mappings = PackageSourceOverrideMappings.Create(
-            source,
-            requestedChannel: null,
-            nugetServiceIndexOverride: null,
-            allowCredentialMaterial: true);
-
-        Assert.Equal(
-            [source, PackageSources.NuGetOrg],
-            mappings.Select(static mapping => mapping.Source));
-    }
-
-    [Fact]
-    [PlatformSpecific(TestPlatforms.Windows)]
-    public void ExtendedLocalDrivePath_IsNotRebasedDuringResolutionOrValidation()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var source = $@"\\?\{workspace.WorkspaceRoot.FullName}\missing";
-
-        Assert.False(PackageSourceOverrideMappings.IsRemoteFileSystemSource(source));
-        Assert.Equal(source, PackageSourceOverrideMappings.ResolveForWorkingDirectory(source, workspace.WorkspaceRoot));
-        Assert.Equal(source, PackageSourceOverrideMappings.GetNormalizedLocalDirectory(source));
-        Assert.Equal(source, PackageSourceOverrideMappings.GetMissingLocalDirectory(source));
-
-        var reparsePoint = PackageSourceOverrideMappings.GetFirstReparsePoint(source, workspace.WorkspaceRoot);
-        Assert.True(reparsePoint is null || reparsePoint.StartsWith(@"\\?\", StringComparison.OrdinalIgnoreCase));
     }
 }

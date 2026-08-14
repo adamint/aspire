@@ -12,16 +12,6 @@
         <target state="new">Include all integrations, even those not marked compatible with the AppHost language</target>
         <note />
       </trans-unit>
-      <trans-unit id="ConfiguredLinkedSourceNotSupported">
-        <source>Symbolic links and junctions are not supported in persistent NuGet source configuration. Use the resolved local directory or pass the linked source explicitly with --source.</source>
-        <target state="new">Symbolic links and junctions are not supported in persistent NuGet source configuration. Use the resolved local directory or pass the linked source explicitly with --source.</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="ConfiguredRemoteSourceNotSupported">
-        <source>Remote file shares are not supported in persistent NuGet source configuration. Use an HTTP(S) feed or pass the remote source explicitly with --source.</source>
-        <target state="new">Remote file shares are not supported in persistent NuGet source configuration. Use an HTTP(S) feed or pass the remote source explicitly with --source.</target>
-        <note />
-      </trans-unit>
       <trans-unit id="Description">
         <source>Add a hosting integration to the AppHost</source>
         <target state="needs-review-translation">Agregue una integración de hospedaje a Aspire AppHost.</target>
@@ -102,11 +92,6 @@
         <target state="new">The integration search query.</target>
         <note />
       </trans-unit>
-      <trans-unit id="InvalidSource">
-        <source>The NuGet source is not a valid HTTP(S) or file URI. Correct the source value or pass a valid local directory.</source>
-        <target state="new">The NuGet source is not a valid HTTP(S) or file URI. Correct the source value or pass a valid local directory.</target>
-        <note />
-      </trans-unit>
       <trans-unit id="NoIntegrationPackagesFound">
         <source>No integration packages were found. Please check your internet connection or NuGet source configuration.</source>
         <target state="translated">No se encontraron paquetes de integración. Compruebe la conexión a Internet o la configuración de origen de NuGet.</target>
@@ -180,16 +165,6 @@
       <trans-unit id="SourceArgumentDescription">
         <source>The NuGet source to use for the integration</source>
         <target state="needs-review-translation">El origen de NuGet que se utilizará para la integración.</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="SourceDirectoryNotFound">
-        <source>The local NuGet source directory '{0}' does not exist.</source>
-        <target state="new">The local NuGet source directory '{0}' does not exist.</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="SourceWithCredentialsNotSupported">
-        <source>The NuGet source includes credentials, a query string, or a fragment. Configure authentication with a NuGet credential provider, then use the feed URL without embedded secrets.</source>
-        <target state="new">The NuGet source includes credentials, a query string, or a fragment. Configure authentication with a NuGet credential provider, then use the feed URL without embedded secrets.</target>
         <note />
       </trans-unit>
       <trans-unit id="SpecifiedVersionNotFoundForPackage">

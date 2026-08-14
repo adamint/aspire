@@ -26,11 +26,6 @@ internal interface ITemplate
     bool IsEmpty { get; }
 
     /// <summary>
-    /// Gets a value indicating whether this template owns the generated Aspire project configuration.
-    /// </summary>
-    bool OwnsAspireConfig { get; }
-
-    /// <summary>
     /// Gets a value indicating whether this template should be shown in the interactive template picker.
     /// </summary>
     bool ShowInPrompt { get; }
@@ -61,11 +56,6 @@ internal interface ITemplate
     /// Gets the AppHost languages that this template can prompt for.
     /// </summary>
     IReadOnlyList<string> SelectableAppHostLanguages { get; }
-
-    /// <summary>
-    /// Gets the template arguments that suppress its automatic restore.
-    /// </summary>
-    IReadOnlyList<string> RestoreSuppressionArguments { get; }
 
     /// <summary>
     /// Applies template-specific command options.

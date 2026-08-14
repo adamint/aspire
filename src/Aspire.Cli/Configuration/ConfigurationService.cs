@@ -36,7 +36,7 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
             // Handle empty files or whitespace-only content
             settings = string.IsNullOrWhiteSpace(existingContent)
                 ? new JsonObject()
-                : ConfigurationHelper.ParseSettingsObject(existingContent) ?? new JsonObject();
+                : JsonNode.Parse(existingContent, nodeOptions: null, ConfigurationHelper.ParseOptions)?.AsObject() ?? new JsonObject();
         }
         else
         {
@@ -68,7 +68,7 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
                 return false;
             }
 
-            var settings = ConfigurationHelper.ParseSettingsObject(existingContent);
+            var settings = JsonNode.Parse(existingContent, nodeOptions: null, ConfigurationHelper.ParseOptions)?.AsObject();
 
             if (settings is null)
             {
@@ -194,7 +194,7 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
                 return;
             }
 
-            var settings = ConfigurationHelper.ParseSettingsObject(content);
+            var settings = JsonNode.Parse(content, nodeOptions: null, ConfigurationHelper.ParseOptions)?.AsObject();
 
             if (settings is not null)
             {
@@ -210,7 +210,6 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
     /// <summary>
     /// Sets a nested value in a JsonObject using dot notation.
     /// Creates intermediate objects as needed and replaces primitives with objects when necessary.
-    /// Property matching is case-insensitive to match Microsoft.Extensions.Configuration semantics.
     /// Also removes any conflicting flattened keys (colon-separated format) to prevent duplicate key errors.
     /// </summary>
     private static void SetNestedValue(JsonObject settings, string key, string value)
@@ -222,25 +221,28 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
 
         var keyParts = key.Split('.');
 
+        // Remove any conflicting flattened keys (e.g., "features:showAllTemplates" when setting "features.showAllTemplates")
+        // This prevents duplicate key errors when loading the configuration
+        RemoveConflictingFlattenedKeys(settings, keyParts);
+
         var currentObject = settings;
 
         // Navigate to the parent object, creating objects as needed
         for (int i = 0; i < keyParts.Length - 1; i++)
         {
-            // A flattened key can occur at any level:
-            //   { "appHost": { "path:language": "..." } }
-            // Remove conflicts relative to the current object before descending.
-            RemoveConflictingFlattenedKeys(currentObject, keyParts, i);
-
             var part = keyParts[i];
-            currentObject = GetOrCreateNestedObject(currentObject, part);
+
+            // If the property doesn't exist or isn't an object, replace it with a new object
+            if (!currentObject.ContainsKey(part) || currentObject[part] is not JsonObject)
+            {
+                currentObject[part] = new JsonObject();
+            }
+
+            currentObject = currentObject[part]!.AsObject();
         }
 
-        // Microsoft.Extensions.Configuration treats JSON keys case-insensitively. Remove every
-        // logical match before writing the canonical requested casing so invalid duplicates such
-        // as "NuGetSource" plus "nugetSource" are repaired instead of preserved.
+        // Set the final value
         var finalKey = keyParts[keyParts.Length - 1];
-        RemovePropertiesCaseInsensitive(currentObject, finalKey);
         currentObject[finalKey] = value;
     }
 
@@ -248,96 +250,23 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
     /// Removes any flattened keys (colon-separated) that would conflict with a nested structure.
     /// For example, when setting "features.showAllTemplates", remove "features:showAllTemplates".
     /// </summary>
-    private static void RemoveConflictingFlattenedKeys(JsonObject settings, string[] keyParts, int startIndex)
+    private static void RemoveConflictingFlattenedKeys(JsonObject settings, string[] keyParts)
     {
-        for (var length = keyParts.Length - startIndex; length > 1; length--)
+        // Build all possible flattened key patterns that could conflict
+        // For key "a.b.c", we need to remove "a:b:c" from the root
+        var flattenedKey = string.Join(":", keyParts);
+        settings.Remove(flattenedKey);
+
+        // Also check for partial flattened keys at each level
+        // For example, if we have "a.b.c", we should also check for "a:b" in the root
+        // that might contain a "c" value
+        for (int i = 1; i < keyParts.Length; i++)
         {
-            var flattenedKey = string.Join(":", keyParts, startIndex, length);
-            var matchingPropertyNames = GetPropertyNamesCaseInsensitive(settings, flattenedKey);
-
-            foreach (var propertyName in matchingPropertyNames)
+            var partialKey = string.Join(":", keyParts.Take(i));
+            if (settings.ContainsKey(partialKey) && settings[partialKey] is not JsonObject)
             {
-                // Preserve the existing behavior for partial flattened objects because their
-                // child values do not conflict with the value being written. A full flattened
-                // match conflicts regardless of its node type.
-                if (length == keyParts.Length - startIndex || settings[propertyName] is not JsonObject)
-                {
-                    settings.Remove(propertyName);
-                }
-            }
-        }
-    }
-
-    private static JsonObject GetOrCreateNestedObject(JsonObject settings, string propertyName)
-    {
-        var matchingPropertyNames = GetPropertyNamesCaseInsensitive(settings, propertyName);
-        var objectPropertyName = matchingPropertyNames.FirstOrDefault(
-            name => string.Equals(name, propertyName, StringComparison.Ordinal) && settings[name] is JsonObject)
-            ?? matchingPropertyNames.FirstOrDefault(name => settings[name] is JsonObject);
-
-        if (objectPropertyName is not null)
-        {
-            var targetObject = settings[objectPropertyName]!.AsObject();
-            foreach (var matchingPropertyName in matchingPropertyNames)
-            {
-                if (string.Equals(matchingPropertyName, objectPropertyName, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                if (settings[matchingPropertyName] is JsonObject siblingObject)
-                {
-                    MergeDisjointProperties(targetObject, siblingObject);
-                }
-            }
-
-            RemovePropertiesCaseInsensitive(settings, propertyName, objectPropertyName);
-
-            return targetObject;
-        }
-
-        RemovePropertiesCaseInsensitive(settings, propertyName);
-        var nestedObject = new JsonObject();
-        settings[propertyName] = nestedObject;
-
-        return nestedObject;
-    }
-
-    private static void MergeDisjointProperties(JsonObject target, JsonObject source)
-    {
-        foreach (var (propertyName, value) in source)
-        {
-            var targetPropertyName = GetPropertyNamesCaseInsensitive(target, propertyName).FirstOrDefault();
-            if (targetPropertyName is null)
-            {
-                target[propertyName] = value?.DeepClone();
-            }
-            else if (target[targetPropertyName] is JsonObject targetObject && value is JsonObject sourceObject)
-            {
-                // Invalid case variants can each contain valid nested settings. Merge object
-                // children recursively, while the selected target wins leaf and type conflicts.
-                MergeDisjointProperties(targetObject, sourceObject);
-            }
-        }
-    }
-
-    private static string[] GetPropertyNamesCaseInsensitive(JsonObject settings, string propertyName)
-    {
-        return
-        [
-            .. settings
-                .Select(property => property.Key)
-                .Where(name => string.Equals(name, propertyName, StringComparison.OrdinalIgnoreCase))
-        ];
-    }
-
-    private static void RemovePropertiesCaseInsensitive(JsonObject settings, string propertyName, string? propertyNameToPreserve = null)
-    {
-        foreach (var matchingPropertyName in GetPropertyNamesCaseInsensitive(settings, propertyName))
-        {
-            if (!string.Equals(matchingPropertyName, propertyNameToPreserve, StringComparison.Ordinal))
-            {
-                settings.Remove(matchingPropertyName);
+                // This is a flattened value that conflicts with our nested structure
+                settings.Remove(partialKey);
             }
         }
     }
@@ -434,24 +363,7 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
         return Task.FromResult(configuration[configKey]);
     }
 
-    public async Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
-    {
-        var result = await GetConfigurationFromDirectoryWithOriginAsync(key, startDirectory, continueSearchWhenKeyMissing, cancellationToken).ConfigureAwait(false);
-
-        return result?.Value;
-    }
-
-    public Task<ConfigurationValueWithOrigin?> GetConfigurationFromDirectoryWithOriginAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
-    {
-        return GetConfigurationFromDirectoryWithOriginCoreAsync(key, startDirectory, continueSearchWhenKeyMissing, includeGlobalSettings: true);
-    }
-
-    public Task<ConfigurationValueWithOrigin?> GetLocalConfigurationFromDirectoryWithOriginAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
-    {
-        return GetConfigurationFromDirectoryWithOriginCoreAsync(key, startDirectory, continueSearchWhenKeyMissing, includeGlobalSettings: false);
-    }
-
-    private Task<ConfigurationValueWithOrigin?> GetConfigurationFromDirectoryWithOriginCoreAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing, bool includeGlobalSettings)
+    public Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(startDirectory);
 
@@ -468,10 +380,9 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
         for (var searchDirectory = startDirectory; searchDirectory is not null; searchDirectory = searchDirectory.Parent)
         {
             var configFilePath = Path.Combine(searchDirectory.FullName, AspireConfigFile.FileName);
-            var configFile = new FileInfo(configFilePath);
-            if (TryReadConfigurationValueWithOrigin(configFilePath, configKey, GetBaseDirectoryForSettingsFile(configFile), out var configFileValue))
+            if (TryReadConfigurationValue(configFilePath, configKey, out var configFileValue))
             {
-                return Task.FromResult<ConfigurationValueWithOrigin?>(configFileValue);
+                return Task.FromResult<string?>(configFileValue);
             }
             else if (File.Exists(configFilePath) && !continueSearchWhenKeyMissing)
             {
@@ -479,20 +390,14 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
             }
 
             var legacySettingsPath = ConfigurationHelper.BuildPathToSettingsJsonFile(searchDirectory.FullName);
-            var legacySettingsFile = new FileInfo(legacySettingsPath);
-            if (TryReadConfigurationValueWithOrigin(legacySettingsPath, configKey, GetBaseDirectoryForSettingsFile(legacySettingsFile), out var legacySettingsValue))
+            if (TryReadConfigurationValue(legacySettingsPath, configKey, out var legacySettingsValue))
             {
-                return Task.FromResult<ConfigurationValueWithOrigin?>(legacySettingsValue);
+                return Task.FromResult<string?>(legacySettingsValue);
             }
             else if (File.Exists(legacySettingsPath) && !continueSearchWhenKeyMissing)
             {
                 break;
             }
-        }
-
-        if (!includeGlobalSettings)
-        {
-            return Task.FromResult<ConfigurationValueWithOrigin?>(null);
         }
 
         // 2. Global settings file fallback (lower precedence).
@@ -501,32 +406,22 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
         // assembly metadata) and the acquisition scripts no longer seed a "channel" field into
         // global settings. The read here remains so a user who deliberately ran
         // `aspire config set -g channel <x>` continues to get their preference honored by
-        // `aspire update` until that workflow is removed in a follow-up. Most per-project flows still
-        // avoid global fallback, but source selection intentionally allows local-then-global
-        // `nugetSource` precedence so `aspire add` / integration discovery can honor the user's
-        // configured feed when no explicit `--source` was supplied.
+        // `aspire update` until that workflow is removed in a follow-up. New per-project flows
+        // (`aspire add`, `aspire init`) do not consult global config and must not start to.
         if (File.Exists(globalSettingsFile.FullName))
         {
             var globalConfig = LoadSettingsFileForReading(globalSettingsFile.FullName);
             var globalValue = globalConfig[configKey];
             if (!string.IsNullOrWhiteSpace(globalValue))
             {
-                return Task.FromResult<ConfigurationValueWithOrigin?>(
-                    new ConfigurationValueWithOrigin(globalValue, GetBaseDirectoryForSettingsFile(globalSettingsFile), IsGlobal: true));
+                return Task.FromResult<string?>(globalValue);
             }
         }
 
-        return Task.FromResult<ConfigurationValueWithOrigin?>(null);
+        return Task.FromResult<string?>(null);
     }
 
-    private DirectoryInfo GetBaseDirectoryForSettingsFile(FileInfo settingsFile)
-    {
-        return ConfigurationHelper.GetLegacySettingsRootDirectory(settingsFile)
-            ?? settingsFile.Directory
-            ?? executionContext.WorkingDirectory;
-    }
-
-    private static bool TryReadConfigurationValueWithOrigin(string settingsFilePath, string configKey, DirectoryInfo baseDirectory, [NotNullWhen(true)] out ConfigurationValueWithOrigin? value)
+    private static bool TryReadConfigurationValue(string settingsFilePath, string configKey, [NotNullWhen(true)] out string? value)
     {
         value = null;
 
@@ -542,7 +437,7 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
             return false;
         }
 
-        value = new ConfigurationValueWithOrigin(candidateValue, baseDirectory);
+        value = candidateValue;
         return true;
     }
 
@@ -573,10 +468,10 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
             return new ConfigurationBuilder().Build();
         }
 
-        JsonObject? node;
+        JsonNode? node;
         try
         {
-            node = ConfigurationHelper.ParseSettingsObject(content);
+            node = JsonNode.Parse(content, documentOptions: ConfigurationHelper.ParseOptions);
         }
         catch (JsonException ex)
         {
@@ -585,7 +480,7 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
                 ex);
         }
 
-        if (node is null)
+        if (node is not JsonObject)
         {
             return new ConfigurationBuilder().Build();
         }

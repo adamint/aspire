@@ -134,8 +134,7 @@ internal class DotNetTemplateFactory(
             (ctx, projectName) => OutputPathHelper.GetUniqueDefaultOutputPath(projectName, ctx.WorkingDirectory.FullName),
             ApplyExtraAspireStarterOptions,
             (template, inputs, parseResult, ct) => ApplyTemplateAsync(template, inputs, parseResult, PromptForExtraAspireStarterOptionsAsync, ct),
-            languageId: KnownLanguageId.CSharp,
-            restoreSuppressionArguments: ["--skipRestore"]
+            languageId: KnownLanguageId.CSharp
             );
 
         yield return new CallbackTemplate(
@@ -144,8 +143,7 @@ internal class DotNetTemplateFactory(
             (ctx, projectName) => OutputPathHelper.GetUniqueDefaultOutputPath(projectName, ctx.WorkingDirectory.FullName),
             ApplyExtraAspireJsFrontendStarterOptions,
             (template, inputs, parseResult, ct) => ApplyTemplateAsync(template, inputs, parseResult, PromptForExtraAspireJsFrontendStarterOptionsAsync, ct),
-            languageId: KnownLanguageId.CSharp,
-            ownsAspireConfig: false
+            languageId: KnownLanguageId.CSharp
             );
 
         if (showAllTemplates)
@@ -157,8 +155,7 @@ internal class DotNetTemplateFactory(
                 ApplyDevLocalhostTldOption,
                 ApplyTemplateWithNoExtraArgsAsync,
                 languageId: KnownLanguageId.CSharp,
-                isEmpty: true,
-                restoreSuppressionArguments: ["--no-restore"]
+                isEmpty: true
                 );
 
             yield return new CallbackTemplate(
@@ -167,8 +164,7 @@ internal class DotNetTemplateFactory(
                 (ctx, projectName) => OutputPathHelper.GetUniqueDefaultOutputPath(projectName, ctx.WorkingDirectory.FullName),
                 ApplyDevLocalhostTldOption,
                 ApplyTemplateWithNoExtraArgsAsync,
-                languageId: KnownLanguageId.CSharp,
-                restoreSuppressionArguments: ["--no-restore"]
+                languageId: KnownLanguageId.CSharp
                 );
 
             yield return new CallbackTemplate(
@@ -177,8 +173,7 @@ internal class DotNetTemplateFactory(
                 (ctx, projectName) => OutputPathHelper.GetUniqueDefaultOutputPath(projectName, ctx.WorkingDirectory.FullName),
                 _ => { },
                 ApplyTemplateWithNoExtraArgsAsync,
-                languageId: KnownLanguageId.CSharp,
-                ownsAspireConfig: false
+                languageId: KnownLanguageId.CSharp
                 );
         }
 
@@ -189,8 +184,7 @@ internal class DotNetTemplateFactory(
             (ctx, projectName) => OutputPathHelper.GetUniqueDefaultOutputPath(projectName, ctx.WorkingDirectory.FullName),
             _ => { },
             ApplyTemplateWithNoExtraArgsAsync,
-            languageId: KnownLanguageId.CSharp,
-            ownsAspireConfig: false
+            languageId: KnownLanguageId.CSharp
             );
 
         // Folded into the last yielded template.
@@ -200,8 +194,7 @@ internal class DotNetTemplateFactory(
             (ctx, projectName) => OutputPathHelper.GetUniqueDefaultOutputPath(projectName, ctx.WorkingDirectory.FullName),
             _ => { },
             ApplyTemplateWithNoExtraArgsAsync,
-            languageId: KnownLanguageId.CSharp,
-            ownsAspireConfig: false
+            languageId: KnownLanguageId.CSharp
             );
 
         // Folded into the last yielded template.
@@ -211,8 +204,7 @@ internal class DotNetTemplateFactory(
             (ctx, projectName) => OutputPathHelper.GetUniqueDefaultOutputPath(projectName, ctx.WorkingDirectory.FullName),
             _ => { },
             (template, inputs, parseResult, ct) => ApplyTemplateAsync(template, inputs, parseResult, PromptForExtraAspireXUnitOptionsAsync, ct),
-            languageId: KnownLanguageId.CSharp,
-            ownsAspireConfig: false
+            languageId: KnownLanguageId.CSharp
             );
 
         // Prepends a test framework selection step then calls the
@@ -234,8 +226,7 @@ internal class DotNetTemplateFactory(
                     var testCallbackTemplate = (CallbackTemplate)testTemplate;
                     return await testCallbackTemplate.ApplyTemplateAsync(inputs, parseResult, ct);
                 },
-                languageId: KnownLanguageId.CSharp,
-                ownsAspireConfig: false);
+                languageId: KnownLanguageId.CSharp);
         }
     }
 
@@ -248,8 +239,7 @@ internal class DotNetTemplateFactory(
             ApplyDevLocalhostTldOption,
             (template, inputs, parseResult, ct) => ApplySingleFileTemplate(template, inputs, parseResult, PromptForExtraAspireSingleFileOptionsAsync, ct),
             languageId: KnownLanguageId.CSharp,
-            isEmpty: true,
-            restoreSuppressionArguments: ["--no-restore"]
+            isEmpty: true
             );
     }
 
@@ -480,10 +470,6 @@ internal class DotNetTemplateFactory(
             // Some templates have additional arguments that need to be applied to the `dotnet new` command
             // when it is executed. This callback will get those arguments and potentially prompt for them.
             var extraArgs = await extraArgsCallback(parseResult, cancellationToken);
-            if (ShouldRestoreAfterTemplate(template, inputs))
-            {
-                extraArgs = [.. extraArgs, .. template.RestoreSuppressionArguments];
-            }
 
             var installOutcome = await templateNuGetConfigService.InstallTemplatePackageAsync(
                 selectedTemplateDetails,
@@ -501,24 +487,6 @@ internal class DotNetTemplateFactory(
             }
 
             interactionService.DisplayMessage(KnownEmojis.Package, string.Format(CultureInfo.CurrentCulture, TemplatingStrings.UsingProjectTemplatesVersion, installOutcome.TemplateVersion));
-
-            // dotnet new restores project templates as part of project creation. Create the
-            // source-specific config before invoking it so the restore cannot fall back to
-            // nuget.org. Global/ambient and credential-bearing explicit sources use a
-            // project-local config only for this process and are restored immediately after
-            // the command finishes.
-            await TemplateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(
-                inputs.Source,
-                selectedTemplateDetails.Channel,
-                outputPath,
-                inputs.SourcePolicy,
-                cancellationToken,
-                executionContext.NuGetServiceIndexOverride);
-            using var temporarySourceConfig = await TemplateNuGetConfigService.CreateTemporarySourceOverrideConfigAsync(
-                inputs.Source,
-                outputPath,
-                inputs.SourcePolicy,
-                cancellationToken);
 
             var newProjectCollector = new OutputCollector();
             var newProjectExitCode = await interactionService.ShowStatusAsync(
@@ -570,38 +538,11 @@ internal class DotNetTemplateFactory(
             // excludes it): its packages live on nuget.org, so `aspire add`/`aspire restore`
             // continue to use the ambient NuGet config without a per-project pin. Mirrors the
             // TypeScript starter behavior in CliTemplateFactory.TypeScriptStarterTemplate.
-            if (template.OwnsAspireConfig && selectedTemplateDetails.Channel.ShouldPersistChannelName())
+            if (selectedTemplateDetails.Channel.ShouldPersistChannelName())
             {
                 var config = AspireConfigFile.LoadOrCreate(outputPath);
                 config.Channel = selectedTemplateDetails.Channel.Name;
                 config.Save(outputPath);
-            }
-
-            if (ShouldRestoreAfterTemplate(template, inputs) &&
-                FindAppHostRestoreTarget(outputPath) is { } restoreTarget)
-            {
-                var restoreCollector = new OutputCollector();
-                var restoreExitCode = await interactionService.ShowStatusAsync(
-                    TemplatingStrings.CreatingNewProject,
-                    () => runner.RestoreAsync(
-                        restoreTarget,
-                        new ProcessInvocationOptions
-                        {
-                            StandardOutputCallback = restoreCollector.AppendOutput,
-                            StandardErrorCallback = restoreCollector.AppendOutput
-                        },
-                        cancellationToken),
-                    emoji: KnownEmojis.Package);
-
-                if (restoreExitCode != 0)
-                {
-                    interactionService.DisplayLines(restoreCollector.GetLines());
-                    interactionService.DisplayError(string.Format(
-                        CultureInfo.CurrentCulture,
-                        TemplatingStrings.ProjectCreationFailed,
-                        restoreExitCode));
-                    return new TemplateResult(CliExitCodes.FailedToBuildArtifacts, outputPath);
-                }
             }
 
             // For channels that route Aspire packages to a custom feed, optionally create or update
@@ -609,14 +550,7 @@ internal class DotNetTemplateFactory(
             // newly created project's output directory. The `stable` channel is skipped inside
             // PromptToCreateOrUpdateNuGetConfigAsync (ShouldCreateNuGetConfig) because its packages
             // are on nuget.org and a <clear/>-based config would clobber the user's ambient sources.
-            var sourceConfigCreated = await TemplateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(
-                inputs.Source,
-                selectedTemplateDetails.Channel,
-                outputPath,
-                inputs.SourcePolicy,
-                cancellationToken,
-                executionContext.NuGetServiceIndexOverride);
-            if (!sourceConfigCreated && string.IsNullOrWhiteSpace(inputs.Source))
+            if (!await TemplateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(inputs.Source, selectedTemplateDetails.Channel, outputPath, cancellationToken, executionContext.NuGetServiceIndexOverride))
             {
                 await templateNuGetConfigService.PromptToCreateOrUpdateNuGetConfigAsync(selectedTemplateDetails.Channel, outputPath, cancellationToken);
             }
@@ -653,55 +587,6 @@ internal class DotNetTemplateFactory(
             interactionService.DisplayError(ex.Message);
             return new TemplateResult(CliExitCodes.FailedToCreateNewProject);
         }
-    }
-
-    internal static bool ShouldRestoreAfterTemplate(CallbackTemplate template, TemplateInputs inputs)
-    {
-        return template.OwnsAspireConfig && !string.IsNullOrWhiteSpace(inputs.Source);
-    }
-
-    internal static FileInfo? FindAppHostRestoreTarget(string outputPath)
-    {
-        if (!Directory.Exists(outputPath))
-        {
-            return null;
-        }
-
-        var config = AspireConfigFile.Load(outputPath);
-        if (config?.AppHost?.Path is { Length: > 0 } appHostPath)
-        {
-            var entryPointPath = Path.GetFullPath(appHostPath, outputPath);
-            if (File.Exists(entryPointPath))
-            {
-                if (string.Equals(Path.GetExtension(entryPointPath), ".csproj", StringComparison.OrdinalIgnoreCase))
-                {
-                    return new FileInfo(entryPointPath);
-                }
-
-                var containingProjects = Directory.EnumerateFiles(
-                        Path.GetDirectoryName(entryPointPath) ?? outputPath,
-                        "*.csproj",
-                        SearchOption.TopDirectoryOnly)
-                    .ToArray();
-                if (containingProjects.Length == 1)
-                {
-                    return new FileInfo(containingProjects[0]);
-                }
-
-                return string.Equals(Path.GetExtension(entryPointPath), ".cs", StringComparison.OrdinalIgnoreCase)
-                    ? new FileInfo(entryPointPath)
-                    : null;
-            }
-        }
-
-        var projectFiles = Directory.EnumerateFiles(outputPath, "*.csproj", SearchOption.AllDirectories).ToArray();
-        if (projectFiles.Length == 1)
-        {
-            return new FileInfo(projectFiles[0]);
-        }
-
-        var sourceFiles = Directory.EnumerateFiles(outputPath, "*.cs", SearchOption.TopDirectoryOnly).ToArray();
-        return sourceFiles.Length == 1 ? new FileInfo(sourceFiles[0]) : null;
     }
 
     private async Task<string> GetProjectNameAsync(TemplateInputs inputs, string templateName, ParseResult parseResult, CancellationToken cancellationToken)

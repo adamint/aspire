@@ -56,7 +56,7 @@ public class TemplateNuGetConfigServiceTests(ITestOutputHelper outputHelper)
         var service = CreateService();
         const string sourceOverride = "/tmp/aspire-pr-hive/packages";
 
-        Assert.True(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride, channelName: null, outputDirectory.FullName, PackageSourceRoutingPolicy.Explicit, CancellationToken.None));
+        Assert.True(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride, channelName: null, outputDirectory.FullName, CancellationToken.None));
 
         var doc = XDocument.Load(Path.Combine(outputDirectory.FullName, "nuget.config"));
         Assert.Contains(doc.Root!.Element("packageSources")!.Elements("clear"), _ => true);
@@ -97,7 +97,7 @@ public class TemplateNuGetConfigServiceTests(ITestOutputHelper outputHelper)
         };
         var service = CreateService(packagingService: packagingService);
 
-        Assert.True(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride, channelName: "daily", outputDirectory.FullName, PackageSourceRoutingPolicy.Explicit, CancellationToken.None));
+        Assert.True(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride, channelName: "daily", outputDirectory.FullName, CancellationToken.None));
 
         var doc = XDocument.Load(Path.Combine(outputDirectory.FullName, "nuget.config"));
         Assert.Equal(["Aspire*"], GetPackagePatternsForSource(doc, sourceOverride));
@@ -105,60 +105,6 @@ public class TemplateNuGetConfigServiceTests(ITestOutputHelper outputHelper)
         Assert.Equal([PackageMapping.AllPackages], GetPackagePatternsForSource(doc, fallbackSource));
         Assert.Empty(GetPackagePatternsForSource(doc, channelAspireSource));
         Assert.Empty(GetPackagePatternsForSource(doc, PackageSources.NuGetOrg));
-    }
-
-    [Fact]
-    public async Task CreateOrUpdateNuGetConfigForSourceOverrideAsync_ProjectLocalConfiguredSourceIsExclusive()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var outputDirectory = workspace.WorkspaceRoot.CreateSubdirectory("output");
-        const string sourceOverride = "https://internal.example/v3/index.json";
-
-        var service = CreateService();
-
-        Assert.True(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(
-            sourceOverride,
-            channelName: null,
-            outputDirectory.FullName,
-            PackageSourceRoutingPolicy.ProjectLocalConfigured,
-            CancellationToken.None));
-
-        var doc = XDocument.Load(Path.Combine(outputDirectory.FullName, "nuget.config"));
-        Assert.Equal([sourceOverride], doc.Root!.Element("packageSources")!.Elements("add").Select(e => (string?)e.Attribute("value")));
-        Assert.Equal(["Aspire*", "*"], GetPackagePatternsForSource(doc, sourceOverride));
-        Assert.DoesNotContain(PackageSources.NuGetOrg, doc.Descendants("add").Select(e => (string?)e.Attribute("value")));
-    }
-
-    [Fact]
-    public async Task CreateTemporarySourceOverrideConfigAsync_GlobalConfiguredSourceIsExclusiveAndNotPersisted()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var outputDirectory = workspace.WorkspaceRoot.CreateSubdirectory("output");
-        const string sourceOverride = "https://internal.example/v3/index.json";
-
-        var service = CreateService();
-
-        Assert.False(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(
-            sourceOverride,
-            channelName: null,
-            outputDirectory.FullName,
-            PackageSourceRoutingPolicy.GlobalOrAmbientConfigured,
-            CancellationToken.None));
-        Assert.False(File.Exists(Path.Combine(outputDirectory.FullName, "nuget.config")));
-
-        using (await TemplateNuGetConfigService.CreateTemporarySourceOverrideConfigAsync(
-                   sourceOverride,
-                   outputDirectory.FullName,
-                   PackageSourceRoutingPolicy.GlobalOrAmbientConfigured,
-                   CancellationToken.None))
-        {
-            var configPath = Path.Combine(outputDirectory.FullName, "nuget.config");
-            var doc = XDocument.Load(configPath);
-            Assert.DoesNotContain(PackageSources.NuGetOrg, doc.Descendants("add").Select(e => (string?)e.Attribute("value")));
-            Assert.Equal(["Aspire*", "*"], doc.Root!.Element("packageSourceMapping")!.Elements("packageSource").SelectMany(e => e.Elements("package")).Select(e => (string?)e.Attribute("pattern")));
-        }
-
-        Assert.False(File.Exists(Path.Combine(outputDirectory.FullName, "nuget.config")));
     }
 
     [Fact]
@@ -195,7 +141,7 @@ public class TemplateNuGetConfigServiceTests(ITestOutputHelper outputHelper)
         var service = CreateService();
         const string sourceOverride = "/tmp/aspire-pr-hive/packages";
 
-        Assert.True(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride, channelName: null, outputDirectory.FullName, PackageSourceRoutingPolicy.Explicit, CancellationToken.None));
+        Assert.True(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride, channelName: null, outputDirectory.FullName, CancellationToken.None));
 
         var doc = XDocument.Load(Path.Combine(outputDirectory.FullName, "nuget.config"));
         Assert.Contains(doc.Root!.Element("packageSources")!.Elements("add"), e => (string?)e.Attribute("value") == "https://project.example/v3/index.json");
@@ -214,45 +160,24 @@ public class TemplateNuGetConfigServiceTests(ITestOutputHelper outputHelper)
         };
         var service = CreateService(packagingService: packagingService);
 
-        Assert.False(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride: null, channelName: "daily", workspace.WorkspaceRoot.FullName, PackageSourceRoutingPolicy.Explicit, CancellationToken.None));
-        Assert.False(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride: "", channelName: "daily", workspace.WorkspaceRoot.FullName, PackageSourceRoutingPolicy.Explicit, CancellationToken.None));
-        Assert.False(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride: "   ", channelName: "daily", workspace.WorkspaceRoot.FullName, PackageSourceRoutingPolicy.Explicit, CancellationToken.None));
+        Assert.False(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride: null, channelName: "daily", workspace.WorkspaceRoot.FullName, CancellationToken.None));
+        Assert.False(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride: "", channelName: "daily", workspace.WorkspaceRoot.FullName, CancellationToken.None));
+        Assert.False(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride: "   ", channelName: "daily", workspace.WorkspaceRoot.FullName, CancellationToken.None));
     }
 
     [Theory]
     [InlineData("https://user:token@example.invalid/v3/index.json")]
     [InlineData("https://example.invalid/v3/index.json?sig=token")]
     [InlineData("https://example.invalid/v3/index.json#token")]
-    public async Task CreateOrUpdateNuGetConfigForSourceOverrideAsync_CredentialBearingHttpSourceIsNotPersisted(string sourceOverride)
+    public async Task CreateOrUpdateNuGetConfigForSourceOverrideAsync_CredentialBearingHttpSourceThrows(string sourceOverride)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var service = CreateService();
 
-        Assert.False(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride, channelName: null, workspace.WorkspaceRoot.FullName, PackageSourceRoutingPolicy.Explicit, CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(
+            async () => await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(sourceOverride, channelName: null, workspace.WorkspaceRoot.FullName, CancellationToken.None));
 
         Assert.False(File.Exists(Path.Combine(workspace.WorkspaceRoot.FullName, "nuget.config")));
-    }
-
-    [Fact]
-    public async Task CreateTemporarySourceOverrideConfigAsync_RestoresExistingConfigWithoutPersistingCredentials()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var outputDirectory = workspace.WorkspaceRoot.CreateSubdirectory("output");
-        var configPath = Path.Combine(outputDirectory.FullName, "nuget.config");
-        const string originalContent = "<configuration><packageSources /></configuration>";
-        await File.WriteAllTextAsync(configPath, originalContent);
-
-        using (await TemplateNuGetConfigService.CreateTemporarySourceOverrideConfigAsync(
-                   "https://example.invalid/v3/index.json?sig=token",
-                   outputDirectory.FullName,
-                   PackageSourceRoutingPolicy.Explicit,
-                   CancellationToken.None))
-        {
-            var duringRestore = await File.ReadAllTextAsync(configPath);
-            Assert.Contains("sig=token", duringRestore);
-        }
-
-        Assert.Equal(originalContent, await File.ReadAllTextAsync(configPath));
     }
 
     [Fact]

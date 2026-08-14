@@ -1,8 +1,6 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using Aspire.Cli.Packaging;
-
 namespace Aspire.Cli.Templating;
 
 /// <summary>
@@ -24,16 +22,6 @@ internal sealed class TemplateInputs
     /// Gets the NuGet source (from --source option).
     /// </summary>
     public string? Source { get; init; }
-
-    /// <summary>
-    /// Gets a value indicating whether <see cref="Source"/> came from an explicit one-shot command option.
-    /// </summary>
-    public bool SourceIsExplicit { get; init; }
-
-    /// <summary>
-    /// Gets the persistence and routing policy for <see cref="Source"/>.
-    /// </summary>
-    public required PackageSourceRoutingPolicy SourcePolicy { get; init; }
 
     /// <summary>
     /// Gets the version (from --version option).
