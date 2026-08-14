@@ -1,11 +1,13 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Globalization;
 using System.Text.Json;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Packaging;
 using Aspire.Cli.Projects;
+using Aspire.Cli.Resources;
 using Aspire.Cli.Utils;
 using Semver;
 using NuGetPackage = Aspire.Shared.NuGetPackageCli;
@@ -17,21 +19,27 @@ internal sealed class IntegrationPackageSearchService(
     IProjectLocator projectLocator,
     IInteractionService interactionService,
     CliExecutionContext executionContext,
+    IConfigurationService configurationService,
     IAppHostProjectFactory projectFactory)
 {
     private const double FuzzyMatchThreshold = 0.3;
 
-    public async Task<IEnumerable<(NuGetPackage Package, PackageChannel Channel)>> GetIntegrationPackagesWithChannelsAsync(DirectoryInfo workingDirectory, string? configuredChannel, CancellationToken cancellationToken)
+    public async Task<IEnumerable<(NuGetPackage Package, PackageChannel Channel)>> GetIntegrationPackagesWithChannelsAsync(DirectoryInfo workingDirectory, string? configuredChannel, string? packageSource, CancellationToken cancellationToken)
     {
         var channels = await GetSearchChannelsAsync(configuredChannel, cancellationToken);
+        var sourceOverrideMappings = string.IsNullOrWhiteSpace(packageSource)
+            ? null
+            : PackageSourceOverrideMappings.CreateForTemplateOperations(packageSource);
 
         var packages = new List<(NuGetPackage Package, PackageChannel Channel)>();
         var packagesLock = new object();
 
         await Parallel.ForEachAsync(channels, cancellationToken, async (channel, ct) =>
         {
+            var channelMappings = sourceOverrideMappings ?? channel.Mappings;
             var integrationPackages = await channel.GetIntegrationPackagesAsync(
                 workingDirectory: workingDirectory,
+                mappings: channelMappings,
                 cancellationToken: ct);
             lock (packagesLock)
             {
@@ -52,9 +60,12 @@ internal sealed class IntegrationPackageSearchService(
     /// Resolving both lists together avoids re-resolving the channel set and lets each channel's integration
     /// search and its <c>tags:polyglot</c> lookup run concurrently, rather than as two serial discovery passes.
     /// </remarks>
-    public async Task<(IReadOnlyList<(NuGetPackage Package, PackageChannel Channel)> Packages, IReadOnlySet<string> PolyglotCompatibleIds)> GetIntegrationPackagesWithPolyglotCompatibilityAsync(DirectoryInfo workingDirectory, string? configuredChannel, CancellationToken cancellationToken)
+    public async Task<(IReadOnlyList<(NuGetPackage Package, PackageChannel Channel)> Packages, IReadOnlySet<string> PolyglotCompatibleIds)> GetIntegrationPackagesWithPolyglotCompatibilityAsync(DirectoryInfo workingDirectory, string? configuredChannel, string? packageSource, CancellationToken cancellationToken)
     {
         var channels = await GetSearchChannelsAsync(configuredChannel, cancellationToken);
+        var sourceOverrideMappings = string.IsNullOrWhiteSpace(packageSource)
+            ? null
+            : PackageSourceOverrideMappings.CreateForTemplateOperations(packageSource);
 
         var packages = new List<(NuGetPackage Package, PackageChannel Channel)>();
         var polyglotIds = new HashSet<string>(StringComparers.NuGetPackageId);
@@ -62,10 +73,12 @@ internal sealed class IntegrationPackageSearchService(
 
         await Parallel.ForEachAsync(channels, cancellationToken, async (channel, ct) =>
         {
+            var channelMappings = sourceOverrideMappings ?? channel.Mappings;
+
             // Resolve the integration list and the polyglot allow-list for this channel concurrently so the
             // compatibility lookup runs alongside the integration search instead of as a second serial pass.
-            var integrationPackagesTask = channel.GetIntegrationPackagesAsync(workingDirectory: workingDirectory, cancellationToken: ct);
-            var polyglotIdsTask = channel.GetPolyglotCompatiblePackageIdsAsync(workingDirectory: workingDirectory, cancellationToken: ct);
+            var integrationPackagesTask = channel.GetIntegrationPackagesAsync(workingDirectory: workingDirectory, mappings: channelMappings, cancellationToken: ct);
+            var polyglotIdsTask = channel.GetPolyglotCompatiblePackageIdsAsync(workingDirectory: workingDirectory, mappings: channelMappings, cancellationToken: ct);
             await Task.WhenAll(integrationPackagesTask, polyglotIdsTask);
 
             lock (gate)
@@ -107,6 +120,40 @@ internal sealed class IntegrationPackageSearchService(
         return hasHives || !string.IsNullOrEmpty(configuredChannel)
             ? allChannels
             : allChannels.Where(c => c.Type is PackageChannelType.Implicit);
+    }
+
+    public async Task<string?> ResolvePackageSourceAsync(string? explicitSource, DirectoryInfo workingDirectory, CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitSource))
+        {
+            return PackageSourceOverrideMappings.ResolveForWorkingDirectory(explicitSource, executionContext.WorkingDirectory);
+        }
+
+        var configuredSource = await configurationService.GetConfigurationFromDirectoryWithOriginAsync(
+            AspireConfigFile.NuGetSourceKey,
+            workingDirectory,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        return string.IsNullOrWhiteSpace(configuredSource?.Value)
+            ? null
+            : PackageSourceOverrideMappings.ResolveForWorkingDirectory(configuredSource.Value, configuredSource.BaseDirectory);
+    }
+
+    public static string? GetPackageSourceValidationError(string? packageSource)
+    {
+        if (string.IsNullOrWhiteSpace(packageSource))
+        {
+            return null;
+        }
+
+        if (PackageSourceOverrideMappings.HasCredentialMaterial(packageSource))
+        {
+            return AddCommandStrings.SourceWithCredentialsNotSupported;
+        }
+
+        return PackageSourceOverrideMappings.GetMissingLocalDirectory(packageSource) is { } missingDirectory
+            ? string.Format(CultureInfo.CurrentCulture, AddCommandStrings.SourceDirectoryNotFound, missingDirectory)
+            : null;
     }
 
     public async Task<(DirectoryInfo WorkingDirectory, string? ConfiguredChannel, string? LanguageId, int? ExitCode)> GetPackageSearchContextAsync(FileInfo? passedAppHostProjectFile, CancellationToken cancellationToken)

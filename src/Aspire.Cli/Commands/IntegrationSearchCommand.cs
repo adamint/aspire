@@ -64,6 +64,16 @@ internal abstract class IntegrationDiscoveryCommand : BaseCommand
                 return CommandResult.FromExitCode(exitCode);
             }
 
+            var packageSource = await _integrationPackageSearchService.ResolvePackageSourceAsync(
+                explicitSource: null,
+                workingDirectory,
+                cancellationToken);
+            if (IntegrationPackageSearchService.GetPackageSourceValidationError(packageSource) is { } sourceValidationError)
+            {
+                InteractionService.DisplayError(sourceValidationError);
+                return CommandResult.Failure(CliExitCodes.InvalidCommand);
+            }
+
             // Match `aspire add`: a non-C# (polyglot) AppHost can only consume integrations with ATS
             // export coverage (the `polyglot` NuGet tag), so list/search hide the rest unless --all is
             // passed. The language is only known when an AppHost was resolved; otherwise show everything.
@@ -84,7 +94,7 @@ internal abstract class IntegrationDiscoveryCommand : BaseCommand
                 // Resolve the integration list and the polyglot allow-list in a single discovery pass.
                 var (discoveredPackages, discoveredPolyglotIds) = await InteractionService.ShowStatusAsync(
                     AddCommandStrings.SearchingForAspirePackages,
-                    async () => await _integrationPackageSearchService.GetIntegrationPackagesWithPolyglotCompatibilityAsync(workingDirectory, configuredChannel, cancellationToken));
+                    async () => await _integrationPackageSearchService.GetIntegrationPackagesWithPolyglotCompatibilityAsync(workingDirectory, configuredChannel, packageSource, cancellationToken));
                 packagesWithChannels = discoveredPackages.ToArray();
                 polyglotCompatibleIds = discoveredPolyglotIds;
             }
@@ -92,7 +102,7 @@ internal abstract class IntegrationDiscoveryCommand : BaseCommand
             {
                 packagesWithChannels = (await InteractionService.ShowStatusAsync(
                     AddCommandStrings.SearchingForAspirePackages,
-                    async () => await _integrationPackageSearchService.GetIntegrationPackagesWithChannelsAsync(workingDirectory, configuredChannel, cancellationToken)))
+                    async () => await _integrationPackageSearchService.GetIntegrationPackagesWithChannelsAsync(workingDirectory, configuredChannel, packageSource, cancellationToken)))
                     .ToArray();
             }
 

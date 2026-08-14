@@ -676,6 +676,45 @@ public class GuestAppHostProjectTests : IDisposable
     }
 
     [Fact]
+    public async Task AddPackageAsync_PassesSourceOverrideToRegeneration()
+    {
+        const string sourceOverride = "https://configured.example/v3/index.json";
+
+        var configPath = Path.Combine(_workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
+        await File.WriteAllTextAsync(configPath, """
+            {
+              "sdk": { "version": "1.0.0" },
+              "packages": { "Aspire.Hosting": "1.0.0" }
+            }
+            """);
+
+        var appHostPath = Path.Combine(_workspace.WorkspaceRoot.FullName, "apphost.ts");
+        await File.WriteAllTextAsync(appHostPath, "// test apphost");
+
+        var failingProject = new FakeFailingAppHostServerProject(appHostPath);
+        var factory = new TestAppHostServerProjectFactory
+        {
+            CreateAsyncCallback = (_, _) =>
+                Task.FromResult<IAppHostServerProject>(failingProject)
+        };
+
+        var project = CreateGuestAppHostProject(appHostServerProjectFactory: factory);
+
+        var result = await project.AddPackageAsync(
+            new AddPackageContext
+            {
+                AppHostFile = new FileInfo(appHostPath),
+                PackageId = "Aspire.Hosting.Redis",
+                PackageVersion = "2.0.0",
+                Source = sourceOverride,
+            },
+            CancellationToken.None);
+
+        Assert.False(result);
+        Assert.Equal(sourceOverride, failingProject.LastPackageSourceOverride);
+    }
+
+    [Fact]
     public async Task FindAndStopRunningInstanceAsync_CleansUpDeadPidSocketAndReturnsNoRunningInstance()
     {
         var appHostPath = Path.Combine(_workspace.WorkspaceRoot.FullName, "apphost.ts");

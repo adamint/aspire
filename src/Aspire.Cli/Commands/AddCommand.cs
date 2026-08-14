@@ -104,9 +104,9 @@ internal sealed class AddCommand : BaseCommand
             var integrationName = parseResult.GetValue(s_integrationArgument);
             var passedAppHostProjectFile = parseResult.GetValue(s_appHostOption);
             var version = parseResult.GetValue(s_versionOption);
-            var source = parseResult.GetValue(s_sourceOption);
+            var explicitSource = parseResult.GetValue(s_sourceOption);
             var includeAllIntegrations = parseResult.GetValue(s_allOption);
-            addActivity = _profilingTelemetry.StartAddCommand(integrationName, version, source, passedAppHostProjectFile);
+            addActivity = _profilingTelemetry.StartAddCommand(integrationName, version, explicitSource, passedAppHostProjectFile);
 
             AppHostProjectSearchResult searchResult;
             using (var findAppHostActivity = _profilingTelemetry.StartAddFindAppHost(passedAppHostProjectFile))
@@ -156,6 +156,22 @@ internal sealed class AddCommand : BaseCommand
                 return AddCommandFromExitCode(exitCode);
             }
 
+            var source = await _integrationPackageSearchService.ResolvePackageSourceAsync(
+                explicitSource,
+                effectiveAppHostProjectFile.Directory!,
+                cancellationToken);
+            if (IntegrationPackageSearchService.GetPackageSourceValidationError(source) is { } sourceValidationError)
+            {
+                return AddCommandFailure(CliExitCodes.InvalidCommand, sourceValidationError);
+            }
+
+            // Package discovery and any later version lookup must resolve against the same source override.
+            // Reusing one mapping set prevents version selection from silently falling back to the channel feed
+            // after discovery already proved the package exists behind the approved source.
+            var sourceOverrideMappings = string.IsNullOrWhiteSpace(source)
+                ? null
+                : PackageSourceOverrideMappings.CreateForTemplateOperations(source);
+
             // For non-C# (polyglot) AppHosts, only integrations with ATS export coverage are usable: a
             // TypeScript/Python/Go/Java/Rust AppHost gets a generated SDK only for packages carrying the
             // `polyglot` NuGet tag. The tag is added by default to Aspire.Hosting integrations that run the
@@ -181,7 +197,7 @@ internal sealed class AddCommand : BaseCommand
                 {
                     var (discoveredPackages, discoveredPolyglotIds) = await InteractionService.ShowStatusAsync(
                         AddCommandStrings.SearchingForAspirePackages,
-                        async () => await _integrationPackageSearchService.GetIntegrationPackagesWithPolyglotCompatibilityAsync(effectiveAppHostProjectFile.Directory!, configuredChannel, cancellationToken));
+                        async () => await _integrationPackageSearchService.GetIntegrationPackagesWithPolyglotCompatibilityAsync(effectiveAppHostProjectFile.Directory!, configuredChannel, source, cancellationToken));
                     packagesWithChannels = discoveredPackages as List<(NuGetPackage Package, PackageChannel Channel)> ?? discoveredPackages.ToList();
                     polyglotCompatibleIds = discoveredPolyglotIds;
                 }
@@ -189,7 +205,7 @@ internal sealed class AddCommand : BaseCommand
                 {
                     var discoveredPackages = await InteractionService.ShowStatusAsync(
                         AddCommandStrings.SearchingForAspirePackages,
-                        async () => await _integrationPackageSearchService.GetIntegrationPackagesWithChannelsAsync(effectiveAppHostProjectFile.Directory!, configuredChannel, cancellationToken));
+                        async () => await _integrationPackageSearchService.GetIntegrationPackagesWithChannelsAsync(effectiveAppHostProjectFile.Directory!, configuredChannel, source, cancellationToken));
                     packagesWithChannels = discoveredPackages as List<(NuGetPackage Package, PackageChannel Channel)> ?? discoveredPackages.ToList();
                 }
 
@@ -293,6 +309,7 @@ internal sealed class AddCommand : BaseCommand
                     integrationName,
                     version,
                     configuredChannel,
+                    sourceOverrideMappings,
                     cancellationToken,
                     promptForSinglePackage: integrationName is not null),
                 1 when packageMatchKind == ProfilingTelemetry.Values.AddPackageMatchKindExact
@@ -303,6 +320,7 @@ internal sealed class AddCommand : BaseCommand
                     filteredPackagesWithShortName,
                     version,
                     configuredChannel,
+                    sourceOverrideMappings,
                     cancellationToken,
                     promptForSingleFuzzyPackage)
             };
@@ -445,7 +463,7 @@ internal sealed class AddCommand : BaseCommand
         }
     }
 
-    private static async Task<IEnumerable<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)>> GetAllPackageVersions(DirectoryInfo workingDirectory, IEnumerable<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)> possiblePackages, CancellationToken cancellationToken)
+    private static async Task<IEnumerable<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)>> GetAllPackageVersions(DirectoryInfo workingDirectory, IEnumerable<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)> possiblePackages, PackageMapping[]? sourceOverrideMappings, CancellationToken cancellationToken)
     {
         var distinctPackageIds = possiblePackages.DistinctBy(package => package.Package.Id);
         var channels = possiblePackages.Select(package => package.Channel).Distinct();
@@ -455,7 +473,7 @@ internal sealed class AddCommand : BaseCommand
         {
             foreach (var package in distinctPackageIds)
             {
-                var packages = await channel.GetPackageVersionsAsync(package.Package.Id, workingDirectory, cancellationToken);
+                var packages = await channel.GetPackageVersionsAsync(package.Package.Id, workingDirectory, sourceOverrideMappings, cancellationToken);
                 versions.AddRange(packages.Select(p => (FriendlyName: package.FriendlyName, Package: p, Channel: channel)));
             }
         }
@@ -467,6 +485,7 @@ internal sealed class AddCommand : BaseCommand
         IEnumerable<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)> possiblePackages,
         string? preferredVersion,
         string? configuredChannel,
+        PackageMapping[]? sourceOverrideMappings,
         CancellationToken cancellationToken,
         bool promptForSinglePackage = false)
     {
@@ -498,7 +517,7 @@ internal sealed class AddCommand : BaseCommand
 
             var allVersions = await InteractionService.ShowStatusAsync(
                 string.Format(CultureInfo.CurrentCulture, AddCommandStrings.SearchingForSpecifiedPackageVersion, selectedPackage.Package.Id, preferredVersion),
-                async () => await GetAllPackageVersions(workingDirectory, packageVersions, cancellationToken));
+                async () => await GetAllPackageVersions(workingDirectory, packageVersions, sourceOverrideMappings, cancellationToken));
             var matchedPreferredVersionPackage = allVersions.FirstOrDefault(packageVersion => packageVersion.Package.Version == preferredVersion);
             if (matchedPreferredVersionPackage.Package is not null)
             {
@@ -579,6 +598,7 @@ internal sealed class AddCommand : BaseCommand
         string? searchTerm,
         string? preferredVersion,
         string? configuredChannel,
+        PackageMapping[]? sourceOverrideMappings,
         CancellationToken cancellationToken,
         bool promptForSinglePackage = false)
     {
@@ -587,7 +607,7 @@ internal sealed class AddCommand : BaseCommand
             InteractionService.DisplaySubtleMessage(string.Format(CultureInfo.CurrentCulture, AddCommandStrings.NoPackagesMatchedSearchTerm, searchTerm));
         }
 
-        return await GetPackageByInteractiveFlow(workingDirectory, possiblePackages, preferredVersion, configuredChannel, cancellationToken, promptForSinglePackage);
+        return await GetPackageByInteractiveFlow(workingDirectory, possiblePackages, preferredVersion, configuredChannel, sourceOverrideMappings, cancellationToken, promptForSinglePackage);
     }
 
 }

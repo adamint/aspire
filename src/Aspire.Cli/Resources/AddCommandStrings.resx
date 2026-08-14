@@ -147,6 +147,12 @@
   <data name="SourceArgumentDescription" xml:space="preserve">
     <value>The NuGet source to use for the integration</value>
   </data>
+  <data name="SourceDirectoryNotFound" xml:space="preserve">
+    <value>The local NuGet source directory '{0}' does not exist.</value>
+  </data>
+  <data name="SourceWithCredentialsNotSupported" xml:space="preserve">
+    <value>The NuGet source includes credentials, a query string, or a fragment. Configure credentials with a NuGet credential provider, then use the feed URL without embedded secrets.</value>
+  </data>
   <data name="AllArgumentDescription" xml:space="preserve">
     <value>Include all integrations, even those not marked compatible with the AppHost language</value>
   </data>

@@ -415,8 +415,10 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
         // assembly metadata) and the acquisition scripts no longer seed a "channel" field into
         // global settings. The read here remains so a user who deliberately ran
         // `aspire config set -g channel <x>` continues to get their preference honored by
-        // `aspire update` until that workflow is removed in a follow-up. New per-project flows
-        // (`aspire add`, `aspire init`) do not consult global config and must not start to.
+        // `aspire update` until that workflow is removed in a follow-up. Most per-project flows still
+        // avoid global fallback, but source selection intentionally allows local-then-global
+        // `nugetSource` precedence so `aspire add` / integration discovery can honor the user's
+        // configured feed when no explicit `--source` was supplied.
         if (File.Exists(globalSettingsFile.FullName))
         {
             var globalConfig = LoadSettingsFileForReading(globalSettingsFile.FullName);

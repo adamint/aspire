@@ -167,6 +167,16 @@
         <target state="needs-review-translation">Die NuGet-Quelle, die für die Integration verwendet werden soll.</target>
         <note />
       </trans-unit>
+      <trans-unit id="SourceDirectoryNotFound">
+        <source>The local NuGet source directory '{0}' does not exist.</source>
+        <target state="new">The local NuGet source directory '{0}' does not exist.</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="SourceWithCredentialsNotSupported">
+        <source>The NuGet source includes credentials, a query string, or a fragment. Configure credentials with a NuGet credential provider, then use the feed URL without embedded secrets.</source>
+        <target state="new">The NuGet source includes credentials, a query string, or a fragment. Configure credentials with a NuGet credential provider, then use the feed URL without embedded secrets.</target>
+        <note />
+      </trans-unit>
       <trans-unit id="SpecifiedVersionNotFoundForPackage">
         <source>The requested version '{1}' was not found for package '{0}'.</source>
         <target state="new">The requested version '{1}' was not found for package '{0}'.</target>

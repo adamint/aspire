@@ -133,6 +133,22 @@ namespace Aspire.Cli.Resources {
             }
         }
 
+        public static string SourceDirectoryNotFound
+        {
+            get
+            {
+                return ResourceManager.GetString("SourceDirectoryNotFound", resourceCulture);
+            }
+        }
+
+        public static string SourceWithCredentialsNotSupported
+        {
+            get
+            {
+                return ResourceManager.GetString("SourceWithCredentialsNotSupported", resourceCulture);
+            }
+        }
+
         public static string AllArgumentDescription
         {
             get

@@ -283,8 +283,7 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
         // check was hardcoded into IsIntegrationPackageId and silently dropped them here.
         var showDeprecatedPackages = _features.IsFeatureEnabled(KnownFeatures.ShowDeprecatedPackages, defaultValue: false);
 
-        var packageMetadata = packageSource
-            .EnumerateFiles("*.nupkg", SearchOption.TopDirectoryOnly)
+        var packageMetadata = EnumerateLocalPackageFiles(packageSource)
             .Select(file =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -376,7 +375,7 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
     {
         var ids = new HashSet<string>(StringComparers.NuGetPackageId);
 
-        foreach (var file in packageSource.EnumerateFiles("*.nupkg", SearchOption.TopDirectoryOnly))
+        foreach (var file in EnumerateLocalPackageFiles(packageSource))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -392,6 +391,19 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
         }
 
         return ids;
+    }
+
+    private static IEnumerable<FileInfo> EnumerateLocalPackageFiles(DirectoryInfo packageSource)
+    {
+        // Folder feeds can be flat (<feed>/<id>.<version>.nupkg) or hierarchical
+        // (<feed>/<lower-id>/<version>/<id>.<version>.nupkg). Discovery, polyglot filtering, and
+        // version lookup must all see the same package set or a source override can look empty until
+        // a later step falls through to a different path.
+        return packageSource.EnumerateFiles("*.nupkg", new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = true
+        });
     }
 
     private bool IsAllowedTemplatePackageByQuality(SemVersion version, string versionText)
@@ -556,9 +568,21 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
 
     public async Task<IEnumerable<NuGetPackage>> GetPackageVersionsAsync(string packageId, DirectoryInfo workingDirectory, CancellationToken cancellationToken)
     {
+        return await GetPackageVersionsAsync(packageId, workingDirectory, mappings: null, cancellationToken);
+    }
+
+    public async Task<IEnumerable<NuGetPackage>> GetPackageVersionsAsync(string packageId, DirectoryInfo workingDirectory, PackageMapping[]? mappings, CancellationToken cancellationToken)
+    {
+        var effectiveMappings = mappings ?? (Type is PackageChannelType.Explicit ? Mappings : null);
+        var localPackageSource = GetLocalAspirePackageSource(effectiveMappings);
+        if (localPackageSource is not null)
+        {
+            return GetPackageVersionsFromLocalPackageSource(packageId, localPackageSource, cancellationToken);
+        }
+
         var tasks = new List<Task<IEnumerable<NuGetPackage>>>();
 
-        using var tempNuGetConfig = Type is PackageChannelType.Explicit ? await TemporaryNuGetConfig.CreateAsync(Mappings!) : null;
+        using var tempNuGetConfig = effectiveMappings is not null ? await TemporaryNuGetConfig.CreateAsync(effectiveMappings) : null;
 
         if (Quality is PackageChannelQuality.Stable || Quality is PackageChannelQuality.Both)
         {
@@ -615,6 +639,47 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
         });
 
         return filteredPackages;
+    }
+
+    private IEnumerable<NuGetPackage> GetPackageVersionsFromLocalPackageSource(string packageId, DirectoryInfo packageSource, CancellationToken cancellationToken)
+    {
+        // Local folder feeds can be flat (<feed>/<id>.<version>.nupkg) or hierarchical
+        // (<feed>/<lower-id>/<version>/<id>.<version>.nupkg). Walk recursively so a source override
+        // survives the version-lookup path for both layouts instead of falling back to feed queries.
+        var localPackageVersions = EnumerateLocalPackageFiles(packageSource)
+            .Select(file =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return GetPackageFileMetadata(file.FullName);
+            })
+            .OfType<PackageFileMetadata>()
+            .Where(metadata => string.Equals(metadata.PackageId, packageId, StringComparisons.NuGetPackageId))
+            .OrderByDescending(metadata => metadata.Version, SemVersion.PrecedenceComparer)
+            .ToArray();
+
+        var source = PathNormalizer.NormalizePathForStorage(packageSource.FullName);
+        var filteredPackages = localPackageVersions
+            .Where(IsAllowedByQuality)
+            .Select(metadata => new NuGetPackage { Id = metadata.PackageId, Version = metadata.Version.ToString(), Source = source })
+            .ToArray();
+
+        if (Quality is PackageChannelQuality.Stable && filteredPackages.Length == 0)
+        {
+            return localPackageVersions
+                .Where(static metadata => metadata.Version.IsPrerelease)
+                .Select(metadata => new NuGetPackage { Id = metadata.PackageId, Version = metadata.Version.ToString(), Source = source })
+                .ToArray();
+        }
+
+        return filteredPackages;
+
+        bool IsAllowedByQuality(PackageFileMetadata metadata) => new { metadata.Version, Quality } switch
+        {
+            { Quality: PackageChannelQuality.Both } => true,
+            { Quality: PackageChannelQuality.Stable, Version: { IsPrerelease: false } } => true,
+            { Quality: PackageChannelQuality.Prerelease, Version: { IsPrerelease: true } } => true,
+            _ => false
+        };
     }
 
     public PackageChannel CreateScopedChannelForPackage(string packageId)
