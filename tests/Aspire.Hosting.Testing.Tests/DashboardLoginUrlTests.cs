@@ -190,16 +190,30 @@ public class DashboardLoginUrlTests
         var token = dashboardUri.Query["?t=".Length..];
         Assert.NotEmpty(token);
 
+        // Resource log forwarding is asynchronous. Wait for the child dashboard's summary, which is written after
+        // its separate login URL line, so the assertion covers both the AppHost and dashboard-process output.
+        while (!logCollector.GetSnapshot().Any(record =>
+            record.Category?.EndsWith(".Resources.aspire-dashboard", StringComparison.Ordinal) == true &&
+            GetLogText(record).Contains("Aspire Dashboard", StringComparison.Ordinal)))
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationTokenSource.Token);
+        }
+
         var written = string.Join(
             Environment.NewLine,
-            logCollector.GetSnapshot().Select(record => record.Message + " " + record.StructuredState?.Aggregate(
-                string.Empty,
-                (accumulated, pair) => accumulated + " " + pair.Value)));
+            logCollector.GetSnapshot().Select(GetLogText));
 
         Assert.False(
             written.Contains(token, StringComparison.Ordinal),
             "The dashboard browser token was written to AppHost logs.");
         Assert.Contains("Aspire Dashboard", written, StringComparison.Ordinal);
+    }
+
+    private static string GetLogText(FakeLogRecord record)
+    {
+        return record.Message + " " + record.StructuredState?.Aggregate(
+            string.Empty,
+            (accumulated, pair) => accumulated + " " + pair.Value);
     }
 
     private static Task<IDistributedApplicationTestingBuilder> CreateDashboardBuilderAsync()
