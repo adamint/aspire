@@ -105,8 +105,7 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
     /// local packages. See <c>docs/specs/cli-identity-sidecar.md</c>.
     /// </remarks>
     public bool IsBackedByLocalPackageDirectory =>
-        Type is PackageChannelType.Explicit &&
-        Mappings?.Any(static mapping => mapping.IsAspireDirectoryMapping) == true;
+        EffectiveMappings?.Any(static mapping => mapping.IsAspireDirectoryMapping) == true;
 
     private static string ComputeSourceDetails(PackageMapping[]? mappings)
     {

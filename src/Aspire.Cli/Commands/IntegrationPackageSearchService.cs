@@ -170,30 +170,61 @@ internal sealed class IntegrationPackageSearchService(
             AspireConfigFile.NuGetSourceKey,
             appHostProjectFile.Directory!,
             cancellationToken: cancellationToken));
+        var localConfiguration = await configurationService.GetLocalConfigurationAsync(cancellationToken);
+        localConfiguration.TryGetValue(AspireConfigFile.NuGetSourceKey, out var localSource);
+        localSource = NormalizeSource(localSource);
+        var globalConfiguration = await configurationService.GetGlobalConfigurationAsync(cancellationToken);
+        globalConfiguration.TryGetValue(AspireConfigFile.NuGetSourceKey, out var globalSource);
+        globalSource = NormalizeSource(globalSource);
+        var invocationSource = NormalizeSource(invocationConfiguredSource);
 
         if (appHostWasExplicitlyPassed)
         {
-            return targetSource ?? NormalizeSource(invocationConfiguredSource);
+            if (targetSource is not null)
+            {
+                var resolutionDirectory = string.Equals(targetSource, globalSource, StringComparison.Ordinal)
+                    ? executionContext.WorkingDirectory
+                    : appHostProjectFile.Directory!;
+                return ResolveSource(targetSource, resolutionDirectory);
+            }
+
+            // Environment and command-host providers still outrank files, but a local
+            // config from the invocation workspace must not leak into an explicit target.
+            return invocationSource is not null &&
+                !string.Equals(invocationSource, localSource, StringComparison.Ordinal)
+                    ? ResolveSource(invocationSource, executionContext.WorkingDirectory)
+                    : null;
         }
 
-        var invocationSource = NormalizeSource(invocationConfiguredSource);
-        if (invocationSource is null)
+        if (localSource is not null)
         {
-            return targetSource;
+            return ResolveSource(localSource, executionContext.WorkingDirectory);
         }
 
-        var globalConfiguration = await configurationService.GetGlobalConfigurationAsync(cancellationToken);
-        globalConfiguration.TryGetValue(AspireConfigFile.NuGetSourceKey, out var globalSource);
+        if (invocationSource is not null &&
+            !string.Equals(invocationSource, globalSource, StringComparison.Ordinal))
+        {
+            return ResolveSource(invocationSource, executionContext.WorkingDirectory);
+        }
 
-        // A process-level value that differs from the global file came from the selecting
-        // workspace or a higher-precedence provider and should continue to select the target.
-        return !string.Equals(invocationSource, NormalizeSource(globalSource), StringComparison.Ordinal)
-            ? invocationSource
-            : targetSource ?? invocationSource;
+        if (targetSource is not null)
+        {
+            var resolutionDirectory = string.Equals(targetSource, globalSource, StringComparison.Ordinal)
+                ? executionContext.WorkingDirectory
+                : appHostProjectFile.Directory!;
+            return ResolveSource(targetSource, resolutionDirectory);
+        }
+
+        return invocationSource is null
+            ? null
+            : ResolveSource(invocationSource, executionContext.WorkingDirectory);
     }
 
     private static string? NormalizeSource(string? source)
         => string.IsNullOrWhiteSpace(source) ? null : source;
+
+    private static string ResolveSource(string source, DirectoryInfo workingDirectory)
+        => PackageSourceOverrideMappings.ResolveForWorkingDirectory(source, workingDirectory);
 
     public (string? ConfiguredChannel, int? ExitCode) GetConfiguredChannel(FileInfo appHostProjectFile, IAppHostProject project)
     {

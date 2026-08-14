@@ -171,6 +171,25 @@ public class PackageChannelTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public void WithMappings_LocalSourceReportsLocalPackageDirectory()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var packagesDirectory = workspace.CreateDirectory("packages");
+        var channel = PackageChannel.CreateImplicitChannel(
+            new FakeNuGetPackageCache(),
+            new TestFeatures(),
+            NullLogger.Instance);
+
+        var overriddenChannel = channel.WithMappings(
+        [
+            new PackageMapping("Aspire*", packagesDirectory.FullName),
+            new PackageMapping(PackageMapping.AllPackages, packagesDirectory.FullName)
+        ]);
+
+        Assert.True(overriddenChannel.IsBackedByLocalPackageDirectory);
+    }
+
+    [Fact]
     public async Task GetIntegrationPackagesAsync_WithPinnedLocalSource_ReturnsOnlyPinnedLocalIntegrationPackages()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);

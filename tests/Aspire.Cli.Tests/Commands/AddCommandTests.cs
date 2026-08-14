@@ -9,6 +9,7 @@ using Aspire.Cli.Interaction;
 using Aspire.Cli.Packaging;
 using Aspire.Cli.Projects;
 using Aspire.Cli.Resources;
+using Aspire.Cli.Templating;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
 using Aspire.Cli.Utils;
@@ -359,6 +360,122 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
             CancellationToken.None);
 
         Assert.Equal(appHostSource, source);
+    }
+
+    [Fact]
+    public async Task ConfiguredSourceResolutionForExplicitAppHostDoesNotUseSelectingWorkspace()
+    {
+        const string workspaceSource = "https://workspace.example/v3/index.json";
+
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        await File.WriteAllTextAsync(
+            Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName),
+            $$"""
+            {
+              "nugetSource": "{{workspaceSource}}"
+            }
+            """);
+        using var targetWorkspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostDirectory = targetWorkspace.WorkspaceRoot;
+        var appHostFile = new FileInfo(Path.Combine(appHostDirectory.FullName, "AppHost.csproj"));
+        await File.WriteAllTextAsync(appHostFile.FullName, "<Project />");
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+
+        var source = await provider.GetRequiredService<IntegrationPackageSearchService>().GetConfiguredNuGetSourceAsync(
+            appHostFile,
+            appHostWasExplicitlyPassed: true,
+            workspaceSource,
+            CancellationToken.None);
+
+        Assert.Null(source);
+    }
+
+    [Fact]
+    public async Task ConfiguredSourceResolutionUsesWorkspaceForRelativeSelectingSource()
+    {
+        const string workspaceSource = "feeds/local";
+
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        await File.WriteAllTextAsync(
+            Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName),
+            $$"""
+            {
+              "nugetSource": "{{workspaceSource}}"
+            }
+            """);
+        var appHostDirectory = workspace.CreateDirectory("target");
+        var appHostFile = new FileInfo(Path.Combine(appHostDirectory.FullName, "AppHost.csproj"));
+        await File.WriteAllTextAsync(appHostFile.FullName, "<Project />");
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+
+        var source = await provider.GetRequiredService<IntegrationPackageSearchService>().GetConfiguredNuGetSourceAsync(
+            appHostFile,
+            appHostWasExplicitlyPassed: false,
+            workspaceSource,
+            CancellationToken.None);
+
+        Assert.Equal(Path.Combine(workspace.WorkspaceRoot.FullName, workspaceSource), source);
+    }
+
+    [Fact]
+    public async Task ConfiguredSourceResolutionUsesTargetForRelativeAppHostSource()
+    {
+        const string appHostSource = "feeds/target";
+
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        using var targetWorkspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostFile = new FileInfo(Path.Combine(targetWorkspace.WorkspaceRoot.FullName, "AppHost.csproj"));
+        await File.WriteAllTextAsync(appHostFile.FullName, "<Project />");
+        await File.WriteAllTextAsync(
+            Path.Combine(targetWorkspace.WorkspaceRoot.FullName, AspireConfigFile.FileName),
+            $$"""
+            {
+              "nugetSource": "{{appHostSource}}"
+            }
+            """);
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+
+        var source = await provider.GetRequiredService<IntegrationPackageSearchService>().GetConfiguredNuGetSourceAsync(
+            appHostFile,
+            appHostWasExplicitlyPassed: true,
+            invocationConfiguredSource: null,
+            CancellationToken.None);
+
+        Assert.Equal(Path.Combine(targetWorkspace.WorkspaceRoot.FullName, appHostSource), source);
+    }
+
+    [Fact]
+    public async Task AddCommandDetectsConfiguredSourceInParentNuGetConfig()
+    {
+        const string source = "https://configured.example/v3/index.json";
+
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        await TemplateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(
+            source,
+            channel: null,
+            workspace.WorkspaceRoot.FullName,
+            CancellationToken.None);
+        var appHostDirectory = workspace.CreateDirectory("src/AppHost");
+
+        Assert.True(AddCommand.IsSourceAvailableFromNuGetConfig(appHostDirectory, source));
+
+        await File.WriteAllTextAsync(
+            Path.Combine(appHostDirectory.FullName, "nuget.config"),
+            """
+            <configuration>
+              <packageSources>
+                <clear />
+              </packageSources>
+            </configuration>
+            """);
+
+        Assert.False(AddCommand.IsSourceAvailableFromNuGetConfig(appHostDirectory, source));
     }
 
     [Theory]
@@ -2158,12 +2275,16 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Theory]
-    [InlineData(null, "https://configured.example/v3/index.json", "https://configured.example/v3/index.json", null)]
-    [InlineData("https://explicit.example/v3/index.json", "https://configured.example/v3/index.json", "https://explicit.example/v3/index.json", "https://explicit.example/v3/index.json")]
-    [InlineData(null, "   ", null, null)]
+    [InlineData(null, "https://configured.example/v3/index.json", true, "https://configured.example/v3/index.json", null)]
+    [InlineData(null, "https://configured.example/v3/index.json", false, "https://configured.example/v3/index.json", "https://configured.example/v3/index.json")]
+    [InlineData("https://explicit.example/v3/index.json", "https://configured.example/v3/index.json", true, "https://explicit.example/v3/index.json", null)]
+    [InlineData("https://explicit.example/v3/index.json", "https://configured.example/v3/index.json", false, "https://explicit.example/v3/index.json", "https://explicit.example/v3/index.json")]
+    [InlineData("https://configured.example/v3/index.json", "https://configured.example/v3/index.json", true, "https://configured.example/v3/index.json", null)]
+    [InlineData(null, "   ", false, null, null)]
     public async Task AddCommandUsesConfiguredSourceUnlessExplicitSourceIsProvided(
         string? explicitSource,
         string configuredSource,
+        bool projectHasSourceConfig,
         string? expectedSearchSource,
         string? expectedAddSource)
     {
@@ -2173,6 +2294,18 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var appHostFile = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, "AppHost.csproj"));
         await File.WriteAllTextAsync(appHostFile.FullName, "<Project />");
+        if (projectHasSourceConfig)
+        {
+            await TemplateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(
+                expectedSearchSource,
+                channel: null,
+                workspace.WorkspaceRoot.FullName,
+                CancellationToken.None);
+        }
+        var nugetConfigPath = Path.Combine(workspace.WorkspaceRoot.FullName, "nuget.config");
+        var originalNuGetConfig = File.Exists(nugetConfigPath)
+            ? await File.ReadAllTextAsync(nugetConfigPath)
+            : null;
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
         {
             // Makes it easier to isolate behavior in test case by disabling one
@@ -2241,10 +2374,9 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal(expectedSearchSource, searchUsedSource);
         Assert.Equal(expectedAddSource, addUsedSource);
 
-        var nugetConfigPath = Path.Combine(workspace.WorkspaceRoot.FullName, "nuget.config");
-        if (explicitSource is null && expectedSearchSource is not null)
+        if (originalNuGetConfig is not null)
         {
-            AssertSourceOverrideNuGetConfig(workspace.WorkspaceRoot.FullName, expectedSearchSource);
+            Assert.Equal(originalNuGetConfig, await File.ReadAllTextAsync(nugetConfigPath));
         }
         else
         {
@@ -3517,16 +3649,6 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
             Source = "nuget",
             Version = version
         };
-    }
-
-    private static void AssertSourceOverrideNuGetConfig(string outputPath, string sourceOverride)
-    {
-        var document = XDocument.Load(Path.Combine(outputPath, "nuget.config"));
-        var packageSources = document.Root!.Element("packageSources")!;
-
-        Assert.Contains(packageSources.Elements("clear"), _ => true);
-        Assert.Contains(packageSources.Elements("add"), element => (string?)element.Attribute("value") == sourceOverride);
-        Assert.Contains(packageSources.Elements("add"), element => (string?)element.Attribute("value") == PackageSources.NuGetOrg);
     }
 
     private static (string? Name, string? Package, string? Version)[] ReadIntegrationResults(string json)
