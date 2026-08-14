@@ -38,11 +38,7 @@ internal interface IConfigurationService
     /// <summary>
     /// Reads a directory-scoped configuration value together with its declaring directory.
     /// </summary>
-    async Task<ConfigurationValueWithOrigin?> GetConfigurationFromDirectoryWithOriginAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
-    {
-        var value = await GetConfigurationFromDirectoryAsync(key, startDirectory, continueSearchWhenKeyMissing, cancellationToken);
-        return value is null ? null : new(value, startDirectory, IsGlobal: false);
-    }
+    Task<ConfigurationValueWithOrigin?> GetConfigurationFromDirectoryWithOriginAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default);
 
     string GetSettingsFilePath(bool isGlobal);
 }

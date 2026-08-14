@@ -1253,6 +1253,69 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         AssertSourceOverrideNuGetConfig(Path.Combine(workspace.WorkspaceRoot.FullName, "output"), expectedSource);
     }
 
+    [Fact]
+    public async Task NewCommandResolvesRelativeGlobalSourceFromGlobalSettingsDirectory()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        var probeServices = CreateServiceCollection(workspace);
+        using (var probeProvider = probeServices.BuildServiceProvider())
+        {
+            var globalSettingsPath = probeProvider.GetRequiredService<IConfigurationService>().GetSettingsFilePath(isGlobal: true);
+            var globalSettingsDirectory = Directory.CreateDirectory(Path.GetDirectoryName(globalSettingsPath)!);
+            Directory.CreateDirectory(Path.Combine(globalSettingsDirectory.FullName, "global-feed"));
+            await File.WriteAllTextAsync(
+                globalSettingsPath,
+                """
+                {
+                  "nugetSource": "global-feed"
+                }
+                """);
+        }
+
+        string? discoverySource = null;
+        var cache = new FakeNuGetPackageCache
+        {
+            GetTemplatePackagesAsyncCallback = (_, _, nugetConfig, _) =>
+            {
+                Assert.NotNull(nugetConfig);
+                discoverySource = (string?)XDocument.Load(nugetConfig.FullName).Root!
+                    .Element("packageSources")!
+                    .Elements("add")
+                    .Single()
+                    .Attribute("value");
+                return Task.FromResult<IEnumerable<NuGetPackage>>(
+                    [new NuGetPackage { Id = "Aspire.ProjectTemplates", Source = discoverySource!, Version = "9.2.0" }]);
+            }
+        };
+        var channel = PackageChannel.CreateExplicitChannel(
+            PackageChannelNames.Staging,
+            PackageChannelQuality.Stable,
+            [new PackageMapping(PackageMapping.AllPackages, PackageSources.NuGetOrg)],
+            cache,
+            new TestFeatures(),
+            NullLogger.Instance);
+        var services = CreateServiceCollection(workspace, options =>
+        {
+            options.PackagingServiceFactory = _ => new TestPackagingService
+            {
+                GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>([channel])
+            };
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var globalSettingsFile = new FileInfo(provider.GetRequiredService<IConfigurationService>().GetSettingsFilePath(isGlobal: true));
+        var expectedSource = Path.Combine(globalSettingsFile.Directory!.FullName, "global-feed");
+        var command = provider.GetRequiredService<NewCommand>();
+        var result = command.Parse("new aspire-empty --name TestApp --output ./output --language csharp --localhost-tld false --suppress-agent-init --channel staging");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Equal(expectedSource, discoverySource);
+        AssertSourceOverrideNuGetConfig(Path.Combine(workspace.WorkspaceRoot.FullName, "output"), expectedSource);
+    }
+
     [Theory]
     [InlineData("https://proxy.example/v3/index.json", false)]
     [InlineData("relative-feed", true)]

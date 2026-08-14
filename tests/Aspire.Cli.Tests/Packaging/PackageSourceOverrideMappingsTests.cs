@@ -2,6 +2,8 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Aspire.Cli.Packaging;
+using Aspire.Cli.Tests.Utils;
+using Aspire.Hosting.Utils;
 
 namespace Aspire.Cli.Tests.Packaging;
 
@@ -52,5 +54,20 @@ public class PackageSourceOverrideMappingsTests(ITestOutputHelper outputHelper)
         var result = PackageSourceOverrideMappings.ResolveForWorkingDirectory(source, workspace.WorkspaceRoot);
 
         Assert.Equal(source, result);
+    }
+
+    [Fact]
+    public void SourcesMatch_ResolvesMacOSFilesystemAliases()
+    {
+        Assert.SkipUnless(OperatingSystem.IsMacOS(), "Filesystem aliases such as /var -> /private/var are specific to macOS.");
+
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var source = workspace.WorkspaceRoot.FullName;
+        var canonicalSource = PathNormalizer.ResolveSymlinks(source);
+        Assert.NotEqual(source, canonicalSource);
+
+        var result = PackageSourceOverrideMappings.SourcesMatch(source, canonicalSource, new TestEnvironment());
+
+        Assert.True(result);
     }
 }

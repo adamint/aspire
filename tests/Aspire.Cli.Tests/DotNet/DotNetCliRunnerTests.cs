@@ -53,6 +53,9 @@ public class DotNetCliRunnerTests(ITestOutputHelper outputHelper)
                 """
                 E https://enabled.example/v3/index.json
                 D /path/to/disabled/feed
+                EM /path/to/enabled-machine-wide-feed
+                EO https://enabled-official.example/v3/index.json
+                EMO https://enabled-machine-wide-official.example/v3/index.json
                 E /path with spaces/enabled feed
                 """));
 
@@ -65,6 +68,9 @@ public class DotNetCliRunnerTests(ITestOutputHelper outputHelper)
         Assert.Equal(
             [
                 "https://enabled.example/v3/index.json",
+                "/path/to/enabled-machine-wide-feed",
+                "https://enabled-official.example/v3/index.json",
+                "https://enabled-machine-wide-official.example/v3/index.json",
                 "/path with spaces/enabled feed"
             ],
             sources);

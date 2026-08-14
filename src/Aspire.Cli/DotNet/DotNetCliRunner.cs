@@ -1670,12 +1670,15 @@ internal sealed class DotNetCliRunner(
             // `dotnet nuget list source --format short` emits one source per line:
             //   E https://api.nuget.org/v3/index.json
             //   D /path/to/disabled/feed
-            // Only enabled sources participate in restore.
+            // Additional flags can be appended to the status token, such as EM for an
+            // enabled machine-wide source or EO for an enabled official source.
+            // Only status tokens beginning with E participate in restore.
             foreach (var sourceLine in line.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
             {
-                if (sourceLine.Length > 2 && sourceLine[0] == 'E' && char.IsWhiteSpace(sourceLine[1]))
+                var separatorIndex = sourceLine.IndexOfAny([' ', '\t']);
+                if (separatorIndex > 0 && sourceLine[0] == 'E')
                 {
-                    sources.Add(sourceLine[2..].Trim());
+                    sources.Add(sourceLine[(separatorIndex + 1)..].Trim());
                 }
             }
 
