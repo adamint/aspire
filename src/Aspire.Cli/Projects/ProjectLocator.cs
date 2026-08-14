@@ -885,6 +885,7 @@ internal sealed class ProjectLocator(
     public async Task<AppHostProjectSearchResult> UseOrFindAppHostProjectFileAsync(FileInfo? projectFile, MultipleAppHostProjectsFoundBehavior multipleAppHostProjectsFoundBehavior, bool createSettingsFile, bool displayProgress, CancellationToken cancellationToken = default)
     {
         logger.LogDebug("Finding project file in {CurrentDirectory}", executionContext.WorkingDirectory);
+        var explicitSelectionWasPrompted = false;
 
         if (projectFile is not null)
         {
@@ -966,6 +967,7 @@ internal sealed class ProjectLocator(
                     if (multipleAppHostProjectsFoundBehavior is MultipleAppHostProjectsFoundBehavior.Prompt)
                     {
                         logger.LogDebug("Multiple AppHost project files found in directory {Directory}, prompting user to select", directory.FullName);
+                        explicitSelectionWasPrompted = true;
                         projectFile = await interactionService.PromptForSelectionAsync(
                             InteractionServiceStrings.SelectAppHostToUse,
                             appHostProjects,
@@ -1024,7 +1026,7 @@ internal sealed class ProjectLocator(
                         logger.LogDebug("Using {Language} apphost {ProjectFile}", handler.DisplayName, projectFile.FullName);
                         if (createSettingsFile)
                         {
-                            await CreateSettingsFileAsync(projectFile, preserveExistingDefault: true, cancellationToken);
+                            await CreateSettingsFileAsync(projectFile, preserveExistingDefault: !explicitSelectionWasPrompted, cancellationToken);
                         }
 
                         return new AppHostProjectSearchResult(projectFile, [projectFile]);
@@ -1204,8 +1206,11 @@ internal sealed class ProjectLocator(
     {
         var configuredSelectionOrigin = configuration[KnownConfigNames.CliAppHostSelectionOrigin];
         var isExplicitLaunchConfiguration = string.Equals(configuredSelectionOrigin, ExplicitLaunchConfigurationSelectionOrigin, StringComparison.OrdinalIgnoreCase);
-        var selectionOrigin = preserveExistingDefault ? "--apphost" : configuredSelectionOrigin;
-        var shouldPreserveExistingDefault = preserveExistingDefault || isExplicitLaunchConfiguration;
+        var hasConfiguredSelectionOrigin = !string.IsNullOrEmpty(configuredSelectionOrigin);
+        var selectionOrigin = hasConfiguredSelectionOrigin ? configuredSelectionOrigin : "--apphost";
+        var shouldPreserveExistingDefault =
+            isExplicitLaunchConfiguration ||
+            preserveExistingDefault && !hasConfiguredSelectionOrigin;
 
         var (settingsFile, appHostDirForScopedConfig) = ResolveWorkspaceConfigTarget(projectFile);
 
