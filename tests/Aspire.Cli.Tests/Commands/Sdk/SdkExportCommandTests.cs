@@ -71,6 +71,7 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
             project.Integrations,
             integration => integration.Name == "Contoso.Aspire.Widgets");
         Assert.Equal("[2.0.0]", package.Version);
+        Assert.True(package.DisableLocalProjectSubstitution);
 
         var generator = Assert.Single(
             project.Integrations,

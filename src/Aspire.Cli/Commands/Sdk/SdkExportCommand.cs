@@ -236,7 +236,10 @@ internal sealed class SdkExportCommand : BaseCommand
     }
 
     private static IntegrationReference CreateExactPackageReference(string packageName, string packageVersion)
-        => IntegrationReference.FromPackage(packageName, $"[{packageVersion}]");
+        => IntegrationReference.FromPackage(
+            packageName,
+            $"[{packageVersion}]",
+            disableLocalProjectSubstitution: true);
 
     private static bool TryParsePackage(
         string argument,

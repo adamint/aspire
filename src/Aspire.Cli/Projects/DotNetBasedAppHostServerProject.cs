@@ -181,10 +181,8 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
                         new XElement("IsAspireProjectResource", "false")));
                 }
             }
-            // An exact range is an explicit request to restore that package, used by sdk export so
-            // the document cannot be labelled with a package version while describing checkout code.
             else if (integration.Name.StartsWith("Aspire.Hosting", StringComparison.OrdinalIgnoreCase) &&
-                     !IsExactVersionRange(integration.Version))
+                     !integration.DisableLocalProjectSubstitution)
             {
                 var projectPath = Path.Combine(_repoRoot, "src", integration.Name, $"{integration.Name}.csproj");
                 if (File.Exists(projectPath) && addedProjects.Add(integration.Name))
@@ -260,12 +258,6 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
 
         return doc;
     }
-
-    private static bool IsExactVersionRange(string? version)
-        => version is { Length: > 2 } &&
-           version[0] == '[' &&
-           version[^1] == ']' &&
-           !version.Contains(',');
 
     /// <summary>
     /// Scaffolds the project files.
