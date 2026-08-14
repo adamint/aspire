@@ -417,7 +417,7 @@ existing project
 Run the server as a detached background process:
 
 ```bash
-'/Applications/Visual Studio Code - Insiders.app/Contents/Resources/app/bin/code' serve-web \
+nohup '/Applications/Visual Studio Code - Insiders.app/Contents/Resources/app/bin/code' serve-web \
   --host 127.0.0.1 \
   --port 8765 \
   --without-connection-token \
@@ -425,7 +425,7 @@ Run the server as a detached background process:
   --disable-telemetry \
   --server-data-dir /Users/adamratzman/.copilot/session-state/75ac937a-798f-4895-b1b5-ee4948b12b56/files/issue19283-playwright/server-data \
   --default-folder /Users/adamratzman/.copilot/session-state/75ac937a-798f-4895-b1b5-ee4948b12b56/files/issue19283-playwright/workspace \
-  > /Users/adamratzman/.copilot/session-state/75ac937a-798f-4895-b1b5-ee4948b12b56/files/issue19283-playwright/vscode-serve-web.log 2>&1
+  > /Users/adamratzman/.copilot/session-state/75ac937a-798f-4895-b1b5-ee4948b12b56/files/issue19283-playwright/vscode-serve-web.log 2>&1 &
 ```
 
 Verify:
