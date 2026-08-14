@@ -36,6 +36,7 @@ internal sealed class NewCommand : BaseCommand
     private readonly AgentInitCommand _agentInitCommand;
     private readonly ICliHostEnvironment _hostEnvironment;
     private readonly IConfiguration _configuration;
+    private readonly IConfigurationService _configurationService;
 
     internal static readonly Option<string?> s_nameOption = new("--name", "-n")
     {
@@ -75,6 +76,7 @@ internal sealed class NewCommand : BaseCommand
         AgentInitCommand agentInitCommand,
         ICliHostEnvironment hostEnvironment,
         IConfiguration configuration,
+        IConfigurationService configurationService,
         CommonCommandServices services)
         : base("new", NewCommandStrings.Description, services)
     {
@@ -85,6 +87,7 @@ internal sealed class NewCommand : BaseCommand
         _agentInitCommand = agentInitCommand;
         _hostEnvironment = hostEnvironment;
         _configuration = configuration;
+        _configurationService = configurationService;
 
         Options.Add(s_nameOption);
         Options.Add(s_outputOption);
@@ -475,7 +478,8 @@ internal sealed class NewCommand : BaseCommand
     {
         using var activity = Telemetry.StartDiagnosticActivity(this.Name);
 
-        var source = GetEffectiveSource(parseResult, _configuration);
+        var sourceResolution = await ResolveSourceAsync(parseResult, cancellationToken).ConfigureAwait(false);
+        var source = sourceResolution?.Value;
         if (!string.IsNullOrWhiteSpace(source) && PackageSourceOverrideMappings.HasCredentialMaterial(source))
         {
             InteractionService.DisplayError(NewCommandStrings.SourceWithCredentialsCannotBePersisted);
@@ -483,7 +487,7 @@ internal sealed class NewCommand : BaseCommand
         }
         if (!string.IsNullOrWhiteSpace(source))
         {
-            source = PackageSourceOverrideMappings.ResolveForWorkingDirectory(source, ExecutionContext.WorkingDirectory);
+            source = PackageSourceOverrideMappings.ResolveForWorkingDirectory(source, sourceResolution!.BaseDirectory);
             if (PackageSourceOverrideMappings.GetMissingLocalDirectory(source) is { } missingDirectory)
             {
                 InteractionService.DisplayError(string.Format(
@@ -584,6 +588,31 @@ internal sealed class NewCommand : BaseCommand
         }
 
         return CommandResult.FromExitCode(agentInitResult.ExitCode);
+    }
+
+    private async Task<ConfigurationValueWithOrigin?> ResolveSourceAsync(ParseResult parseResult, CancellationToken cancellationToken)
+    {
+        var explicitSource = parseResult.GetValue(s_sourceOption);
+        if (!string.IsNullOrWhiteSpace(explicitSource))
+        {
+            return new ConfigurationValueWithOrigin(explicitSource, ExecutionContext.WorkingDirectory);
+        }
+
+        var configuredSource = await _configurationService.GetConfigurationFromDirectoryWithOriginAsync(
+            AspireConfigFile.NuGetSourceKey,
+            ExecutionContext.WorkingDirectory,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (configuredSource is not null)
+        {
+            return configuredSource;
+        }
+
+        // In-memory test providers and other non-file-backed IConfiguration sources do not
+        // carry file provenance. Keep the historical cwd-relative behavior for that fallback.
+        var fallbackSource = _configuration[AspireConfigFile.NuGetSourceKey];
+        return string.IsNullOrWhiteSpace(fallbackSource)
+            ? null
+            : new ConfigurationValueWithOrigin(fallbackSource, ExecutionContext.WorkingDirectory);
     }
 
     private static bool ShouldResolveCliTemplateVersion(ITemplate template)

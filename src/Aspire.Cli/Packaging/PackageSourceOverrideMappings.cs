@@ -8,12 +8,13 @@ namespace Aspire.Cli.Packaging;
 internal static class PackageSourceOverrideMappings
 {
     /// <summary>
-    /// Resolves a command-line package source against the invocation directory, returning relative local sources as absolute paths so persisted mappings remain valid elsewhere.
+    /// Resolves a package source against the supplied base directory, returning relative local
+    /// sources as absolute paths so persisted mappings remain valid elsewhere.
     /// </summary>
-    public static string ResolveForWorkingDirectory(string source, DirectoryInfo workingDirectory)
+    public static string ResolveForWorkingDirectory(string source, DirectoryInfo baseDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(source);
-        ArgumentNullException.ThrowIfNull(workingDirectory);
+        ArgumentNullException.ThrowIfNull(baseDirectory);
 
         var sourceKind = ClassifySource(source, out _);
 
@@ -25,7 +26,7 @@ internal static class PackageSourceOverrideMappings
             return source;
         }
 
-        return Path.GetFullPath(source, workingDirectory.FullName);
+        return Path.GetFullPath(source, baseDirectory.FullName);
     }
 
     public static string? GetMissingLocalDirectory(string source)

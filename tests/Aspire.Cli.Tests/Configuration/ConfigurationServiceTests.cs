@@ -36,6 +36,11 @@ public class ConfigurationServiceTests(ITestOutputHelper outputHelper)
         return (service, settingsFilePath);
     }
 
+    private static string GetGlobalSettingsFilePath(TemporaryWorkspace workspace)
+    {
+        return Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire-global", AspireConfigFile.FileName);
+    }
+
     [Fact]
     public async Task SetConfigurationAsync_WorksWithJsonComments()
     {
@@ -280,6 +285,76 @@ public class ConfigurationServiceTests(ITestOutputHelper outputHelper)
         var value = await service.GetConfigurationFromDirectoryAsync("channel", srcDirectory);
 
         Assert.Equal("daily", value);
+    }
+
+    [Fact]
+    public async Task GetConfigurationFromDirectoryWithOriginAsync_FindsNearestParentModernConfigAndReturnsConfigDirectory()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        var (service, settingsFilePath) = CreateService(
+            workspace,
+            """
+            {
+              "nugetSource": "feed"
+            }
+            """);
+
+        var srcDirectory = workspace.WorkspaceRoot.CreateSubdirectory("src");
+        var nestedDirectory = srcDirectory.CreateSubdirectory("nested");
+
+        var result = await service.GetConfigurationFromDirectoryWithOriginAsync(AspireConfigFile.NuGetSourceKey, nestedDirectory);
+
+        Assert.NotNull(result);
+        Assert.Equal("feed", result.Value);
+        Assert.Equal(new FileInfo(settingsFilePath).Directory!.FullName, result.BaseDirectory.FullName);
+    }
+
+    [Fact]
+    public async Task GetConfigurationFromDirectoryWithOriginAsync_FallsBackToGlobalConfigAndReturnsGlobalConfigDirectory()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(GetGlobalSettingsFilePath(workspace))!);
+        await File.WriteAllTextAsync(
+            GetGlobalSettingsFilePath(workspace),
+            """
+            {
+              "nugetSource": "global-feed"
+            }
+            """);
+
+        var (service, _) = CreateService(workspace);
+        var srcDirectory = workspace.WorkspaceRoot.CreateSubdirectory("src");
+
+        var result = await service.GetConfigurationFromDirectoryWithOriginAsync(AspireConfigFile.NuGetSourceKey, srcDirectory);
+
+        Assert.NotNull(result);
+        Assert.Equal("global-feed", result.Value);
+        Assert.Equal(workspace.WorkspaceRoot.FullName, result.BaseDirectory.Parent!.FullName);
+    }
+
+    [Fact]
+    public async Task GetConfigurationFromDirectoryWithOriginAsync_LegacyConfigReturnsWorkspaceRoot()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire", "settings.json"),
+            """
+            {
+              "nugetSource": "legacy-feed"
+            }
+            """);
+
+        var (service, _) = CreateService(workspace);
+        var srcDirectory = workspace.WorkspaceRoot.CreateSubdirectory("src");
+
+        var result = await service.GetConfigurationFromDirectoryWithOriginAsync(AspireConfigFile.NuGetSourceKey, srcDirectory);
+
+        Assert.NotNull(result);
+        Assert.Equal("legacy-feed", result.Value);
+        Assert.Equal(workspace.WorkspaceRoot.FullName, result.BaseDirectory.FullName);
     }
 
     [Fact]

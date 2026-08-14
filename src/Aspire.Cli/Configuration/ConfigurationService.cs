@@ -363,7 +363,14 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
         return Task.FromResult(configuration[configKey]);
     }
 
-    public Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
+    public async Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
+    {
+        var result = await GetConfigurationFromDirectoryWithOriginAsync(key, startDirectory, continueSearchWhenKeyMissing, cancellationToken).ConfigureAwait(false);
+
+        return result?.Value;
+    }
+
+    public Task<ConfigurationValueWithOrigin?> GetConfigurationFromDirectoryWithOriginAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(startDirectory);
 
@@ -380,9 +387,10 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
         for (var searchDirectory = startDirectory; searchDirectory is not null; searchDirectory = searchDirectory.Parent)
         {
             var configFilePath = Path.Combine(searchDirectory.FullName, AspireConfigFile.FileName);
-            if (TryReadConfigurationValue(configFilePath, configKey, out var configFileValue))
+            var configFile = new FileInfo(configFilePath);
+            if (TryReadConfigurationValueWithOrigin(configFilePath, configKey, GetBaseDirectoryForSettingsFile(configFile), out var configFileValue))
             {
-                return Task.FromResult<string?>(configFileValue);
+                return Task.FromResult<ConfigurationValueWithOrigin?>(configFileValue);
             }
             else if (File.Exists(configFilePath) && !continueSearchWhenKeyMissing)
             {
@@ -390,9 +398,10 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
             }
 
             var legacySettingsPath = ConfigurationHelper.BuildPathToSettingsJsonFile(searchDirectory.FullName);
-            if (TryReadConfigurationValue(legacySettingsPath, configKey, out var legacySettingsValue))
+            var legacySettingsFile = new FileInfo(legacySettingsPath);
+            if (TryReadConfigurationValueWithOrigin(legacySettingsPath, configKey, GetBaseDirectoryForSettingsFile(legacySettingsFile), out var legacySettingsValue))
             {
-                return Task.FromResult<string?>(legacySettingsValue);
+                return Task.FromResult<ConfigurationValueWithOrigin?>(legacySettingsValue);
             }
             else if (File.Exists(legacySettingsPath) && !continueSearchWhenKeyMissing)
             {
@@ -414,14 +423,21 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
             var globalValue = globalConfig[configKey];
             if (!string.IsNullOrWhiteSpace(globalValue))
             {
-                return Task.FromResult<string?>(globalValue);
+                return Task.FromResult<ConfigurationValueWithOrigin?>(new ConfigurationValueWithOrigin(globalValue, GetBaseDirectoryForSettingsFile(globalSettingsFile)));
             }
         }
 
-        return Task.FromResult<string?>(null);
+        return Task.FromResult<ConfigurationValueWithOrigin?>(null);
     }
 
-    private static bool TryReadConfigurationValue(string settingsFilePath, string configKey, [NotNullWhen(true)] out string? value)
+    private DirectoryInfo GetBaseDirectoryForSettingsFile(FileInfo settingsFile)
+    {
+        return ConfigurationHelper.GetLegacySettingsRootDirectory(settingsFile)
+            ?? settingsFile.Directory
+            ?? executionContext.WorkingDirectory;
+    }
+
+    private static bool TryReadConfigurationValueWithOrigin(string settingsFilePath, string configKey, DirectoryInfo baseDirectory, [NotNullWhen(true)] out ConfigurationValueWithOrigin? value)
     {
         value = null;
 
@@ -437,7 +453,7 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
             return false;
         }
 
-        value = candidateValue;
+        value = new ConfigurationValueWithOrigin(candidateValue, baseDirectory);
         return true;
     }
 

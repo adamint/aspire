@@ -725,6 +725,13 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal([PackageMapping.AllPackages], GetPackagePatternsForSource(doc, PackageSources.NuGetOrg));
     }
 
+    private static string CreateLocalTemplateFeed(string feedPath)
+    {
+        Directory.CreateDirectory(feedPath);
+        File.WriteAllText(Path.Combine(feedPath, "Aspire.ProjectTemplates.9.2.0.nupkg"), string.Empty);
+        return feedPath;
+    }
+
     private static string[] GetPackagePatternsForSource(XDocument doc, string source)
     {
         var packageSourceMapping = doc.Root!.Element("packageSourceMapping");
@@ -1197,7 +1204,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             : sourceOverride;
         if (isRelative)
         {
-            Directory.CreateDirectory(expectedSource);
+            CreateLocalTemplateFeed(expectedSource);
         }
 
         string? discoveryAspireSource = null;
@@ -1253,8 +1260,16 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
         Assert.Equal(CliExitCodes.Success, exitCode);
-        Assert.Equal(expectedSource, discoveryAspireSource);
-        Assert.Equal(expectedSource, discoveryFallbackSource);
+        if (isRelative)
+        {
+            Assert.Null(discoveryAspireSource);
+            Assert.Null(discoveryFallbackSource);
+        }
+        else
+        {
+            Assert.Equal(expectedSource, discoveryAspireSource);
+            Assert.Equal(expectedSource, discoveryFallbackSource);
+        }
         AssertSourceOverrideNuGetConfig(Path.Combine(workspace.WorkspaceRoot.FullName, "output"), expectedSource);
     }
 
@@ -1321,6 +1336,39 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal(configuredSource, discoveryAspireSource);
         Assert.Equal(configuredSource, discoveryFallbackSource);
         AssertSourceOverrideNuGetConfig(Path.Combine(workspace.WorkspaceRoot.FullName, "output"), configuredSource);
+    }
+
+    [Fact]
+    public async Task NewCommandWithRelativeConfiguredSourceResolvesAgainstConfigDirectory()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        var workspaceConfigPath = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
+        await File.WriteAllTextAsync(
+            workspaceConfigPath,
+            """
+            {
+              "nugetSource": "feed"
+            }
+            """);
+
+        var expectedSource = Path.Combine(workspace.WorkspaceRoot.FullName, "feed");
+        CreateLocalTemplateFeed(expectedSource);
+
+        var nestedWorkingDirectory = workspace.CreateDirectory("nested");
+        var services = CreateServiceCollection(workspace, options =>
+        {
+            options.WorkingDirectory = nestedWorkingDirectory;
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var command = provider.GetRequiredService<NewCommand>();
+        var result = command.Parse("new aspire-empty --name TestApp --output ./output --language csharp --localhost-tld false --suppress-agent-init");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        AssertSourceOverrideNuGetConfig(Path.Combine(nestedWorkingDirectory.FullName, "output"), expectedSource);
     }
 
     [Fact]
@@ -1421,8 +1469,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
     public async Task NewCommandWithEmptyTemplateAndSourceOverridePersistsSourceForLaterRestore(string language, string? featureFlag, string scaffoldFileName)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var sourceOverride = Path.Combine(workspace.WorkspaceRoot.FullName, "source-feed");
-        Directory.CreateDirectory(sourceOverride);
+        var sourceOverride = CreateLocalTemplateFeed(Path.Combine(workspace.WorkspaceRoot.FullName, "source-feed"));
         string? capturedPackageSourceOverride = null;
         TestInteractionService? interactionService = null;
 
@@ -1468,8 +1515,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
     public async Task NewCommandWithCSharpEmptyTemplateAndSourceOverridePersistsSourceForLaterRestore()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var sourceOverride = Path.Combine(workspace.WorkspaceRoot.FullName, "source-feed");
-        Directory.CreateDirectory(sourceOverride);
+        var sourceOverride = CreateLocalTemplateFeed(Path.Combine(workspace.WorkspaceRoot.FullName, "source-feed"));
 
         var services = CreateServiceCollection(workspace);
 
@@ -2196,8 +2242,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
     public async Task NewCommandWithTypeScriptStarterAndSourceOverridePersistsSourceAndPlumbsOverride()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var sourceOverride = Path.Combine(workspace.WorkspaceRoot.FullName, "source-feed");
-        Directory.CreateDirectory(sourceOverride);
+        var sourceOverride = CreateLocalTemplateFeed(Path.Combine(workspace.WorkspaceRoot.FullName, "source-feed"));
         TestInteractionService? interactionService = null;
         var services = CreateServiceCollection(workspace, options =>
         {
@@ -2303,8 +2348,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         // restore would just add noise behind a more prominent error. Pin that the starter path
         // mirrors the empty-template path here.
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var sourceOverride = Path.Combine(workspace.WorkspaceRoot.FullName, "source-feed");
-        Directory.CreateDirectory(sourceOverride);
+        var sourceOverride = CreateLocalTemplateFeed(Path.Combine(workspace.WorkspaceRoot.FullName, "source-feed"));
 
         TestInteractionService? interactionService = null;
         var services = CreateServiceCollection(workspace, options =>

@@ -29,5 +29,11 @@ internal interface IConfigurationService
     /// during the walk cannot be parsed as JSON, matching the behavior of startup-time settings load.
     /// </remarks>
     Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads a configuration value scoped to a specific directory and returns the value together
+    /// with the directory that should be treated as the configuration root for relative paths.
+    /// </summary>
+    Task<ConfigurationValueWithOrigin?> GetConfigurationFromDirectoryWithOriginAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default);
     string GetSettingsFilePath(bool isGlobal);
 }
