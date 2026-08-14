@@ -160,7 +160,9 @@ internal sealed class AddCommand : BaseCommand
                 explicitSource,
                 effectiveAppHostProjectFile.Directory!,
                 cancellationToken);
-            if (IntegrationPackageSearchService.GetPackageSourceValidationError(source) is { } sourceValidationError)
+            if (IntegrationPackageSearchService.GetPackageSourceValidationError(
+                source,
+                isExplicitSource: !string.IsNullOrWhiteSpace(explicitSource)) is { } sourceValidationError)
             {
                 return AddCommandFailure(CliExitCodes.InvalidCommand, sourceValidationError);
             }

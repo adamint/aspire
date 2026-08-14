@@ -2360,6 +2360,98 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
         Assert.Contains(expectedError, interactionService.DisplayedErrors);
     }
 
+    [Theory]
+    [MemberData(nameof(InvalidConfiguredHttpSources))]
+    public async Task AddCommandRejectsInvalidExplicitSourceBeforeDiscovery(string explicitSource, string expectedError)
+    {
+        var discoveryCalled = false;
+        var installationCalled = false;
+        var interactionService = new TestInteractionService();
+
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostFile = CreateAppHostProject(workspace.WorkspaceRoot, "apphost.ts");
+        var cache = new FakeNuGetPackageCache
+        {
+            GetIntegrationPackagesAsyncCallback = (_, _, _, _) =>
+            {
+                discoveryCalled = true;
+                return Task.FromResult<IEnumerable<NuGetPackage>>([]);
+            }
+        };
+        var projectFactory = new TestTypeScriptStarterProjectFactory((_, _, _) => Task.FromResult(true));
+        projectFactory.Project.AddPackageAsyncCallback = (_, _) =>
+        {
+            installationCalled = true;
+            return Task.FromResult(true);
+        };
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.DisabledFeatures = [KnownFeatures.UpdateNotificationsEnabled];
+            options.InteractionServiceFactory = _ => interactionService;
+            options.PackagingServiceFactory = _ => new TestPackagingService
+            {
+                GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>(
+                    [PackageChannel.CreateImplicitChannel(cache, new TestFeatures(), NullLogger.Instance)])
+            };
+        });
+        services.AddSingleton<IAppHostProjectFactory>(projectFactory);
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<AddCommand>();
+        var result = command.Parse($"add redis --apphost \"{appHostFile.FullName}\" --source \"{explicitSource}\"");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
+        Assert.False(discoveryCalled);
+        Assert.False(installationCalled);
+        Assert.Contains(expectedError, interactionService.DisplayedErrors);
+    }
+
+    [Fact]
+    public async Task AddCommandRejectsConfiguredRemoteFileSourceBeforeDiscovery()
+    {
+        var expectedError = AddCommandStrings.ConfiguredRemoteSourceNotSupported;
+        var discoveryCalled = false;
+        var interactionService = new TestInteractionService();
+
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostFile = CreateAppHostProject(workspace.WorkspaceRoot, "apphost.ts");
+        WriteAspireConfig(workspace.WorkspaceRoot, "file://example.test/share");
+
+        var cache = new FakeNuGetPackageCache
+        {
+            GetIntegrationPackagesAsyncCallback = (_, _, _, _) =>
+            {
+                discoveryCalled = true;
+                return Task.FromResult<IEnumerable<NuGetPackage>>([]);
+            }
+        };
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.DisabledFeatures = [KnownFeatures.UpdateNotificationsEnabled];
+            options.InteractionServiceFactory = _ => interactionService;
+            options.PackagingServiceFactory = _ => new TestPackagingService
+            {
+                GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>(
+                    [PackageChannel.CreateImplicitChannel(cache, new TestFeatures(), NullLogger.Instance)])
+            };
+        });
+        services.AddSingleton<IAppHostProjectFactory>(new TestTypeScriptStarterProjectFactory((_, _, _) => Task.FromResult(true)));
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<AddCommand>();
+        var result = command.Parse($"add redis --apphost \"{appHostFile.FullName}\"");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
+        Assert.False(discoveryCalled);
+        Assert.Equal([expectedError], interactionService.DisplayedErrors);
+    }
+
     [Fact]
     public async Task AddCommandRejectsMissingConfiguredLocalSourceBeforeDiscovery()
     {
@@ -2448,6 +2540,53 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
         Assert.False(discoveryCalled);
         Assert.Empty(rawJson);
         Assert.Contains(expectedError, interactionService.DisplayedErrors);
+    }
+
+    [Fact]
+    public async Task IntegrationListCommandRejectsConfiguredRemoteFileSourceBeforeDiscovery()
+    {
+        var expectedError = AddCommandStrings.ConfiguredRemoteSourceNotSupported;
+        var discoveryCalled = false;
+        var rawJson = string.Empty;
+        var interactionService = new TestInteractionService
+        {
+            DisplayRawTextCallback = text => rawJson = text
+        };
+
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostFile = CreateAppHostProject(workspace.WorkspaceRoot, "apphost.ts");
+        WriteAspireConfig(workspace.WorkspaceRoot, "file://example.test/share");
+
+        var cache = new FakeNuGetPackageCache
+        {
+            GetIntegrationPackagesAsyncCallback = (_, _, _, _) =>
+            {
+                discoveryCalled = true;
+                return Task.FromResult<IEnumerable<NuGetPackage>>([]);
+            }
+        };
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.InteractionServiceFactory = _ => interactionService;
+            options.PackagingServiceFactory = _ => new TestPackagingService
+            {
+                GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>(
+                    [PackageChannel.CreateImplicitChannel(cache, new TestFeatures(), NullLogger.Instance)])
+            };
+        });
+        services.AddSingleton<IAppHostProjectFactory>(new TestTypeScriptStarterProjectFactory((_, _, _) => Task.FromResult(true)));
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse($"integration list --apphost \"{appHostFile.FullName}\" --format json");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
+        Assert.False(discoveryCalled);
+        Assert.Empty(rawJson);
+        Assert.Equal([expectedError], interactionService.DisplayedErrors);
     }
 
     [Fact]

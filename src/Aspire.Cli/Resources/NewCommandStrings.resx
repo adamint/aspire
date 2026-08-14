@@ -121,6 +121,9 @@
   <data name="SourceDirectoryNotFound" xml:space="preserve">
     <value>The local NuGet source directory '{0}' does not exist.</value>
   </data>
+  <data name="ConfiguredRemoteSourceNotSupported" xml:space="preserve">
+    <value>Remote file shares are not supported in persistent NuGet source configuration. Use an HTTP(S) feed or pass the remote source explicitly with --source.</value>
+  </data>
   <data name="SourceWithCredentialsCannotBePersisted" xml:space="preserve">
     <value>The NuGet source includes credentials, a query string, or a fragment and cannot be written to the project's NuGet.config. Configure credentials with NuGet credential providers or user-level NuGet configuration, then use the feed URL without embedded secrets.</value>
   </data>

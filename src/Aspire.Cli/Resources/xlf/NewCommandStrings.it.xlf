@@ -12,6 +12,11 @@
         <target state="translated">Canale da usare per i modelli (stabile, temporaneo, giornaliero)</target>
         <note />
       </trans-unit>
+      <trans-unit id="ConfiguredRemoteSourceNotSupported">
+        <source>Remote file shares are not supported in persistent NuGet source configuration. Use an HTTP(S) feed or pass the remote source explicitly with --source.</source>
+        <target state="new">Remote file shares are not supported in persistent NuGet source configuration. Use an HTTP(S) feed or pass the remote source explicitly with --source.</target>
+        <note />
+      </trans-unit>
       <trans-unit id="CreateProjectDirectlyInSelectedFolderChoice">
         <source>Directly in the selected folder</source>
         <target state="new">Directly in the selected folder</target>

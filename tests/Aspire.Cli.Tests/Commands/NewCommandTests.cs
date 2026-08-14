@@ -1368,7 +1368,9 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
         Assert.Equal(CliExitCodes.Success, exitCode);
-        AssertSourceOverrideNuGetConfig(Path.Combine(nestedWorkingDirectory.FullName, "output"), expectedSource);
+        var outputPath = Path.Combine(nestedWorkingDirectory.FullName, "output");
+        AssertSourceOverrideNuGetConfig(outputPath, expectedSource);
+        Assert.Equal(expectedSource, AspireConfigFile.Load(outputPath)?.NuGetSource);
     }
 
     [Fact]
@@ -1436,7 +1438,9 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal(CliExitCodes.Success, exitCode);
         Assert.Equal(explicitSource, discoveryAspireSource);
         Assert.Equal(explicitSource, discoveryFallbackSource);
-        AssertSourceOverrideNuGetConfig(Path.Combine(workspace.WorkspaceRoot.FullName, "output"), explicitSource);
+        var outputPath = Path.Combine(workspace.WorkspaceRoot.FullName, "output");
+        AssertSourceOverrideNuGetConfig(outputPath, explicitSource);
+        Assert.Null(AspireConfigFile.Load(outputPath)?.NuGetSource);
     }
 
     [Fact]
@@ -1564,6 +1568,59 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         Assert.False(Directory.Exists(Path.Combine(workspace.WorkspaceRoot.FullName, "output")));
         Assert.NotNull(interactionService);
         Assert.Contains(NewCommandStrings.SourceWithCredentialsCannotBePersisted, interactionService!.DisplayedErrors);
+    }
+
+    [Fact]
+    public async Task NewCommandWithConfiguredRemoteFileSourceFailsBeforeCreatingProject()
+    {
+        var expectedError = NewCommandStrings.ConfiguredRemoteSourceNotSupported;
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var templateDiscoveryInvoked = false;
+        var scaffoldingInvoked = false;
+        var interactionService = new TestInteractionService();
+
+        await File.WriteAllTextAsync(
+            Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName),
+            """
+            {
+              "nugetSource": "file://example.test/share"
+            }
+            """);
+
+        var cache = new FakeNuGetPackageCache
+        {
+            GetTemplatePackagesAsyncCallback = (_, _, _, _) =>
+            {
+                templateDiscoveryInvoked = true;
+                return Task.FromResult<IEnumerable<NuGetPackage>>([]);
+            }
+        };
+        var services = CreateServiceCollection(workspace, options =>
+        {
+            options.InteractionServiceFactory = _ => interactionService;
+            options.NuGetPackageCacheFactory = _ => cache;
+        });
+
+        services.AddSingleton<IScaffoldingService>(new TestScaffoldingService
+        {
+            ScaffoldAsyncCallback = (_, _) =>
+            {
+                scaffoldingInvoked = true;
+                return Task.FromResult(true);
+            }
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var command = provider.GetRequiredService<NewCommand>();
+        var result = command.Parse("new aspire-empty --name TestApp --output ./output --language typescript --localhost-tld false --suppress-agent-init");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
+        Assert.False(templateDiscoveryInvoked);
+        Assert.False(scaffoldingInvoked);
+        Assert.False(Directory.Exists(Path.Combine(workspace.WorkspaceRoot.FullName, "output")));
+        Assert.Equal([expectedError], interactionService.DisplayedErrors);
     }
 
     [Fact]

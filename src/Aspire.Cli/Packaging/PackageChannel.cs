@@ -260,8 +260,7 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
     {
         var source = PathNormalizer.NormalizePathForStorage(packageSource.FullName);
 
-        return packageSource
-            .EnumerateFiles("*.nupkg", SearchOption.TopDirectoryOnly)
+        return EnumerateLocalPackageFiles(packageSource)
             .Select(file =>
             {
                 cancellationToken.ThrowIfCancellationRequested();

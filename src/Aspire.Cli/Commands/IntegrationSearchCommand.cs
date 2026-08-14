@@ -68,7 +68,7 @@ internal abstract class IntegrationDiscoveryCommand : BaseCommand
                 explicitSource: null,
                 workingDirectory,
                 cancellationToken);
-            if (IntegrationPackageSearchService.GetPackageSourceValidationError(packageSource) is { } sourceValidationError)
+            if (IntegrationPackageSearchService.GetPackageSourceValidationError(packageSource, isExplicitSource: false) is { } sourceValidationError)
             {
                 InteractionService.DisplayError(sourceValidationError);
                 return CommandResult.Failure(CliExitCodes.InvalidCommand);

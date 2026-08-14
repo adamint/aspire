@@ -478,11 +478,19 @@ internal sealed class NewCommand : BaseCommand
     {
         using var activity = Telemetry.StartDiagnosticActivity(this.Name);
 
+        var sourceIsExplicit = !string.IsNullOrWhiteSpace(parseResult.GetValue(s_sourceOption));
         var sourceResolution = await ResolveSourceAsync(parseResult, cancellationToken).ConfigureAwait(false);
         var source = sourceResolution?.Value;
         if (!string.IsNullOrWhiteSpace(source) && PackageSourceOverrideMappings.HasCredentialMaterial(source))
         {
             InteractionService.DisplayError(NewCommandStrings.SourceWithCredentialsCannotBePersisted);
+            return CommandResult.Failure(CliExitCodes.InvalidCommand);
+        }
+        if (!sourceIsExplicit &&
+            !string.IsNullOrWhiteSpace(source) &&
+            PackageSourceOverrideMappings.IsRemoteFileSystemSource(source))
+        {
+            InteractionService.DisplayError(NewCommandStrings.ConfiguredRemoteSourceNotSupported);
             return CommandResult.Failure(CliExitCodes.InvalidCommand);
         }
         if (!string.IsNullOrWhiteSpace(source))
@@ -571,6 +579,14 @@ internal sealed class NewCommand : BaseCommand
         // extraction. Ensure the bundle is ready instead of relying on best-effort prefetching.
         if (templateResult.ExitCode == CliExitCodes.Success)
         {
+            if (!sourceIsExplicit && !string.IsNullOrWhiteSpace(source))
+            {
+                var outputPath = templateResult.OutputPath ?? ExecutionContext.WorkingDirectory.FullName;
+                var config = AspireConfigFile.LoadOrCreate(outputPath);
+                config.NuGetSource = source;
+                config.Save(outputPath);
+            }
+
             await _bundleService.EnsureExtractedAsync(cancellationToken);
         }
 

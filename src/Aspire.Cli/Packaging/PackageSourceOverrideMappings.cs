@@ -42,6 +42,24 @@ internal static class PackageSourceOverrideMappings
         return Directory.Exists(localDirectory) ? null : localDirectory;
     }
 
+    public static bool IsRemoteFileSystemSource(string source)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(source);
+
+        var trimmedSource = source.Trim();
+        if (trimmedSource.StartsWith(@"\\", StringComparison.Ordinal) ||
+            OperatingSystem.IsWindows() && trimmedSource.StartsWith("//", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return trimmedSource.StartsWith("file:", StringComparison.OrdinalIgnoreCase) &&
+            Uri.TryCreate(trimmedSource, UriKind.Absolute, out var uri) &&
+            uri.IsFile &&
+            !uri.IsLoopback &&
+            (uri.IsUnc || !string.IsNullOrEmpty(uri.Host));
+    }
+
     public static string? GetNormalizedLocalDirectory(string source)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(source);

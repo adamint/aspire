@@ -53,4 +53,22 @@ public class PackageSourceOverrideMappingsTests(ITestOutputHelper outputHelper)
 
         Assert.Equal(source, result);
     }
+
+    [Theory]
+    [InlineData("file:///local/feed", false)]
+    [InlineData("file://localhost/local/feed", false)]
+    [InlineData("file://example.test/share", true)]
+    public void IsRemoteFileSystemSource_FileUri_ReturnsExpectedResult(string source, bool expected)
+    {
+        Assert.Equal(expected, PackageSourceOverrideMappings.IsRemoteFileSystemSource(source));
+    }
+
+    [Theory]
+    [InlineData(@"C:\feed", false)]
+    [InlineData(@"\\example.test\share", true)]
+    [PlatformSpecific(TestPlatforms.Windows)]
+    public void IsRemoteFileSystemSource_WindowsPath_ReturnsExpectedResult(string source, bool expected)
+    {
+        Assert.Equal(expected, PackageSourceOverrideMappings.IsRemoteFileSystemSource(source));
+    }
 }

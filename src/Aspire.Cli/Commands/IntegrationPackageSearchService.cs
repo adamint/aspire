@@ -139,7 +139,7 @@ internal sealed class IntegrationPackageSearchService(
             : PackageSourceOverrideMappings.ResolveForWorkingDirectory(configuredSource.Value, configuredSource.BaseDirectory);
     }
 
-    public static string? GetPackageSourceValidationError(string? packageSource)
+    public static string? GetPackageSourceValidationError(string? packageSource, bool isExplicitSource)
     {
         if (string.IsNullOrWhiteSpace(packageSource))
         {
@@ -149,6 +149,11 @@ internal sealed class IntegrationPackageSearchService(
         if (PackageSourceOverrideMappings.HasCredentialMaterial(packageSource))
         {
             return AddCommandStrings.SourceWithCredentialsNotSupported;
+        }
+
+        if (!isExplicitSource && PackageSourceOverrideMappings.IsRemoteFileSystemSource(packageSource))
+        {
+            return AddCommandStrings.ConfiguredRemoteSourceNotSupported;
         }
 
         return PackageSourceOverrideMappings.GetMissingLocalDirectory(packageSource) is { } missingDirectory
