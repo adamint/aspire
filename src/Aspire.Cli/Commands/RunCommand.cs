@@ -1087,11 +1087,12 @@ internal sealed class RunCommand : BaseCommand
             // Start the probe without awaiting it so extension responsiveness never delays
             // subscription to the AppHost stream or writes to the diagnostic log file.
             var structuredLogSupportProbe = ExtensionHelper.IsExtensionHost(interactionService, out var extensionInteractionService, out var extensionBackchannel)
-                ? SupportsStructuredAppHostLogsAsync(extensionBackchannel, cancellationToken)
+                ? SupportsStructuredAppHostLogsAsync(fileLoggerProvider, extensionBackchannel, cancellationToken)
                 : Task.FromResult(false);
 
             var logEntries = backchannel.GetAppHostLogEntriesAsync(cancellationToken);
             bool? extensionSupportsStructuredLogs = null;
+            var pendingExtensionEntries = new List<BackchannelLogEntry>();
 
             await foreach (var entry in logEntries.WithCancellation(cancellationToken))
             {
@@ -1105,26 +1106,31 @@ internal sealed class RunCommand : BaseCommand
                     continue;
                 }
 
-                extensionSupportsStructuredLogs ??= await structuredLogSupportProbe.ConfigureAwait(false);
-
-                // Older AppHosts deserialize the added sequence as 0. Only numbered records have
-                // the identity needed to suppress reconnect replays safely.
-                if (extensionSupportsStructuredLogs is true && entry.SequenceNumber > 0)
+                // Keep draining the AppHost stream while the capability round trip is pending.
+                // The CLI log file is the diagnostic artifact for a wedged extension, so the
+                // extension delivery path must not apply backpressure to file capture.
+                if (extensionSupportsStructuredLogs is null && !structuredLogSupportProbe.IsCompleted)
                 {
-                    extensionInteractionService.WriteAppHostLogEntry(new ExtensionAppHostLogEntry
-                    {
-                        SequenceNumber = entry.SequenceNumber,
-                        LogLevel = entry.LogLevel.ToString(),
-                        Message = entry.Message,
-                        CategoryName = entry.CategoryName,
-                        EventId = entry.EventId.Id,
-                        Exception = entry.Exception,
-                    });
+                    pendingExtensionEntries.Add(entry);
+                    continue;
                 }
-                else
+
+                extensionSupportsStructuredLogs ??= await structuredLogSupportProbe.ConfigureAwait(false);
+                foreach (var pendingEntry in pendingExtensionEntries)
                 {
-                    // Older extensions only accept plain debug-session messages.
-                    extensionInteractionService.WriteDebugSessionMessage(entry.Message, entry.LogLevel is not LogLevel.Error and not LogLevel.Critical, "\x1b[2m");
+                    ForwardAppHostLogEntryToExtension(extensionInteractionService, extensionSupportsStructuredLogs.Value, pendingEntry);
+                }
+                pendingExtensionEntries.Clear();
+
+                ForwardAppHostLogEntryToExtension(extensionInteractionService, extensionSupportsStructuredLogs.Value, entry);
+            }
+
+            if (extensionInteractionService is not null && pendingExtensionEntries.Count > 0)
+            {
+                extensionSupportsStructuredLogs ??= await structuredLogSupportProbe.ConfigureAwait(false);
+                foreach (var pendingEntry in pendingExtensionEntries)
+                {
+                    ForwardAppHostLogEntryToExtension(extensionInteractionService, extensionSupportsStructuredLogs.Value, pendingEntry);
                 }
             }
         }
@@ -1143,15 +1149,54 @@ internal sealed class RunCommand : BaseCommand
         }
     }
 
-    private static async Task<bool> SupportsStructuredAppHostLogsAsync(IExtensionBackchannel extensionBackchannel, CancellationToken cancellationToken)
+    private static void ForwardAppHostLogEntryToExtension(
+        IExtensionInteractionService extensionInteractionService,
+        bool extensionSupportsStructuredLogs,
+        BackchannelLogEntry entry)
+    {
+        // Older AppHosts deserialize the added sequence as 0. Only numbered records have
+        // the identity needed to suppress reconnect replays safely.
+        if (extensionSupportsStructuredLogs && entry.SequenceNumber > 0)
+        {
+            extensionInteractionService.WriteAppHostLogEntry(new ExtensionAppHostLogEntry
+            {
+                SequenceNumber = entry.SequenceNumber,
+                LogLevel = entry.LogLevel.ToString(),
+                Message = entry.Message,
+                CategoryName = entry.CategoryName,
+                EventId = entry.EventId.Id,
+                Exception = entry.Exception,
+            });
+        }
+        else
+        {
+            // Older extensions only accept plain debug-session messages.
+            extensionInteractionService.WriteDebugSessionMessage(entry.Message, entry.LogLevel is not LogLevel.Error and not LogLevel.Critical, "\x1b[2m");
+        }
+    }
+
+    private static async Task<bool> SupportsStructuredAppHostLogsAsync(
+        FileLoggerProvider fileLoggerProvider,
+        IExtensionBackchannel extensionBackchannel,
+        CancellationToken cancellationToken)
     {
         try
         {
             return await extensionBackchannel.HasCapabilityAsync(KnownCapabilities.AppHostLogOutput, cancellationToken)
                 .WaitAsync(s_structuredLogSupportProbeTimeout, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            fileLoggerProvider.WriteLog(
+                DateTimeOffset.UtcNow,
+                LogLevel.Debug,
+                "Aspire.Cli",
+                "Structured AppHost log capability probe failed; using legacy debug console output.",
+                ex);
             return false;
         }
     }

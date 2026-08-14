@@ -3635,6 +3635,133 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
         }
     }
 
+    [Fact]
+    public async Task CaptureAppHostLogsAsync_DoesNotLetTheCapabilityProbeGateLogFileWrites()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var logFilePath = Path.Combine(workspace.WorkspaceRoot.FullName, "test.log");
+        var secondEntryRequested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var extensionBackchannel = new TestExtensionBackchannel
+        {
+            // The probe cannot answer until capture requests the second entry. Awaiting the probe
+            // inside the loop deadlocks that request until the probe's fallback timeout fires.
+            HasCapabilityAsyncCallback = async (capability, _) =>
+            {
+                await secondEntryRequested.Task;
+                return capability == KnownCapabilities.AppHostLogOutput;
+            }
+        };
+        using var services = new ServiceCollection()
+            .AddSingleton<IExtensionBackchannel>(extensionBackchannel)
+            .BuildServiceProvider();
+        var forwarded = new List<ExtensionAppHostLogEntry>();
+        var interactionService = new TestExtensionInteractionService(services)
+        {
+            WriteAppHostLogEntryCallback = forwarded.Add
+        };
+        var backchannel = new TestAppHostBackchannel
+        {
+            GetAppHostLogEntriesAsyncCallback = YieldEntries
+        };
+
+        using (var fileLoggerProvider = new FileLoggerProvider(logFilePath, new TestStartupErrorWriter()))
+        {
+            await RunCommand.CaptureAppHostLogsAsync(fileLoggerProvider, backchannel, interactionService, CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(30));
+        }
+
+        Assert.Equal(["First entry", "Second entry"], forwarded.Select(entry => entry.Message));
+        var logFileContents = await File.ReadAllTextAsync(logFilePath);
+        Assert.Contains("First entry", logFileContents);
+        Assert.Contains("Second entry", logFileContents);
+
+        async IAsyncEnumerable<BackchannelLogEntry> YieldEntries([EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            yield return CreateEntry(1, LogLevel.Information, "First entry");
+            secondEntryRequested.SetResult();
+            yield return CreateEntry(2, LogLevel.Information, "Second entry");
+            await Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task CaptureAppHostLogsAsync_KeepsWritingTheLogFileWhenTheCapabilityProbeNeverAnswers()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var logFilePath = Path.Combine(workspace.WorkspaceRoot.FullName, "test.log");
+        var wedgedProbe = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var extensionBackchannel = new TestExtensionBackchannel
+        {
+            HasCapabilityAsyncCallback = (_, _) => wedgedProbe.Task
+        };
+        using var services = new ServiceCollection()
+            .AddSingleton<IExtensionBackchannel>(extensionBackchannel)
+            .BuildServiceProvider();
+        var legacyMessages = new List<string>();
+        var interactionService = new TestExtensionInteractionService(services)
+        {
+            WriteDebugSessionMessageCallback = (message, _, _) => legacyMessages.Add(message)
+        };
+        var backchannel = new TestAppHostBackchannel
+        {
+            GetAppHostLogEntriesAsyncCallback = YieldEntries
+        };
+
+        using (var fileLoggerProvider = new FileLoggerProvider(logFilePath, new TestStartupErrorWriter()))
+        {
+            await RunCommand.CaptureAppHostLogsAsync(fileLoggerProvider, backchannel, interactionService, CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(30));
+        }
+
+        Assert.Equal(["First entry", "Second entry", "Third entry"], legacyMessages);
+        var logFileContents = await File.ReadAllTextAsync(logFilePath);
+        Assert.Contains("First entry", logFileContents);
+        Assert.Contains("Second entry", logFileContents);
+        Assert.Contains("Third entry", logFileContents);
+
+        static async IAsyncEnumerable<BackchannelLogEntry> YieldEntries([EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            yield return CreateEntry(1, LogLevel.Information, "First entry");
+            yield return CreateEntry(2, LogLevel.Information, "Second entry");
+            yield return CreateEntry(3, LogLevel.Information, "Third entry");
+            await Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task CaptureAppHostLogsAsync_LogsCapabilityProbeFailures()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var logFilePath = Path.Combine(workspace.WorkspaceRoot.FullName, "test.log");
+        var extensionBackchannel = new TestExtensionBackchannel
+        {
+            HasCapabilityAsyncCallback = (_, _) => Task.FromException<bool>(new InvalidOperationException("Probe failed"))
+        };
+        using var services = new ServiceCollection()
+            .AddSingleton<IExtensionBackchannel>(extensionBackchannel)
+            .BuildServiceProvider();
+        var interactionService = new TestExtensionInteractionService(services);
+        var backchannel = new TestAppHostBackchannel
+        {
+            GetAppHostLogEntriesAsyncCallback = YieldEntries
+        };
+
+        using (var fileLoggerProvider = new FileLoggerProvider(logFilePath, new TestStartupErrorWriter()))
+        {
+            await RunCommand.CaptureAppHostLogsAsync(fileLoggerProvider, backchannel, interactionService, CancellationToken.None);
+        }
+
+        var logFileContents = await File.ReadAllTextAsync(logFilePath);
+        Assert.Contains("Structured AppHost log capability probe failed", logFileContents);
+        Assert.Contains("Probe failed", logFileContents);
+
+        static async IAsyncEnumerable<BackchannelLogEntry> YieldEntries([EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            yield return CreateEntry(1, LogLevel.Information, "Fallback entry");
+            await Task.CompletedTask;
+        }
+    }
+
     private static BackchannelLogEntry CreateEntry(long sequenceNumber, LogLevel level, string message, string? exception = null)
     {
         return new BackchannelLogEntry
