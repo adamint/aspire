@@ -2372,16 +2372,65 @@ internal sealed partial class DotNetAppHostProject : IAppHostProject
             StandardOutputCallback = outputCollector.AppendOutput,
             StandardErrorCallback = outputCollector.AppendError,
         };
+        var packageInstallSource = context.Source;
+        if (!context.IsSourceExplicit && packageInstallSource is not null)
+        {
+            var (exitCode, enabledSources) = await _runner.GetNuGetSourcesAsync(
+                context.AppHostFile.Directory!,
+                new ProcessInvocationOptions(),
+                cancellationToken);
+            if (exitCode == 0 && enabledSources.Any(source => SourcesMatch(source, packageInstallSource)))
+            {
+                packageInstallSource = null;
+            }
+        }
+
         var result = await _runner.AddPackageAsync(
             context.AppHostFile,
             context.PackageId,
             context.PackageVersion,
-            context.UseSourceForPackageInstall ? context.Source : null,
+            packageInstallSource,
             noRestore: false,
             options,
             cancellationToken);
 
         return result == 0;
+    }
+
+    private bool SourcesMatch(string left, string right)
+    {
+        if (string.Equals(left, right, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var pathComparer = _environment.IsWindows() || _environment.IsMacOS()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+
+        if (UrlHelper.IsHttpUrl(left) || UrlHelper.IsHttpUrl(right))
+        {
+            return Uri.TryCreate(left, UriKind.Absolute, out var leftUri) &&
+                Uri.TryCreate(right, UriKind.Absolute, out var rightUri) &&
+                Uri.Compare(
+                    leftUri,
+                    rightUri,
+                    UriComponents.SchemeAndServer | UriComponents.PathAndQuery,
+                    UriFormat.Unescaped,
+                    StringComparison.OrdinalIgnoreCase) == 0;
+        }
+
+        if (Uri.TryCreate(left, UriKind.Absolute, out var leftFileUri) && leftFileUri.IsFile)
+        {
+            left = leftFileUri.LocalPath;
+        }
+
+        if (Uri.TryCreate(right, UriKind.Absolute, out var rightFileUri) && rightFileUri.IsFile)
+        {
+            right = rightFileUri.LocalPath;
+        }
+
+        return pathComparer.Equals(Path.GetFullPath(left), Path.GetFullPath(right));
     }
 
     /// <inheritdoc />

@@ -375,8 +375,7 @@ internal sealed class AddCommand : BaseCommand
                 PackageId = selectedNuGetPackage.Package.Id,
                 PackageVersion = selectedNuGetPackage.Package.Version,
                 Source = source,
-                UseSourceForPackageInstall = source is not null &&
-                    !IsSourceAvailableFromNuGetConfig(effectiveAppHostProjectFile.Directory!, source)
+                IsSourceExplicit = explicitSource is not null
             };
 
             // Stop any running AppHost instance before adding the package.
@@ -460,56 +459,6 @@ internal sealed class AddCommand : BaseCommand
         {
             addActivity.Dispose();
         }
-    }
-
-    internal static bool IsSourceAvailableFromNuGetConfig(DirectoryInfo startDirectory, string source)
-    {
-        ArgumentNullException.ThrowIfNull(startDirectory);
-        ArgumentException.ThrowIfNullOrWhiteSpace(source);
-
-        for (var directory = startDirectory; directory is not null; directory = directory.Parent)
-        {
-            if (!NuGetConfigMerger.TryFindNuGetConfigInDirectory(directory, out var nugetConfigFile))
-            {
-                continue;
-            }
-
-            var packageSources = System.Xml.Linq.XDocument.Load(nugetConfigFile.FullName)
-                .Root?
-                .Element("packageSources");
-            if (packageSources is null)
-            {
-                continue;
-            }
-
-            var sourceAvailable = false;
-            var clearsInheritedSources = false;
-            foreach (var element in packageSources.Elements())
-            {
-                if (element.Name.LocalName == "clear")
-                {
-                    sourceAvailable = false;
-                    clearsInheritedSources = true;
-                }
-                else if (element.Name.LocalName == "add" &&
-                    string.Equals((string?)element.Attribute("value"), source, StringComparison.OrdinalIgnoreCase))
-                {
-                    sourceAvailable = true;
-                }
-            }
-
-            if (sourceAvailable)
-            {
-                return true;
-            }
-
-            if (clearsInheritedSources)
-            {
-                return false;
-            }
-        }
-
-        return false;
     }
 
     private static async Task<IEnumerable<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)>> GetAllPackageVersions(DirectoryInfo workingDirectory, IEnumerable<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)> possiblePackages, CancellationToken cancellationToken)

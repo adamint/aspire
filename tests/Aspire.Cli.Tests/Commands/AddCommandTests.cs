@@ -422,6 +422,39 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task ConfiguredSourceResolutionUsesDeclaringDirectoryForRelativeSelectingSource()
+    {
+        const string workspaceSource = "feeds/local";
+
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var invocationDirectory = workspace.CreateDirectory("src/client");
+        await File.WriteAllTextAsync(
+            Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName),
+            $$"""
+            {
+              "nugetSource": "{{workspaceSource}}"
+            }
+            """);
+        var appHostDirectory = workspace.CreateDirectory("target");
+        var appHostFile = new FileInfo(Path.Combine(appHostDirectory.FullName, "AppHost.csproj"));
+        await File.WriteAllTextAsync(appHostFile.FullName, "<Project />");
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.WorkingDirectory = invocationDirectory;
+        });
+        using var provider = services.BuildServiceProvider();
+
+        var source = await provider.GetRequiredService<IntegrationPackageSearchService>().GetConfiguredNuGetSourceAsync(
+            appHostFile,
+            appHostWasExplicitlyPassed: false,
+            workspaceSource,
+            CancellationToken.None);
+
+        Assert.Equal(Path.Combine(workspace.WorkspaceRoot.FullName, workspaceSource), source);
+    }
+
+    [Fact]
     public async Task ConfiguredSourceResolutionUsesTargetForRelativeAppHostSource()
     {
         const string appHostSource = "feeds/target";
@@ -451,31 +484,43 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task AddCommandDetectsConfiguredSourceInParentNuGetConfig()
+    public async Task ConfiguredSourceResolutionUsesTargetOriginWhenTargetAndGlobalValuesMatch()
     {
-        const string source = "https://configured.example/v3/index.json";
+        const string sourceValue = "feeds/shared";
 
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        await TemplateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(
-            source,
-            channel: null,
-            workspace.WorkspaceRoot.FullName,
-            CancellationToken.None);
-        var appHostDirectory = workspace.CreateDirectory("src/AppHost");
-
-        Assert.True(AddCommand.IsSourceAvailableFromNuGetConfig(appHostDirectory, source));
-
+        using var targetWorkspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostFile = new FileInfo(Path.Combine(targetWorkspace.WorkspaceRoot.FullName, "AppHost.csproj"));
+        await File.WriteAllTextAsync(appHostFile.FullName, "<Project />");
         await File.WriteAllTextAsync(
-            Path.Combine(appHostDirectory.FullName, "nuget.config"),
-            """
-            <configuration>
-              <packageSources>
-                <clear />
-              </packageSources>
-            </configuration>
+            Path.Combine(targetWorkspace.WorkspaceRoot.FullName, AspireConfigFile.FileName),
+            $$"""
+            {
+              "nugetSource": "{{sourceValue}}"
+            }
             """);
 
-        Assert.False(AddCommand.IsSourceAvailableFromNuGetConfig(appHostDirectory, source));
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+
+        var configurationService = provider.GetRequiredService<IConfigurationService>();
+        var globalSettingsPath = configurationService.GetSettingsFilePath(isGlobal: true);
+        Directory.CreateDirectory(Path.GetDirectoryName(globalSettingsPath)!);
+        await File.WriteAllTextAsync(
+            globalSettingsPath,
+            $$"""
+            {
+              "nugetSource": "{{sourceValue}}"
+            }
+            """);
+
+        var source = await provider.GetRequiredService<IntegrationPackageSearchService>().GetConfiguredNuGetSourceAsync(
+            appHostFile,
+            appHostWasExplicitlyPassed: true,
+            sourceValue,
+            CancellationToken.None);
+
+        Assert.Equal(Path.Combine(targetWorkspace.WorkspaceRoot.FullName, sourceValue), source);
     }
 
     [Theory]
@@ -2277,9 +2322,9 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
     [Theory]
     [InlineData(null, "https://configured.example/v3/index.json", true, "https://configured.example/v3/index.json", null)]
     [InlineData(null, "https://configured.example/v3/index.json", false, "https://configured.example/v3/index.json", "https://configured.example/v3/index.json")]
-    [InlineData("https://explicit.example/v3/index.json", "https://configured.example/v3/index.json", true, "https://explicit.example/v3/index.json", null)]
+    [InlineData("https://explicit.example/v3/index.json", "https://configured.example/v3/index.json", true, "https://explicit.example/v3/index.json", "https://explicit.example/v3/index.json")]
     [InlineData("https://explicit.example/v3/index.json", "https://configured.example/v3/index.json", false, "https://explicit.example/v3/index.json", "https://explicit.example/v3/index.json")]
-    [InlineData("https://configured.example/v3/index.json", "https://configured.example/v3/index.json", true, "https://configured.example/v3/index.json", null)]
+    [InlineData("https://configured.example/v3/index.json", "https://configured.example/v3/index.json", true, "https://configured.example/v3/index.json", "https://configured.example/v3/index.json")]
     [InlineData(null, "   ", false, null, null)]
     public async Task AddCommandUsesConfiguredSourceUnlessExplicitSourceIsProvided(
         string? explicitSource,
@@ -2358,6 +2403,10 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
                     // Simulate adding the package.
                     return 0; // Success.
                 };
+                runner.GetNuGetSourcesAsyncCallback = (workingDirectory, options, cancellationToken) =>
+                    (0, projectHasSourceConfig && expectedSearchSource is not null
+                        ? [expectedSearchSource]
+                        : []);
 
                 return runner;
             };

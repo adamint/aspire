@@ -81,9 +81,9 @@ internal sealed class AddPackageContext
     public string? Source { get; init; }
 
     /// <summary>
-    /// Gets or sets whether the source should be passed directly to the package installation command.
+    /// Gets or sets whether the source was explicitly provided for package installation.
     /// </summary>
-    public bool UseSourceForPackageInstall { get; init; }
+    public bool IsSourceExplicit { get; init; }
 
     /// <summary>
     /// Gets or sets the output collector for capturing stdout/stderr.

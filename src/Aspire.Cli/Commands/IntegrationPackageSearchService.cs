@@ -166,58 +166,49 @@ internal sealed class IntegrationPackageSearchService(
         string? invocationConfiguredSource,
         CancellationToken cancellationToken)
     {
-        var targetSource = NormalizeSource(await configurationService.GetConfigurationFromDirectoryAsync(
+        var selectingSource = await configurationService.GetConfigurationFromDirectoryWithOriginAsync(
+            AspireConfigFile.NuGetSourceKey,
+            executionContext.WorkingDirectory,
+            cancellationToken: cancellationToken);
+        var targetSource = await configurationService.GetConfigurationFromDirectoryWithOriginAsync(
             AspireConfigFile.NuGetSourceKey,
             appHostProjectFile.Directory!,
-            cancellationToken: cancellationToken));
-        var localConfiguration = await configurationService.GetLocalConfigurationAsync(cancellationToken);
-        localConfiguration.TryGetValue(AspireConfigFile.NuGetSourceKey, out var localSource);
-        localSource = NormalizeSource(localSource);
-        var globalConfiguration = await configurationService.GetGlobalConfigurationAsync(cancellationToken);
-        globalConfiguration.TryGetValue(AspireConfigFile.NuGetSourceKey, out var globalSource);
-        globalSource = NormalizeSource(globalSource);
+            cancellationToken: cancellationToken);
         var invocationSource = NormalizeSource(invocationConfiguredSource);
 
         if (appHostWasExplicitlyPassed)
         {
             if (targetSource is not null)
             {
-                var resolutionDirectory = string.Equals(targetSource, globalSource, StringComparison.Ordinal)
-                    ? executionContext.WorkingDirectory
-                    : appHostProjectFile.Directory!;
-                return ResolveSource(targetSource, resolutionDirectory);
+                return ResolveSource(targetSource.Value, targetSource.BaseDirectory);
             }
 
             // Environment and command-host providers still outrank files, but a local
             // config from the invocation workspace must not leak into an explicit target.
-            return invocationSource is not null &&
-                !string.Equals(invocationSource, localSource, StringComparison.Ordinal)
+            return invocationSource is not null && selectingSource is null
                     ? ResolveSource(invocationSource, executionContext.WorkingDirectory)
                     : null;
         }
 
-        if (localSource is not null)
+        if (selectingSource is { IsGlobal: false })
         {
-            return ResolveSource(localSource, executionContext.WorkingDirectory);
+            return ResolveSource(selectingSource.Value, selectingSource.BaseDirectory);
         }
 
-        if (invocationSource is not null &&
-            !string.Equals(invocationSource, globalSource, StringComparison.Ordinal))
+        if (invocationSource is not null && selectingSource is null)
         {
             return ResolveSource(invocationSource, executionContext.WorkingDirectory);
         }
 
-        if (targetSource is not null)
+        if (targetSource is { IsGlobal: false })
         {
-            var resolutionDirectory = string.Equals(targetSource, globalSource, StringComparison.Ordinal)
-                ? executionContext.WorkingDirectory
-                : appHostProjectFile.Directory!;
-            return ResolveSource(targetSource, resolutionDirectory);
+            return ResolveSource(targetSource.Value, targetSource.BaseDirectory);
         }
 
-        return invocationSource is null
+        var globalSource = targetSource ?? selectingSource;
+        return globalSource is null
             ? null
-            : ResolveSource(invocationSource, executionContext.WorkingDirectory);
+            : ResolveSource(globalSource.Value, globalSource.BaseDirectory);
     }
 
     private static string? NormalizeSource(string? source)
