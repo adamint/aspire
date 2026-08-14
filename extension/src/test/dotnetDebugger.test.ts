@@ -551,6 +551,7 @@ suite('Dotnet Debugger Extension Tests', () => {
 
     test('AppHost selected profile overrides inherited and old CLI environment', async () => {
         const fs = require('fs');
+        const platformStub = sinon.stub(process, 'platform').value('win32');
         const tempRoot = nodePath.join(process.cwd(), '.test-temp', `dotnet-apphost-profile-${process.pid}-${Date.now()}`);
         const projectDir = nodePath.join(tempRoot, 'AppHost');
         const propertiesDir = nodePath.join(projectDir, 'Properties');
@@ -625,7 +626,7 @@ suite('Dotnet Debugger Extension Tests', () => {
                 launchConfig,
                 undefined,
                 [
-                    { name: 'mode', value: 'cli-h1' },
+                    { name: 'MODE', value: 'cli-h1' },
                     { name: 'DOTNET_LAUNCH_PROFILE', value: 'h1' },
                     { name: 'ASPNETCORE_URLS', value: 'http://localhost:15001' },
                     { name: 'EXPLICIT', value: 'from-cli' },
@@ -649,10 +650,73 @@ suite('Dotnet Debugger Extension Tests', () => {
                 AMBIENT_ONLY: 'from-process',
                 CLI_PRECEDENCE: 'from-cli'
             });
+            assert.deepStrictEqual(
+                Object.keys(debugConfig.env).filter(name => name.toLowerCase() === 'mode'),
+                ['mode']);
         } finally {
+            platformStub.restore();
             for (const [name, value] of Object.entries(inheritedEnvironment)) {
                 restoreEnvironmentVariable(name, value);
             }
+            fs.rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    test('AppHost explicit environment overrides the selected launch profile marker', async () => {
+        const fs = require('fs');
+        const tempRoot = nodePath.join(process.cwd(), '.test-temp', `dotnet-apphost-explicit-profile-${process.pid}-${Date.now()}`);
+        const projectDir = nodePath.join(tempRoot, 'AppHost');
+        const propertiesDir = nodePath.join(projectDir, 'Properties');
+        fs.mkdirSync(propertiesDir, { recursive: true });
+
+        try {
+            const projectPath = nodePath.join(projectDir, 'AppHost.csproj');
+            fs.writeFileSync(projectPath, '<Project></Project>');
+            fs.writeFileSync(nodePath.join(propertiesDir, 'launchSettings.json'), JSON.stringify({
+                profiles: {
+                    h1: {
+                        commandName: 'Project'
+                    },
+                    h2: {
+                        commandName: 'Project'
+                    }
+                }
+            }));
+
+            const outputPath = nodePath.join(projectDir, 'bin', 'Debug', 'net10.0', 'AppHost.dll');
+            const { extension } = createDebuggerExtension(outputPath, null, true, true);
+            const launchConfig: ProjectLaunchConfiguration = {
+                type: 'project',
+                project_path: projectPath,
+                launch_profile: 'h1'
+            };
+            const debugSessionConfig: AspireExtendedDebugConfiguration = {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: projectPath,
+                debuggers: {
+                    apphost: {
+                        launchProfile: 'h2',
+                        env: {
+                            DOTNET_LAUNCH_PROFILE: 'explicit-profile'
+                        }
+                    }
+                }
+            };
+            const fakeAspireDebugSession = sinon.createStubInstance(AspireDebugSession);
+            fakeAspireDebugSession.configuration = debugSessionConfig;
+
+            const debugConfig = await createDebugSessionConfiguration(
+                debugSessionConfig,
+                launchConfig,
+                undefined,
+                [{ name: 'DOTNET_LAUNCH_PROFILE', value: 'h1' }],
+                { debug: true, runId: '1', debugSessionId: '1', isApphost: true, debugSession: fakeAspireDebugSession },
+                extension);
+
+            assert.strictEqual(debugConfig.env.DOTNET_LAUNCH_PROFILE, 'explicit-profile');
+        } finally {
             fs.rmSync(tempRoot, { recursive: true, force: true });
         }
     });
