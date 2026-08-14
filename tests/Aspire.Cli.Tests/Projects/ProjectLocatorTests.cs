@@ -1887,6 +1887,11 @@ builder.Build().Run();");
             return Task.FromResult<ConfigurationValueWithOrigin?>(null);
         }
 
+        public Task<ConfigurationValueWithOrigin?> GetLocalConfigurationFromDirectoryWithOriginAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<ConfigurationValueWithOrigin?>(null);
+        }
+
         public string GetSettingsFilePath(bool isGlobal)
         {
             return isGlobal

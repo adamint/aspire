@@ -67,7 +67,8 @@ internal abstract class IntegrationDiscoveryCommand : BaseCommand
             var packageSourceResolution = await _integrationPackageSearchService.ResolvePackageSourceAsync(
                 explicitSource: null,
                 workingDirectory,
-                cancellationToken);
+                useInvocationConfig: passedAppHostProjectFile is null,
+                cancellationToken: cancellationToken);
             if (IntegrationPackageSearchService.GetPackageSourceValidationError(packageSourceResolution) is { } sourceValidationError)
             {
                 InteractionService.DisplayError(sourceValidationError);
@@ -163,7 +164,7 @@ internal abstract class IntegrationDiscoveryCommand : BaseCommand
         var matches = (searchTerm is null
             ? packages.Select(p => (p.FriendlyName, p.Package, p.Channel, SearchScore: 0.0))
             : IntegrationPackageSearchService.GetIntegrationSearchMatches(packages, searchTerm))
-            .GroupBy(p => p.Package.Id)
+            .GroupBy(p => p.Package.Id, StringComparers.NuGetPackageId)
             .Select(IntegrationPackageSearchService.SelectPreferredIntegrationPackage);
 
         var orderedMatches = searchTerm is null

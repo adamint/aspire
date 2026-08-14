@@ -21,6 +21,7 @@ internal static class PackageSourceOverrideMappings
         // On Unix, Uri treats DOS-shaped paths such as C:/feed as absolute file URIs.
         // Preserve a file URI only when the source explicitly includes the file: scheme.
         if (Path.IsPathFullyQualified(source) ||
+            IsWindowsExtendedLocalDrivePath(source) ||
             sourceKind is PackageSourceKind.Http or PackageSourceKind.FileUri)
         {
             return source;
@@ -90,7 +91,8 @@ internal static class PackageSourceOverrideMappings
         }
 
         var isRelativeLocalPath = sourceKind is PackageSourceKind.LocalPath &&
-            !Path.IsPathFullyQualified(source);
+            !Path.IsPathFullyQualified(source) &&
+            !IsWindowsExtendedLocalDrivePath(source);
 
         // Relative configuration is inspected from its declaring directory on every OS, which
         // avoids rejecting unrelated symlinked ancestors such as macOS system temporary paths.
@@ -101,7 +103,9 @@ internal static class PackageSourceOverrideMappings
             return null;
         }
 
-        var resolvedLocalDirectory = Path.GetFullPath(localDirectory!, baseDirectory.FullName);
+        var resolvedLocalDirectory = IsWindowsExtendedLocalDrivePath(localDirectory!)
+            ? localDirectory!
+            : Path.GetFullPath(localDirectory!, baseDirectory.FullName);
         var inspectionBase = isRelativeLocalPath
             ? Path.GetFullPath(baseDirectory.FullName)
             : Path.GetPathRoot(resolvedLocalDirectory)!;
@@ -119,7 +123,9 @@ internal static class PackageSourceOverrideMappings
             return null;
         }
 
-        return Path.GetFullPath(localDirectory!);
+        return IsWindowsExtendedLocalDrivePath(localDirectory!)
+            ? localDirectory
+            : Path.GetFullPath(localDirectory!);
     }
 
     public static PackageMapping[] Create(string packageSourceOverride, PackageChannel? requestedChannel, string? nugetServiceIndexOverride)
@@ -213,6 +219,11 @@ internal static class PackageSourceOverrideMappings
 
     private static bool HasWindowsRemotePathPrefix(string path)
     {
+        if (IsWindowsExtendedLocalDrivePath(path))
+        {
+            return false;
+        }
+
         if (path.Length >= 2 &&
             IsWindowsDirectorySeparator(path[0]) &&
             IsWindowsDirectorySeparator(path[1]))
@@ -228,6 +239,18 @@ internal static class PackageSourceOverrideMappings
             path[1] == '?' &&
             path[2] == '?' &&
             IsWindowsDirectorySeparator(path[3]);
+    }
+
+    private static bool IsWindowsExtendedLocalDrivePath(string path)
+    {
+        return path.Length >= 7 &&
+            path[0] == '\\' &&
+            path[1] == '\\' &&
+            path[2] == '?' &&
+            path[3] == '\\' &&
+            ((path[4] >= 'A' && path[4] <= 'Z') || (path[4] >= 'a' && path[4] <= 'z')) &&
+            path[5] == ':' &&
+            IsWindowsDirectorySeparator(path[6]);
     }
 
     private static string? GetFirstReparsePoint(string localDirectory, string inspectionBase)

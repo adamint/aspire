@@ -73,6 +73,11 @@ internal sealed class TestConfigurationService : IConfigurationService
             : new ConfigurationValueWithOrigin(result, startDirectory));
     }
 
+    public Task<ConfigurationValueWithOrigin?> GetLocalConfigurationFromDirectoryWithOriginAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
+    {
+        return GetConfigurationFromDirectoryWithOriginAsync(key, startDirectory, continueSearchWhenKeyMissing, cancellationToken);
+    }
+
     public Func<string, DirectoryInfo, string?>? OnGetConfigurationFromDirectory { get; set; }
     public Func<string, DirectoryInfo, ConfigurationValueWithOrigin?>? OnGetConfigurationFromDirectoryWithOrigin { get; set; }
 

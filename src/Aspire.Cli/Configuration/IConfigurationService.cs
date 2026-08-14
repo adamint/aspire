@@ -35,5 +35,10 @@ internal interface IConfigurationService
     /// with the directory that should be treated as the configuration root for relative paths.
     /// </summary>
     Task<ConfigurationValueWithOrigin?> GetConfigurationFromDirectoryWithOriginAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads a configuration value scoped to a specific directory without consulting global settings.
+    /// </summary>
+    Task<ConfigurationValueWithOrigin?> GetLocalConfigurationFromDirectoryWithOriginAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default);
     string GetSettingsFilePath(bool isGlobal);
 }

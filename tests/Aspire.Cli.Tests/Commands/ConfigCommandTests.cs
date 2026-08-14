@@ -1053,6 +1053,11 @@ internal sealed class TestConfigurationService : IConfigurationService
         return string.IsNullOrWhiteSpace(value) ? null : new ConfigurationValueWithOrigin(value, startDirectory);
     }
 
+    public Task<ConfigurationValueWithOrigin?> GetLocalConfigurationFromDirectoryWithOriginAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
+    {
+        return GetConfigurationFromDirectoryWithOriginAsync(key, startDirectory, continueSearchWhenKeyMissing, cancellationToken);
+    }
+
     public string GetSettingsFilePath(bool isGlobal)
     {
         return string.Empty;

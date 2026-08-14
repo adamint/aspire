@@ -128,7 +128,7 @@
     <value>Symbolic links and junctions are not supported in persistent NuGet source configuration. Use the resolved local directory or pass the linked source explicitly with --source.</value>
   </data>
   <data name="SourceWithCredentialsCannotBePersisted" xml:space="preserve">
-    <value>The NuGet source includes credentials, a query string, or a fragment and cannot be written to the project's NuGet.config. Configure credentials with NuGet credential providers or user-level NuGet configuration, then use the feed URL without embedded secrets.</value>
+    <value>The NuGet source includes credentials, a query string, or a fragment and cannot be written to the project's NuGet.config. Configure authentication with a NuGet credential provider, then use the feed URL without embedded secrets.</value>
   </data>
   <data name="VersionArgumentDescription" xml:space="preserve">
     <value>The version of the project templates to use</value>

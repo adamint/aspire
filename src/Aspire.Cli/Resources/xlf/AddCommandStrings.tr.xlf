@@ -183,8 +183,8 @@
         <note />
       </trans-unit>
       <trans-unit id="SourceWithCredentialsNotSupported">
-        <source>The NuGet source includes credentials, a query string, or a fragment. Configure credentials with a NuGet credential provider, then use the feed URL without embedded secrets.</source>
-        <target state="new">The NuGet source includes credentials, a query string, or a fragment. Configure credentials with a NuGet credential provider, then use the feed URL without embedded secrets.</target>
+        <source>The NuGet source includes credentials, a query string, or a fragment. Configure authentication with a NuGet credential provider, then use the feed URL without embedded secrets.</source>
+        <target state="new">The NuGet source includes credentials, a query string, or a fragment. Configure authentication with a NuGet credential provider, then use the feed URL without embedded secrets.</target>
         <note />
       </trans-unit>
       <trans-unit id="SpecifiedVersionNotFoundForPackage">

@@ -75,10 +75,14 @@ public class PackageSourceOverrideMappingsTests(ITestOutputHelper outputHelper)
     [Theory]
     [InlineData(@"C:\feed", false)]
     [InlineData("/usr/feed", false)]
+    [InlineData(@"\\?\C:\feed", false)]
+    [InlineData(@"\\?\C:/feed", false)]
     [InlineData(@"\\example.test\share", true)]
     [InlineData("//example.test/share", true)]
     [InlineData(@"/\attacker\share", true)]
     [InlineData(@"\/attacker/share", true)]
+    [InlineData(@"\\?\UNC\attacker\share", true)]
+    [InlineData(@"\\.\C:\feed", true)]
     [InlineData(@"\??\UNC\attacker\share", true)]
     [InlineData("/??/UNC/attacker/share", true)]
     [InlineData(@"\??/UNC\attacker\share", true)]
@@ -116,5 +120,21 @@ public class PackageSourceOverrideMappingsTests(ITestOutputHelper outputHelper)
             workspace.WorkspaceRoot);
 
         Assert.Equal(link, result);
+    }
+
+    [Fact]
+    [PlatformSpecific(TestPlatforms.Windows)]
+    public void ExtendedLocalDrivePath_IsNotRebasedDuringResolutionOrValidation()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var source = $@"\\?\{workspace.WorkspaceRoot.FullName}\missing";
+
+        Assert.False(PackageSourceOverrideMappings.IsRemoteFileSystemSource(source));
+        Assert.Equal(source, PackageSourceOverrideMappings.ResolveForWorkingDirectory(source, workspace.WorkspaceRoot));
+        Assert.Equal(source, PackageSourceOverrideMappings.GetNormalizedLocalDirectory(source));
+        Assert.Equal(source, PackageSourceOverrideMappings.GetMissingLocalDirectory(source));
+
+        var reparsePoint = PackageSourceOverrideMappings.GetFirstReparsePoint(source, workspace.WorkspaceRoot);
+        Assert.True(reparsePoint is null || reparsePoint.StartsWith(@"\\?\", StringComparison.OrdinalIgnoreCase));
     }
 }

@@ -443,6 +443,16 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
 
     public Task<ConfigurationValueWithOrigin?> GetConfigurationFromDirectoryWithOriginAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
     {
+        return GetConfigurationFromDirectoryWithOriginCoreAsync(key, startDirectory, continueSearchWhenKeyMissing, includeGlobalSettings: true);
+    }
+
+    public Task<ConfigurationValueWithOrigin?> GetLocalConfigurationFromDirectoryWithOriginAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
+    {
+        return GetConfigurationFromDirectoryWithOriginCoreAsync(key, startDirectory, continueSearchWhenKeyMissing, includeGlobalSettings: false);
+    }
+
+    private Task<ConfigurationValueWithOrigin?> GetConfigurationFromDirectoryWithOriginCoreAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing, bool includeGlobalSettings)
+    {
         ArgumentNullException.ThrowIfNull(startDirectory);
 
         var configKey = key.Replace('.', ':');
@@ -478,6 +488,11 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
             {
                 break;
             }
+        }
+
+        if (!includeGlobalSettings)
+        {
+            return Task.FromResult<ConfigurationValueWithOrigin?>(null);
         }
 
         // 2. Global settings file fallback (lower precedence).

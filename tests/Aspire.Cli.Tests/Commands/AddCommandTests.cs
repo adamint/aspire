@@ -2317,6 +2317,165 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal(Path.GetFullPath(packagesDirectory.FullName), addUsedSource);
     }
 
+    [Theory]
+    [InlineData("integration list --format json")]
+    [InlineData("integration search redis --format json")]
+    public async Task IntegrationDiscoveryConfiguredSourceUsesSelectingConfigForOutOfTreeAppHost(string commandLine)
+    {
+        var rawJson = string.Empty;
+
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        using var externalWorkspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var sourceDirectory = workspace.CreateDirectory("feed");
+        File.WriteAllText(Path.Combine(sourceDirectory.FullName, "aspire.hosting.redis.13.4.0.nupkg"), string.Empty);
+        var appHostFile = CreateAppHostProject(externalWorkspace.WorkspaceRoot, "apphost.ts");
+        WriteAspireConfig(
+            workspace.WorkspaceRoot,
+            "feed",
+            Path.GetRelativePath(workspace.WorkspaceRoot.FullName, appHostFile.FullName));
+
+        var cache = new FakeNuGetPackageCache
+        {
+            GetIntegrationPackagesAsyncCallback = (_, _, _, _) => throw new InvalidOperationException("Configured local sources should be enumerated directly.")
+        };
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.InteractionServiceFactory = _ => new TestInteractionService
+            {
+                DisplayRawTextCallback = text => rawJson = text
+            };
+            options.ProjectLocatorFactory = _ => new TestProjectLocator
+            {
+                GetAppHostFromSettingsAsyncCallback = _ => Task.FromResult<FileInfo?>(appHostFile)
+            };
+            options.PackagingServiceFactory = _ => new TestPackagingService
+            {
+                GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>(
+                    [PackageChannel.CreateImplicitChannel(cache, new TestFeatures(), NullLogger.Instance)])
+            };
+        });
+        services.AddSingleton<IAppHostProjectFactory>(new TestTypeScriptStarterProjectFactory((_, _, _) => Task.FromResult(true)));
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse(commandLine);
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        var integration = Assert.Single(ReadIntegrationResults(rawJson));
+        Assert.Equal("aspire.hosting.redis", integration.Package);
+    }
+
+    [Fact]
+    public async Task IntegrationDiscoverySelectingConfigWithoutSourceFallsBackToTargetAppHostConfig()
+    {
+        var rawJson = string.Empty;
+
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        using var externalWorkspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var sourceDirectory = externalWorkspace.CreateDirectory("feed");
+        File.WriteAllText(Path.Combine(sourceDirectory.FullName, "aspire.hosting.redis.13.4.0.nupkg"), string.Empty);
+        var appHostFile = CreateAppHostProject(externalWorkspace.WorkspaceRoot, "apphost.ts");
+        WriteAspireConfig(externalWorkspace.WorkspaceRoot, "feed");
+        File.WriteAllText(
+            Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName),
+            JsonSerializer.Serialize(new
+            {
+                appHost = new { path = Path.GetRelativePath(workspace.WorkspaceRoot.FullName, appHostFile.FullName) }
+            }));
+
+        var cache = new FakeNuGetPackageCache
+        {
+            GetIntegrationPackagesAsyncCallback = (_, _, _, _) => throw new InvalidOperationException("Configured local sources should be enumerated directly.")
+        };
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.InteractionServiceFactory = _ => new TestInteractionService
+            {
+                DisplayRawTextCallback = text => rawJson = text
+            };
+            options.ProjectLocatorFactory = _ => new TestProjectLocator
+            {
+                GetAppHostFromSettingsAsyncCallback = _ => Task.FromResult<FileInfo?>(appHostFile)
+            };
+            options.PackagingServiceFactory = _ => new TestPackagingService
+            {
+                GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>(
+                    [PackageChannel.CreateImplicitChannel(cache, new TestFeatures(), NullLogger.Instance)])
+            };
+        });
+        services.AddSingleton<IAppHostProjectFactory>(new TestTypeScriptStarterProjectFactory((_, _, _) => Task.FromResult(true)));
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("integration list --format json");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        var integration = Assert.Single(ReadIntegrationResults(rawJson));
+        Assert.Equal("aspire.hosting.redis", integration.Package);
+    }
+
+    [Fact]
+    public async Task AddCommandConfiguredSourceUsesSelectingConfigForOutOfTreeAppHost()
+    {
+        string? addedPackage = null;
+        string? addUsedSource = null;
+
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        using var externalWorkspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var sourceDirectory = workspace.CreateDirectory("feed");
+        File.WriteAllText(Path.Combine(sourceDirectory.FullName, "aspire.hosting.redis.13.4.0.nupkg"), string.Empty);
+        var appHostFile = CreateAppHostProject(externalWorkspace.WorkspaceRoot, "apphost.ts");
+        WriteAspireConfig(
+            workspace.WorkspaceRoot,
+            "feed",
+            Path.GetRelativePath(workspace.WorkspaceRoot.FullName, appHostFile.FullName));
+
+        var cache = new FakeNuGetPackageCache
+        {
+            GetIntegrationPackagesAsyncCallback = (_, _, _, _) => throw new InvalidOperationException("Configured local sources should be enumerated directly."),
+            GetPackageVersionsAsyncCallback = (_, _, _, _, _, _) => throw new InvalidOperationException("Configured local sources should be enumerated directly.")
+        };
+        var projectFactory = new TestTypeScriptStarterProjectFactory((_, _, _) => Task.FromResult(true));
+        projectFactory.Project.AddPackageAsyncCallback = (context, _) =>
+        {
+            addedPackage = context.PackageId;
+            addUsedSource = context.Source;
+            return Task.FromResult(true);
+        };
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.CliHostEnvironmentFactory = _ => TestHelpers.CreateNonInteractiveHostEnvironment();
+            options.ProjectLocatorFactory = _ => new TestProjectLocator
+            {
+                UseOrFindAppHostProjectFileWithBehaviorAsyncCallback = (_, _, _, _) =>
+                    Task.FromResult(new AppHostProjectSearchResult(appHostFile, [appHostFile]))
+            };
+            options.PackagingServiceFactory = _ => new TestPackagingService
+            {
+                GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>(
+                    [PackageChannel.CreateImplicitChannel(cache, new TestFeatures(), NullLogger.Instance)])
+            };
+        });
+        services.AddSingleton<IAppHostProjectFactory>(projectFactory);
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<AddCommand>();
+        var result = command.Parse("add Aspire.Hosting.Redis");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Equal("aspire.hosting.redis", addedPackage);
+        Assert.Equal(Path.GetFullPath(sourceDirectory.FullName), addUsedSource);
+    }
+
     [Fact]
     public async Task AddCommandExplicitLinkedSourceRemainsOptIn()
     {
@@ -4063,7 +4222,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
 
     public static IEnumerable<object[]> InvalidConfiguredHttpSources()
     {
-        const string expectedError = "The NuGet source includes credentials, a query string, or a fragment. Configure credentials with a NuGet credential provider, then use the feed URL without embedded secrets.";
+        const string expectedError = "The NuGet source includes credentials, a query string, or a fragment. Configure authentication with a NuGet credential provider, then use the feed URL without embedded secrets.";
 
         yield return
         [
@@ -4089,11 +4248,22 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
         return projectFile;
     }
 
-    private static void WriteAspireConfig(DirectoryInfo directory, string nugetSource)
+    private static void WriteAspireConfig(DirectoryInfo directory, string nugetSource, string? appHostPath = null)
     {
+        object settings = appHostPath is null
+            ? new
+            {
+                nugetSource
+            }
+            : new
+            {
+                appHost = new { path = appHostPath },
+                nugetSource
+            };
+
         File.WriteAllText(
             Path.Combine(directory.FullName, AspireConfigFile.FileName),
-            JsonSerializer.Serialize(new { nugetSource }));
+            JsonSerializer.Serialize(settings));
     }
 
     private static (string? AspireSource, string? FallbackSource) GetMappedSources(FileInfo? nugetConfigFile)
@@ -4369,6 +4539,56 @@ public class AddCommandFuzzySearchTests(ITestOutputHelper outputHelper)
 
         Assert.Equal(0, exitCode);
         Assert.Equal("Aspire.Hosting.Kubernetes", addedPackage);
+    }
+
+    [Fact]
+    public async Task AddCommand_NonInteractive_CanonicalNuGetIdMatchesLowercaseLocalMetadata()
+    {
+        string? addedPackage = null;
+
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.CliHostEnvironmentFactory = _ => TestHelpers.CreateNonInteractiveHostEnvironment();
+            options.ProjectLocatorFactory = _ => new TestProjectLocator();
+
+            options.DotNetCliRunnerFactory = _ =>
+            {
+                var runner = new TestDotNetCliRunner
+                {
+                    SearchPackagesAsyncCallback = (_, _, _, _, _, _, _, _, _, _) =>
+                    {
+                        return (
+                            0,
+                            new NuGetPackage[]
+                            {
+                                new()
+                                {
+                                    Id = "aspire.hosting.redis",
+                                    Source = "local",
+                                    Version = "9.2.0"
+                                }
+                            });
+                    },
+                    AddPackageAsyncCallback = (_, packageName, _, _, _, _, _) =>
+                    {
+                        addedPackage = packageName;
+                        return 0;
+                    }
+                };
+
+                return runner;
+            };
+        });
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<AddCommand>();
+        var result = command.Parse("add Aspire.Hosting.Redis");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Equal("aspire.hosting.redis", addedPackage);
     }
 
     [Fact]

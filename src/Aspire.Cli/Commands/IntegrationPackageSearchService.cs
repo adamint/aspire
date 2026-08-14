@@ -122,7 +122,7 @@ internal sealed class IntegrationPackageSearchService(
             : allChannels.Where(c => c.Type is PackageChannelType.Implicit);
     }
 
-    public async Task<PackageSourceResolution?> ResolvePackageSourceAsync(string? explicitSource, DirectoryInfo workingDirectory, CancellationToken cancellationToken)
+    public async Task<PackageSourceResolution?> ResolvePackageSourceAsync(string? explicitSource, DirectoryInfo workingDirectory, bool useInvocationConfig, CancellationToken cancellationToken)
     {
         if (!string.IsNullOrWhiteSpace(explicitSource))
         {
@@ -133,7 +133,29 @@ internal sealed class IntegrationPackageSearchService(
                 IsExplicit: true);
         }
 
-        var configuredSource = await configurationService.GetConfigurationFromDirectoryWithOriginAsync(
+        ConfigurationValueWithOrigin? configuredSource;
+        if (useInvocationConfig)
+        {
+            configuredSource = await configurationService.GetLocalConfigurationFromDirectoryWithOriginAsync(
+                AspireConfigFile.NuGetSourceKey,
+                executionContext.WorkingDirectory,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            if (configuredSource is null &&
+                !string.Equals(executionContext.WorkingDirectory.FullName, workingDirectory.FullName, StringComparison.OrdinalIgnoreCase))
+            {
+                configuredSource = await configurationService.GetLocalConfigurationFromDirectoryWithOriginAsync(
+                    AspireConfigFile.NuGetSourceKey,
+                    workingDirectory,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+        }
+        else
+        {
+            configuredSource = null;
+        }
+
+        configuredSource ??= await configurationService.GetConfigurationFromDirectoryWithOriginAsync(
             AspireConfigFile.NuGetSourceKey,
             workingDirectory,
             cancellationToken: cancellationToken).ConfigureAwait(false);

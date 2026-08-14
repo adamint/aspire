@@ -159,7 +159,8 @@ internal sealed class AddCommand : BaseCommand
             var sourceResolution = await _integrationPackageSearchService.ResolvePackageSourceAsync(
                 explicitSource,
                 effectiveAppHostProjectFile.Directory!,
-                cancellationToken);
+                useInvocationConfig: passedAppHostProjectFile is null,
+                cancellationToken: cancellationToken);
             if (IntegrationPackageSearchService.GetPackageSourceValidationError(sourceResolution) is { } sourceValidationError)
             {
                 return AddCommandFailure(CliExitCodes.InvalidCommand, sourceValidationError);
@@ -231,7 +232,8 @@ internal sealed class AddCommand : BaseCommand
             if (applyPolyglotFilter)
             {
                 bool MatchesIntegrationName((string FriendlyName, NuGetPackage Package, PackageChannel Channel) p)
-                    => p.FriendlyName == integrationName || p.Package.Id == integrationName;
+                    => string.Equals(p.FriendlyName, integrationName, StringComparisons.UserTextSearch) ||
+                        string.Equals(p.Package.Id, integrationName, StringComparisons.NuGetPackageId);
 
                 // If the user named a specific integration that exists but is not polyglot-compatible, give a
                 // precise, actionable error rather than silently dropping it and fuzzy-matching something else.
@@ -261,7 +263,9 @@ internal sealed class AddCommand : BaseCommand
             }
 
             var filteredPackagesWithShortName = packagesWithShortName
-                .Where(p => p.FriendlyName == integrationName || p.Package.Id == integrationName)
+                .Where(p =>
+                    string.Equals(p.FriendlyName, integrationName, StringComparisons.UserTextSearch) ||
+                    string.Equals(p.Package.Id, integrationName, StringComparisons.NuGetPackageId))
                 .ToList();
             var packageMatchKind = filteredPackagesWithShortName.Count > 0
                 ? ProfilingTelemetry.Values.AddPackageMatchKindExact
@@ -467,7 +471,7 @@ internal sealed class AddCommand : BaseCommand
 
     private static async Task<IEnumerable<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)>> GetAllPackageVersions(DirectoryInfo workingDirectory, IEnumerable<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)> possiblePackages, PackageMapping[]? sourceOverrideMappings, CancellationToken cancellationToken)
     {
-        var distinctPackageIds = possiblePackages.DistinctBy(package => package.Package.Id);
+        var distinctPackageIds = possiblePackages.DistinctBy(package => package.Package.Id, StringComparers.NuGetPackageId);
         var channels = possiblePackages.Select(package => package.Channel).Distinct();
 
         var versions = new List<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)>();
@@ -491,7 +495,7 @@ internal sealed class AddCommand : BaseCommand
         CancellationToken cancellationToken,
         bool promptForSinglePackage = false)
     {
-        var distinctPackages = possiblePackages.DistinctBy(p => p.Package.Id).ToArray();
+        var distinctPackages = possiblePackages.DistinctBy(p => p.Package.Id, StringComparers.NuGetPackageId).ToArray();
 
         // Exact matches can skip the package prompt when one package remains. Fuzzy/no-match
         // fallbacks opt into prompting so interactive users confirm the candidate first.
@@ -505,7 +509,9 @@ internal sealed class AddCommand : BaseCommand
             _ => throw new InvalidOperationException(AddCommandStrings.UnexpectedNumberOfPackagesFound)
         };
 
-        var packageVersions = possiblePackages.Where(p => p.Package.Id == selectedPackage.Package.Id).ToArray();
+        var packageVersions = possiblePackages
+            .Where(p => string.Equals(p.Package.Id, selectedPackage.Package.Id, StringComparisons.NuGetPackageId))
+            .ToArray();
 
         // If any of the package versions are an exact match for the preferred version
         // then we can skip the version prompt and just use that version.
@@ -756,7 +762,7 @@ internal class AddCommandPrompter(IInteractionService interactionService) : IAdd
     {
         // Filter to show only the highest version for each package ID
         var filteredPackages = packages
-            .GroupBy(p => p.Package.Id)
+            .GroupBy(p => p.Package.Id, StringComparers.NuGetPackageId)
             .Select(g => g.OrderByDescending(p => SemVersion.Parse(p.Package.Version), SemVersion.PrecedenceComparer).First())
             .ToArray();
 
