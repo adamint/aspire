@@ -417,9 +417,19 @@ async function findAppHostProcessIds(appHostPath: string): Promise<number[]> {
     const processes = process.platform === 'win32'
         ? await listWindowsProcesses()
         : await listPosixProcesses();
+    const expectedAppHostPath = process.platform === 'win32'
+        ? appHostPath.toLowerCase()
+        : appHostPath;
 
     return processes
-        .filter(entry => entry.commandLine.includes('--start-debug-session') && entry.commandLine.includes(appHostPath))
+        .filter(entry => {
+            // Windows process command lines can normalize the drive-letter casing independently
+            // from workspace discovery (`C:\...` versus `c:\...`).
+            const commandLine = process.platform === 'win32'
+                ? entry.commandLine.toLowerCase()
+                : entry.commandLine;
+            return commandLine.includes('--start-debug-session') && commandLine.includes(expectedAppHostPath);
+        })
         .map(entry => entry.pid)
         .sort((left, right) => left - right);
 }
