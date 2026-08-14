@@ -563,15 +563,19 @@ suite('Dotnet Debugger Extension Tests', () => {
             ASPNETCORE_URLS: process.env.ASPNETCORE_URLS,
             EXPLICIT: process.env.EXPLICIT,
             AMBIENT_ONLY: process.env.AMBIENT_ONLY,
-            CLI_PRECEDENCE: process.env.CLI_PRECEDENCE
+            CLI_PRECEDENCE: process.env.CLI_PRECEDENCE,
+            DEFAULT_PROFILE_ONLY: process.env.DEFAULT_PROFILE_ONLY,
+            DEFAULT_PROFILE_EXPLICIT: process.env.DEFAULT_PROFILE_EXPLICIT
         };
 
         process.env.mode = 'ambient-h1';
         process.env.DOTNET_LAUNCH_PROFILE = 'h1';
-        process.env.ASPNETCORE_URLS = 'http://localhost:15001';
+        process.env.ASPNETCORE_URLS = 'http://localhost:14000';
         process.env.EXPLICIT = 'from-process';
         process.env.AMBIENT_ONLY = 'from-process';
         process.env.CLI_PRECEDENCE = 'from-process';
+        process.env.DEFAULT_PROFILE_ONLY = 'from-process';
+        process.env.DEFAULT_PROFILE_EXPLICIT = 'from-process';
 
         try {
             const projectPath = nodePath.join(projectDir, 'AppHost.csproj');
@@ -583,7 +587,9 @@ suite('Dotnet Debugger Extension Tests', () => {
                         applicationUrl: 'http://localhost:15001',
                         environmentVariables: {
                             mode: '1',
-                            EXPLICIT: 'from-h1'
+                            EXPLICIT: 'from-h1',
+                            DEFAULT_PROFILE_ONLY: 'from-h1',
+                            DEFAULT_PROFILE_EXPLICIT: 'from-h1'
                         }
                     },
                     h2: {
@@ -635,7 +641,9 @@ suite('Dotnet Debugger Extension Tests', () => {
                     { name: 'ASPNETCORE_URLS', value: 'http://localhost:15001' },
                     { name: 'EXPLICIT', value: 'from-cli' },
                     { name: 'CLI_PRECEDENCE', value: 'from-cli' },
-                    { name: 'UNSELECTED_ONLY', value: 'from-cli' }
+                    { name: 'UNSELECTED_ONLY', value: 'from-cli' },
+                    { name: 'DEFAULT_PROFILE_ONLY', value: 'from-h1' },
+                    { name: 'DEFAULT_PROFILE_EXPLICIT', value: 'from-cli-explicit' }
                 ],
                 { debug: true, runId: '1', debugSessionId: '1', isApphost: true, debugSession: fakeAspireDebugSession },
                 extension);
@@ -647,7 +655,9 @@ suite('Dotnet Debugger Extension Tests', () => {
                 EXPLICIT: debugConfig.env.EXPLICIT,
                 AMBIENT_ONLY: debugConfig.env.AMBIENT_ONLY,
                 CLI_PRECEDENCE: debugConfig.env.CLI_PRECEDENCE,
-                UNSELECTED_ONLY: debugConfig.env.UNSELECTED_ONLY
+                UNSELECTED_ONLY: debugConfig.env.UNSELECTED_ONLY,
+                DEFAULT_PROFILE_ONLY: debugConfig.env.DEFAULT_PROFILE_ONLY,
+                DEFAULT_PROFILE_EXPLICIT: debugConfig.env.DEFAULT_PROFILE_EXPLICIT
             }, {
                 mode: '2',
                 DOTNET_LAUNCH_PROFILE: 'h2',
@@ -655,11 +665,32 @@ suite('Dotnet Debugger Extension Tests', () => {
                 EXPLICIT: 'from-h2',
                 AMBIENT_ONLY: 'from-process',
                 CLI_PRECEDENCE: 'from-cli',
-                UNSELECTED_ONLY: 'from-cli'
+                UNSELECTED_ONLY: 'from-cli',
+                DEFAULT_PROFILE_ONLY: 'from-process',
+                DEFAULT_PROFILE_EXPLICIT: 'from-cli-explicit'
             });
             assert.deepStrictEqual(
                 Object.keys(debugConfig.env).filter(name => name.toLowerCase() === 'mode'),
                 ['mode']);
+
+            const ambientUrlDebugSessionConfig: AspireExtendedDebugConfiguration = {
+                ...debugSessionConfig,
+                debuggers: {
+                    apphost: {
+                        launchProfile: 'h3'
+                    }
+                }
+            };
+            fakeAspireDebugSession.configuration = ambientUrlDebugSessionConfig;
+            const ambientUrlDebugConfig = await createDebugSessionConfiguration(
+                ambientUrlDebugSessionConfig,
+                launchConfig,
+                undefined,
+                [{ name: 'ASPNETCORE_URLS', value: 'http://localhost:15001' }],
+                { debug: true, runId: '1', debugSessionId: '1', isApphost: true, debugSession: fakeAspireDebugSession },
+                extension);
+
+            assert.strictEqual(ambientUrlDebugConfig.env.ASPNETCORE_URLS, 'http://localhost:14000');
         } finally {
             platformStub.restore();
             for (const [name, value] of Object.entries(inheritedEnvironment)) {

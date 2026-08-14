@@ -409,26 +409,27 @@ function createProjectEnvironment(
     }
 
     const environment = getEnvironmentWithoutE2EBridgeVariables();
-    applyEnvironmentVariables(environment, runApiEnvironment);
-    for (const envVar of runSessionEnvironment) {
-        setEnvironmentVariable(environment, envVar.name, envVar.value);
-    }
-
-    // Older CLIs send one flattened AppHost environment that can include the SDK default profile's
-    // values. Remove only values owned by that default profile before applying the profile selected by
-    // launch.json. Keys from other profiles may also be legitimate ambient or explicit CLI values.
-    // See https://github.com/microsoft/aspire/issues/19387.
-    const defaultProfile = determineDefaultLaunchProfile(launchSettings).profile;
-    if (defaultProfile) {
+    const { profile: defaultProfile, profileName: defaultProfileName } = determineDefaultLaunchProfile(launchSettings);
+    applyEnvironmentVariables(environment, runApiEnvironment, defaultProfile, defaultProfileName);
+    if (disableLaunchProfile && defaultProfile) {
         for (const name of Object.keys(defaultProfile.environmentVariables ?? {})) {
             deleteEnvironmentVariable(environment, name);
         }
         if (defaultProfile.applicationUrl) {
             deleteEnvironmentVariable(environment, 'ASPNETCORE_URLS');
         }
-        deleteEnvironmentVariable(environment, 'DOTNET_LAUNCH_PROFILE');
     }
-    else if (disableLaunchProfile) {
+    for (const envVar of runSessionEnvironment) {
+        if (!isDefaultLaunchProfileEnvironmentVariable(envVar.name, envVar.value, defaultProfile, defaultProfileName)) {
+            setEnvironmentVariable(environment, envVar.name, envVar.value);
+        }
+    }
+
+    // Older CLIs send one flattened AppHost environment that can include the SDK default profile's
+    // values. Filter only entries whose names and values match that profile before applying the profile
+    // selected by launch.json. This preserves inherited values and explicit CLI overrides using the same keys.
+    // See https://github.com/microsoft/aspire/issues/19387.
+    if (disableLaunchProfile) {
         deleteEnvironmentVariable(environment, 'DOTNET_LAUNCH_PROFILE');
     }
 
@@ -450,10 +451,40 @@ function createProjectEnvironment(
     return environment;
 }
 
-function applyEnvironmentVariables(environment: NodeJS.ProcessEnv, variables: { [key: string]: string } | undefined): void {
+function applyEnvironmentVariables(
+    environment: NodeJS.ProcessEnv,
+    variables: { [key: string]: string } | undefined,
+    defaultProfile?: LaunchProfile | null,
+    defaultProfileName?: string | null
+): void {
     for (const [name, value] of Object.entries(variables ?? {})) {
-        setEnvironmentVariable(environment, name, value);
+        if (!isDefaultLaunchProfileEnvironmentVariable(name, value, defaultProfile, defaultProfileName)) {
+            setEnvironmentVariable(environment, name, value);
+        }
     }
+}
+
+function isDefaultLaunchProfileEnvironmentVariable(
+    name: string,
+    value: string | undefined,
+    defaultProfile: LaunchProfile | null | undefined,
+    defaultProfileName: string | null | undefined
+): boolean {
+    if (!defaultProfile) {
+        return false;
+    }
+
+    const namesEqual = (candidate: string) =>
+        process.platform === 'win32' ? candidate.toLowerCase() === name.toLowerCase() : candidate === name;
+
+    for (const [profileVariableName, profileVariableValue] of Object.entries(defaultProfile.environmentVariables ?? {})) {
+        if (namesEqual(profileVariableName) && profileVariableValue === value) {
+            return true;
+        }
+    }
+
+    return (namesEqual('ASPNETCORE_URLS') && defaultProfile.applicationUrl === value)
+        || (namesEqual('DOTNET_LAUNCH_PROFILE') && defaultProfileName === value);
 }
 
 export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSession: AspireDebugSession) => IDotNetService): ResourceDebuggerExtension {
