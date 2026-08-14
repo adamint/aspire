@@ -1987,9 +1987,17 @@ public class AtsTypeScriptCodeGeneratorTests
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
 
+        var context = new AtsContext
+        {
+            Capabilities = null!,
+            HandleTypes = [],
+            DtoTypes = [],
+            EnumTypes = []
+        };
+
         IApiReferenceExporter exporter = new AtsTypeScriptApiReferenceExporter();
         Assert.Throws<OperationCanceledException>(() => exporter.ExportApi(
-            CreateEntryPointContext(ApiExportPackageName),
+            context,
             new ApiReferenceExportOptions(
                 ApiExportPackageName,
                 ApiExportPackageVersion,

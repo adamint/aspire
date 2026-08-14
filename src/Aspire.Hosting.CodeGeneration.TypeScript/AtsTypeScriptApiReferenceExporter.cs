@@ -44,6 +44,7 @@ internal sealed class AtsTypeScriptApiReferenceExporter : IApiReferenceExporter
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(options);
+        cancellationToken.ThrowIfCancellationRequested();
 
         // Build the projector from the same context the generator would use, so the exported
         // documentation describes the exact signatures generation would emit rather than a
