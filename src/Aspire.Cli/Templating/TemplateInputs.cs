@@ -3,6 +3,14 @@
 
 namespace Aspire.Cli.Templating;
 
+internal enum TemplateSourcePolicy
+{
+    None,
+    ProjectLocalConfigured,
+    GlobalOrAmbientConfigured,
+    Explicit
+}
+
 /// <summary>
 /// Values passed to templates from commands.
 /// </summary>
@@ -27,6 +35,11 @@ internal sealed class TemplateInputs
     /// Gets a value indicating whether <see cref="Source"/> came from an explicit one-shot command option.
     /// </summary>
     public bool SourceIsExplicit { get; init; }
+
+    /// <summary>
+    /// Gets the persistence and routing policy for <see cref="Source"/>.
+    /// </summary>
+    public TemplateSourcePolicy SourcePolicy { get; init; }
 
     /// <summary>
     /// Gets the version (from --version option).

@@ -496,17 +496,20 @@ internal class DotNetTemplateFactory(
 
             // dotnet new restores project templates as part of project creation. Create the
             // source-specific config before invoking it so the restore cannot fall back to
-            // nuget.org. Credential-bearing explicit sources use a project-local config only
-            // for this process and are restored immediately after the command finishes.
+            // nuget.org. Global/ambient and credential-bearing explicit sources use a
+            // project-local config only for this process and are restored immediately after
+            // the command finishes.
             await TemplateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(
                 inputs.Source,
                 selectedTemplateDetails.Channel,
                 outputPath,
+                inputs.SourcePolicy,
                 cancellationToken,
                 executionContext.NuGetServiceIndexOverride);
             using var temporarySourceConfig = await TemplateNuGetConfigService.CreateTemporarySourceOverrideConfigAsync(
                 inputs.Source,
                 outputPath,
+                inputs.SourcePolicy,
                 cancellationToken);
 
             var newProjectCollector = new OutputCollector();
@@ -566,7 +569,7 @@ internal class DotNetTemplateFactory(
                 config.Save(outputPath);
             }
 
-            if (template.OwnsAspireConfig &&
+            if (ShouldRestoreAfterTemplate(template, inputs) &&
                 FindAppHostRestoreTarget(outputPath) is { } restoreTarget)
             {
                 var restoreCollector = new OutputCollector();
@@ -602,6 +605,7 @@ internal class DotNetTemplateFactory(
                 inputs.Source,
                 selectedTemplateDetails.Channel,
                 outputPath,
+                inputs.SourcePolicy,
                 cancellationToken,
                 executionContext.NuGetServiceIndexOverride);
             if (!sourceConfigCreated && string.IsNullOrWhiteSpace(inputs.Source))
@@ -643,23 +647,53 @@ internal class DotNetTemplateFactory(
         }
     }
 
-    private static FileInfo? FindAppHostRestoreTarget(string outputPath)
+    internal static bool ShouldRestoreAfterTemplate(CallbackTemplate template, TemplateInputs inputs)
+    {
+        return template.OwnsAspireConfig && !string.IsNullOrWhiteSpace(inputs.Source);
+    }
+
+    internal static FileInfo? FindAppHostRestoreTarget(string outputPath)
     {
         if (!Directory.Exists(outputPath))
         {
             return null;
         }
 
-        var appHostProject = Directory.EnumerateFiles(outputPath, "*AppHost*.csproj", SearchOption.AllDirectories)
-            .FirstOrDefault();
-        if (appHostProject is not null)
+        var config = AspireConfigFile.Load(outputPath);
+        if (config?.AppHost?.Path is { Length: > 0 } appHostPath)
         {
-            return new FileInfo(appHostProject);
+            var entryPointPath = Path.GetFullPath(appHostPath, outputPath);
+            if (File.Exists(entryPointPath))
+            {
+                if (string.Equals(Path.GetExtension(entryPointPath), ".csproj", StringComparison.OrdinalIgnoreCase))
+                {
+                    return new FileInfo(entryPointPath);
+                }
+
+                var containingProjects = Directory.EnumerateFiles(
+                        Path.GetDirectoryName(entryPointPath) ?? outputPath,
+                        "*.csproj",
+                        SearchOption.TopDirectoryOnly)
+                    .ToArray();
+                if (containingProjects.Length == 1)
+                {
+                    return new FileInfo(containingProjects[0]);
+                }
+
+                return string.Equals(Path.GetExtension(entryPointPath), ".cs", StringComparison.OrdinalIgnoreCase)
+                    ? new FileInfo(entryPointPath)
+                    : null;
+            }
         }
 
-        var appHostFile = Directory.EnumerateFiles(outputPath, "*.cs", SearchOption.TopDirectoryOnly)
-            .FirstOrDefault(path => string.Equals(Path.GetFileName(path), "apphost.cs", StringComparison.OrdinalIgnoreCase));
-        return appHostFile is null ? null : new FileInfo(appHostFile);
+        var projectFiles = Directory.EnumerateFiles(outputPath, "*.csproj", SearchOption.AllDirectories).ToArray();
+        if (projectFiles.Length == 1)
+        {
+            return new FileInfo(projectFiles[0]);
+        }
+
+        var sourceFiles = Directory.EnumerateFiles(outputPath, "*.cs", SearchOption.TopDirectoryOnly).ToArray();
+        return sourceFiles.Length == 1 ? new FileInfo(sourceFiles[0]) : null;
     }
 
     private async Task<string> GetProjectNameAsync(TemplateInputs inputs, string templateName, ParseResult parseResult, CancellationToken cancellationToken)

@@ -714,16 +714,24 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         return runner;
     }
 
-    private static void AssertSourceOverrideNuGetConfig(string outputPath, string sourceOverride)
+    private static void AssertSourceOverrideNuGetConfig(string outputPath, string sourceOverride, bool exclusiveConfiguredSource = false)
     {
         var doc = XDocument.Load(Path.Combine(outputPath, "nuget.config"));
         var packageSources = doc.Root!.Element("packageSources")!;
 
         Assert.Contains(packageSources.Elements("clear"), _ => true);
         Assert.Contains(packageSources.Elements("add"), e => (string?)e.Attribute("value") == sourceOverride);
-        Assert.Contains(packageSources.Elements("add"), e => (string?)e.Attribute("value") == PackageSources.NuGetOrg);
-        Assert.Equal(["Aspire*"], GetPackagePatternsForSource(doc, sourceOverride));
-        Assert.Equal([PackageMapping.AllPackages], GetPackagePatternsForSource(doc, PackageSources.NuGetOrg));
+        if (exclusiveConfiguredSource)
+        {
+            Assert.DoesNotContain(packageSources.Elements("add"), e => (string?)e.Attribute("value") == PackageSources.NuGetOrg);
+            Assert.Equal(["Aspire*", PackageMapping.AllPackages], GetPackagePatternsForSource(doc, sourceOverride));
+        }
+        else
+        {
+            Assert.Contains(packageSources.Elements("add"), e => (string?)e.Attribute("value") == PackageSources.NuGetOrg);
+            Assert.Equal(["Aspire*"], GetPackagePatternsForSource(doc, sourceOverride));
+            Assert.Equal([PackageMapping.AllPackages], GetPackagePatternsForSource(doc, PackageSources.NuGetOrg));
+        }
     }
 
     private static string CreateLocalTemplateFeed(string feedPath)
@@ -1336,7 +1344,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal(CliExitCodes.Success, exitCode);
         Assert.Equal(configuredSource, discoveryAspireSource);
         Assert.Equal(configuredSource, discoveryFallbackSource);
-        AssertSourceOverrideNuGetConfig(Path.Combine(workspace.WorkspaceRoot.FullName, "output"), configuredSource);
+        AssertSourceOverrideNuGetConfig(Path.Combine(workspace.WorkspaceRoot.FullName, "output"), configuredSource, exclusiveConfiguredSource: true);
     }
 
     [Fact]
@@ -1437,6 +1445,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         var config = JsonNode.Parse(
             await File.ReadAllTextAsync(Path.Combine(workspace.WorkspaceRoot.FullName, "output", AspireConfigFile.FileName)))!.AsObject();
         Assert.False(config.ContainsKey(AspireConfigFile.NuGetSourceKey));
+        Assert.False(File.Exists(Path.Combine(workspace.WorkspaceRoot.FullName, "output", "nuget.config")));
     }
 
     [Fact]
@@ -1567,7 +1576,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
 
         Assert.Equal(CliExitCodes.Success, exitCode);
         var outputPath = Path.Combine(nestedWorkingDirectory.FullName, "output");
-        AssertSourceOverrideNuGetConfig(outputPath, expectedSource);
+        AssertSourceOverrideNuGetConfig(outputPath, expectedSource, exclusiveConfiguredSource: true);
         Assert.Equal(expectedSource, AspireConfigFile.Load(outputPath)?.NuGetSource);
     }
 

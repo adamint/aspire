@@ -10,6 +10,7 @@ using Aspire.Cli.Packaging;
 using Aspire.Cli.Projects;
 using Aspire.Cli.Tests.Mcp;
 using Aspire.Cli.Tests.TestServices;
+using Aspire.Cli.Templating;
 using Aspire.Cli.Tests.Utils;
 using Aspire.Cli.Utils;
 using Aspire.Hosting;
@@ -547,6 +548,25 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task TryCreateTemporaryNuGetConfig_WithPersistentConfiguredSource_IsExclusive()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        const string packageSourceOverride = "https://internal.example/v3/index.json";
+        var server = CreatePrebuiltAppHostServer(workspace);
+
+        using var result = await InvokeTryCreateTemporaryNuGetConfigAsync(
+            server,
+            requestedChannel: null,
+            packageSourceOverride: packageSourceOverride,
+            sourcePolicy: TemplateSourcePolicy.ProjectLocalConfigured);
+
+        Assert.NotNull(result);
+        var doc = XDocument.Load(result.ConfigFile.FullName);
+        Assert.Equal(["Aspire*", PackageMapping.AllPackages], GetPackagePatternsForSource(doc, packageSourceOverride));
+        Assert.DoesNotContain(NuGetOrgSource, doc.Descendants("add").Select(e => (string?)e.Attribute("value")));
+    }
+
+    [Fact]
     public async Task TryCreateTemporaryNuGetConfig_WithCredentialBearingPackageSourceOverride_AllowsTransientConfig()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
@@ -767,6 +787,22 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
         Assert.Contains(packageSourceOverride, sources);
         Assert.DoesNotContain(channelSource, sources);
         Assert.Contains(NuGetOrgSource, sources);
+    }
+
+    [Fact]
+    public async Task GetNuGetSources_WithPersistentConfiguredSource_IsExclusive()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        const string packageSourceOverride = "https://internal.example/v3/index.json";
+        var server = CreatePrebuiltAppHostServer(workspace);
+
+        var sources = await InvokeGetNuGetSourcesAsync(
+            server,
+            requestedChannel: "staging",
+            packageSourceOverride: packageSourceOverride,
+            sourcePolicy: TemplateSourcePolicy.GlobalOrAmbientConfigured);
+
+        Assert.Equal([packageSourceOverride], sources);
     }
 
     [Fact]
@@ -1024,28 +1060,30 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
     private static async Task<TemporaryNuGetConfig?> InvokeTryCreateTemporaryNuGetConfigAsync(
         PrebuiltAppHostServer server,
         string? requestedChannel,
-        string? packageSourceOverride = null)
+        string? packageSourceOverride = null,
+        TemplateSourcePolicy sourcePolicy = TemplateSourcePolicy.Explicit)
     {
         var method = typeof(PrebuiltAppHostServer).GetMethod(
             "TryCreateTemporaryNuGetConfigAsync",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
         Assert.NotNull(method);
 
-        var task = (Task<TemporaryNuGetConfig?>)method.Invoke(server, [requestedChannel, packageSourceOverride, CancellationToken.None])!;
+        var task = (Task<TemporaryNuGetConfig?>)method.Invoke(server, [requestedChannel, packageSourceOverride, CancellationToken.None, sourcePolicy])!;
         return await task;
     }
 
     private static async Task<IReadOnlyList<string>?> InvokeGetNuGetSourcesAsync(
         PrebuiltAppHostServer server,
         string? requestedChannel,
-        string? packageSourceOverride = null)
+        string? packageSourceOverride = null,
+        TemplateSourcePolicy sourcePolicy = TemplateSourcePolicy.Explicit)
     {
         var method = typeof(PrebuiltAppHostServer).GetMethod(
             "GetNuGetSourcesAsync",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
         Assert.NotNull(method);
 
-        var task = (Task<IEnumerable<string>?>)method.Invoke(server, [requestedChannel, packageSourceOverride, CancellationToken.None])!;
+        var task = (Task<IEnumerable<string>?>)method.Invoke(server, [requestedChannel, packageSourceOverride, CancellationToken.None, sourcePolicy])!;
         var result = await task;
         return result?.ToList();
     }

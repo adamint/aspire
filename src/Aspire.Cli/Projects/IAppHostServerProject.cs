@@ -4,6 +4,7 @@
 using Aspire.Cli.Configuration;
 using Aspire.Cli.DotNet;
 using Aspire.Cli.Processes;
+using Aspire.Cli.Templating;
 using Aspire.Cli.Utils;
 
 namespace Aspire.Cli.Projects;
@@ -136,4 +137,15 @@ internal interface IAppHostServerProject
     /// </summary>
     /// <returns>A path that uniquely identifies this AppHost.</returns>
     string GetInstanceIdentifier();
+}
+
+internal interface IAppHostServerSourcePolicyProject
+{
+    Task<AppHostServerPrepareResult> PrepareAsync(
+        string sdkVersion,
+        IEnumerable<IntegrationReference> integrations,
+        string? requestedChannel,
+        string? packageSourceOverride,
+        TemplateSourcePolicy sourcePolicy,
+        CancellationToken cancellationToken);
 }

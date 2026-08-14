@@ -10,6 +10,7 @@ using Aspire.Cli.Configuration;
 using Aspire.Cli.DotNet;
 using Aspire.Cli.Packaging;
 using Aspire.Cli.Processes;
+using Aspire.Cli.Templating;
 using Aspire.Cli.Utils;
 using Aspire.Hosting;
 using Aspire.Shared;
@@ -21,7 +22,7 @@ namespace Aspire.Cli.Projects;
 /// AppHost server project for local Aspire development that uses the .NET SDK to build.
 /// Uses project references to the local Aspire repository (ASPIRE_REPO_ROOT).
 /// </summary>
-internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
+internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject, IAppHostServerSourcePolicyProject
 {
     private const string ProjectHashFileName = ".projecthash";
     private const string AppsFolder = "hosts";
@@ -265,7 +266,8 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
         IEnumerable<IntegrationReference> integrations,
         string? requestedChannel = null,
         string? packageSourceOverride = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        TemplateSourcePolicy sourcePolicy = TemplateSourcePolicy.Explicit)
     {
         // Clean obj folder to ensure fresh NuGet restore
         var objPath = Path.Combine(_projectModelPath, "obj");
@@ -324,8 +326,29 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
         // Handle NuGet config and channel resolution
         string? channelName = null;
 
-        var userNugetConfig = FindNuGetConfig(_appPath);
-        if (userNugetConfig is not null)
+        var hasPersistentSource = !string.IsNullOrWhiteSpace(packageSourceOverride) &&
+            sourcePolicy is TemplateSourcePolicy.ProjectLocalConfigured or TemplateSourcePolicy.GlobalOrAmbientConfigured;
+        var hasCredentialSource = !string.IsNullOrWhiteSpace(packageSourceOverride) &&
+            sourcePolicy is TemplateSourcePolicy.Explicit &&
+            PackageSourceOverrideMappings.HasCredentialMaterial(packageSourceOverride);
+        var hasExclusiveSource = hasPersistentSource || hasCredentialSource;
+        // The generated server project is a restore staging area. For configured sources,
+        // give it the same exclusive mapping as the template operation without copying the
+        // source into the user's project when the value came from global or ambient config.
+        var userNugetConfig = hasExclusiveSource ? null : FindNuGetConfig(_appPath);
+        if (hasPersistentSource)
+        {
+            await TemporaryNuGetConfig.GenerateAsync(
+                PackageSourceOverrideMappings.CreateForPersistentConfiguredSource(packageSourceOverride!),
+                Path.Combine(_projectModelPath, "nuget.config"));
+        }
+        else if (hasCredentialSource)
+        {
+            await TemporaryNuGetConfig.GenerateAsync(
+                PackageSourceOverrideMappings.CreateForTemplateOperations(packageSourceOverride!),
+                Path.Combine(_projectModelPath, "nuget.config"));
+        }
+        else if (userNugetConfig is not null)
         {
             var nugetConfigPath = Path.Combine(_projectModelPath, "nuget.config");
             File.Copy(userNugetConfig, nugetConfigPath, overwrite: true);
@@ -339,37 +362,44 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
         // Resolve channel sources and add them via RestoreAdditionalProjectSources
         // This is additive — it preserves the user's nuget.config and adds channel-specific sources
         var channelSources = new List<string>();
-        var matchedChannels = !string.IsNullOrEmpty(configuredChannelName)
-            ? channels.Where(c => string.Equals(c.Name, configuredChannelName, StringComparison.OrdinalIgnoreCase))
-            : channels.Where(c => c.Type == PackageChannelType.Explicit);
-
-        foreach (var ch in matchedChannels)
+        if (hasPersistentSource)
         {
-            channelName ??= ch.Name;
-            if (ch.Mappings is not null)
+            channelSources.Add(packageSourceOverride!);
+        }
+        else if (!hasCredentialSource)
+        {
+            var matchedChannels = !string.IsNullOrEmpty(configuredChannelName)
+                ? channels.Where(c => string.Equals(c.Name, configuredChannelName, StringComparison.OrdinalIgnoreCase))
+                : channels.Where(c => c.Type == PackageChannelType.Explicit);
+
+            foreach (var ch in matchedChannels)
             {
-                foreach (var mapping in ch.Mappings)
+                channelName ??= ch.Name;
+                if (ch.Mappings is not null)
                 {
-                    if (!channelSources.Contains(mapping.Source, StringComparer.OrdinalIgnoreCase))
+                    foreach (var mapping in ch.Mappings)
                     {
-                        channelSources.Add(mapping.Source);
+                        if (!channelSources.Contains(mapping.Source, StringComparer.OrdinalIgnoreCase))
+                        {
+                            channelSources.Add(mapping.Source);
+                        }
                     }
                 }
             }
-        }
 
-        // Thread an explicit `--source` override into the restore sources so the dogfood
-        // `aspire new --source <pr-hive>` flow is honored in dev mode (in-repo). Prepending
-        // makes the override the first source NuGet evaluates, which matters when the same
-        // Aspire package version exists in both the hive and a channel feed. Note: unlike
-        // PrebuiltAppHostServer this path does not emit Package Source Mappings, so NuGet
-        // may still consult other sources if the override does not satisfy a request — the
-        // override is best-effort here, sufficient for the in-repo developer scenario where
-        // most Aspire.* dependencies come from ProjectReference, not PackageReference.
-        if (!string.IsNullOrWhiteSpace(packageSourceOverride) &&
-            !channelSources.Contains(packageSourceOverride, StringComparer.OrdinalIgnoreCase))
-        {
-            channelSources.Insert(0, packageSourceOverride);
+            // Thread an explicit `--source` override into the restore sources so the dogfood
+            // `aspire new --source <pr-hive>` flow is honored in dev mode (in-repo). Prepending
+            // makes the override the first source NuGet evaluates, which matters when the same
+            // Aspire package version exists in both the hive and a channel feed. Note: unlike
+            // PrebuiltAppHostServer this path does not emit Package Source Mappings, so NuGet
+            // may still consult other sources if the override does not satisfy a request — the
+            // override is best-effort here, sufficient for the in-repo developer scenario where
+            // most Aspire.* dependencies come from ProjectReference, not PackageReference.
+            if (!string.IsNullOrWhiteSpace(packageSourceOverride) &&
+                !channelSources.Contains(packageSourceOverride, StringComparer.OrdinalIgnoreCase))
+            {
+                channelSources.Insert(0, packageSourceOverride);
+            }
         }
 
         // Create the project file
@@ -440,28 +470,61 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
     }
 
     /// <inheritdoc />
+    Task<AppHostServerPrepareResult> IAppHostServerProject.PrepareAsync(
+        string sdkVersion,
+        IEnumerable<IntegrationReference> integrations,
+        string? requestedChannel,
+        string? packageSourceOverride,
+        CancellationToken cancellationToken)
+    {
+        return PrepareAsync(
+            sdkVersion,
+            integrations,
+            requestedChannel,
+            packageSourceOverride,
+            TemplateSourcePolicy.Explicit,
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<AppHostServerPrepareResult> PrepareAsync(
         string sdkVersion,
         IEnumerable<IntegrationReference> integrations,
         string? requestedChannel = null,
         string? packageSourceOverride = null,
+        TemplateSourcePolicy sourcePolicy = TemplateSourcePolicy.Explicit,
         CancellationToken cancellationToken = default)
     {
-        var (_, channelName) = await CreateProjectFilesAsync(integrations, requestedChannel, packageSourceOverride, cancellationToken);
-        var (buildSuccess, buildOutput) = await BuildAsync(cancellationToken);
+        var temporarySourceConfig = !string.IsNullOrWhiteSpace(packageSourceOverride) &&
+            (sourcePolicy is TemplateSourcePolicy.GlobalOrAmbientConfigured ||
+             (sourcePolicy is TemplateSourcePolicy.Explicit &&
+              PackageSourceOverrideMappings.HasCredentialMaterial(packageSourceOverride)));
+        var (_, channelName) = await CreateProjectFilesAsync(integrations, requestedChannel, packageSourceOverride, cancellationToken, sourcePolicy);
+        (bool Success, OutputCollector Output) buildResult;
+        try
+        {
+            buildResult = await BuildAsync(cancellationToken);
+        }
+        finally
+        {
+            if (temporarySourceConfig)
+            {
+                File.Delete(Path.Combine(_projectModelPath, "nuget.config"));
+            }
+        }
 
-        if (!buildSuccess)
+        if (!buildResult.Success)
         {
             return new AppHostServerPrepareResult(
                 Success: false,
-                Output: buildOutput,
+                Output: buildResult.Output,
                 ChannelName: channelName,
                 NeedsCodeGeneration: false);
         }
 
         return new AppHostServerPrepareResult(
             Success: true,
-            Output: buildOutput,
+            Output: buildResult.Output,
             ChannelName: channelName,
             NeedsCodeGeneration: true);
     }

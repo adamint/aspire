@@ -249,6 +249,61 @@ public class ConfigurationHelperTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public void RegisterSettingsFiles_MergesProfileEnvironmentVariablesAsLiteralKeys()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        var config = BuildConfigurationFromSettingsFile(workspace, """
+            {
+              "profiles": {
+                "http": {
+                  "environmentVariables": {
+                    "Logging:LogLevel:Default": "nested",
+                    "Keep:Nested": "keep"
+                  }
+                }
+              },
+              "profiles:http:environmentVariables": {
+                "logging:loglevel:default": "flat"
+              }
+            }
+            """);
+
+        Assert.Equal("nested", config["profiles:http:environmentVariables:Logging:LogLevel:Default"]);
+        Assert.Equal("keep", config["profiles:http:environmentVariables:Keep:Nested"]);
+        Assert.Equal("nested", AspireConfigFile.Load(workspace.WorkspaceRoot.FullName)!.Profiles!["http"].EnvironmentVariables!["Logging:LogLevel:Default"]);
+    }
+
+    [Fact]
+    public void TryNormalizeSettingsFile_RepairsLiteralColonDuplicateKeys()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        var settingsPath = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
+        File.WriteAllText(settingsPath, """
+            {
+              "profiles:http:environmentVariables": {
+                "Logging:LogLevel:Default": "first",
+                "logging:loglevel:default": "last"
+              },
+              "extension": {
+                "package:metadata": {
+                  "asset:type": "first",
+                  "ASSET:TYPE": "last"
+                }
+              }
+            }
+            """);
+
+        Assert.True(ConfigurationHelper.TryNormalizeSettingsFile(settingsPath));
+        var config = AspireConfigFile.Load(workspace.WorkspaceRoot.FullName);
+
+        Assert.Equal("last", config!.Profiles!["http"].EnvironmentVariables!["logging:loglevel:default"]);
+        Assert.Equal("last", config.ExtensionData!["extension"].GetProperty("package:metadata").GetProperty("ASSET:TYPE").GetString());
+        Assert.Equal("last", BuildConfigurationFromSettingsFile(workspace, File.ReadAllText(settingsPath))["profiles:http:environmentVariables:logging:loglevel:default"]);
+    }
+
+    [Fact]
     public void TryNormalizeSettingsFile_PreservesBooleanTypes()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);

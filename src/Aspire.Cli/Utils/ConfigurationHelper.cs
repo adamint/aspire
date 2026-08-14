@@ -347,7 +347,18 @@ internal static class ConfigurationHelper
     {
         if (scope is NormalizationScope.Literal)
         {
-            return JsonNode.Parse(element.GetRawText())!.AsObject();
+            var literal = new JsonObject();
+            foreach (var property in element.EnumerateObject())
+            {
+                if (TryGetPropertyName(literal, property.Name, out var existingName))
+                {
+                    literal.Remove(existingName!);
+                }
+
+                literal[property.Name] = NormalizeJsonElement(property.Value, NormalizationScope.Literal);
+            }
+
+            return literal;
         }
 
         var direct = new JsonObject();
@@ -392,7 +403,6 @@ internal static class ConfigurationHelper
         return element.ValueKind switch
         {
             JsonValueKind.Object => NormalizeObject(element, scope),
-            JsonValueKind.Array when scope is NormalizationScope.Literal => JsonNode.Parse(element.GetRawText()),
             JsonValueKind.Array => NormalizeJsonArray(element, scope),
             JsonValueKind.Null => null,
             _ => JsonNode.Parse(element.GetRawText())
@@ -419,6 +429,26 @@ internal static class ConfigurationHelper
     {
         if (scope is NormalizationScope.Literal)
         {
+            if (element.ValueKind is JsonValueKind.Array)
+            {
+                return element.EnumerateArray().Any(item => NeedsNormalization(item, scope));
+            }
+
+            if (element.ValueKind is not JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            var literalNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var property in element.EnumerateObject())
+            {
+                if (!literalNames.Add(property.Name) ||
+                    NeedsNormalization(property.Value, scope))
+                {
+                    return true;
+                }
+            }
+
             return false;
         }
 
@@ -485,7 +515,9 @@ internal static class ConfigurationHelper
             if (segments.Length >= 3 &&
                 segments[2].Equals("environmentVariables", StringComparison.OrdinalIgnoreCase))
             {
-                return [segments[0], segments[1], segments[2], string.Join(':', segments.Skip(3))];
+                return segments.Length == 3
+                    ? segments
+                    : [segments[0], segments[1], segments[2], string.Join(':', segments.Skip(3))];
             }
 
             if (segments.Length is 2 or 3 &&
@@ -629,7 +661,10 @@ internal static class ConfigurationHelper
     {
         foreach (var (propertyName, value) in source)
         {
-            OverlayJsonPath(target, propertyName.Split(':'), value);
+            // Source properties have already been split and normalized by the caller.
+            // Treat the remaining name as one segment so literal keys such as
+            // "Logging:LogLevel:Default" are not split a second time.
+            OverlayJsonPath(target, [propertyName], value);
         }
     }
 
@@ -637,37 +672,9 @@ internal static class ConfigurationHelper
     {
         foreach (var (propertyName, value) in source)
         {
-            var path = propertyName.Split(':');
-            JsonObject? current = target;
-            for (var i = 0; i < path.Length - 1; i++)
+            if (TryGetPropertyName(target, propertyName, out var existingName))
             {
-                if (TryGetPropertyName(current, path[i], out var existingName))
-                {
-                    if (current[existingName!] is not JsonObject existingObject)
-                    {
-                        current = null;
-                        break;
-                    }
-
-                    current = existingObject;
-                }
-                else
-                {
-                    var child = new JsonObject();
-                    current[path[i]] = child;
-                    current = child;
-                }
-            }
-
-            if (current is null)
-            {
-                continue;
-            }
-
-            var finalSegment = path[^1];
-            if (TryGetPropertyName(current, finalSegment, out var finalName))
-            {
-                if (current[finalName!] is JsonObject existingObject && value is JsonObject sourceObject)
+                if (target[existingName!] is JsonObject existingObject && value is JsonObject sourceObject)
                 {
                     OverlayJsonObjectPreservingExisting(existingObject, sourceObject);
                 }
@@ -675,7 +682,7 @@ internal static class ConfigurationHelper
                 continue;
             }
 
-            current[finalSegment] = value?.DeepClone();
+            target[propertyName] = value?.DeepClone();
         }
     }
 

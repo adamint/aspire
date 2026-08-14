@@ -79,9 +79,11 @@ internal sealed partial class CliTemplateFactory
                         return new TemplateResult((int)CliExitCodes.FailedToBuildArtifacts, outputPath);
                     }
 
-                    await _templateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(inputs.Source, inputs.Channel, outputPath, cancellationToken);
+                    await _templateNuGetConfigService.CreateOrUpdateNuGetConfigForSourceOverrideAsync(inputs.Source, inputs.Channel, outputPath, inputs.SourcePolicy, cancellationToken);
                     _logger.LogDebug("Generating SDK code for TypeScript starter in '{OutputPath}'.", outputPath);
-                    var restoreSucceeded = await guestProject.BuildAndGenerateSdkAsync(new DirectoryInfo(outputPath), packageSourceOverride: inputs.Source, cancellationToken: cancellationToken);
+                    var restoreSucceeded = guestProject is IGuestAppHostSourcePolicyGenerator sourcePolicyGuest
+                        ? await sourcePolicyGuest.BuildAndGenerateSdkAsync(new DirectoryInfo(outputPath), inputs.Source, inputs.SourcePolicy, cancellationToken)
+                        : await guestProject.BuildAndGenerateSdkAsync(new DirectoryInfo(outputPath), inputs.Source, cancellationToken);
                     if (!restoreSucceeded)
                     {
                         _interactionService.DisplayError("Automatic 'aspire restore' failed for the new TypeScript starter project. Run 'aspire restore' in the project directory for more details.");

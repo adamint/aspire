@@ -108,6 +108,60 @@ public class TemplateNuGetConfigServiceTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task CreateOrUpdateNuGetConfigForSourceOverrideAsync_ProjectLocalConfiguredSourceIsExclusive()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var outputDirectory = workspace.WorkspaceRoot.CreateSubdirectory("output");
+        const string sourceOverride = "https://internal.example/v3/index.json";
+
+        var service = CreateService();
+
+        Assert.True(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(
+            sourceOverride,
+            channelName: null,
+            outputDirectory.FullName,
+            TemplateSourcePolicy.ProjectLocalConfigured,
+            CancellationToken.None));
+
+        var doc = XDocument.Load(Path.Combine(outputDirectory.FullName, "nuget.config"));
+        Assert.Equal([sourceOverride], doc.Root!.Element("packageSources")!.Elements("add").Select(e => (string?)e.Attribute("value")));
+        Assert.Equal(["Aspire*", "*"], GetPackagePatternsForSource(doc, sourceOverride));
+        Assert.DoesNotContain(PackageSources.NuGetOrg, doc.Descendants("add").Select(e => (string?)e.Attribute("value")));
+    }
+
+    [Fact]
+    public async Task CreateTemporarySourceOverrideConfigAsync_GlobalConfiguredSourceIsExclusiveAndNotPersisted()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var outputDirectory = workspace.WorkspaceRoot.CreateSubdirectory("output");
+        const string sourceOverride = "https://internal.example/v3/index.json";
+
+        var service = CreateService();
+
+        Assert.False(await service.CreateOrUpdateNuGetConfigForSourceOverrideAsync(
+            sourceOverride,
+            channelName: null,
+            outputDirectory.FullName,
+            TemplateSourcePolicy.GlobalOrAmbientConfigured,
+            CancellationToken.None));
+        Assert.False(File.Exists(Path.Combine(outputDirectory.FullName, "nuget.config")));
+
+        using (await TemplateNuGetConfigService.CreateTemporarySourceOverrideConfigAsync(
+                   sourceOverride,
+                   outputDirectory.FullName,
+                   TemplateSourcePolicy.GlobalOrAmbientConfigured,
+                   CancellationToken.None))
+        {
+            var configPath = Path.Combine(outputDirectory.FullName, "nuget.config");
+            var doc = XDocument.Load(configPath);
+            Assert.DoesNotContain(PackageSources.NuGetOrg, doc.Descendants("add").Select(e => (string?)e.Attribute("value")));
+            Assert.Equal(["Aspire*", "*"], doc.Root!.Element("packageSourceMapping")!.Elements("packageSource").SelectMany(e => e.Elements("package")).Select(e => (string?)e.Attribute("pattern")));
+        }
+
+        Assert.False(File.Exists(Path.Combine(outputDirectory.FullName, "nuget.config")));
+    }
+
+    [Fact]
     public async Task CreateOrUpdateNuGetConfigForSourceOverrideAsync_UpdatesOnlyProjectLocalConfig()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);

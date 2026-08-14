@@ -183,6 +183,24 @@ internal sealed class TemplateNuGetConfigService(
         string outputPath,
         CancellationToken cancellationToken)
     {
+        return await CreateOrUpdateNuGetConfigForSourceOverrideAsync(
+            sourceOverride,
+            channelName,
+            outputPath,
+            TemplateSourcePolicy.Explicit,
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Creates or updates a project NuGet.config using the source's persistence and routing policy.
+    /// </summary>
+    public async Task<bool> CreateOrUpdateNuGetConfigForSourceOverrideAsync(
+        string? sourceOverride,
+        string? channelName,
+        string outputPath,
+        TemplateSourcePolicy sourcePolicy,
+        CancellationToken cancellationToken)
+    {
         if (string.IsNullOrWhiteSpace(sourceOverride))
         {
             return false;
@@ -201,6 +219,7 @@ internal sealed class TemplateNuGetConfigService(
             sourceOverride,
             matchingChannel,
             outputPath,
+            sourcePolicy,
             cancellationToken,
             executionContext.NuGetServiceIndexOverride);
     }
@@ -215,7 +234,32 @@ internal sealed class TemplateNuGetConfigService(
         CancellationToken cancellationToken,
         string? nugetServiceIndexOverride = null)
     {
+        return await CreateOrUpdateNuGetConfigForSourceOverrideAsync(
+            sourceOverride,
+            channel,
+            outputPath,
+            TemplateSourcePolicy.Explicit,
+            cancellationToken,
+            nugetServiceIndexOverride);
+    }
+
+    /// <summary>
+    /// Creates or updates a project NuGet.config using the source's persistence and routing policy.
+    /// </summary>
+    public static async Task<bool> CreateOrUpdateNuGetConfigForSourceOverrideAsync(
+        string? sourceOverride,
+        PackageChannel? channel,
+        string outputPath,
+        TemplateSourcePolicy sourcePolicy,
+        CancellationToken cancellationToken,
+        string? nugetServiceIndexOverride = null)
+    {
         if (string.IsNullOrWhiteSpace(sourceOverride))
+        {
+            return false;
+        }
+
+        if (sourcePolicy is TemplateSourcePolicy.None or TemplateSourcePolicy.GlobalOrAmbientConfigured)
         {
             return false;
         }
@@ -227,10 +271,9 @@ internal sealed class TemplateNuGetConfigService(
             return false;
         }
 
-        var mappings = PackageSourceOverrideMappings.Create(
-            sourceOverride,
-            channel,
-            nugetServiceIndexOverride);
+        var mappings = sourcePolicy is TemplateSourcePolicy.ProjectLocalConfigured
+            ? PackageSourceOverrideMappings.CreateForPersistentConfiguredSource(sourceOverride)
+            : PackageSourceOverrideMappings.Create(sourceOverride, channel, nugetServiceIndexOverride);
         await NuGetConfigMerger.CreateOrUpdateAsync(
             new DirectoryInfo(outputPath),
             mappings,
@@ -244,8 +287,22 @@ internal sealed class TemplateNuGetConfigService(
         string outputPath,
         CancellationToken cancellationToken)
     {
+        return await CreateTemporarySourceOverrideConfigAsync(
+            sourceOverride,
+            outputPath,
+            TemplateSourcePolicy.Explicit,
+            cancellationToken);
+    }
+
+    public static async Task<IDisposable?> CreateTemporarySourceOverrideConfigAsync(
+        string? sourceOverride,
+        string outputPath,
+        TemplateSourcePolicy sourcePolicy,
+        CancellationToken cancellationToken)
+    {
         if (string.IsNullOrWhiteSpace(sourceOverride) ||
-            !PackageSourceOverrideMappings.HasCredentialMaterial(sourceOverride))
+            (sourcePolicy is not TemplateSourcePolicy.GlobalOrAmbientConfigured &&
+             !PackageSourceOverrideMappings.HasCredentialMaterial(sourceOverride)))
         {
             return null;
         }

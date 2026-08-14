@@ -8,6 +8,7 @@ using System.Xml.Linq;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Packaging;
 using Aspire.Cli.Projects;
+using Aspire.Cli.Templating;
 using Aspire.Cli.Utils;
 using Aspire.Cli.Tests.Mcp;
 using Aspire.Cli.Tests.TestServices;
@@ -412,6 +413,88 @@ public class AppHostServerProjectTests(ITestOutputHelper outputHelper) : IDispos
         // Aspire package version exists in both the hive and the channel feed.
         Assert.Equal(overrideSource, sources[0]);
         Assert.Contains("https://pkgs.dev.azure.com/fake/v3/index.json", sources);
+    }
+
+    [Theory]
+    [InlineData("project")]
+    [InlineData("global")]
+    public async Task CreateProjectFiles_WithPersistentConfiguredSource_UsesExclusiveTemporaryConfig(string sourceKind)
+    {
+        var sourcePolicy = sourceKind == "project"
+            ? TemplateSourcePolicy.ProjectLocalConfigured
+            : TemplateSourcePolicy.GlobalOrAmbientConfigured;
+        var appPath = _workspace.WorkspaceRoot.FullName;
+        const string overrideSource = "https://internal.example/v3/index.json";
+        var projectModelPath = Path.Combine(appPath, ".aspire_server_persistent");
+        var project = new DotNetBasedAppHostServerProject(
+            appPath,
+            "test.sock",
+            appPath,
+            new TestDotNetCliRunner(),
+            MockPackagingServiceFactory.Create(),
+            new TestProcessExecutionFactory(),
+            new TestEnvironment(),
+            NullLogger<DotNetBasedAppHostServerProject>.Instance,
+            projectModelPath);
+
+        var packages = new List<IntegrationReference>
+        {
+            IntegrationReference.FromPackage("Aspire.Hosting", "13.1.0")
+        };
+
+        var (projectFilePath, _) = await project.CreateProjectFilesAsync(
+            packages,
+            packageSourceOverride: overrideSource,
+            cancellationToken: CancellationToken.None,
+            sourcePolicy: sourcePolicy).DefaultTimeout();
+
+        var projectDoc = XDocument.Load(projectFilePath);
+        var restoreSources = projectDoc.Descendants("RestoreAdditionalProjectSources").FirstOrDefault()?.Value;
+        Assert.Equal(overrideSource, restoreSources);
+
+        var nugetConfig = XDocument.Load(Path.Combine(projectModelPath, "nuget.config"));
+        Assert.Equal([overrideSource], nugetConfig.Root!.Element("packageSources")!.Elements("add").Select(e => (string?)e.Attribute("value")));
+        var patterns = nugetConfig.Root!.Element("packageSourceMapping")!
+            .Elements("packageSource")
+            .Where(e => string.Equals((string?)e.Attribute("key"), overrideSource, StringComparison.OrdinalIgnoreCase))
+            .SelectMany(e => e.Elements("package"))
+            .Select(e => (string?)e.Attribute("pattern"));
+        Assert.Equal(["Aspire*", PackageMapping.AllPackages], patterns);
+        Assert.DoesNotContain(PackageSources.NuGetOrg, nugetConfig.Descendants("add").Select(e => (string?)e.Attribute("value")));
+    }
+
+    [Fact]
+    public async Task CreateProjectFiles_WithCredentialBearingExplicitSource_DoesNotPersistSourceInProject()
+    {
+        var appPath = _workspace.WorkspaceRoot.FullName;
+        const string overrideSource = "https://internal.example/v3/index.json?sig=secret";
+        var projectModelPath = Path.Combine(appPath, ".aspire_server_credential");
+        var project = new DotNetBasedAppHostServerProject(
+            appPath,
+            "test.sock",
+            appPath,
+            new TestDotNetCliRunner(),
+            MockPackagingServiceFactory.Create(),
+            new TestProcessExecutionFactory(),
+            new TestEnvironment(),
+            NullLogger<DotNetBasedAppHostServerProject>.Instance,
+            projectModelPath);
+
+        var packages = new List<IntegrationReference>
+        {
+            IntegrationReference.FromPackage("Aspire.Hosting", "13.1.0")
+        };
+
+        var (projectFilePath, _) = await project.CreateProjectFilesAsync(
+            packages,
+            packageSourceOverride: overrideSource,
+            cancellationToken: CancellationToken.None).DefaultTimeout();
+
+        var projectDoc = XDocument.Load(projectFilePath);
+        Assert.Null(projectDoc.Descendants("RestoreAdditionalProjectSources").FirstOrDefault());
+
+        var nugetConfig = await File.ReadAllTextAsync(Path.Combine(projectModelPath, "nuget.config"));
+        Assert.Contains("sig=secret", nugetConfig);
     }
 
     [Fact]

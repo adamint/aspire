@@ -186,6 +186,17 @@ internal static class PackageSourceOverrideMappings
         ];
     }
 
+    public static PackageMapping[] CreateForPersistentConfiguredSource(string packageSourceOverride)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(packageSourceOverride);
+
+        return
+        [
+            new("Aspire*", packageSourceOverride),
+            new(PackageMapping.AllPackages, packageSourceOverride)
+        ];
+    }
+
     public static bool HasCredentialMaterial(string source)
     {
         return Uri.TryCreate(source.Trim(), UriKind.Absolute, out var uri) &&

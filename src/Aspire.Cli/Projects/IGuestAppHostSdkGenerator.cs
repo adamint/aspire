@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using Aspire.Cli.Templating;
+
 namespace Aspire.Cli.Projects;
 
 /// <summary>
@@ -16,4 +18,13 @@ internal interface IGuestAppHostSdkGenerator
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns><see langword="true"/> if SDK generation succeeded; otherwise, <see langword="false"/>.</returns>
     Task<bool> BuildAndGenerateSdkAsync(DirectoryInfo directory, string? packageSourceOverride = null, CancellationToken cancellationToken = default);
+}
+
+internal interface IGuestAppHostSourcePolicyGenerator
+{
+    Task<bool> BuildAndGenerateSdkAsync(
+        DirectoryInfo directory,
+        string? packageSourceOverride,
+        TemplateSourcePolicy sourcePolicy,
+        CancellationToken cancellationToken);
 }
