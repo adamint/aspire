@@ -7,6 +7,8 @@ using Microsoft.Extensions.Hosting;
 
 #pragma warning disable ASPIRECERTIFICATES001
 
+using var entryPointProbe = TestingAppHostEntryPointProbe.Track(args);
+
 var builder = DistributedApplication.CreateBuilder(args);
 
 if (args.Contains("--clear-apphost-browser-token"))

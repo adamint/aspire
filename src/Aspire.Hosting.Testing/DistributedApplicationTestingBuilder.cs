@@ -191,7 +191,15 @@ public static class DistributedApplicationTestingBuilder
         ArgumentNullException.ThrowIfNull(configureBuilder, nameof(configureBuilder));
 
         var factory = new SuspendingDistributedApplicationFactory(entryPoint, args, testingOptions, configureBuilder);
-        return await factory.CreateBuilderAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await factory.CreateBuilderAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            await factory.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 
     /// <summary>

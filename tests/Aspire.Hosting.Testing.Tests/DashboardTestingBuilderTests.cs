@@ -158,6 +158,20 @@ public class DashboardTestingBuilderTests
         Assert.Equal(TestingResources.DashboardTestingPublishModeExceptionMessage, exception.Message);
     }
 
+    [Theory]
+    [InlineData(CreationSurface.Generic)]
+    [InlineData(CreationSurface.Type)]
+    public async Task DashboardTestingPublishModeFailureStopsAppHostEntryPoint(CreationSurface creationSurface)
+    {
+        using var probe = TestingAppHostEntryPointProbe.Create();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => CreatePublishBuilderAsync(creationSurface, $"--entry-point-exit-probe={probe.Id}"));
+
+        Assert.Equal(TestingResources.DashboardTestingPublishModeExceptionMessage, exception.Message);
+        await probe.Exited.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
     [Fact]
     public async Task DashboardEnabledThroughConfigureBuilderKeepsCallerConfiguration()
     {
@@ -272,20 +286,21 @@ public class DashboardTestingBuilderTests
         };
     }
 
-    private static async Task CreatePublishBuilderAsync(CreationSurface creationSurface)
+    private static async Task CreatePublishBuilderAsync(CreationSurface creationSurface, params string[] additionalArgs)
     {
         var options = CreateDashboardOptions();
+        string[] args = [.. additionalArgs, "--publisher", "manifest"];
 
         var builder = creationSurface switch
         {
             CreationSurface.Generic => await DistributedApplicationTestingBuilder.CreateAsync<Projects.TestingAppHost1_AppHost>(
                 options,
-                ["--publisher", "manifest"]),
+                args),
             CreationSurface.Type => await DistributedApplicationTestingBuilder.CreateAsync(
                 typeof(Projects.TestingAppHost1_AppHost),
                 options,
-                ["--publisher", "manifest"]),
-            CreationSurface.AdHoc => DistributedApplicationTestingBuilder.Create(options, ["--publisher", "manifest"]),
+                args),
+            CreationSurface.AdHoc => DistributedApplicationTestingBuilder.Create(options, args),
             _ => throw new ArgumentOutOfRangeException(nameof(creationSurface))
         };
 

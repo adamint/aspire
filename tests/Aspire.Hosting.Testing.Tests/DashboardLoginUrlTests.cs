@@ -15,7 +15,7 @@ namespace Aspire.Hosting.Testing.Tests;
 public class DashboardLoginUrlTests
 {
     [Fact]
-    [RequiresFeature(TestFeature.Docker)]
+    [RequiresFeature(TestFeature.ContainerRuntime)]
     public async Task GetDashboardLoginUrlAsyncAuthenticatesDashboardBrowser()
     {
         await using var builder = await CreateDashboardBuilderAsync();
@@ -57,7 +57,7 @@ public class DashboardLoginUrlTests
     }
 
     [Fact]
-    [RequiresFeature(TestFeature.Docker)]
+    [RequiresFeature(TestFeature.ContainerRuntime)]
     public async Task DashboardRejectsWrongCrossApplicationAndBogusLoginTokens()
     {
         await using var firstBuilder = await CreateDashboardBuilderAsync();
@@ -101,7 +101,7 @@ public class DashboardLoginUrlTests
     }
 
     [Fact]
-    [RequiresFeature(TestFeature.Docker)]
+    [RequiresFeature(TestFeature.ContainerRuntime)]
     public async Task GetDashboardLoginUrlAsyncThrowsWhenDashboardIsDisabled()
     {
         var builder = DistributedApplicationTestingBuilder.Create();
@@ -115,7 +115,7 @@ public class DashboardLoginUrlTests
     }
 
     [Fact]
-    [RequiresFeature(TestFeature.Docker)]
+    [RequiresFeature(TestFeature.ContainerRuntime)]
     public async Task GetDashboardLoginUrlAsyncThrowsWhenDashboardAllowsAnonymousAccess()
     {
         await using var builder = await CreateDashboardBuilderAsync();
@@ -154,7 +154,7 @@ public class DashboardLoginUrlTests
     }
 
     [Fact]
-    [RequiresFeature(TestFeature.Docker)]
+    [RequiresFeature(TestFeature.ContainerRuntime)]
     public async Task GetDashboardLoginUrlAsyncPreservesTerminalDashboardFailure()
     {
         var missingDashboardPath = Path.Combine(
@@ -175,7 +175,7 @@ public class DashboardLoginUrlTests
     }
 
     [Fact]
-    [RequiresFeature(TestFeature.Docker)]
+    [RequiresFeature(TestFeature.ContainerRuntime)]
     public async Task DashboardStartupSummaryDoesNotWriteTheBrowserTokenToAppHostLogs()
     {
         await using var builder = await CreateDashboardBuilderAsync();
