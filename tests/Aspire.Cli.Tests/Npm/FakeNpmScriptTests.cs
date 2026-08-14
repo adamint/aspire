@@ -204,7 +204,9 @@ public class FakeNpmScriptTests(ITestOutputHelper outputHelper)
         try
         {
             await process.WaitForExitAsync(TestContext.Current.CancellationToken).DefaultTimeout();
-            await fakeNpm.WaitForParentExitAsync().DefaultTimeout();
+            // Wait only for the marker here. WaitForParentExitAsync also caches the verified holder,
+            // which would bypass the intentionally corrupted identity file below.
+            await fakeNpm.WaitForParentExitMarkerAsync().DefaultTimeout();
             await File.WriteAllTextAsync(
                 fakeNpm.HolderIdentityFile,
                 "not-a-valid-holder-pid",

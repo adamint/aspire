@@ -190,9 +190,14 @@ internal sealed class FakeNpmScript : IDisposable
         return WaitForFileAsync(ParentReadyFile, cancellationToken);
     }
 
+    public Task WaitForParentExitMarkerAsync(CancellationToken cancellationToken = default)
+    {
+        return WaitForFileAsync(ParentExitedFile, cancellationToken);
+    }
+
     public async Task WaitForParentExitAsync(CancellationToken cancellationToken = default)
     {
-        await WaitForFileAsync(ParentExitedFile, cancellationToken).ConfigureAwait(false);
+        await WaitForParentExitMarkerAsync(cancellationToken).ConfigureAwait(false);
 
         // Capture the holder immediately after the parent exits and before callers can mutate the
         // identity file. This pins the exact helper instance without starting an observation timeout
@@ -368,9 +373,20 @@ internal sealed class FakeNpmScript : IDisposable
         // readable, validated holder process — instead of caching a permanent null from an empty read.
         while (!combinedObservationCts.IsCancellationRequested)
         {
-            var holderProcess = await TryCreateVerifiedHolderProcessAsync(
-                combinedObservationCts.Token,
-                logFailure: false).ConfigureAwait(false);
+            Process? holderProcess;
+            try
+            {
+                holderProcess = await TryCreateVerifiedHolderProcessAsync(
+                    combinedObservationCts.Token,
+                    logFailure: false).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // The observation budget can expire during the file read. Perform the final
+                // uncancelled validation below instead of surfacing that internal timeout.
+                break;
+            }
+
             if (holderProcess is not null)
             {
                 return holderProcess;
