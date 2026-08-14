@@ -8,6 +8,7 @@ using Aspire.Cli.Interaction;
 using Aspire.Cli.Projects;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
+using Aspire.Cli.Utils;
 using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.DependencyInjection;
 using StreamJsonRpc;
@@ -204,6 +205,31 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         Assert.Null(rpcClient.LastExportRequest);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SdkExportRejectsCoreWhenEmulatedVersionDiffersFromTheRunningBinary(bool specifyPackage)
+    {
+        var interactionService = new TestInteractionService();
+        var physicalSdkVersion = VersionHelper.GetDefaultSdkVersion();
+        var emulatedSdkVersion = physicalSdkVersion == "0.0.1" ? "0.0.2" : "0.0.1";
+        using var provider = CreateProvider(
+            interactionService,
+            out var workspace,
+            out var rpcClient,
+            out _,
+            identityVersion: emulatedSdkVersion);
+        using var workspaceLease = workspace;
+
+        var command = specifyPackage
+            ? $"sdk export --language typescript --package Aspire.Hosting@{emulatedSdkVersion}"
+            : "sdk export --language typescript";
+        var exitCode = await InvokeAsync(provider, command);
+
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
+        Assert.Null(rpcClient.LastExportRequest);
+    }
+
     [Fact]
     public async Task SdkExportUsesStructuredInvalidParametersForUnsupportedLanguage()
     {
@@ -276,12 +302,13 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         TestInteractionService interactionService,
         out TemporaryWorkspace workspace,
         out StubExportRpcClient rpcClient,
-        out CapturingAppHostServerProject project)
+        out CapturingAppHostServerProject project,
+        string? identityVersion = null)
     {
         workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         rpcClient = new StubExportRpcClient();
         project = new CapturingAppHostServerProject();
-        return CreateProvider(interactionService, out _, rpcClient, project, workspace);
+        return CreateProvider(interactionService, out _, rpcClient, project, workspace, identityVersion);
     }
 
     private ServiceProvider CreateProvider(
@@ -289,12 +316,20 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         out TemporaryWorkspace workspace,
         IAppHostRpcClient rpcClient,
         IAppHostServerProject appHostServerProject,
-        TemporaryWorkspace? existingWorkspace = null)
+        TemporaryWorkspace? existingWorkspace = null,
+        string? identityVersion = null)
     {
         workspace = existingWorkspace ?? TemporaryWorkspace.CreateForCli(outputHelper);
+        var testWorkspace = workspace;
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
         {
             options.InteractionServiceFactory = _ => interactionService;
+            if (identityVersion is not null)
+            {
+                options.CliExecutionContextFactory = _ => testWorkspace.CreateExecutionContext(
+                    identityVersion: identityVersion,
+                    identityOverridden: true);
+            }
         });
 
         services.AddSingleton<IAppHostServerProjectFactory>(new TestAppHostServerProjectFactory

@@ -6,6 +6,7 @@ using System.Text.Json;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Projects;
+using Aspire.Cli.Utils;
 using Microsoft.Extensions.Logging;
 using Semver;
 using StreamJsonRpc;
@@ -93,6 +94,15 @@ internal sealed class SdkExportCommand : BaseCommand
             {
                 integrations.Add(CreateExactPackageReference(packageName, packageVersion));
             }
+        }
+
+        var physicalSdkVersion = VersionHelper.GetDefaultSdkVersion();
+        if (string.Equals(packageName, CorePackageName, StringComparison.Ordinal) &&
+            !string.Equals(ExecutionContext.IdentitySdkVersion, physicalSdkVersion, StringComparison.OrdinalIgnoreCase))
+        {
+            return CommandResult.Failure(
+                CliExitCodes.InvalidCommand,
+                $"This CLI reports SDK version {ExecutionContext.IdentitySdkVersion}, but its embedded {CorePackageName} surface is from {physicalSdkVersion}.");
         }
 
         var languageInfo = await FindLanguageAsync(language, cancellationToken);
