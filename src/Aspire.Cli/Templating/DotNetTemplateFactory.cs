@@ -158,7 +158,7 @@ internal class DotNetTemplateFactory(
                 ApplyTemplateWithNoExtraArgsAsync,
                 languageId: KnownLanguageId.CSharp,
                 isEmpty: true,
-                restoreSuppressionArguments: ["--skipRestore"]
+                restoreSuppressionArguments: ["--no-restore"]
                 );
 
             yield return new CallbackTemplate(
@@ -168,7 +168,7 @@ internal class DotNetTemplateFactory(
                 ApplyDevLocalhostTldOption,
                 ApplyTemplateWithNoExtraArgsAsync,
                 languageId: KnownLanguageId.CSharp,
-                restoreSuppressionArguments: ["--skipRestore"]
+                restoreSuppressionArguments: ["--no-restore"]
                 );
 
             yield return new CallbackTemplate(

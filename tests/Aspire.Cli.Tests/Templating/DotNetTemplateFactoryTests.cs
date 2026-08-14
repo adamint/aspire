@@ -3,6 +3,7 @@
 
 using System.CommandLine;
 using Microsoft.AspNetCore.InternalTesting;
+using System.Diagnostics;
 using System.Text.Json;
 using Aspire.Cli.Backchannel;
 using Aspire.Cli.Certificates;
@@ -370,10 +371,47 @@ public class DotNetTemplateFactoryTests
         var templates = (await factory.GetTemplatesAsync()).ToDictionary(t => t.Name);
 
         Assert.Equal(["--skipRestore"], ((CallbackTemplate)templates["aspire-starter"]).RestoreSuppressionArguments);
-        Assert.Equal(["--skipRestore"], ((CallbackTemplate)templates["aspire-apphost"]).RestoreSuppressionArguments);
+        Assert.Equal(["--no-restore"], ((CallbackTemplate)templates["aspire"]).RestoreSuppressionArguments);
+        Assert.Equal(["--no-restore"], ((CallbackTemplate)templates["aspire-apphost"]).RestoreSuppressionArguments);
 
         var initTemplate = (CallbackTemplate)(await factory.GetInitTemplatesAsync()).Single();
         Assert.Equal(["--no-restore"], initTemplate.RestoreSuppressionArguments);
+    }
+
+    [Theory]
+    [InlineData("aspire-starter", "aspire-starter", "--skipRestore")]
+    [InlineData("aspire-apphost", "aspire-apphost", "--no-restore")]
+    [InlineData("aspire-empty", "aspire", "--no-restore")]
+    [InlineData("aspire-apphost-singlefile", "aspire-apphost-singlefile", "--no-restore")]
+    public async Task ActualTemplateEngine_ExposesExpectedRestoreAlias(
+        string templateDirectoryName,
+        string templateName,
+        string expectedRestoreArgument)
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(_outputHelper);
+        var hive = workspace.CreateDirectory("template-hive");
+        var templatePath = Path.Combine(
+            GetRepoRoot(),
+            "src",
+            "Aspire.ProjectTemplates",
+            "templates",
+            templateDirectoryName);
+
+        var installResult = await RunDotNetAsync(
+            ["new", "install", templatePath, "--debug:custom-hive", hive.FullName],
+            workspace.Path);
+        Assert.Equal(0, installResult.ExitCode);
+
+        var helpResult = await RunDotNetAsync(
+            ["new", templateName, "--help", "--debug:custom-hive", hive.FullName],
+            workspace.Path);
+        Assert.Equal(0, helpResult.ExitCode);
+        Assert.Contains(expectedRestoreArgument, helpResult.Output);
+
+        var unexpectedRestoreArgument = expectedRestoreArgument == "--skipRestore"
+            ? "--no-restore"
+            : "--skipRestore";
+        Assert.DoesNotContain(unexpectedRestoreArgument, helpResult.Output);
     }
 
     [Fact]
@@ -483,7 +521,7 @@ public class DotNetTemplateFactoryTests
             CancellationToken.None);
 
         Assert.Equal(CliExitCodes.FailedToBuildArtifacts, result.ExitCode);
-        Assert.Contains("--skipRestore", newProjectArguments!);
+        Assert.Contains("--no-restore", newProjectArguments!);
         var restoreCall = Assert.Single(restoreCalls);
         Assert.Equal(projectPath, restoreCall.FullName);
     }
@@ -519,6 +557,55 @@ public class DotNetTemplateFactoryTests
             hostEnvironment,
             templateNuGetConfigService,
             new HostEnvironment());
+    }
+
+    private static async Task<(int ExitCode, string Output)> RunDotNetAsync(
+        IReadOnlyList<string> arguments,
+        string workingDirectory)
+    {
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo("dotnet")
+            {
+                WorkingDirectory = workingDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            }
+        };
+
+        foreach (var argument in arguments)
+        {
+            process.StartInfo.ArgumentList.Add(argument);
+        }
+
+        Assert.True(process.Start());
+
+        // Read both streams concurrently so a template-engine diagnostic cannot fill a pipe
+        // while the test waits for the process to exit.
+        var standardOutputTask = process.StandardOutput.ReadToEndAsync();
+        var standardErrorTask = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        var output = await standardOutputTask + await standardErrorTask;
+        return (process.ExitCode, output);
+    }
+
+    private static string GetRepoRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "global.json")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate the Aspire repository root.");
     }
 
     private sealed class TestInteractionService : IInteractionService
