@@ -71,6 +71,31 @@ aspire <command> [options]
 | `docs` | Browse and search Aspire documentation and API reference from aspire.dev. |
 | `agent` | Manage AI agent specific setup. |
 
+## Configure a default NuGet source
+
+Set a source from an app directory to add it to the nearest `aspire.config.json`:
+
+```bash
+aspire config set nugetSource https://packages.example.com/v3/index.json
+```
+
+Or set a default for all apps:
+
+```bash
+aspire config set nugetSource https://packages.example.com/v3/index.json --global
+```
+
+The source is used by `aspire new`, `aspire add`, `aspire integration list`, and
+`aspire integration search`. For commands that accept `--source` (`new` and
+`add`), the explicit option wins. Otherwise, the nearest local setting wins,
+then the global setting, then the normal channel and NuGet source behavior.
+Relative paths are resolved from the directory containing the setting.
+
+For private feeds, configure authentication with a NuGet credential provider or
+user-level NuGet configuration. Do not include credentials, query strings, or
+fragments in `nugetSource`. Persistent remote file shares are not supported; use
+an HTTP(S) feed or pass the remote source explicitly with `--source`.
+
 ## Examples
 
 ```bash
