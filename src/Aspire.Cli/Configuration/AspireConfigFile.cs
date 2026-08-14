@@ -131,6 +131,12 @@ internal sealed class AspireConfigFile
     public Dictionary<string, string>? Packages { get; set; }
 
     /// <summary>
+    /// Captures additional properties so newer or template-specific configuration survives load and save operations.
+    /// </summary>
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
+
+    /// <summary>
     /// Loads aspire.config.json from the specified directory.
     /// </summary>
     /// <returns>The deserialized config, or <c>null</c> if the file does not exist.</returns>
@@ -425,6 +431,9 @@ internal sealed class AspireConfigFile
             config.NuGetSource = settings.NuGetSource;
             config.Features = settings.Features;
             config.Packages = settings.Packages;
+            config.ExtensionData = settings.ExtensionData is null
+                ? null
+                : new Dictionary<string, JsonElement>(settings.ExtensionData);
         }
 
         config.Profiles = profiles;

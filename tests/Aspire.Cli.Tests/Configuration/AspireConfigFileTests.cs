@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Aspire.Cli.Configuration;
 
 namespace Aspire.Cli.Tests.Configuration;
@@ -574,6 +575,57 @@ public class AspireConfigFileTests(ITestOutputHelper outputHelper)
         Assert.Equal("https://proxy.example/v3/index.json", config.NuGetSource);
         Assert.NotNull(saved);
         Assert.Equal("https://proxy.example/v3/index.json", saved.NuGetSource);
+    }
+
+    [Fact]
+    public void LoadOrCreate_MigratesLegacy_PreservesUnknownNestedProperties()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var root = workspace.WorkspaceRoot.FullName;
+
+        var settingsPath = Path.Combine(root, ".aspire", "settings.json");
+        File.WriteAllText(settingsPath, """
+            {
+              "appHostPath": "../apphost.mts",
+              "templateSpecific": {
+                "nested": {
+                  "value": 42,
+                  "items": [
+                    "one",
+                    {
+                      "enabled": true
+                    }
+                  ]
+                }
+              }
+            }
+            """);
+        var expected = JsonNode.Parse("""
+            {
+              "nested": {
+                "value": 42,
+                "items": [
+                  "one",
+                  {
+                    "enabled": true
+                  }
+                ]
+              }
+            }
+            """);
+
+        AspireConfigFile.LoadOrCreate(root);
+
+        var configPath = Path.Combine(root, AspireConfigFile.FileName);
+        var migratedJson = JsonNode.Parse(File.ReadAllText(configPath))!.AsObject();
+        Assert.True(JsonNode.DeepEquals(expected, migratedJson["templateSpecific"]));
+
+        var loaded = AspireConfigFile.Load(root);
+        Assert.NotNull(loaded);
+        loaded.Save(root);
+
+        var roundTrippedJson = JsonNode.Parse(File.ReadAllText(configPath))!.AsObject();
+        Assert.True(JsonNode.DeepEquals(expected, roundTrippedJson["templateSpecific"]));
     }
 
     [Fact]

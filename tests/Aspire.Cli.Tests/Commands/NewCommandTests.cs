@@ -1416,6 +1416,15 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
                       "sdkVersion": "13.1.2",
                       "packages": {
                         "Aspire.Hosting.Redis": "13.1.2"
+                      },
+                      "templateSpecific": {
+                        "nested": {
+                          "value": 42,
+                          "modes": [
+                            "fast",
+                            "safe"
+                          ]
+                        }
                       }
                     }
                     """);
@@ -1458,6 +1467,23 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal("default", profile.Key);
         Assert.Equal("https://localhost:17000", profile.Value.ApplicationUrl);
         Assert.Equal("Development", profile.Value.EnvironmentVariables?["ASPNETCORE_ENVIRONMENT"]);
+
+        var persistedJson = JsonNode.Parse(
+            await File.ReadAllTextAsync(Path.Combine(outputPath, AspireConfigFile.FileName)))!.AsObject();
+        Assert.Equal(configuredSource, persistedJson[AspireConfigFile.NuGetSourceKey]!.GetValue<string>());
+        Assert.True(JsonNode.DeepEquals(
+            JsonNode.Parse("""
+                {
+                  "nested": {
+                    "value": 42,
+                    "modes": [
+                      "fast",
+                      "safe"
+                    ]
+                  }
+                }
+                """),
+            persistedJson["templateSpecific"]));
     }
 
     [Fact]

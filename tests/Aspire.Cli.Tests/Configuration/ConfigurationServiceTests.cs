@@ -441,6 +441,64 @@ public class ConfigurationServiceTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task SetConfigurationAsync_MergesDisjointCaseVariantObjectsIntoExactTarget()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        var (service, settingsFilePath) = CreateService(
+            workspace,
+            """
+            {
+              "APPHOST": {
+                "language": "typescript/nodejs",
+                "runtime": "bun",
+                "Metadata": {
+                  "owner": "sibling"
+                },
+                "future": {
+                  "enabled": true
+                }
+              },
+              "appHost": {
+                "PATH": "target-apphost.mts",
+                "Runtime": "node",
+                "metadata": {
+                  "owner": "target"
+                }
+              },
+              "AppHost": "invalid"
+            }
+            """);
+
+        await service.SetConfigurationAsync("appHost.path", "updated-apphost.mts", isGlobal: false);
+
+        var json = JsonNode.Parse(File.ReadAllText(settingsFilePath))!.AsObject();
+        var appHostProperty = Assert.Single(
+            json,
+            property => string.Equals(property.Key, "appHost", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("appHost", appHostProperty.Key);
+
+        var appHost = Assert.IsType<JsonObject>(appHostProperty.Value);
+        Assert.Equal(5, appHost.Count);
+        Assert.Equal(
+            appHost.Count,
+            appHost.Select(property => property.Key).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal("updated-apphost.mts", appHost["path"]!.GetValue<string>());
+        Assert.Equal("node", appHost["Runtime"]!.GetValue<string>());
+        Assert.Equal("target", appHost["metadata"]!["owner"]!.GetValue<string>());
+        Assert.Equal("typescript/nodejs", appHost["language"]!.GetValue<string>());
+        Assert.True(appHost["future"]!["enabled"]!.GetValue<bool>());
+
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(settingsFilePath)
+            .Build();
+        Assert.Equal("updated-apphost.mts", configuration["appHost:path"]);
+        Assert.Equal("node", configuration["appHost:runtime"]);
+        Assert.Equal("target", configuration["appHost:metadata:owner"]);
+        Assert.Equal("typescript/nodejs", configuration["appHost:language"]);
+    }
+
+    [Fact]
     public async Task SetConfigurationAsync_WritesBooleanStringAsJsonString()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);

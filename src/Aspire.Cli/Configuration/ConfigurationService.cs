@@ -277,8 +277,23 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
 
         if (objectPropertyName is not null)
         {
+            var targetObject = settings[objectPropertyName]!.AsObject();
+            foreach (var matchingPropertyName in matchingPropertyNames)
+            {
+                if (string.Equals(matchingPropertyName, objectPropertyName, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (settings[matchingPropertyName] is JsonObject siblingObject)
+                {
+                    MergeDisjointProperties(targetObject, siblingObject);
+                }
+            }
+
             RemovePropertiesCaseInsensitive(settings, propertyName, objectPropertyName);
-            return settings[objectPropertyName]!.AsObject();
+
+            return targetObject;
         }
 
         RemovePropertiesCaseInsensitive(settings, propertyName);
@@ -286,6 +301,23 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
         settings[propertyName] = nestedObject;
 
         return nestedObject;
+    }
+
+    private static void MergeDisjointProperties(JsonObject target, JsonObject source)
+    {
+        var logicalPropertyNames = target
+            .Select(property => property.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (propertyName, value) in source)
+        {
+            // Invalid case variants can each contain valid settings. Preserve only disjoint
+            // logical children, while the selected target deterministically wins conflicts.
+            if (logicalPropertyNames.Add(propertyName))
+            {
+                target[propertyName] = value?.DeepClone();
+            }
+        }
     }
 
     private static string[] GetPropertyNamesCaseInsensitive(JsonObject settings, string propertyName)
