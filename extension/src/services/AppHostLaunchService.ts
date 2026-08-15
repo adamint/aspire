@@ -7,12 +7,12 @@ import { extensionLogOutputChannel } from '../utils/logging';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
 import { appHostLaunchReservationIdConfigKey, appHostLaunchTokenConfigKey, appHostRestartSourceSessionIdConfigKey, appHostSelectionOriginConfigKey, appHostTelemetryTargetPathConfigKey, type AppHostSelectionOrigin } from '../debugger/AspireDebugConfigurationMetadata';
 import { markAspireDebugConfigurationAsExtensionOwned } from '../debugger/AspireDebugConfigurationProviderInternal';
-import { AppHostLifecycleLockTimeoutError, AppHostStopCancellationError, AppHostStopError, appHostLifecycleLockMaxHoldMs, appHostLifecycleLockWaitTimeoutMs, type AppHostDebugSessionTerminatedEvent, type AppHostEditorSessions, type AppHostLaunchRequestedEvent, type AppHostLaunchSession, type AppHostStopResult, type RunningAppHost } from './appHostLaunchContracts';
+import { AppHostLifecycleLockTimeoutError, AppHostStopCancellationError, AppHostStopError, appHostLifecycleLockMaxHoldMs, appHostLifecycleLockWaitTimeoutMs, type AppHostDebugSessionTerminatedEvent, type AppHostEditorSessionSnapshot, type AppHostEditorSessions, type AppHostLaunchRequestedEvent, type AppHostLaunchSession, type AppHostStopResult, type RunningAppHost } from './appHostLaunchContracts';
 import { AppHostLaunchReservations } from './appHostLaunchReservations';
 import { getLaunchTelemetryProperties, isE2eDebugLaunchSuppressed } from './appHostLaunchTelemetry';
 
 export { AppHostLifecycleLockTimeoutError, AppHostStopCancellationError, AppHostStopError, appHostLifecycleLockMaxHoldMs, appHostLifecycleLockWaitTimeoutMs, externalLaunchReservationTimeoutMs } from './appHostLaunchContracts';
-export type { AppHostDebugSessionTerminatedEvent, AppHostEditorSessions, AppHostLaunchRequestedEvent, AppHostLaunchSession, AppHostStopResult, RunningAppHost } from './appHostLaunchContracts';
+export type { AppHostDebugSessionTerminatedEvent, AppHostEditorSessionSnapshot, AppHostEditorSessions, AppHostLaunchRequestedEvent, AppHostLaunchSession, AppHostStopResult, RunningAppHost } from './appHostLaunchContracts';
 
 function isAspireCommandType(value: unknown): value is AspireCommandType {
     return value === 'run' || value === 'deploy' || value === 'publish' || value === 'do';
@@ -44,6 +44,11 @@ interface TrackedAppHostDebugSession {
     readonly owner: AppHostLaunchSession;
     readonly session: AppHostLaunchSession;
 }
+
+type AppHostTrackedSession = AppHostLaunchSession & {
+    readonly isStopAttemptInProgress?: boolean;
+    readonly isShuttingDown?: boolean;
+};
 
 /**
  * Centralizes all Aspire AppHost launch operations that require a resolved
@@ -174,15 +179,36 @@ export class AppHostLaunchService implements vscode.Disposable {
     }
 
     trackAppHostDebugSession(owner: AppHostLaunchSession, appHostPath: string, debugSession: AspireResourceDebugSession): void {
-        const session: AppHostLaunchSession = {
+        const session: AppHostTrackedSession = {
             appHostPath,
             resolvedAppHostPath: appHostPath,
             operationKind: owner.operationKind,
             get startupCompleted() { return owner.startupCompleted; },
             configuration: owner.configuration,
+            get isStopAttemptInProgress() { return isTrackedSessionStopping(owner); },
             stopDebugging: async () => { await owner.stopDebugging(); },
         };
         this._appHostDebugSessions.set(debugSession.id, { owner, session });
+    }
+
+    /**
+     * Returns the safe subset of editor session state that editor-assistance tools may
+     * summarize.
+     *
+     * These summaries intentionally exclude VS Code's own session identifiers and the
+     * full debug configuration. The caller only needs to answer "what AppHost is the
+     * editor managing right now?" without gaining handles it could feed back into other
+     * command surfaces.
+     */
+    getEditorSessions(): readonly AppHostEditorSessionSnapshot[] {
+        return this.getTrackedEditorSessions().map(session => ({
+            appHostPath: session.appHostPath,
+            resolvedAppHostPath: session.resolvedAppHostPath,
+            operationKind: session.operationKind,
+            startupCompleted: session.startupCompleted,
+            noDebug: session.configuration.noDebug === true,
+            isStopping: isTrackedSessionStopping(session),
+        }));
     }
 
     /**
@@ -198,18 +224,7 @@ export class AppHostLaunchService implements vscode.Disposable {
     getEditorRunSessions(appHostPath: string): AppHostEditorSessions {
         const sessions: AppHostLaunchSession[] = [];
         let ambiguous = false;
-        const editorSessions = this._getEditorSessions();
-        const fallbackSessions = [...this._appHostDebugSessions.values()]
-            .filter(tracked => {
-                if (!editorSessions.includes(tracked.owner)) {
-                    return true;
-                }
-
-                const ownerPath = tracked.owner.resolvedAppHostPath ?? tracked.owner.appHostPath;
-                return compareAppHostIdentity(ownerPath, tracked.session.appHostPath) !== 'same';
-            })
-            .map(tracked => tracked.session);
-        for (const session of [...editorSessions, ...fallbackSessions]) {
+        for (const session of this.getTrackedEditorSessions()) {
             if (session.operationKind !== 'run') {
                 continue;
             }
@@ -226,6 +241,21 @@ export class AppHostLaunchService implements vscode.Disposable {
         }
 
         return { sessions, ambiguous };
+    }
+
+    private getTrackedEditorSessions(): readonly AppHostLaunchSession[] {
+        const editorSessions = this._getEditorSessions();
+        const fallbackSessions = [...this._appHostDebugSessions.values()]
+            .filter(tracked => {
+                if (!editorSessions.includes(tracked.owner)) {
+                    return true;
+                }
+
+                const ownerPath = tracked.owner.resolvedAppHostPath ?? tracked.owner.appHostPath;
+                return compareAppHostIdentity(ownerPath, tracked.session.appHostPath) !== 'same';
+            })
+            .map(tracked => tracked.session);
+        return [...editorSessions, ...fallbackSessions];
     }
 
     async getRunningAppHosts(token: vscode.CancellationToken): Promise<readonly RunningAppHost[]> {
@@ -769,4 +799,9 @@ function waitForPromise(promise: Promise<unknown>, token: vscode.CancellationTok
                 finish(resolve);
             });
     });
+}
+
+function isTrackedSessionStopping(session: AppHostLaunchSession): boolean {
+    const tracked = session as AppHostTrackedSession;
+    return tracked.isStopAttemptInProgress === true || tracked.isShuttingDown === true;
 }

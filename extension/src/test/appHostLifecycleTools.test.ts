@@ -7,6 +7,7 @@ import * as vscode from 'vscode';
 
 const mutableFs = require('fs') as typeof fs;
 
+import { type AspireOperationKind } from '../dcp/types';
 import {
     AppHostLifecycleToolService,
     AppHostStartLanguageModelTool,
@@ -69,6 +70,17 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
 
     clearLaunching(appHostPath: string): void {
         this.launchingPaths.delete(path.resolve(appHostPath));
+    }
+
+    getEditorSessions() {
+        return this.editorSessions.map(session => ({
+            appHostPath: session.appHostPath,
+            resolvedAppHostPath: session.resolvedAppHostPath,
+            operationKind: session.operationKind,
+            startupCompleted: session.startupCompleted,
+            noDebug: session.configuration.noDebug === true,
+            isStopping: session.isStopping,
+        }));
     }
 
     getEditorRunSessions(appHostPath: string): AppHostLifecycleEditorSessions {
@@ -250,6 +262,8 @@ class FakeDiscoveryService implements AppHostLifecycleDiscoveryService {
 class FakeEditorSession implements AppHostLifecycleEditorSession {
     stopCount = 0;
     stopError: Error | undefined;
+    resolvedAppHostPath: string | undefined;
+    isStopping = false;
     startupCompleted = true;
     // Mirrors production: AspireDebugSession.stopDebugging() ends with the session
     // being removed from the editor-owned session list.
@@ -258,7 +272,8 @@ class FakeEditorSession implements AppHostLifecycleEditorSession {
     constructor(
         readonly appHostPath: string | undefined,
         readonly configuration: { noDebug?: boolean; command?: string },
-        readonly operationKind: string = configuration.command ?? 'run') {
+        readonly operationKind: AspireOperationKind = (configuration.command ?? 'run') as AspireOperationKind) {
+        this.resolvedAppHostPath = appHostPath;
     }
 
     async stopDebugging(): Promise<void> {

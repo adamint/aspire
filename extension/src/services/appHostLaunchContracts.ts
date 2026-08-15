@@ -37,6 +37,22 @@ export interface AppHostLaunchSession {
     stopDebugging(): Promise<void>;
 }
 
+/**
+ * Safe session details the editor-assistance surfaces are allowed to inspect.
+ *
+ * The snapshot deliberately excludes VS Code debug session ids, process ids, and the
+ * full debug configuration. Consumers only need enough state to summarize the AppHost
+ * the editor is already managing.
+ */
+export interface AppHostEditorSessionSnapshot {
+    readonly appHostPath: string | undefined;
+    readonly resolvedAppHostPath: string | undefined;
+    readonly operationKind: AspireOperationKind;
+    readonly startupCompleted: boolean;
+    readonly noDebug: boolean;
+    readonly isStopping: boolean;
+}
+
 export interface RunningAppHost {
     readonly appHostPath: string;
 }

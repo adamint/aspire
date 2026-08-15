@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 
 import { type CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
 import { type AppHostIdentityRelation } from '../utils/appHostIdentity';
-import { type AppHostStopResult } from '../services/AppHostLaunchService';
+import { type AppHostEditorSessionSnapshot, type AppHostStopResult } from '../services/AppHostLaunchService';
 
 /**
  * Names of the contributed language model tools. These must match the `name`
@@ -78,19 +78,32 @@ export interface AppHostLifecycleToolResult {
 }
 
 /**
- * Narrow view of `AppHostLaunchService` used by the tools. Launches are pinned to
- * editor-owned `run` sessions; stops use the same shared lifecycle operation as the
- * Aspire tree so editor and CLI-started AppHosts follow one policy.
+ * Narrow view of `AppHostLaunchService` shared by editor-assistance surfaces that only
+ * need to summarize or correlate editor-owned AppHost sessions.
+ *
+ * `getEditorRunSessions` preserves the same path-comparison semantics the lifecycle
+ * tools already depend on, while `getEditorSessions` exposes a bounded, safe projection
+ * for callers that need to distinguish non-`run` sessions without inheriting VS Code's
+ * raw session identifiers or full launch configurations.
  */
-export interface AppHostLifecycleLaunchService {
+export interface AppHostEditorStateLaunchService {
     isLaunching(appHostPath: string): boolean;
+    getEditorRunSessions(appHostPath: string): AppHostLifecycleEditorSessions;
+    getEditorSessions(): readonly AppHostEditorSessionSnapshot[];
+}
+
+/**
+ * Narrow view of `AppHostLaunchService` used by the lifecycle tools. Launches are
+ * pinned to editor-owned `run` sessions; stops use the same shared lifecycle operation
+ * as the Aspire tree so editor and CLI-started AppHosts follow one policy.
+ */
+export interface AppHostLifecycleLaunchService extends AppHostEditorStateLaunchService {
     /**
      * Synchronously claims the launching slot, or reports that another launch already
      * holds it. See `AppHostLaunchService.tryReserveLaunch`.
      */
     tryReserveLaunch(appHostPath: string): boolean;
     clearLaunching(appHostPath: string): void;
-    getEditorRunSessions(appHostPath: string): AppHostLifecycleEditorSessions;
     getRunningAppHosts(token: vscode.CancellationToken): Promise<readonly AppHostLifecycleRunningAppHost[]>;
     compareAppHostIdentity(left: string | undefined, right: string | undefined): AppHostIdentityRelation;
     runWithAppHostLifecycleLock<T>(appHostPath: string, token: vscode.CancellationToken, action: (token: vscode.CancellationToken) => Promise<T>): Promise<T>;
