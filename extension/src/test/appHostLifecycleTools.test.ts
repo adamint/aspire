@@ -25,6 +25,8 @@ import {
 import { AppHostLifecycleLockTimeoutError, AppHostStopCancellationError, AppHostStopError, type AppHostStopResult } from '../services/AppHostLaunchService';
 import { type CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
 import { compareAppHostIdentity, type AppHostIdentityRelation } from '../utils/appHostIdentity';
+import { extensionLogOutputChannel } from '../utils/logging';
+import { SafeAppHostTargetResolver } from '../lm/safeAppHostTargetResolver';
 
 interface LaunchCall {
     appHostPath: string;
@@ -991,14 +993,33 @@ suite('AppHost lifecycle language model tools', () => {
         });
 
         test('reports a bounded failure without leaking launch error details', async () => {
-            launchService.launchError = new Error('aspire run failed: token=super-secret-value at /Users/private/AppHost.csproj');
+            const sandbox = sinon.createSandbox();
+            const sentinels = [
+                '/Users/private/AppHost.csproj',
+                'https://dashboard.example.invalid/login?token=url-secret-value',
+                'raw CLI stdout: build-secret-output',
+                'credential=super-secret-value',
+                'stack-message-private',
+            ];
 
-            const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
-            const serialized = JSON.stringify(result);
+            try {
+                const errorLog = sandbox.stub(extensionLogOutputChannel, 'error');
+                launchService.launchError = new Error(sentinels.join('\n'));
 
-            assert.strictEqual(result.outcome, 'failed');
-            assert.strictEqual(serialized.includes('super-secret-value'), false);
-            assert.strictEqual(serialized.includes('/Users/private'), false);
+                const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+                const serialized = JSON.stringify(result);
+                const logText = errorLog.getCalls().map(call => String(call.args[0])).join('\n');
+
+                assert.strictEqual(result.outcome, 'failed');
+                assert.strictEqual(logText, `Aspire language model tool ${aspireAppHostStartToolName} failed.`);
+                for (const sentinel of sentinels) {
+                    assert.strictEqual(serialized.includes(sentinel), false);
+                    assert.strictEqual(logText.includes(sentinel), false);
+                }
+            }
+            finally {
+                sandbox.restore();
+            }
         });
 
         test('reports cancellation when the launch pipeline cancels', async () => {
@@ -1543,6 +1564,40 @@ suite('AppHost lifecycle language model tools', () => {
             assert.strictEqual(launchService.launchCalls.length, 0);
             assert.strictEqual(launchService.pendingLifecycleLockCount, 0);
             assert.strictEqual(launchService.runningAppHostRequests, 0);
+        });
+
+        test('uses a supplied safe target resolver', async () => {
+            const injectedResolver = new SafeAppHostTargetResolver(discoveryService);
+            const resolveTarget = sinon.stub(injectedResolver, 'resolveTarget').resolves({
+                resolved: true,
+                target: {
+                    absolutePath: appHostProjectPath,
+                    relativePath: 'Injected/AppHost.csproj',
+                    displayPath: 'Injected/AppHost.csproj',
+                    identity: injectedResolver.getIdentityForAppHostPath(appHostProjectPath),
+                },
+            });
+            const injectedService = new AppHostLifecycleToolService({
+                launchService,
+                discoveryService,
+            }, injectedResolver);
+            const tokenSource = new vscode.CancellationTokenSource();
+            try {
+                const displayPath = await injectedService.describeTarget(
+                    'model-selector',
+                    tokenSource.token);
+
+                assert.strictEqual(displayPath, 'Injected/AppHost.csproj');
+                sinon.assert.calledOnceWithExactly(
+                    resolveTarget,
+                    'model-selector',
+                    tokenSource.token);
+                assert.strictEqual(discoveryService.discoverCalls, 0);
+            }
+            finally {
+                tokenSource.dispose();
+                injectedService.dispose();
+            }
         });
 
         test('prepareInvocation does not launch or stop anything', async () => {

@@ -23,6 +23,7 @@ import { __resetCommonPropertiesForTests, __setReporterForTests } from '../utils
 import { aspireDashboard, debugSessionStopTimedOut } from '../loc/strings';
 import { registerRunCleanup } from '../debugger/runCleanupRegistry';
 import { __resetAppHostIdentityRegistryForTests } from '../utils/appHostIdentity';
+import { AppHostBuildFailureError } from '../debugger/appHostBuildFailureError';
 
 interface RecordedEvent {
     name: string;
@@ -4243,6 +4244,97 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         const serialized = JSON.stringify(readLatestLaunchFailures(appHostPath));
         assert.strictEqual(serialized.includes(rawBuildOutput), false);
         assert.strictEqual(serialized.includes(appHostPath), false);
+    });
+
+    test('records typed Rust build failures without raw Cargo data in the journal or telemetry', async () => {
+        const appHostPath = join(makeTempDir(), 'apphost.rs');
+        writeFileSync(appHostPath, '');
+        const sentinels = [
+            appHostPath,
+            'RAW_CARGO_STDOUT_SENTINEL',
+            'RAW_CARGO_STDERR_SENTINEL',
+            'CARGO_CREDENTIAL_SENTINEL',
+            'cargo-token-sentinel',
+        ] as const;
+        const rawCargoFailure = [
+            sentinels[0],
+            sentinels[1],
+            sentinels[2],
+            sentinels[3],
+            `https://registry.example.invalid/index?t=${sentinels[4]}`,
+        ].join(' | ');
+        const fake = new FakeTelemetryReporter();
+        const restoreReporter = __setReporterForTests(fake as unknown as TelemetryReporter);
+        try {
+            sinon.stub(vscode.extensions, 'getExtension').callsFake((extensionId: string) =>
+                extensionId === 'ms-vscode.cpptools' || extensionId === 'vadimcn.vscode-lldb'
+                    ? { id: extensionId } as vscode.Extension<unknown>
+                    : undefined);
+            sinon.stub(debuggerExtensionsModule, 'createDebugSessionConfiguration')
+                .rejects(new AppHostBuildFailureError(rawCargoFailure, true));
+            sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined);
+            sinon.stub(vscode.debug, 'stopDebugging').resolves();
+            const parentDebugSession = {
+                id: 'aspire-session',
+                type: 'aspire',
+                name: 'Aspire',
+                configuration: {
+                    type: 'aspire',
+                    request: 'launch',
+                    name: 'Aspire',
+                    program: appHostPath,
+                    command: 'run',
+                    noDebug: false,
+                },
+            } as unknown as vscode.DebugSession;
+            const aspireDebugSession = new AspireDebugSession(
+                parentDebugSession,
+                {} as any,
+                {} as any,
+                {} as any,
+                () => { });
+            sinon.stub(aspireDebugSession, 'createDebugAdapterTrackerCore');
+
+            await aspireDebugSession.startAppHost(
+                appHostPath,
+                ['cargo', 'run'],
+                [],
+                true,
+                { forceBuild: false });
+
+            const failures = readLatestLaunchFailures(appHostPath);
+            assert.strictEqual(failures.length, 1);
+            assert.deepStrictEqual(getFailureDetails(failures[0]), {
+                stage: 'build',
+                category: 'buildFailed',
+                controller: 'editor',
+                mode: 'debug',
+                providerKind: 'rust',
+                exitCodeBucket: 'none',
+            });
+            const launchFailureEvents = fake.events.filter(
+                event => event.name === 'aspire/vscode/launchfailure/recorded');
+            assert.strictEqual(launchFailureEvents.length, 1);
+            assert.deepStrictEqual(launchFailureEvents[0].properties, {
+                stage: 'build',
+                category: 'buildFailed',
+                controller: 'editor',
+                mode: 'debug',
+                provider_kind: 'rust',
+                exit_code_bucket: 'none',
+            });
+
+            const serialized = JSON.stringify({
+                journal: failures,
+                telemetry: fake.events,
+            });
+            for (const sentinel of sentinels) {
+                assert.strictEqual(serialized.includes(sentinel), false, `Leaked sentinel: ${sentinel}`);
+            }
+        }
+        finally {
+            restoreReporter();
+        }
     });
 
     test('records untyped AppHost configuration failures as debug-session failures', async () => {

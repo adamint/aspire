@@ -154,7 +154,7 @@ export class SafeAppHostTargetResolver {
             // "The registry could not be read" is not "there are no AppHosts". Reporting
             // the latter would tell the caller its target does not exist when the truth is
             // that the extension could not find out.
-            extensionLogOutputChannel.warn(`Aspire editor assistance could not enumerate AppHosts: ${String(error)}`);
+            extensionLogOutputChannel.warn('Aspire editor assistance could not enumerate AppHosts.');
             return { resolved: false, outcome: 'error' };
         }
 

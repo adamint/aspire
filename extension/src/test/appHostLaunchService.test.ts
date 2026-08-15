@@ -10,6 +10,7 @@ import { isAspireDebugConfigurationExtensionOwned } from '../debugger/AspireDebu
 import {
     __resetLaunchFailureJournalForTests,
     readLatestLaunchFailures,
+    recordLaunchFailureForAppHostPath,
     type LaunchFailureRecord,
 } from '../services/launchFailureJournal';
 import { appHostLifecycleBusy } from '../loc/strings';
@@ -1415,9 +1416,37 @@ suite('AppHostLaunchService', () => {
         await assert.rejects(service.launch('/repo/AppHost.csproj', 'run', true), /did not start the Aspire run session/);
 
         assert.strictEqual(service.isLaunching('/repo/AppHost.csproj'), false);
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures('/repo/AppHost.csproj')[0]), {
+        const failures = readLatestLaunchFailures('/repo/AppHost.csproj');
+        assert.strictEqual(failures.length, 1);
+        assert.deepStrictEqual(getFailureDetails(failures[0]), {
             stage: 'cliLaunch',
             category: 'unknown',
+            controller: 'editor',
+            mode: 'run',
+            providerKind: 'dotnet',
+            exitCodeBucket: 'none',
+        });
+    });
+
+    test('launch preserves provider discovery failure when startDebugging returns false', async () => {
+        startDebuggingStub.callsFake(async () => {
+            recordLaunchFailureForAppHostPath('/repo/AppHost.csproj', {
+                stage: 'discovery',
+                category: 'missingDependency',
+                controller: 'editor',
+                mode: 'run',
+                providerKind: 'dotnet',
+            });
+            return false;
+        });
+
+        await assert.rejects(service.launch('/repo/AppHost.csproj', 'run', true), /did not start the Aspire run session/);
+
+        const failures = readLatestLaunchFailures('/repo/AppHost.csproj');
+        assert.strictEqual(failures.length, 1);
+        assert.deepStrictEqual(getFailureDetails(failures[0]), {
+            stage: 'discovery',
+            category: 'missingDependency',
             controller: 'editor',
             mode: 'run',
             providerKind: 'dotnet',
@@ -1477,9 +1506,37 @@ suite('AppHostLaunchService', () => {
         await assert.rejects(service.launch('/repo/AppHost.csproj', 'run', true), /boom/);
 
         assert.strictEqual(service.isLaunching('/repo/AppHost.csproj'), false);
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures('/repo/AppHost.csproj')[0]), {
+        const failures = readLatestLaunchFailures('/repo/AppHost.csproj');
+        assert.strictEqual(failures.length, 1);
+        assert.deepStrictEqual(getFailureDetails(failures[0]), {
             stage: 'cliLaunch',
             category: 'unknown',
+            controller: 'editor',
+            mode: 'run',
+            providerKind: 'dotnet',
+            exitCodeBucket: 'none',
+        });
+    });
+
+    test('launch preserves provider validation failure when startDebugging throws', async () => {
+        startDebuggingStub.callsFake(async () => {
+            recordLaunchFailureForAppHostPath('/repo/AppHost.csproj', {
+                stage: 'validation',
+                category: 'invalidConfiguration',
+                controller: 'editor',
+                mode: 'run',
+                providerKind: 'dotnet',
+            });
+            throw new Error('provider rejected launch');
+        });
+
+        await assert.rejects(service.launch('/repo/AppHost.csproj', 'run', true), /provider rejected launch/);
+
+        const failures = readLatestLaunchFailures('/repo/AppHost.csproj');
+        assert.strictEqual(failures.length, 1);
+        assert.deepStrictEqual(getFailureDetails(failures[0]), {
+            stage: 'validation',
+            category: 'invalidConfiguration',
             controller: 'editor',
             mode: 'run',
             providerKind: 'dotnet',

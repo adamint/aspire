@@ -211,30 +211,30 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Language model tools that let an agent use the same AppHost lifecycle service as the
   // editor and Aspire tree instead of maintaining a separate start/stop policy.
+  const appHostTargetResolver = new SafeAppHostTargetResolver(appHostDiscoveryService);
   const appHostLifecycleToolService = new AppHostLifecycleToolService({
     launchService: appHostLaunchService,
     discoveryService: appHostDiscoveryService,
-  });
+  }, appHostTargetResolver);
   context.subscriptions.push(appHostLifecycleToolService);
   const appHostLifecycleToolRegistration = registerAppHostLifecycleTools(appHostLifecycleToolService);
   context.subscriptions.push(appHostLifecycleToolRegistration);
 
   // Editor-assistance tools use the same safe AppHost registry and editor-owned session
   // projections as lifecycle tools. UI side effects stay isolated behind the handoff service.
-  const editorAssistanceTargetResolver = new SafeAppHostTargetResolver(appHostDiscoveryService);
   const editorStateSnapshotService = new EditorStateSnapshotService({
     launchService: appHostLaunchService,
-    targetResolver: editorAssistanceTargetResolver,
+    targetResolver: appHostTargetResolver,
   });
   const editorUiHandoffService = new EditorUiHandoffService({
-    targetResolver: editorAssistanceTargetResolver,
+    targetResolver: appHostTargetResolver,
     appHostRepository: dataRepository,
     output: extensionLogOutputChannel,
     getAspireDebugSessions: identity =>
       aspireExtensionContext.getAspireDebugSessionsForAppHostIdentity(identity),
   });
   const editorAssistanceToolService = new EditorAssistanceToolService({
-    targetResolver: editorAssistanceTargetResolver,
+    targetResolver: appHostTargetResolver,
     snapshotService: editorStateSnapshotService,
     resourceRepository: dataRepository,
     getEditorResourceSessions: () => aspireExtensionContext.editorResourceSessions,

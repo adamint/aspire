@@ -330,7 +330,7 @@ export class EditorAssistanceToolService {
                 return { resolved: false, outcome: 'canceled' };
             }
 
-            extensionLogOutputChannel.error(`Aspire language model tool ${tool} failed while resolving an AppHost: ${String(error)}`);
+            extensionLogOutputChannel.error(`Aspire language model tool ${tool} failed while resolving an AppHost.`);
             return { resolved: false, outcome: 'error' };
         }
 
@@ -349,7 +349,7 @@ export class EditorAssistanceToolService {
             return createStatusFailure('canceled');
         }
 
-        extensionLogOutputChannel.error(`Aspire language model tool ${aspireDebugSessionStatusToolName} failed: ${String(error)}`);
+        extensionLogOutputChannel.error(`Aspire language model tool ${aspireDebugSessionStatusToolName} failed.`);
         return createStatusFailure('error');
     }
 
@@ -358,7 +358,7 @@ export class EditorAssistanceToolService {
             return createExplainFailure('canceled');
         }
 
-        extensionLogOutputChannel.error(`Aspire language model tool ${aspireExplainLaunchFailureToolName} failed: ${String(error)}`);
+        extensionLogOutputChannel.error(`Aspire language model tool ${aspireExplainLaunchFailureToolName} failed.`);
         return createExplainFailure('error');
     }
 }

@@ -44,7 +44,7 @@
         "comment": "The duration of the command invocation in milliseconds."
       }
     },
-    "aspire/vscode/editorAssistance/result": {
+    "aspire/vscode/editorassistance/result": {
       "tool": {
         "classification": "SystemMetaData",
         "purpose": "FeatureInsight",
@@ -116,7 +116,7 @@
         "comment": "The duration of the editor-assistance tool invocation in milliseconds."
       }
     },
-    "aspire/vscode/launchFailure/recorded": {
+    "aspire/vscode/launchfailure/recorded": {
       "stage": {
         "classification": "SystemMetaData",
         "purpose": "PerformanceAndHealth",

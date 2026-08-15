@@ -70,7 +70,7 @@ export interface TelemetryEventSchema {
         properties: 'command' | 'outcome' | 'source' | 'error_kind';
         measurements: 'duration_ms';
     };
-    'aspire/vscode/editorAssistance/result': {
+    'aspire/vscode/editorassistance/result': {
         properties:
             | 'tool'
             | 'outcome'
@@ -87,7 +87,7 @@ export interface TelemetryEventSchema {
             | 'presentation';
         measurements: 'duration_ms';
     };
-    'aspire/vscode/launchFailure/recorded': {
+    'aspire/vscode/launchfailure/recorded': {
         properties: 'stage' | 'category' | 'controller' | 'mode' | 'provider_kind' | 'exit_code_bucket';
         measurements: 'journal_size';
     };

@@ -63,11 +63,23 @@ export class EditorUiHandoffService implements EditorUiHandoffOperations {
             }
 
             const sessions = this._dependencies.getAspireDebugSessions(target.identity);
-            const cliPid = runningMatches[0].cliPid;
-            const matchingSessions = typeof cliPid === 'number'
-                ? sessions.filter(session => session.cliProcessId === cliPid)
-                : [];
-            const editorSession = matchingSessions.length === 1 ? matchingSessions[0] : undefined;
+            let editorSession: (typeof sessions)[number] | undefined;
+            if (sessions.length > 0) {
+                // Any editor session owns its Dashboard settings, shutdown state, and child cleanup.
+                // Falling back to an ownerless browser is safe only for a genuinely external AppHost,
+                // so a fresh CLI row must identify exactly one editor owner before UI is presented.
+                const cliPid = runningMatches[0].cliPid;
+                if (typeof cliPid !== 'number') {
+                    return { outcome: 'error' };
+                }
+
+                const matchingSessions = sessions.filter(session => session.cliProcessId === cliPid);
+                if (matchingSessions.length !== 1) {
+                    return { outcome: 'error' };
+                }
+
+                editorSession = matchingSessions[0];
+            }
             throwIfCanceled(token);
             if (editorSession?.isShuttingDown) {
                 return { outcome: 'error' };

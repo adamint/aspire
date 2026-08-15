@@ -55,9 +55,11 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
     private readonly _targetResolver: SafeAppHostTargetResolver;
     private _disposed = false;
 
-    constructor(dependencies: AppHostLifecycleToolDependencies) {
+    constructor(
+        dependencies: AppHostLifecycleToolDependencies,
+        targetResolver: SafeAppHostTargetResolver = new SafeAppHostTargetResolver(dependencies.discoveryService)) {
         this._dependencies = dependencies;
-        this._targetResolver = new SafeAppHostTargetResolver(dependencies.discoveryService);
+        this._targetResolver = targetResolver;
     }
 
     dispose(): void {
@@ -324,10 +326,9 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             return createResult(tool, 'busy', relativePath, controller, requestedMode, effectiveMode);
         }
 
-        // Failure details stay in the extension log. They routinely contain absolute
-        // paths, CLI stderr, and DCP/RPC connection details, none of which may cross
-        // back into the model transcript.
-        extensionLogOutputChannel.error(`Aspire language model tool ${tool} failed: ${String(error)}`);
+        // Model-triggered failures routinely contain absolute paths, CLI output, and
+        // connection details. Keep this diagnostic bounded to the registered tool name.
+        extensionLogOutputChannel.error(`Aspire language model tool ${tool} failed.`);
         return createResult(tool, 'failed', relativePath, controller, requestedMode, effectiveMode);
     }
 

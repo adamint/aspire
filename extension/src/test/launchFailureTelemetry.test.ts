@@ -48,7 +48,7 @@ suite('launch failure telemetry', () => {
             });
 
         assert.deepStrictEqual(events, [{
-            eventName: 'aspire/vscode/launchFailure/recorded',
+            eventName: 'aspire/vscode/launchfailure/recorded',
             properties: {
                 stage: 'debugSession',
                 category: 'permissionDenied',

@@ -50,7 +50,7 @@ suite('editor assistance telemetry', () => {
             await telemetry.capture(aspireDebugSessionStatusToolName, async () => result),
             result);
         assert.deepStrictEqual(events, [{
-            eventName: 'aspire/vscode/editorAssistance/result',
+            eventName: 'aspire/vscode/editorassistance/result',
             properties: {
                 tool: aspireDebugSessionStatusToolName,
                 outcome: 'running',
@@ -97,7 +97,7 @@ suite('editor assistance telemetry', () => {
         await telemetry.capture(aspireExplainLaunchFailureToolName, async () => result);
 
         assert.deepStrictEqual(events, [{
-            eventName: 'aspire/vscode/editorAssistance/result',
+            eventName: 'aspire/vscode/editorassistance/result',
             properties: {
                 tool: aspireExplainLaunchFailureToolName,
                 outcome: 'failureFound',
@@ -135,7 +135,7 @@ suite('editor assistance telemetry', () => {
 
         assert.deepStrictEqual(events, [
             {
-                eventName: 'aspire/vscode/editorAssistance/result',
+                eventName: 'aspire/vscode/editorassistance/result',
                 properties: {
                     tool: aspireOpenDashboardToolName,
                     outcome: 'opened',
@@ -145,7 +145,7 @@ suite('editor assistance telemetry', () => {
                 measurements: { duration_ms: 2 },
             },
             {
-                eventName: 'aspire/vscode/editorAssistance/result',
+                eventName: 'aspire/vscode/editorassistance/result',
                 properties: {
                     tool: aspireOpenDashboardToolName,
                     outcome: 'canceled',
@@ -174,7 +174,7 @@ suite('editor assistance telemetry', () => {
 
         assert.deepStrictEqual(events, [
             {
-                eventName: 'aspire/vscode/editorAssistance/result',
+                eventName: 'aspire/vscode/editorassistance/result',
                 properties: {
                     tool: aspireDebugSessionStatusToolName,
                     outcome: 'invalidInput',
@@ -183,7 +183,7 @@ suite('editor assistance telemetry', () => {
                 measurements: { duration_ms: 1 },
             },
             {
-                eventName: 'aspire/vscode/editorAssistance/result',
+                eventName: 'aspire/vscode/editorassistance/result',
                 properties: {
                     tool: aspireOpenOutputToolName,
                     outcome: 'workspaceNotTrusted',
@@ -214,7 +214,7 @@ suite('editor assistance telemetry', () => {
             error);
 
         assert.deepStrictEqual(events, [{
-            eventName: 'aspire/vscode/editorAssistance/result',
+            eventName: 'aspire/vscode/editorassistance/result',
             properties: {
                 tool: aspireOpenOutputToolName,
                 outcome: 'error',
@@ -252,7 +252,7 @@ suite('editor assistance telemetry', () => {
         } as unknown as EditorAssistanceToolResult));
 
         assert.deepStrictEqual(events, [{
-            eventName: 'aspire/vscode/editorAssistance/result',
+            eventName: 'aspire/vscode/editorassistance/result',
             properties: {
                 tool: aspireListDebugSessionsToolName,
                 outcome: 'sessionsFound',

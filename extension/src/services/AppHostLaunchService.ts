@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { AspireCommandType, AspireExtendedDebugConfiguration, type AspireResourceDebugSession } from '../dcp/types';
 import { startDebuggingDeclined } from '../loc/strings';
-import { recordLaunchFailureForAppHostPath, type LaunchFailureCategory, type LaunchFailureMode, type LaunchFailureProviderKind } from './launchFailureJournal';
+import { getLatestLaunchFailureSequenceForAppHostPath, recordLaunchFailureForAppHostPath, type LaunchFailureCategory, type LaunchFailureMode, type LaunchFailureProviderKind } from './launchFailureJournal';
 import { compareAppHostIdentity, getAppHostIdentityKeyInfo, isAppHostPathWithinDirectory, type AppHostIdentityKeyInfo, type AppHostIdentityRelation } from '../utils/appHostIdentity';
 import { classifyAppHostPath } from '../utils/appHostLanguage';
 import { classifyError, isCommandCancellation, sendTelemetryEvent, type EventProperties } from '../utils/telemetry';
@@ -716,6 +716,7 @@ export class AppHostLaunchService implements vscode.Disposable {
         }
 
         let failureCategory: LaunchFailureCategory | undefined;
+        let launchFailureSequenceBeforeStartDebugging: number | undefined;
         try {
             const cliAvailability = await checkCliAvailableOrRedirect('debug_gate');
             if (!cliAvailability.available) {
@@ -725,6 +726,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             throwIfCancelled(token);
             config.skipCliAvailabilityCheck = true;
 
+            launchFailureSequenceBeforeStartDebugging = getLatestLaunchFailureSequenceForAppHostPath(appHostPath);
             const started = await vscode.debug.startDebugging(undefined, config);
             if (!started) {
                 // A false result means VS Code declined the launch before the
@@ -745,14 +747,21 @@ export class AppHostLaunchService implements vscode.Disposable {
         } catch (err) {
             this._pendingRunPathByToken.delete(launchToken);
             this.clearMatchingLaunching(appHostPath, reservationId);
-            recordLaunchFailureForAppHostPath(appHostPath, {
-                stage: 'cliLaunch',
-                category: failureCategory,
-                controller: 'editor',
-                mode: getLaunchFailureMode(command, noDebug),
-                providerKind: getAppHostProviderKind(appHostPath),
-                error: err,
-            });
+            // The per-AppHost reservation serializes this launch interval, so a newer
+            // sequence for the exact identity was recorded by a provider boundary during
+            // this attempt. Preserve that specific failure instead of appending cliLaunch.
+            const hasNewerBoundaryFailure = launchFailureSequenceBeforeStartDebugging !== undefined &&
+                getLatestLaunchFailureSequenceForAppHostPath(appHostPath) > launchFailureSequenceBeforeStartDebugging;
+            if (!hasNewerBoundaryFailure) {
+                recordLaunchFailureForAppHostPath(appHostPath, {
+                    stage: 'cliLaunch',
+                    category: failureCategory,
+                    controller: 'editor',
+                    mode: getLaunchFailureMode(command, noDebug),
+                    providerKind: getAppHostProviderKind(appHostPath),
+                    error: err,
+                });
+            }
             const canceled = isCommandCancellation(err);
             const properties: EventProperties<'aspire/vscode/apphost/launch/result'> = {
                 ...telemetryProperties,

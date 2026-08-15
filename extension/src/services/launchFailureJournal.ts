@@ -79,7 +79,7 @@ export interface LaunchFailureJournalClock {
     now(): number;
 }
 
-const launchFailureRecordedEventName = 'aspire/vscode/launchFailure/recorded' as const;
+const launchFailureRecordedEventName = 'aspire/vscode/launchfailure/recorded' as const;
 type LaunchFailureRecordedProperties = EventProperties<typeof launchFailureRecordedEventName>;
 type LaunchFailureRecordedMeasurements = EventMeasurements<typeof launchFailureRecordedEventName>;
 
@@ -220,6 +220,18 @@ export class LaunchFailureJournal {
         return records.slice().reverse().map(record => ({ ...record }));
     }
 
+    getLatestSequence(appHostIdentity: OpaqueAppHostIdentity): number {
+        this.pruneExpired();
+        for (let index = this._records.length - 1; index >= 0; index--) {
+            const record = this._records[index];
+            if (record.appHostIdentity === appHostIdentity) {
+                return record.sequence;
+            }
+        }
+
+        return 0;
+    }
+
     clear(): void {
         this._records.splice(0);
         this._nextSequence = 0;
@@ -285,6 +297,10 @@ export function recordSanitizedLaunchFailureForAppHostPath(appHostPath: string, 
 export function readLatestLaunchFailures(appHostPath?: string): readonly LaunchFailureRecord[] {
     const identity = appHostPath ? getOrCreateIdentityForAbsolutePath(appHostPath) : undefined;
     return defaultLaunchFailureJournal.readLatest(identity);
+}
+
+export function getLatestLaunchFailureSequenceForAppHostPath(appHostPath: string): number {
+    return defaultLaunchFailureJournal.getLatestSequence(getOrCreateIdentityForAbsolutePath(appHostPath));
 }
 
 export function resetLaunchFailureJournal(): void {

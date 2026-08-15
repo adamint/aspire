@@ -11,7 +11,7 @@ import {
     type EventProperties,
 } from '../utils/telemetry';
 
-const editorAssistanceResultEventName = 'aspire/vscode/editorAssistance/result' as const;
+const editorAssistanceResultEventName = 'aspire/vscode/editorassistance/result' as const;
 
 type ResultEventProperties = EventProperties<typeof editorAssistanceResultEventName>;
 type ResultEventMeasurements = EventMeasurements<typeof editorAssistanceResultEventName>;

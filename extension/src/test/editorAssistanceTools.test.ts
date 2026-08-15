@@ -289,6 +289,27 @@ function createAspireConfiguration(values: Readonly<Record<string, unknown>> = {
     };
 }
 
+function createUnsafeModelTriggeredError(workspaceRoot: string): {
+    readonly error: Error;
+    readonly sentinels: readonly string[];
+} {
+    const sentinels = [
+        path.join(workspaceRoot, 'private', 'AppHost.csproj'),
+        'dashboard-token-sentinel',
+        'RAW_CLI_STDOUT_SENTINEL',
+        'CREDENTIAL_SENTINEL=editor-secret',
+        'STACK_MESSAGE_SENTINEL',
+    ] as const;
+    const error = new Error([
+        sentinels[0],
+        `https://dashboard.example.invalid/login?t=${sentinels[1]}`,
+        sentinels[2],
+        sentinels[3],
+    ].join(' | '));
+    error.stack = `${error.name}: ${error.message}\n    at ${sentinels[4]}`;
+    return { error, sentinels };
+}
+
 function readEditorAssistanceToolResult(result: vscode.LanguageModelToolResult): EditorAssistanceToolResult {
     const parts = result.content as Array<{ value?: unknown }>;
     assert.strictEqual(parts.length, 1);
@@ -1339,6 +1360,53 @@ suite('Editor assistance AppHost services', () => {
             assert.strictEqual(JSON.stringify(failed).includes(workspaceRoot), false);
         });
 
+        test('keeps preflight, status, and explanation diagnostics free of raw error text', async () => {
+            const sandbox = sinon.createSandbox();
+            try {
+                const errorLog = sandbox.stub(extensionLogOutputChannel, 'error');
+                const { error, sentinels } = createUnsafeModelTriggeredError(workspaceRoot);
+
+                resourceRepository.error = error;
+                const statusResult = await service.getDebugSessionStatus(
+                    { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api' },
+                    new vscode.CancellationTokenSource().token);
+
+                failureReaderError = error;
+                const explainResult = await service.explainLaunchFailure(
+                    { appHostPath: 'AppHost/AppHost.csproj' },
+                    new vscode.CancellationTokenSource().token);
+
+                resourceRepository.error = undefined;
+                failureReaderError = undefined;
+                sandbox.stub(resolver, 'resolveTarget').rejects(error);
+                const preflightResult = await service.getDebugSessionStatus(
+                    { appHostPath: 'AppHost/AppHost.csproj' },
+                    new vscode.CancellationTokenSource().token);
+
+                assert.deepStrictEqual(
+                    [statusResult, explainResult, preflightResult].map(result => result.outcome),
+                    ['error', 'error', 'error']);
+                assert.deepStrictEqual(
+                    errorLog.getCalls().map(call => call.args),
+                    [
+                        [`Aspire language model tool ${aspireDebugSessionStatusToolName} failed.`],
+                        [`Aspire language model tool ${aspireExplainLaunchFailureToolName} failed.`],
+                        [`Aspire language model tool ${aspireDebugSessionStatusToolName} failed while resolving an AppHost.`],
+                    ]);
+
+                const serialized = JSON.stringify({
+                    results: [statusResult, explainResult, preflightResult],
+                    logs: errorLog.getCalls().map(call => call.args),
+                });
+                for (const sentinel of sentinels) {
+                    assert.strictEqual(serialized.includes(sentinel), false, `Leaked sentinel: ${sentinel}`);
+                }
+            }
+            finally {
+                sandbox.restore();
+            }
+        });
+
         test('strictly validates dashboard and empty-object tool inputs before consulting dependencies', async () => {
             const token = new vscode.CancellationTokenSource().token;
             for (const input of [
@@ -1808,7 +1876,7 @@ suite('Editor assistance AppHost services', () => {
             }
         });
 
-        test('reuses the exact editor-owned Dashboard launcher and reports external debug fallback', async () => {
+        test('reuses the exact editor-owned Dashboard launcher and uses ownerless fallback only with zero editor sessions', async () => {
             const sandbox = sinon.createSandbox();
             try {
                 sandbox.stub(vscode.workspace, 'getConfiguration').returns(createAspireConfiguration({
@@ -1948,20 +2016,23 @@ suite('Editor assistance AppHost services', () => {
             }
         });
 
-        test('uses ownerless Dashboard configuration when fresh CLI ownership is unproven', async () => {
+        test('fails closed when fresh CLI ownership is null or mismatched during editor session shutdown', async () => {
             const sandbox = sinon.createSandbox();
             try {
-                sandbox.stub(vscode.workspace, 'getConfiguration').returns(createAspireConfiguration({
+                const getConfiguration = sandbox.stub(vscode.workspace, 'getConfiguration').returns(createAspireConfiguration({
                     dashboardBrowser: 'openExternalBrowser',
                 }));
                 const openExternal = sandbox.stub(vscode.env, 'openExternal').resolves(true);
+                const startDebugging = sandbox.stub(vscode.debug, 'startDebugging').resolves(true);
+                const executeCommand = sandbox.stub(vscode.commands, 'executeCommand').resolves();
+                const showInformationMessage = sandbox.stub(vscode.window, 'showInformationMessage').resolves(undefined);
                 const ownedOpenDashboard = sandbox.stub().resolves('debugBrowser');
                 dashboardSessionsByIdentity.set(
                     resolver.getIdentityForAppHostPath(appHostProjectPath),
                     [{
                         cliProcessId: 1001,
                         configuration: { dashboardBrowser: 'debugEdge' },
-                        isShuttingDown: false,
+                        isShuttingDown: true,
                         openDashboard: ownedOpenDashboard,
                     } as EditorUiHandoffDebugSession]);
 
@@ -1978,15 +2049,68 @@ suite('Editor assistance AppHost services', () => {
                         new vscode.CancellationTokenSource().token);
 
                     assert.deepStrictEqual(result, {
-                        success: true,
+                        success: false,
                         tool: aspireOpenDashboardToolName,
-                        outcome: 'opened',
-                        presentation: 'externalBrowser',
+                        outcome: 'error',
                     });
                 }
 
-                assert.strictEqual(openExternal.callCount, 2);
+                sinon.assert.notCalled(getConfiguration);
+                sinon.assert.notCalled(openExternal);
+                sinon.assert.notCalled(startDebugging);
+                sinon.assert.notCalled(executeCommand);
+                sinon.assert.notCalled(showInformationMessage);
                 assert.strictEqual(ownedOpenDashboard.callCount, 0);
+            }
+            finally {
+                sandbox.restore();
+            }
+        });
+
+        test('fails closed when multiple editor sessions match the fresh CLI owner', async () => {
+            const sandbox = sinon.createSandbox();
+            try {
+                const matchingCliPid = 2002;
+                const getConfiguration = sandbox.stub(vscode.workspace, 'getConfiguration').returns(createAspireConfiguration({
+                    dashboardBrowser: 'openExternalBrowser',
+                }));
+                const openExternal = sandbox.stub(vscode.env, 'openExternal').resolves(true);
+                const firstOpenDashboard = sandbox.stub().resolves('integratedBrowser');
+                const secondOpenDashboard = sandbox.stub().resolves('debugBrowser');
+                dashboardSessionsByIdentity.set(
+                    resolver.getIdentityForAppHostPath(appHostProjectPath),
+                    [{
+                        cliProcessId: matchingCliPid,
+                        configuration: { dashboardBrowser: 'integratedBrowser' },
+                        isShuttingDown: false,
+                        openDashboard: firstOpenDashboard,
+                    }, {
+                        cliProcessId: matchingCliPid,
+                        configuration: { dashboardBrowser: 'debugEdge' },
+                        isShuttingDown: false,
+                        openDashboard: secondOpenDashboard,
+                    }]);
+                uiRepository.appHosts = [{
+                    ...createRunningAppHost(
+                        appHostProjectPath,
+                        'https://dashboard.example.invalid/login?t=private'),
+                    cliPid: matchingCliPid,
+                }];
+
+                const result = await service.openDashboard(
+                    { appHostPath: 'AppHost/AppHost.csproj' },
+                    new vscode.CancellationTokenSource().token);
+
+                assert.deepStrictEqual(result, {
+                    success: false,
+                    tool: aspireOpenDashboardToolName,
+                    outcome: 'error',
+                });
+                sinon.assert.notCalled(getConfiguration);
+                sinon.assert.notCalled(openExternal);
+                sinon.assert.notCalled(firstOpenDashboard);
+                sinon.assert.notCalled(secondOpenDashboard);
+                assert.strictEqual(JSON.stringify(result).includes(String(matchingCliPid)), false);
             }
             finally {
                 sandbox.restore();
@@ -2430,7 +2554,7 @@ suite('Editor assistance AppHost services', () => {
                 });
                 assert.deepStrictEqual(telemetryEvents, [
                     {
-                        eventName: 'aspire/vscode/editorAssistance/result',
+                        eventName: 'aspire/vscode/editorassistance/result',
                         properties: {
                             tool: aspireDebugSessionStatusToolName,
                             outcome: 'notDebugging',
@@ -2442,7 +2566,7 @@ suite('Editor assistance AppHost services', () => {
                         measurements: { duration_ms: 1 },
                     },
                     {
-                        eventName: 'aspire/vscode/editorAssistance/result',
+                        eventName: 'aspire/vscode/editorassistance/result',
                         properties: {
                             tool: aspireExplainLaunchFailureToolName,
                             outcome: 'noRecordedFailure',
@@ -2637,6 +2761,34 @@ suite('Editor assistance AppHost services', () => {
             const resolution = await resolver.resolveTarget('AppHost/AppHost.csproj', new vscode.CancellationTokenSource().token);
 
             assert.deepStrictEqual(resolution, { resolved: false, outcome: 'error' });
+        });
+
+        test('keeps resolver discovery diagnostics free of raw error text', async () => {
+            const sandbox = sinon.createSandbox();
+            try {
+                const warningLog = sandbox.stub(extensionLogOutputChannel, 'warn');
+                const { error, sentinels } = createUnsafeModelTriggeredError(workspaceRoot);
+                discoveryService.discoverError = error;
+
+                const resolution = await resolver.resolveTarget(
+                    'AppHost/AppHost.csproj',
+                    new vscode.CancellationTokenSource().token);
+
+                assert.deepStrictEqual(resolution, { resolved: false, outcome: 'error' });
+                sinon.assert.calledOnceWithExactly(
+                    warningLog,
+                    'Aspire editor assistance could not enumerate AppHosts.');
+                const serialized = JSON.stringify({
+                    resolution,
+                    logs: warningLog.getCalls().map(call => call.args),
+                });
+                for (const sentinel of sentinels) {
+                    assert.strictEqual(serialized.includes(sentinel), false, `Leaked sentinel: ${sentinel}`);
+                }
+            }
+            finally {
+                sandbox.restore();
+            }
         });
 
         test('omits candidates that are outside every workspace folder', async () => {
