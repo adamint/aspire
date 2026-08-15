@@ -112,16 +112,17 @@ public class ResourceSnapshotBuilderTests
     }
 
     [Theory]
-    [InlineData("run", "--configuration", "--framework=net10.0")]
-    [InlineData("run", "-c", "-f")]
-    [InlineData("run", "--configuration=Release", "--framework")]
-    [InlineData("run", "-c=Release", "-f=net10.0")]
-    [InlineData("watch", "--configuration", "--framework=net10.0")]
-    [InlineData("watch", "-c", "-f")]
-    [InlineData("watch", "--configuration=Release", "--framework")]
-    [InlineData("watch", "-c=Release", "-f=net10.0")]
+    [InlineData("Run", "run", "--configuration", "--framework=net10.0")]
+    [InlineData("run", "run", "-c", "-f")]
+    [InlineData("run", "run", "--configuration=Release", "--framework")]
+    [InlineData("run", "run", "-c=Release", "-f=net10.0")]
+    [InlineData("WATCH", "watch", "--configuration", "--framework=net10.0")]
+    [InlineData("watch", "watch", "-c", "-f")]
+    [InlineData("watch", "watch", "--configuration=Release", "--framework")]
+    [InlineData("watch", "watch", "-c=Release", "-f=net10.0")]
     public void ProjectSnapshotIncludesSafeDotNetLaunchMetadata(
-        string command,
+        string launchCommand,
+        string expectedLaunchCommand,
         string configurationArgument,
         string targetFrameworkArgument)
     {
@@ -130,7 +131,7 @@ public class ResourceSnapshotBuilderTests
 
         var effectiveArgs = new List<string>
         {
-            command,
+            launchCommand,
             "--project",
             "/app/project.csproj",
             configurationArgument
@@ -159,9 +160,10 @@ public class ResourceSnapshotBuilderTests
             [project.Name] = project
         }).ToSnapshot(executable, CreatePreviousSnapshot());
 
-        Assert.Equal(command, Assert.IsType<string>(GetProperty(snapshot, KnownProperties.Project.LaunchCommand).Value));
+        Assert.Equal(expectedLaunchCommand, Assert.IsType<string>(GetProperty(snapshot, KnownProperties.Project.LaunchCommand).Value));
         Assert.Equal("Release", Assert.IsType<string>(GetProperty(snapshot, KnownProperties.Project.Configuration).Value));
         Assert.Equal("net10.0", Assert.IsType<string>(GetProperty(snapshot, KnownProperties.Project.TargetFramework).Value));
+        Assert.True(GetProperty(snapshot, KnownProperties.Executable.Args).IsSensitive);
         Assert.False(GetProperty(snapshot, KnownProperties.Project.LaunchCommand).IsSensitive);
         Assert.False(GetProperty(snapshot, KnownProperties.Project.Configuration).IsSensitive);
         Assert.False(GetProperty(snapshot, KnownProperties.Project.TargetFramework).IsSensitive);

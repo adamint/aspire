@@ -33,7 +33,7 @@ public class ResourceSnapshotMapperTests
     }
 
     [Fact]
-    public void MapToResourceJson_WithLaunchConfigurationType_PreservesProperty()
+    public void MapToResourceJson_WithDebugProperties_PreservesProperties()
     {
         var snapshot = new ResourceSnapshot
         {

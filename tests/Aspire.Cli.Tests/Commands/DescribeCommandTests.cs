@@ -258,7 +258,7 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public void DescribeCommand_SnapshotFormat_IncludesLaunchConfigurationTypeForParentedProjectAndMauiResources()
+    public void DescribeCommand_SnapshotFormat_IncludesDebugPropertiesForParentedProjectAndMauiResources()
     {
         var resourcesOutput = new ResourcesOutput
         {
