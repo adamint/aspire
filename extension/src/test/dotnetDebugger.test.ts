@@ -566,10 +566,10 @@ suite('Dotnet Debugger Extension Tests', () => {
 
         await assert.rejects(
             attachProvider.createDebugConfiguration(createProjectResource({
-                    'executable.pid': '1234',
-                    'executable.path': 'dotnet',
-                    'executable.args': null,
-                    'project.path': '/repo/api/Api.csproj',
+                'executable.pid': '1234',
+                'executable.path': 'dotnet',
+                'executable.args': null,
+                'project.path': '/repo/api/Api.csproj',
             })),
             (error: unknown) => error instanceof Error
                 && error.message === 'This resource cannot be attached to a debugger.');
@@ -1057,11 +1057,11 @@ suite('Dotnet Debugger Extension Tests', () => {
     test('attach configuration rejects present invalid launch command metadata', async () => {
         const { attachProvider, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/Api.dll', null, true, true);
         const cases = [
-            { label: 'unsupported publish marker', launchCommand: 'publish', checksLegacyTargetPath: false },
-            { label: 'present null marker fails before older fallback', launchCommand: null, checksLegacyTargetPath: true },
+            { label: 'unsupported publish marker', launchCommand: 'publish' },
+            { label: 'present null marker fails before older fallback', launchCommand: null },
         ] as const;
 
-        for (const { label, launchCommand, checksLegacyTargetPath } of cases) {
+        for (const { label, launchCommand } of cases) {
             dotNetService.getDotNetAttachTargetInfoStub.resetHistory();
             dotNetService.getDotNetTargetPathStub.resetHistory();
 
@@ -1078,9 +1078,7 @@ suite('Dotnet Debugger Extension Tests', () => {
                 label);
 
             assert.strictEqual(dotNetService.getDotNetAttachTargetInfoStub.called, false, label);
-            if (checksLegacyTargetPath) {
-                assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false, label);
-            }
+            assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false, label);
         }
     });
 
