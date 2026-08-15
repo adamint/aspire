@@ -55,11 +55,13 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
     private readonly _compareAppHostIdentity: ResourceDebugAppHostIdentityComparer;
     private readonly _telemetry: ResourceDebugTelemetry;
     private readonly _clock: ResourceDebugClock;
+    readonly onDidChangeDebugSessions: vscode.Event<void>;
 
     constructor(private readonly _dependencies: ResourceDebugServiceDependencies) {
         this._compareAppHostIdentity = _dependencies.compareAppHostIdentity ?? compareAppHostIdentity;
         this._telemetry = _dependencies.telemetry ?? new ExtensionResourceDebugTelemetry();
         this._clock = _dependencies.clock ?? monotonicResourceDebugClock;
+        this.onDidChangeDebugSessions = _dependencies.sessionRegistry.onDidChangeSessions;
     }
 
     dispose(): void {

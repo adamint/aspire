@@ -2731,6 +2731,45 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         provider.dispose();
     });
 
+    test('attachDebuggerToResource passes the workspace AppHost path to the debug service', async () => {
+        let request: ResourceDebugRequest | undefined;
+        const appHostPath = '/workspace/apps/Store/AppHost.csproj';
+        const resourceDebugger: ResourceDebugger = {
+            debug: async value => {
+                request = value;
+                return { outcome: 'started', providerId: 'dotnet' };
+            },
+            canAttachToResource: () => true,
+        };
+        const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
+        const repository = {
+            viewMode: 'workspace' as ViewMode,
+            appHosts: [],
+            workspaceResources: [
+                makeResource({
+                    name: 'api',
+                    state: ResourceState.Running,
+                    properties: makeAttachableProjectProperties(),
+                }),
+            ],
+            workspaceAppHost: makeAppHost({ appHostPath }),
+            workspaceAppHostPath: appHostPath,
+            workspaceAppHostCandidatePaths: [appHostPath],
+            workspaceAppHostName: 'AppHost.csproj',
+            onDidChangeData,
+        } as unknown as AppHostDataRepository;
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), resourceDebugger);
+
+        const [workspaceAppHost] = provider.getChildren();
+        const [resourceItem] = provider.getChildren(workspaceAppHost);
+        await (provider as any).attachDebuggerToResource(resourceItem);
+
+        assert.ok(request);
+        assert.strictEqual(request.appHost.absolutePath, appHostPath);
+        assert.strictEqual(request.appHost.displayPath, vscode.workspace.asRelativePath(appHostPath));
+        provider.dispose();
+    });
+
     test('attachDebuggerToResource shows cancellable progress and reports an active debugger', async () => {
         const progressToken = new vscode.CancellationTokenSource();
         const withProgressStub = sandbox.stub(vscode.window, 'withProgress').callsFake(async (options, task) => {
@@ -2789,7 +2828,9 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             }),
             makeAppHost({
                 appHostPath: '/repo/second/AppHost.csproj',
-                appHostPid: 2222,
+                // The resource tree already knows which AppHost rendered the resource. The attach
+                // adapter must preserve that path instead of looking the owner up from a PID.
+                appHostPid: 1111,
                 resources: [
                     makeResource({
                         name: 'api',
@@ -2813,6 +2854,66 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         assert.strictEqual(debugRequest.appHost.absolutePath, '/repo/second/AppHost.csproj');
         assert.strictEqual(debugRequest.resourceName, 'api');
         provider.dispose();
+    });
+
+    test('attachDebuggerToResource passes progress cancellation to the debug service without a warning', async () => {
+        const cancellation = new vscode.CancellationTokenSource();
+        let receivedToken: vscode.CancellationToken | undefined;
+        const resourceDebugger: ResourceDebugger = {
+            debug: async request => {
+                receivedToken = request.cancellationToken;
+                return { outcome: 'cancelled' };
+            },
+            canAttachToResource: () => true,
+        };
+        const withProgressStub = sandbox.stub(vscode.window, 'withProgress').callsFake(async (_options, task) =>
+            await task({ report: () => { } }, cancellation.token));
+        const warningStub = sandbox.stub(vscode.window, 'showWarningMessage');
+        const provider = makeTreeProvider([
+            makeAppHost({
+                resources: [
+                    makeResource({
+                        state: ResourceState.Running,
+                        properties: makeAttachableProjectProperties(),
+                    }),
+                ],
+            }),
+        ], 'global', undefined, resourceDebugger);
+
+        try {
+            await (provider as any).attachDebuggerToResource(getFirstResourceItem(provider));
+
+            assert.ok(withProgressStub.calledOnce);
+            assert.strictEqual(receivedToken, cancellation.token);
+            assert.strictEqual(warningStub.called, false);
+        }
+        finally {
+            cancellation.dispose();
+            provider.dispose();
+        }
+    });
+
+    test('attachDebuggerToResource refreshes the tree when resource debug session state changes', () => {
+        const debugSessionChanges = new vscode.EventEmitter<void>();
+        const resourceDebugger = {
+            debug: async () => ({ outcome: 'started', providerId: 'dotnet' as const }),
+            canAttachToResource: () => true,
+            onDidChangeDebugSessions: debugSessionChanges.event,
+        } as ResourceDebugger & { onDidChangeDebugSessions: vscode.Event<void> };
+        const provider = makeTreeProvider([], 'global', undefined, resourceDebugger);
+        let refreshCount = 0;
+        const subscription = provider.onDidChangeTreeData(() => refreshCount++);
+
+        try {
+            debugSessionChanges.fire();
+
+            assert.strictEqual(refreshCount, 1);
+        }
+        finally {
+            subscription.dispose();
+            debugSessionChanges.dispose();
+            provider.dispose();
+        }
     });
 
     test('attachDebuggerToResource rejects a resource removed before invocation', async () => {
@@ -2937,6 +3038,29 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         provider.dispose();
     });
 
+    test('attachDebuggerToResource uses future provider requirement labels without language-specific branching', async () => {
+        const provider = makeTreeProvider([
+            makeAppHost({
+                resources: [
+                    makeResource({
+                        state: ResourceState.Running,
+                        properties: makeAttachableProjectProperties(),
+                    }),
+                ],
+            }),
+        ], 'global', undefined, makeResourceDebugger({
+            outcome: 'debuggerExtensionMissing',
+            debuggerExtensions: [{ id: 'future.debugger', label: 'Future debugger' }],
+        }));
+        const warningStub = sandbox.stub(vscode.window, 'showWarningMessage');
+
+        const outcome = await (provider as any).attachDebuggerToResource(getFirstResourceItem(provider));
+
+        assert.deepStrictEqual(outcome, { success: false, errorKind: 'ResourceNotAttachable' });
+        assert.ok(warningStub.calledOnceWith('Install Future debugger to attach the debugger to this resource.'));
+        provider.dispose();
+    });
+
     test('attachDebuggerToResource reports when VS Code declines the attach session', async () => {
         const provider = makeTreeProvider([
             makeAppHost({
@@ -2954,12 +3078,12 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             outcome: 'error',
             errorKind: 'debuggerStartDeclined',
         }));
+        const warningStub = sandbox.stub(vscode.window, 'showWarningMessage');
 
-        await assert.rejects(
-            (provider as any).attachDebuggerToResource(getFirstResourceItem(provider)),
-            (error: unknown) => error instanceof Error
-                && error.name === 'StartDebuggingDeclined'
-                && error.message === 'VS Code did not start the debugger attach session for API.');
+        const outcome = await (provider as any).attachDebuggerToResource(getFirstResourceItem(provider));
+
+        assert.deepStrictEqual(outcome, { success: false, errorKind: 'ResourceNotAttachable' });
+        assert.ok(warningStub.calledOnceWith('VS Code did not start the debugger attach session for API.'));
         provider.dispose();
     });
 

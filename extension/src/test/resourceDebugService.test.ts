@@ -1059,6 +1059,32 @@ suite('Resource debug service', () => {
         sessions.dispose();
     });
 
+    test('publishes attach session start and termination changes to tree consumers', async () => {
+        const { service, sessions, events } = createService({
+            startDebugging: async (_folder, configuration) => {
+                events.start(configuration);
+                return true;
+            },
+        });
+        const lifecycle = service.onDidChangeDebugSessions;
+        let changeCount = 0;
+        const subscription = lifecycle(() => changeCount++);
+
+        try {
+            assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
+            assert.strictEqual(changeCount, 1);
+            assert.ok(events.startedConfiguration);
+
+            events.terminate(events.startedConfiguration);
+
+            assert.strictEqual(changeCount, 2);
+        }
+        finally {
+            subscription.dispose();
+            sessions.dispose();
+        }
+    });
+
     test('emits a bounded start and success result with deterministic durations', async () => {
         const telemetry = new TestResourceDebugTelemetry();
         telemetry.currentTime = 100;

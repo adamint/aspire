@@ -68,6 +68,11 @@ export interface ResourceAttachProvider {
 export interface ResourceDebugger {
     debug(request: ResourceDebugRequest): Promise<ResourceDebugResult>;
     canAttachToResource(resource: ResourceDebugResourceSnapshot): boolean;
+    /**
+     * Lets resource presentations refresh after attach sessions start or end without receiving
+     * internal process, path, or debugger configuration details.
+     */
+    readonly onDidChangeDebugSessions?: vscode.Event<void>;
 }
 
 export type ResourceDebugErrorKind =

@@ -112,6 +112,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
 
     private readonly _dataSubscription: vscode.Disposable;
     private readonly _launchingSubscription: vscode.Disposable;
+    private readonly _resourceDebugSessionSubscription: vscode.Disposable | undefined;
     private readonly _stoppingAppHostTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
     private _contentProviderRegistration: vscode.Disposable | undefined;
     private readonly _appHostSourceContents = new Map<string, string>();
@@ -137,6 +138,9 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
 
         // When the launch service's launching state changes, refresh the tree.
         this._launchingSubscription = this._launchService.onDidChangeLaunchingState(() => {
+            this._onDidChangeTreeData.fire();
+        });
+        this._resourceDebugSessionSubscription = this._resourceDebugService.onDidChangeDebugSessions?.(() => {
             this._onDidChangeTreeData.fire();
         });
     }
@@ -185,6 +189,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
     dispose(): void {
         this._dataSubscription.dispose();
         this._launchingSubscription.dispose();
+        this._resourceDebugSessionSubscription?.dispose();
         for (const timeout of this._stoppingAppHostTimeouts.values()) {
             clearTimeout(timeout);
         }
@@ -706,7 +711,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
             }
 
             if (appHost.resources && appHost.resources.length > 0) {
-                items.push(new ResourcesGroupItem(appHost.resources, appHost.appHostPid));
+                items.push(new ResourcesGroupItem(appHost.resources, appHost.appHostPid, appHost.appHostPath));
             }
 
             return items;
@@ -721,7 +726,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
                     element.appHostPid,
                     hasChildren,
                     element.resources,
-                    undefined,
+                    element.appHostPath,
                     this._resourceDebugService.canAttachToResource(r));
             });
         }
@@ -1009,10 +1014,9 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         element: ResourceItem,
         cancellationToken: vscode.CancellationToken,
     ): Promise<AttachDebuggerHandledFailure | void> {
-        // Global resource items retain the AppHost PID rather than its path. Resolve that
-        // owner again before refreshing the resource snapshot so duplicate resource names
-        // in different AppHosts cannot attach to whichever host happens to render first.
-        const ownerAppHostPath = element.appHostPath ?? this._findAppHostForResource(element)?.appHostPath;
+        // The tree captures the owning AppHost when it renders a resource so an attach never
+        // chooses a same-named resource from another AppHost based on a mutable PID lookup.
+        const ownerAppHostPath = element.appHostPath;
         if (!ownerAppHostPath) {
             vscode.window.showWarningMessage(attachDebuggerResourceNotFound);
             return { success: false, errorKind: 'ResourceNotFound' };
@@ -1051,9 +1055,8 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
                 return { success: false, errorKind: 'ResourceNotAttachable' };
             case 'error':
                 if (result.errorKind === 'debuggerStartDeclined') {
-                    const error = new Error(attachDebuggerDeclined(element.resource.displayName ?? element.resource.name));
-                    error.name = 'StartDebuggingDeclined';
-                    throw error;
+                    vscode.window.showWarningMessage(attachDebuggerDeclined(element.resource.displayName ?? element.resource.name));
+                    return { success: false, errorKind: 'ResourceNotAttachable' };
                 }
 
                 vscode.window.showWarningMessage(attachDebuggerUnavailable);

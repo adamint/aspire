@@ -43,9 +43,13 @@ export class EndpointUrlItem extends vscode.TreeItem {
 }
 
 export class ResourcesGroupItem extends vscode.TreeItem {
-    constructor(public readonly resources: ResourceJson[], public readonly appHostPid: number) {
+    constructor(
+        public readonly resources: ResourceJson[],
+        public readonly appHostPid: number,
+        public readonly appHostPath: string,
+    ) {
         super(resourcesGroupLabel, vscode.TreeItemCollapsibleState.Expanded);
-        this.id = `resources:${appHostPid}`;
+        this.id = `resources:${getComparisonKey(path.resolve(appHostPath))}`;
         this.iconPath = new vscode.ThemeIcon('layers', new vscode.ThemeColor('aspire.brandPurple'));
         this.contextValue = 'resourcesGroup';
         this.description = `(${resources.length})`;
@@ -137,9 +141,9 @@ export class ResourceItem extends vscode.TreeItem {
             ? vscode.TreeItemCollapsibleState.Expanded
             : hasExpandableContent ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None;
         super(label, collapsible);
-        const ownerId = appHostPid !== null
-            ? appHostPid.toString()
-            : appHostPath ? getComparisonKey(path.resolve(appHostPath)) : 'workspace';
+        const ownerId = appHostPath
+            ? getComparisonKey(path.resolve(appHostPath))
+            : appHostPid !== null ? appHostPid.toString() : 'workspace';
         this.id = `resource:${ownerId}:${resource.name}`;
         this.iconPath = getResourceIcon(resource);
         this.description = buildResourceDescription(resource);

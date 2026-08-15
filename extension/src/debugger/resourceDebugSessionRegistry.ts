@@ -52,6 +52,8 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
     private readonly _attempts = new Map<number, TrackedAttachAttempt>();
     private readonly _attemptsByResource = new Map<string, Set<number>>();
     private readonly _resourceLocks = new Map<string, Promise<void>>();
+    private readonly _onDidChangeSessions = new vscode.EventEmitter<void>();
+    readonly onDidChangeSessions = this._onDidChangeSessions.event;
     private readonly _subscriptions: vscode.Disposable;
     private readonly _pendingStartTimeoutMs: number;
     private readonly _telemetry: ResourceDebugTelemetry;
@@ -75,6 +77,7 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
         this._attempts.clear();
         this._attemptsByResource.clear();
         this._resourceLocks.clear();
+        this._onDidChangeSessions.dispose();
     }
 
     hasActiveSession(appHost: ResourceDebugAppHostTarget, resourceName: string): boolean {
@@ -166,6 +169,7 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
                 if (attempt.sessionIds.size === 0) {
                     this._schedulePendingStartExpiry(attempt);
                 }
+                this._onDidChangeSessions.fire();
             },
             abandon: () => this._removeAttempt(attempt),
         };
@@ -220,6 +224,7 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
         if (attemptMarkers?.size === 0) {
             this._attemptsByResource.delete(attempt.resourceKey);
         }
+        this._onDidChangeSessions.fire();
     }
 
     private _schedulePendingStartExpiry(attempt: TrackedAttachAttempt): void {
