@@ -142,6 +142,39 @@ export interface AppHostLifecycleToolDependencies {
     readonly discoveryService: AppHostLifecycleDiscoveryService;
 }
 
+/**
+ * A registry-approved AppHost identity safe for a caller to pass to an editor-owned
+ * operation. `absolutePath` remains internal; presentation layers may render only
+ * `displayPath`.
+ */
+export interface SafeAppHostTarget {
+    readonly absolutePath: string;
+    readonly displayPath: string;
+}
+
+/**
+ * The intentionally small result shape shared by tools that need to select an AppHost
+ * but must not own AppHost discovery or path-security policy.
+ */
+export type SafeAppHostTargetResolution =
+    | { readonly resolved: true; readonly target: SafeAppHostTarget }
+    | {
+        readonly resolved: false;
+        readonly outcome: Extract<
+            AppHostLifecycleOutcome,
+            'invalidInput' | 'unknownAppHost' | 'ambiguousAppHost' | 'discoveryFailed' | 'cancelled'
+        >;
+    };
+
+/**
+ * Resolves a model selector only against the editor's discovered AppHost registry.
+ *
+ * Consumers must not recreate discovery, containment, or multi-root selection logic.
+ */
+export interface SafeAppHostTargetResolver {
+    resolveTarget(rawAppHost: unknown, token: vscode.CancellationToken): Promise<SafeAppHostTargetResolution>;
+}
+
 export interface AppHostLifecycleToolRegistration extends vscode.Disposable {
     readonly registered: boolean;
     /**

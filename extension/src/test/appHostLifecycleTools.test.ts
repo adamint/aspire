@@ -355,9 +355,12 @@ suite('AppHost lifecycle language model tools', () => {
             const packageNls = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.nls.json'), 'utf8')) as Record<string, string>;
             const tools = manifest.contributes.languageModelTools ?? [];
 
-            assert.deepStrictEqual(tools.map(tool => tool.name), [aspireAppHostStartToolName, aspireAppHostStopToolName]);
+            const lifecycleTools = tools.filter(tool =>
+                tool.name === aspireAppHostStartToolName ||
+                tool.name === aspireAppHostStopToolName);
+            assert.deepStrictEqual(lifecycleTools.map(tool => tool.name), [aspireAppHostStartToolName, aspireAppHostStopToolName]);
 
-            for (const tool of tools) {
+            for (const tool of lifecycleTools) {
                 for (const localizedField of ['displayName', 'modelDescription', 'userDescription']) {
                     const reference = tool[localizedField] as string;
                     assert.match(reference, /^%[\w.-]+%$/, `${tool.name}.${localizedField} must be a package.nls reference.`);

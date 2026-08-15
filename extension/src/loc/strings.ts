@@ -279,3 +279,7 @@ export const appHostLifecycleUnspecifiedMode = vscode.l10n.t('unspecified');
 export const appHostLifecycleUnresolvedPath = vscode.l10n.t('an unresolved path');
 export const appHostLifecycleBusy = vscode.l10n.t('Another start or stop operation for this Aspire AppHost is still in progress. Wait for it to finish and try again.');
 export const appHostLifecycleLaunchAlreadyClaimed = vscode.l10n.t('This Aspire AppHost is already starting or running. The new debug session was cancelled so only one AppHost runs.');
+export const resourceDebugToolConfirmationTitle = vscode.l10n.t('Attach debugger to Aspire resource');
+export const resourceDebugToolConfirmationMessage = (resourceName: string, appHostPath: string) => vscode.l10n.t('Attach the debugger to resource {0} from Aspire AppHost {1}?', resourceName, appHostPath);
+export const resourceDebugToolInvocationMessage = (resourceName: string) => vscode.l10n.t('Attaching debugger to Aspire resource {0}...', resourceName);
+export const resourceDebugToolUnavailableInvocationMessage = vscode.l10n.t('Unable to attach debugger to the requested Aspire resource.');

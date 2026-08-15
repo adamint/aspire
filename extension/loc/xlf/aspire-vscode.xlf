@@ -88,8 +88,23 @@
     <trans-unit id="command.attachDebuggerToResource">
       <source xml:lang="en">Attach debugger</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.resourceDebugToolConfirmationTitle">
+      <source xml:lang="en">Attach debugger to Aspire resource</source>
+    </trans-unit>
     <trans-unit id="aspire-vscode.strings.attachDebuggerConfigurationName">
       <source xml:lang="en">Attach debugger: {0}</source>
+    </trans-unit>
+    <trans-unit id="languageModelTool.aspireResourceDebug.modelDescription">
+      <source xml:lang="en">Attach the VS Code debugger to a running Aspire resource that the extension has already discovered. Requires a workspace-relative AppHost path and the resource name. The default auto strategy currently attaches to the resource; start and restart under debug are not supported.</source>
+    </trans-unit>
+    <trans-unit id="languageModelTool.aspireResourceDebug.userDescription">
+      <source xml:lang="en">Attach the debugger to a running Aspire resource.</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.resourceDebugToolConfirmationMessage">
+      <source xml:lang="en">Attach the debugger to resource {0} from Aspire AppHost {1}?</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.resourceDebugToolInvocationMessage">
+      <source xml:lang="en">Attaching debugger to Aspire resource {0}...</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.attachingDebugger">
       <source xml:lang="en">Attaching debugger to {0}...</source>
@@ -225,6 +240,9 @@
     </trans-unit>
     <trans-unit id="command.codeLensDebugPipelineStep">
       <source xml:lang="en">Debug Aspire pipeline step</source>
+    </trans-unit>
+    <trans-unit id="languageModelTool.aspireResourceDebug.displayName">
+      <source xml:lang="en">Debug Aspire resource</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.dashboardLaunchChromeLabel">
       <source xml:lang="en">Debug with Chrome</source>
@@ -858,6 +876,9 @@
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.unableToAddFolderToWorkspace">
       <source xml:lang="en">Unable to add folder to workspace: {0}</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.resourceDebugToolUnavailableInvocationMessage">
+      <source xml:lang="en">Unable to attach debugger to the requested Aspire resource.</source>
     </trans-unit>
     <trans-unit id="command.updateSelf">
       <source xml:lang="en">Update Aspire CLI</source>

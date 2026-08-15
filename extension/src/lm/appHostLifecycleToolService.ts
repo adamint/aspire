@@ -21,6 +21,9 @@ import {
     type AppHostLifecycleToolResult,
     type AppHostStartToolInput,
     type AppHostStopToolInput,
+    type SafeAppHostTarget,
+    type SafeAppHostTargetResolver,
+    type SafeAppHostTargetResolution,
 } from './appHostLifecycleToolContracts';
 
 /**
@@ -60,7 +63,7 @@ const identityChangingCharacters = /[\u0000-\u001F\u007F-\u009F]|\p{Cf}/u;
  * confirmation renders and the path the launcher receives originate from the same object.
  * The model's input only ever selects one of these; it never contributes to one.
  */
-interface ResolvedAppHostTarget {
+interface ResolvedAppHostTarget extends SafeAppHostTarget {
     /** Absolute path exactly as the registry enumerated it, used for launching. */
     absolutePath: string;
     /** Path relative to the containing workspace folder, always with `/` separators. */
@@ -75,7 +78,14 @@ interface ResolvedAppHostTarget {
 
 type AppHostTargetResolution =
     | { resolved: true; target: ResolvedAppHostTarget }
-    | { resolved: false; outcome: AppHostLifecycleOutcome; knownAppHosts?: readonly string[] };
+    | {
+        resolved: false;
+        outcome: Extract<
+            AppHostLifecycleOutcome,
+            'invalidInput' | 'unknownAppHost' | 'ambiguousAppHost' | 'discoveryFailed' | 'cancelled'
+        >;
+        knownAppHosts?: readonly string[];
+    };
 
 type PreflightResult =
     | { rejected: true; result: AppHostLifecycleToolResult }
@@ -101,7 +111,7 @@ type PreflightResult =
  * straight to the debug adapter and bypasses the lock, which is why every decision here
  * is re-validated against live session state rather than the lock alone.
  */
-export class AppHostLifecycleToolService implements vscode.Disposable {
+export class AppHostLifecycleToolService implements vscode.Disposable, SafeAppHostTargetResolver {
     private readonly _dependencies: AppHostLifecycleToolDependencies;
     private _disposed = false;
 

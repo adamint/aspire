@@ -31,6 +31,7 @@ import type { AspireAppHostState, AspireExtensionApi, AspireExtensionStateSnapsh
 import { AppHostsViewTelemetry } from './views/AppHostsViewTelemetry';
 import { initializeCliPathEnvironmentSync } from './utils/cliPathEnvironment';
 import { AppHostLifecycleToolService, registerAppHostLifecycleTools } from './lm/appHostLifecycleTools';
+import { AspireResourceDebugToolService, registerAspireResourceDebugTool } from './lm/resourceDebugTools';
 import { registerInstrumentedCommand } from './activation/instrumentedCommand';
 import { registerCliCommands } from './activation/registerCliCommands';
 import { registerTreeViewCommands } from './activation/registerTreeViewCommands';
@@ -228,6 +229,12 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(appHostLifecycleToolService);
   const appHostLifecycleToolRegistration = registerAppHostLifecycleTools(appHostLifecycleToolService);
   context.subscriptions.push(appHostLifecycleToolRegistration);
+  const resourceDebugToolService = new AspireResourceDebugToolService({
+    targetResolver: appHostLifecycleToolService,
+    resourceDebugger: resourceDebugService,
+  });
+  context.subscriptions.push(resourceDebugToolService);
+  context.subscriptions.push(registerAspireResourceDebugTool(resourceDebugToolService));
 
   const getEnableSettingsFileCreationPromptOnStartup = () => vscode.workspace.getConfiguration('aspire').get<boolean>('enableSettingsFileCreationPromptOnStartup', true);
   const setEnableSettingsFileCreationPromptOnStartup = async (value: boolean) => await vscode.workspace.getConfiguration('aspire').update('enableSettingsFileCreationPromptOnStartup', value, vscode.ConfigurationTarget.Workspace);

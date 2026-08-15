@@ -52,7 +52,8 @@
     "onCommand:aspire-vscode.installCli",
     "onCommand:aspire-vscode.verifyCliInstalled",
     "onLanguageModelTool:aspire_apphost_start",
-    "onLanguageModelTool:aspire_apphost_stop"
+    "onLanguageModelTool:aspire_apphost_stop",
+    "onLanguageModelTool:aspire_resource_debug"
   ],
   "main": "./dist/extension.js",
   "l10n": "./l10n",
@@ -117,6 +118,45 @@
           },
           "required": [
             "appHostPath"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "aspire_resource_debug",
+        "toolReferenceName": "aspireDebugResource",
+        "displayName": "%languageModelTool.aspireResourceDebug.displayName%",
+        "modelDescription": "%languageModelTool.aspireResourceDebug.modelDescription%",
+        "userDescription": "%languageModelTool.aspireResourceDebug.userDescription%",
+        "icon": "$(debug-alt)",
+        "canBeReferencedInPrompt": true,
+        "when": "isWorkspaceTrusted",
+        "tags": [
+          "aspire",
+          "debug",
+          "resource"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "appHostPath": {
+              "type": "string"
+            },
+            "resourceName": {
+              "type": "string"
+            },
+            "strategy": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "attach"
+              ],
+              "default": "auto"
+            }
+          },
+          "required": [
+            "appHostPath",
+            "resourceName"
           ],
           "additionalProperties": false
         }
