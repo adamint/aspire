@@ -81,6 +81,18 @@ suite('Launched child process discovery', () => {
         ]);
     });
 
+    test('parses UTF-8 BOM-prefixed Windows CIM output with non-ASCII command text', () => {
+        assert.deepStrictEqual(parseWindowsProcessList(`\uFEFF${JSON.stringify({
+            ProcessId: 42,
+            ParentProcessId: 10,
+            Name: 'api.exe',
+            ExecutablePath: 'C:\\target\\über api.exe',
+            CommandLine: '"C:\\target\\über api.exe" --name "日本語"',
+        })}`), [
+            process(42, 10, 'C:\\target\\über api.exe', '"C:\\target\\über api.exe" --name "日本語"'),
+        ]);
+    });
+
     test('uses fixed platform-specific process discovery commands', async () => {
         const calls: Array<{ command: string; args: readonly string[] }> = [];
         const commandRunner: LaunchedChildProcessCommandRunner = {
@@ -113,7 +125,7 @@ suite('Launched child process discovery', () => {
                     '-NoProfile',
                     '-NonInteractive',
                     '-Command',
-                    'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress',
+                    '$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress',
                 ],
             },
         ]);
@@ -182,6 +194,27 @@ suite('Launched child process discovery', () => {
             { timeoutMs: 20, retryDelayMs: 10 });
 
         await assert.rejects(cyclic.resolveProcessId(10, identity));
+    });
+
+    test('re-verifies selected PID ancestry before accepting a process-list candidate', async () => {
+        const injectedCandidate = process(42, 10, '/target/api', '/target/api');
+        const query: LaunchedChildProcessQuery = {
+            listProcesses: async () => [
+                process(10, 1, '/tool/launcher'),
+                injectedCandidate,
+            ],
+            // A newline in another process's command can forge the row above. The direct PID
+            // query exposes the real parent and must prevent attaching to that unrelated process.
+            getProcess: async processId => processId === 42
+                ? process(42, 99, '/target/api', '/target/api')
+                : process(10, 1, '/tool/launcher'),
+        };
+        const resolver = new LaunchedChildProcessResolver(
+            query,
+            new TestClock(),
+            { timeoutMs: 20, retryDelayMs: 10 });
+
+        await assert.rejects(resolver.resolveProcessId(10, identity));
     });
 
     test('normalizes query failures and supports cancellation', async () => {

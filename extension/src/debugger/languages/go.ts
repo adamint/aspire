@@ -198,10 +198,11 @@ function isGoBuildApplication(process: LaunchedChildProcess): boolean {
 }
 
 function isGoToolProcess(process: LaunchedChildProcess): boolean {
-    const executableName = getProcessCommandProgram(process.command)?.split(/[\\/]/).pop()?.toLowerCase()
-        ?? process.executable.split(/[\\/]/).pop()?.toLowerCase();
-    return executableName === 'go' ||
-        executableName === 'go.exe' ||
+    const programs = [getProcessCommandProgram(process.command), process.executable];
+    return programs.some(program => {
+        const executableName = program?.split(/[\\/]/).pop()?.toLowerCase();
+        return executableName === 'go' || executableName === 'go.exe';
+    }) ||
         /(?:^|[\\/\s])go(?:\.exe)?\s+run(?:\s|$)/i.test(process.command);
 }
 

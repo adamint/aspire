@@ -18,7 +18,6 @@ import {
     attachDebuggerAlreadyDebugging,
     attachDebuggerUnavailable,
     attachDebuggerResourceNotFound,
-    attachDebuggerCsharpExtensionRequired,
     attachDebuggerExtensionsRequired,
     attachDebuggerDeclined,
     dashboardUrlNotFound,
@@ -78,7 +77,7 @@ type TreeElement = AppHostItem | EndpointUrlItem | ResourcesGroupItem | Resource
 
 interface AttachDebuggerHandledFailure {
     success: false;
-    errorKind: 'ResourceNotFound' | 'ResourceNotAttachable' | 'CSharpExtensionMissing';
+    errorKind: 'ResourceNotFound' | 'ResourceNotAttachable';
 }
 
 function isSamePath(left: string, right: string): boolean {
@@ -1040,12 +1039,10 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
                 vscode.window.showWarningMessage(attachDebuggerResourceNotFound);
                 return { success: false, errorKind: 'ResourceNotFound' };
             case 'debuggerExtensionMissing':
-                if (result.debuggerExtensions.some(extension => extension.id === 'ms-dotnettools.csharp')) {
-                    vscode.window.showWarningMessage(attachDebuggerCsharpExtensionRequired);
-                    return { success: false, errorKind: 'CSharpExtensionMissing' };
-                }
-
-                vscode.window.showWarningMessage(attachDebuggerExtensionsRequired(
+                const installMessage = result.debuggerExtensions.length === 1
+                    ? result.debuggerExtensions[0].installMessage
+                    : undefined;
+                vscode.window.showWarningMessage(installMessage ?? attachDebuggerExtensionsRequired(
                     result.debuggerExtensions.map(extension => extension.label).join(', ')));
                 return { success: false, errorKind: 'ResourceNotAttachable' };
             case 'resourceNotRunning':

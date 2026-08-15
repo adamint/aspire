@@ -2902,7 +2902,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
 
         const outcome = await (provider as any).attachDebuggerToResource(getFirstResourceItem(provider));
 
-        assert.deepStrictEqual(outcome, { success: false, errorKind: 'CSharpExtensionMissing' });
+        assert.deepStrictEqual(outcome, { success: false, errorKind: 'ResourceNotAttachable' });
         assert.ok(warningStub.calledOnce);
         provider.dispose();
     });

@@ -210,10 +210,9 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
         if (missingDebuggerExtensions.length > 0) {
             return {
                 outcome: 'debuggerExtensionMissing',
-                debuggerExtensions: missingDebuggerExtensions.map(requirement => ({
-                    id: requirement.id,
-                    label: requirement.label,
-                })),
+                debuggerExtensions: missingDebuggerExtensions.map(requirement => requirement.installMessage
+                    ? { id: requirement.id, label: requirement.label, installMessage: requirement.installMessage }
+                    : { id: requirement.id, label: requirement.label }),
             };
         }
 

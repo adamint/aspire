@@ -23,17 +23,6 @@ export class ResourceAttachProviderRegistry {
         return this._knownProviders.find(provider => provider.canRecognizeResource(resource));
     }
 
-    getAttachableProviderForResource(resource: ResourceDebugResourceSnapshot): ResourceAttachProvider | undefined {
-        return this._knownProviders.find(provider => provider.canAttachToResource(resource));
-    }
-
-    getInstalledProviderForResource(resource: ResourceDebugResourceSnapshot): ResourceAttachProvider | undefined {
-        const provider = this.getAttachableProviderForResource(resource);
-        return provider && this.getMissingDebuggerExtensions(provider).length === 0
-            ? provider
-            : undefined;
-    }
-
     getMissingDebuggerExtensions(provider: ResourceAttachProvider): readonly ResourceDebugExtensionRequirement[] {
         return provider.requiredDebuggerExtensions.filter(requirement =>
             !(this._isDebuggerExtensionInstalled?.(requirement.id) ?? isExtensionInstalled(requirement.id)));

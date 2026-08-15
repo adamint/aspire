@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { extensionLogOutputChannel } from '../../utils/logging';
-import { noCsharpBuildTask, buildFailedWithExitCode, noOutputFromMsbuild, failedToGetTargetPath, invalidLaunchConfiguration, buildFailedForProjectWithError, processExitedWithCode, lookingForDevkitBuildTask, csharpDevKitNotInstalled, failedToInspectRuntimeConfig, dotNetRunFallbackDisablesDebugger, dotNetRunFileBasedExecutableProfileFallback, executableLaunchProfileMissingExecutablePath, attachDebuggerConfigurationName, attachDebuggerUnavailable } from '../../loc/strings';
+import { noCsharpBuildTask, buildFailedWithExitCode, noOutputFromMsbuild, failedToGetTargetPath, invalidLaunchConfiguration, buildFailedForProjectWithError, processExitedWithCode, lookingForDevkitBuildTask, csharpDevKitNotInstalled, failedToInspectRuntimeConfig, dotNetRunFallbackDisablesDebugger, dotNetRunFileBasedExecutableProfileFallback, executableLaunchProfileMissingExecutablePath, attachDebuggerConfigurationName, attachDebuggerCsharpExtensionRequired, attachDebuggerUnavailable } from '../../loc/strings';
 import { ChildProcessWithoutNullStreams } from 'child_process';
 import * as childProcess from 'child_process';
 import * as util from 'util';
@@ -39,7 +39,7 @@ import {
 interface IDotNetService {
     getAndActivateDevKit(): Promise<boolean>
     buildDotNetProject(projectFile: string): Promise<void>;
-    getDotNetAttachTargetInfo(projectFile: string, configuration?: string, cancellationToken?: vscode.CancellationToken): Promise<DotNetAttachTargetInfo>;
+    getDotNetAttachTargetInfo(projectFile: string, configuration?: string, cancellationToken?: vscode.CancellationToken, framework?: string): Promise<DotNetAttachTargetInfo>;
     getDotNetTargetPath(projectFile: string): Promise<string>;
     getDotNetRunApiOutput(projectFile: string, environment?: NodeJS.ProcessEnv): Promise<string>;
 }
@@ -51,6 +51,7 @@ interface DotNetAttachTargetInfo {
 
 interface DotNetAttachDebuggerResourceInfo {
     configuration?: string;
+    framework?: string;
     launcherPid: number;
     projectPath: string;
     resourceLabel: string;
@@ -153,7 +154,7 @@ export class DotNetService implements IDotNetService {
         });
     }
 
-    async getDotNetAttachTargetInfo(projectFile: string, configuration?: string, cancellationToken?: vscode.CancellationToken): Promise<DotNetAttachTargetInfo> {
+    async getDotNetAttachTargetInfo(projectFile: string, configuration?: string, cancellationToken?: vscode.CancellationToken, framework?: string): Promise<DotNetAttachTargetInfo> {
         const args = [
             'msbuild',
             projectFile,
@@ -165,6 +166,9 @@ export class DotNetService implements IDotNetService {
         ];
         if (configuration) {
             args.push(`-property:Configuration=${configuration}`);
+        }
+        if (framework) {
+            args.push(`-property:TargetFramework=${framework}`);
         }
 
         try {
@@ -581,7 +585,7 @@ function getDotNetAttachDebuggerResourceInfo(resource: ResourceDebugResourceSnap
 
     const projectPath = resource.properties?.[projectPathPropertyName] as string;
     return {
-        configuration: getDotNetLaunchConfiguration(resource),
+        ...getDotNetLaunchConfiguration(resource),
         launcherPid,
         projectPath,
         resourceLabel: resource.displayName ?? resource.name,
@@ -618,16 +622,18 @@ function canRecognizeDotNetAttachDebuggerResource(resource: ResourceDebugResourc
     return true;
 }
 
-function getDotNetLaunchConfiguration(resource: ResourceDebugResourceSnapshot): string | undefined {
+function getDotNetLaunchConfiguration(resource: ResourceDebugResourceSnapshot): Pick<DotNetAttachDebuggerResourceInfo, 'configuration' | 'framework'> {
     const executableArgs: unknown = resource.properties?.[executableArgsPropertyName];
     if (!Array.isArray(executableArgs)) {
-        return undefined;
+        return {};
     }
 
     // Project launcher arguments have the shape:
     //   ["run", "--project", "/repo/api.csproj", "--configuration", "Release", "--no-launch-profile", "--", ...appArgs]
     // Stop at the application-argument separator so an app's own --configuration value is not mistaken
     // for the MSBuild configuration DCP used to launch the project.
+    let configuration: string | undefined;
+    let framework: string | undefined;
     for (let index = 0; index < executableArgs.length; index++) {
         const argument = executableArgs[index];
         if (typeof argument !== 'string') {
@@ -638,15 +644,31 @@ function getDotNetLaunchConfiguration(resource: ResourceDebugResourceSnapshot): 
             break;
         }
 
-        if (argument === '--configuration') {
-            const configuration = executableArgs[index + 1];
-            return typeof configuration === 'string' && configuration.trim().length > 0
-                ? configuration.trim()
-                : undefined;
+        if (argument === '--configuration' || argument === '-c') {
+            const nextConfiguration = executableArgs[index + 1];
+            if (typeof nextConfiguration === 'string' && nextConfiguration.trim().length > 0) {
+                configuration = nextConfiguration.trim();
+            }
+        }
+
+        if (argument === '--framework' || argument === '-f') {
+            const nextFramework = executableArgs[index + 1];
+            if (typeof nextFramework === 'string' && nextFramework.trim().length > 0) {
+                framework = nextFramework.trim();
+            }
+        }
+
+        const [option, value] = argument.split('=', 2);
+        if ((option === '--configuration' || option === '-c') && value?.trim()) {
+            configuration = value.trim();
+        }
+
+        if ((option === '--framework' || option === '-f') && value?.trim()) {
+            framework = value.trim();
         }
     }
 
-    return undefined;
+    return { configuration, framework };
 }
 
 function getResourceParentName(resource: ResourceDebugResourceSnapshot): string | null {
@@ -697,21 +719,21 @@ function createDotNetProcessIdentity(targetInfo: DotNetAttachTargetInfo): Launch
 }
 
 function isDotNetProcess(process: LaunchedChildProcess): boolean {
-    const executableName = getProcessCommandProgram(process.command)?.split(/[\\/]/).pop()?.toLowerCase()
-        ?? process.executable.split(/[\\/]/).pop()?.toLowerCase();
-    return executableName === 'dotnet' || executableName === 'dotnet.exe';
+    return [getProcessCommandProgram(process.command), process.executable].some(value => {
+        const executableName = value?.split(/[\\/]/).pop()?.toLowerCase();
+        return executableName === 'dotnet' || executableName === 'dotnet.exe';
+    });
 }
 
 function isAppHostProcessForTarget(process: LaunchedChildProcess, targetPath: string): boolean {
-    const [program] = parseProcessCommandArguments(process.command);
     return getAppHostPaths(targetPath).some(appHostPath =>
         areProcessPathsEqual(process.executable, appHostPath) ||
-        (program !== undefined && areProcessPathsEqual(program, appHostPath)));
+        commandStartsWithPath(process.command, appHostPath));
 }
 
 function isFrameworkDependentProcessForTarget(process: LaunchedChildProcess, targetPath: string): boolean {
     return isDotNetProcess(process) &&
-        parseProcessCommandArguments(process.command).some(argument => areProcessPathsEqual(argument, targetPath));
+        commandContainsPathArgument(process.command, targetPath);
 }
 
 function areProcessPathsEqual(left: string, right: string): boolean {
@@ -732,43 +754,19 @@ function getAppHostPaths(targetPath: string): readonly string[] {
     return [appHostPath, `${appHostPath}.exe`];
 }
 
-function parseProcessCommandArguments(command: string): readonly string[] {
-    const arguments_: string[] = [];
-    let currentArgument = '';
-    let quote: '"' | "'" | undefined;
+function commandStartsWithPath(command: string, targetPath: string): boolean {
+    return new RegExp(`^\\s*(?:"|')?${escapeRegularExpression(targetPath)}(?:"|')?(?=\\s|$)`).test(command);
+}
 
-    // `ps` and CIM report command lines such as:
-    //   dotnet exec "/repo/bin/Debug/net10.0/Api.dll" --urls http://localhost:5000
-    // Keep only argument boundaries and quotes needed to identify the launched target; callers never
-    // receive this command text, which may contain application arguments.
-    for (const character of command) {
-        if (quote !== undefined) {
-            if (character === quote) {
-                quote = undefined;
-            }
-            else {
-                currentArgument += character;
-            }
-        }
-        else if (character === '"' || character === "'") {
-            quote = character;
-        }
-        else if (/\s/.test(character)) {
-            if (currentArgument.length > 0) {
-                arguments_.push(currentArgument);
-                currentArgument = '';
-            }
-        }
-        else {
-            currentArgument += character;
-        }
-    }
+function commandContainsPathArgument(command: string, targetPath: string): boolean {
+    // Do not tokenize command text: POSIX `ps` flattens argv, and valid paths can contain
+    // whitespace (for example, "/repo/OneDrive - Microsoft/Api.dll"). Match the exact evaluated
+    // TargetPath in the original command with argument boundaries instead.
+    return new RegExp(`(?:^|\\s|["'])${escapeRegularExpression(targetPath)}(?=$|\\s|["'])`).test(command);
+}
 
-    if (currentArgument.length > 0) {
-        arguments_.push(currentArgument);
-    }
-
-    return arguments_;
+function escapeRegularExpression(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 export async function createDotNetAttachDebugSessionConfiguration(
@@ -784,7 +782,7 @@ export async function createDotNetAttachDebugSessionConfiguration(
 
     let targetInfo: DotNetAttachTargetInfo;
     try {
-        targetInfo = await dotNetService.getDotNetAttachTargetInfo(attachInfo.projectPath, attachInfo.configuration, cancellationToken);
+        targetInfo = await dotNetService.getDotNetAttachTargetInfo(attachInfo.projectPath, attachInfo.configuration, cancellationToken, attachInfo.framework);
     }
     catch (error) {
         throw new ResourceAttachConfigurationError(
@@ -1069,6 +1067,7 @@ export function createProjectResourceAttachProvider(
         requiredDebuggerExtensions: [{
             id: 'ms-dotnettools.csharp',
             label: 'C#',
+            installMessage: attachDebuggerCsharpExtensionRequired,
         }],
         canRecognizeResource: resource => canRecognizeDotNetAttachDebuggerResource(resource),
         canAttachToResource: resource => getDotNetAttachDebuggerResourceInfo(resource) !== undefined,

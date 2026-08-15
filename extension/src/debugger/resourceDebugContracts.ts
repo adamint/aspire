@@ -36,6 +36,7 @@ export interface ResourceDebugResourceSnapshot {
 export interface ResourceDebugExtensionRequirement {
     readonly id: string;
     readonly label: string;
+    readonly installMessage?: string;
 }
 
 /**

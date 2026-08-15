@@ -48,10 +48,12 @@ class TestDotNetService {
         this._hasDevKit = hasDevKit;
     }
 
-    getDotNetAttachTargetInfo(projectFile: string, configuration?: string, cancellationToken?: vscode.CancellationToken): Promise<{ targetPath: string, useAppHost: boolean }> {
-        return cancellationToken
-            ? this.getDotNetAttachTargetInfoStub(projectFile, configuration, cancellationToken)
-            : this.getDotNetAttachTargetInfoStub(projectFile, configuration);
+    getDotNetAttachTargetInfo(projectFile: string, configuration?: string, cancellationToken?: vscode.CancellationToken, framework?: string): Promise<{ targetPath: string, useAppHost: boolean }> {
+        return framework
+            ? this.getDotNetAttachTargetInfoStub(projectFile, configuration, cancellationToken, framework)
+            : cancellationToken
+                ? this.getDotNetAttachTargetInfoStub(projectFile, configuration, cancellationToken)
+                : this.getDotNetAttachTargetInfoStub(projectFile, configuration);
     }
 
     getDotNetTargetPath(projectFile: string): Promise<string> {
@@ -231,6 +233,50 @@ suite('Dotnet Debugger Extension Tests', () => {
             parentPid: 1234,
             executable: '/usr/local/share/dotnet/dotnet',
             command: 'dotnet exec /repo/bin/Debug/net10.0/Api.dll',
+        }), false);
+        assert.strictEqual(processIdentity.isCandidate({
+            pid: 4323,
+            parentPid: 1234,
+            executable: '/usr/local/share/dotnet/dotnet',
+            command: 'dotnet exec /repo/OneDrive - Microsoft/über-long-path/My Attach Service.dll "" --urls http://localhost:5000',
+        }), false);
+    });
+
+    test('matches a spaced evaluated TargetPath from the raw framework-dependent command', async () => {
+        const targetPath = '/repo/OneDrive - Microsoft/über-long-path/My Attach Service.dll';
+        const { dotNetService } = createDebuggerExtension(targetPath, null, true, true);
+        dotNetService.getDotNetAttachTargetInfoStub.resolves({ targetPath, useAppHost: false });
+        const resolver = {
+            resolveProcessId: sinon.stub().resolves(4321),
+        };
+        const attachProvider = createProjectResourceAttachProvider(
+            () => dotNetService,
+            resolver as unknown as LaunchedChildProcessResolver);
+
+        await attachProvider.createDebugConfiguration({
+            name: 'api',
+            displayName: 'API',
+            resourceType: 'Project',
+            state: 'Running',
+            properties: {
+                'executable.pid': '1234',
+                'executable.path': 'dotnet',
+                'project.path': '/repo/api/Api.csproj',
+            },
+        });
+
+        const processIdentity = resolver.resolveProcessId.firstCall.args[1] as TestLaunchedChildProcessIdentity;
+        assert.strictEqual(processIdentity.isCandidate({
+            pid: 4321,
+            parentPid: 1234,
+            executable: '/usr/local/share/dotnet/dotnet',
+            command: `dotnet exec ${targetPath} "" --urls http://localhost:5000`,
+        }), true);
+        assert.strictEqual(processIdentity.isCandidate({
+            pid: 4322,
+            parentPid: 1234,
+            executable: '/usr/local/share/dotnet/dotnet',
+            command: `dotnet exec ${targetPath}.bak`,
         }), false);
     });
 
@@ -455,6 +501,26 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(configuration.processName, undefined);
         assert.ok(dotNetService.getDotNetAttachTargetInfoStub.calledOnceWithExactly('/repo/api/Api.csproj', 'Release'));
         assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
+    });
+
+    test('attach configuration evaluates TargetPath with the launched target framework', async () => {
+        const { attachProvider, dotNetService } = createDebuggerExtension('/repo/bin/Release/net10.0/Api.dll', null, true, true);
+
+        await attachProvider.createDebugConfiguration({
+            name: 'api',
+            displayName: 'API',
+            resourceType: 'Project',
+            state: 'Running',
+            properties: {
+                'executable.pid': '1234',
+                'executable.path': 'dotnet',
+                'executable.args': ['run', '--configuration', 'Release', '--framework', 'net10.0', '--', '--framework', 'not-a-tfm'],
+                'project.path': '/repo/api/Api.csproj',
+            },
+        });
+
+        assert.ok(dotNetService.getDotNetAttachTargetInfoStub.calledOnceWithExactly(
+            '/repo/api/Api.csproj', 'Release', undefined, 'net10.0'));
     });
 
     test('attach configuration passes cancellation to target discovery', async () => {

@@ -10,6 +10,7 @@ export interface LaunchedChildProcess {
 
 export interface LaunchedChildProcessQuery {
     listProcesses(cancellationToken?: vscode.CancellationToken, timeoutMs?: number): Promise<readonly LaunchedChildProcess[]>;
+    getProcess?(processId: number, cancellationToken?: vscode.CancellationToken, timeoutMs?: number): Promise<LaunchedChildProcess | undefined>;
 }
 
 export interface LaunchedChildProcessClock {
@@ -26,8 +27,9 @@ export interface LaunchedChildProcessCommandRunner {
     run(command: string, args: readonly string[], cancellationToken?: vscode.CancellationToken, timeoutMs?: number): Promise<string>;
 }
 
-const maxProcessListingLength = 1024 * 1024;
-const windowsProcessQuery = 'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress';
+const maxProcessListingLength = 16 * 1024 * 1024;
+const windowsProcessProperties = 'ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine';
+const windowsProcessQuery = `$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); Get-CimInstance Win32_Process | Select-Object ${windowsProcessProperties} | ConvertTo-Json -Compress`;
 
 export function parsePosixProcessList(output: string): readonly LaunchedChildProcess[] {
     const processes: LaunchedChildProcess[] = [];
@@ -53,7 +55,9 @@ export function parsePosixProcessList(output: string): readonly LaunchedChildPro
 export function parseWindowsProcessList(output: string): readonly LaunchedChildProcess[] {
     let parsed: unknown;
     try {
-        parsed = JSON.parse(output);
+        // Windows PowerShell can still prepend U+FEFF despite setting OutputEncoding. JSON.parse
+        // rejects that marker, so remove it before parsing the machine-readable response.
+        parsed = JSON.parse(output.replace(/^\uFEFF/, ''));
     }
     catch {
         throw createProcessDiscoveryError();
@@ -88,8 +92,9 @@ export function getProcessCommandProgram(command: string): string | undefined {
 }
 
 export class LaunchedChildProcessResolver {
-    private static readonly _defaultTimeoutMs = 5_000;
+    private static readonly _defaultTimeoutMs = 30_000;
     private static readonly _defaultRetryDelayMs = 100;
+    private static readonly _maximumRetryDelayMs = 1_000;
 
     constructor(
         private readonly _processQuery: LaunchedChildProcessQuery,
@@ -113,12 +118,13 @@ export class LaunchedChildProcessResolver {
         }
 
         const timeoutMs = Math.max(1, this._timeoutMs);
-        const retryDelayMs = Math.max(1, this._retryDelayMs);
         const deadline = this._clock.now() + timeoutMs;
-        const maximumAttempts = Math.max(2, Math.ceil(timeoutMs / retryDelayMs) + 1);
         let previousCandidate: number | undefined;
+        let retryDelayMs = Math.max(1, this._retryDelayMs);
+        const maximumAttempts = Math.max(2, Math.ceil(timeoutMs / retryDelayMs) + 1);
+        let attempts = 0;
 
-        for (let attempt = 0; attempt < maximumAttempts; attempt++) {
+        while (this._clock.now() <= deadline && attempts++ < maximumAttempts) {
             throwIfCancelled(cancellationToken);
 
             let processes: readonly LaunchedChildProcess[];
@@ -132,7 +138,7 @@ export class LaunchedChildProcessResolver {
                     throw new vscode.CancellationError();
                 }
 
-                throw createProcessDiscoveryError();
+                processes = [];
             }
 
             throwIfCancelled(cancellationToken);
@@ -145,18 +151,22 @@ export class LaunchedChildProcessResolver {
                 throw createProcessDiscoveryError();
             }
 
-            if (candidate !== undefined && candidate === previousCandidate) {
+            if (candidate !== undefined && candidate === previousCandidate &&
+                await this._verifyCandidateLineage(candidate, launcherPid, identity, cancellationToken, deadline)) {
                 return candidate;
             }
 
             previousCandidate = candidate;
             const remainingTimeMs = deadline - this._clock.now();
-            if (remainingTimeMs <= 0 || attempt === maximumAttempts - 1) {
+            if (remainingTimeMs <= 0) {
                 break;
             }
 
             try {
                 await this._clock.sleep(Math.min(retryDelayMs, remainingTimeMs), cancellationToken);
+                retryDelayMs = Math.min(
+                    LaunchedChildProcessResolver._maximumRetryDelayMs,
+                    retryDelayMs * 2);
             }
             catch (error) {
                 if (error instanceof vscode.CancellationError || cancellationToken?.isCancellationRequested) {
@@ -168,6 +178,65 @@ export class LaunchedChildProcessResolver {
         }
 
         throw createProcessDiscoveryError();
+    }
+
+    private async _verifyCandidateLineage(
+        candidatePid: number,
+        launcherPid: number,
+        identity: LaunchedChildProcessIdentity,
+        cancellationToken: vscode.CancellationToken | undefined,
+        deadline: number,
+    ): Promise<boolean> {
+        if (!this._processQuery.getProcess) {
+            return true;
+        }
+
+        let processId = candidatePid;
+        const visited = new Set<number>();
+
+        // `ps` renders command arguments verbatim, including newlines. A malicious command can
+        // therefore forge a plausible extra row in an all-process listing. Re-query every PID in
+        // the selected ancestry immediately before returning so topology and command identity come
+        // from the kernel's actual process record rather than a synthetic line.
+        while (true) {
+            if (visited.has(processId) || this._clock.now() > deadline) {
+                return false;
+            }
+
+            visited.add(processId);
+            let process: LaunchedChildProcess | undefined;
+            try {
+                process = await this._processQuery.getProcess(
+                    processId,
+                    cancellationToken,
+                    Math.max(1, deadline - this._clock.now()));
+            }
+            catch (error) {
+                if (error instanceof vscode.CancellationError || cancellationToken?.isCancellationRequested) {
+                    throw new vscode.CancellationError();
+                }
+
+                return false;
+            }
+
+            if (!process || process.pid !== processId) {
+                return false;
+            }
+
+            if (processId === candidatePid && !identity.isCandidate(process)) {
+                return false;
+            }
+
+            if (processId === launcherPid) {
+                return identity.isLauncher(process);
+            }
+
+            if (!isValidPid(process.parentPid)) {
+                return false;
+            }
+
+            processId = process.parentPid;
+        }
     }
 }
 
@@ -195,9 +264,33 @@ export class SystemLaunchedChildProcessQuery implements LaunchedChildProcessQuer
             ? parseWindowsProcessList(output)
             : parsePosixProcessList(output);
     }
+
+    async getProcess(processId: number, cancellationToken?: vscode.CancellationToken, timeoutMs?: number): Promise<LaunchedChildProcess | undefined> {
+        if (!isValidPid(processId)) {
+            return undefined;
+        }
+
+        const output = this._platform === 'win32'
+            ? await this._commandRunner.run(
+                'powershell.exe',
+                ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+                    `$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); Get-CimInstance Win32_Process -Filter "ProcessId = ${processId}" | Select-Object ${windowsProcessProperties} | ConvertTo-Json -Compress`],
+                cancellationToken,
+                timeoutMs)
+            : await this._commandRunner.run(
+                'ps',
+                ['-p', String(processId), '-o', 'pid=,ppid=,comm=,args='],
+                cancellationToken,
+                timeoutMs);
+
+        const processes = this._platform === 'win32'
+            ? parseWindowsProcessList(output)
+            : parsePosixProcessList(output);
+        return processes.find(process => process.pid === processId);
+    }
 }
 
-class SystemLaunchedChildProcessCommandRunner implements LaunchedChildProcessCommandRunner {
+export class SystemLaunchedChildProcessCommandRunner implements LaunchedChildProcessCommandRunner {
     run(command: string, args: readonly string[], cancellationToken?: vscode.CancellationToken, timeoutMs = 1_000): Promise<string> {
         return new Promise((resolve, reject) => {
             let completed = false;
