@@ -372,7 +372,10 @@ suite('AppHost lifecycle language model tools', () => {
                 contributes: { languageModelTools?: Array<Record<string, any>> };
             };
             const packageNls = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.nls.json'), 'utf8')) as Record<string, string>;
-            const tools = manifest.contributes.languageModelTools ?? [];
+            const tools = (manifest.contributes.languageModelTools ?? [])
+                .filter(tool =>
+                    tool.name === aspireAppHostStartToolName ||
+                    tool.name === aspireAppHostStopToolName);
 
             assert.deepStrictEqual(tools.map(tool => tool.name), [aspireAppHostStartToolName, aspireAppHostStopToolName]);
 
@@ -483,6 +486,12 @@ suite('AppHost lifecycle language model tools', () => {
                 const registration = registerAppHostLifecycleTools(service);
                 assert.strictEqual(registration.registered, true);
                 assert.deepStrictEqual(registerToolStub.getCalls().map(call => call.args[0]), [aspireAppHostStartToolName, aspireAppHostStopToolName]);
+                assert.strictEqual(
+                    registration.tools.get(aspireAppHostStartToolName),
+                    registerToolStub.firstCall.args[1]);
+                assert.strictEqual(
+                    registration.tools.get(aspireAppHostStopToolName),
+                    registerToolStub.secondCall.args[1]);
 
                 registration.dispose();
                 assert.deepStrictEqual(disposed, [aspireAppHostStartToolName, aspireAppHostStopToolName]);

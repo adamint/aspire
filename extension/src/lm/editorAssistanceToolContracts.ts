@@ -29,6 +29,13 @@ export const aspireOpenDashboardToolName = 'aspire_open_dashboard';
 export const aspireOpenOutputToolName = 'aspire_open_output';
 export const aspireListDebugSessionsToolName = 'aspire_list_debug_sessions';
 
+export type EditorAssistanceToolName =
+    | typeof aspireDebugSessionStatusToolName
+    | typeof aspireExplainLaunchFailureToolName
+    | typeof aspireOpenDashboardToolName
+    | typeof aspireOpenOutputToolName
+    | typeof aspireListDebugSessionsToolName;
+
 const maxResourceNameLength = 256;
 const identityChangingCharacters = /[\u0000-\u001F\u007F-\u009F]|\p{Cf}/u;
 

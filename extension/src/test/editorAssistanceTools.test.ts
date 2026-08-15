@@ -31,6 +31,10 @@ import {
     type EditorUiHandoffDebugSession,
 } from '../lm/editorAssistanceToolContracts';
 import { EditorAssistanceToolService } from '../lm/editorAssistanceToolService';
+import {
+    EditorAssistanceTelemetry,
+    type EditorAssistanceTelemetryEvent,
+} from '../lm/editorAssistanceTelemetry';
 import { EditorUiHandoffService } from '../lm/editorUiHandoffService';
 import { EditorStateSnapshotService } from '../lm/editorStateSnapshotService';
 import {
@@ -1417,7 +1421,7 @@ suite('Editor assistance AppHost services', () => {
             assert.deepStrictEqual(editorOutput.showCalls, []);
         });
 
-        test('rechecks Output trust after confirmation before focusing the editor', async () => {
+        test('rechecks Output trust after confirmation before showing the view', async () => {
             const tool = new AspireOpenOutputLanguageModelTool(service);
             const input = {};
             const prepared = await tool.prepareInvocation(
@@ -2135,7 +2139,7 @@ suite('Editor assistance AppHost services', () => {
             }
         });
 
-        test('focuses Aspire Output exactly once without reading or appending content', async () => {
+        test('shows Aspire Output exactly once without reading or appending content', async () => {
             const unexpectedProperties: PropertyKey[] = [];
             const output = new Proxy({
                 showCalls: [] as Array<boolean | undefined>,
@@ -2359,10 +2363,17 @@ suite('Editor assistance AppHost services', () => {
 
         test('registers five adapters with confirmation only for Dashboard and Output', async () => {
             const disposed: string[] = [];
+            const telemetryEvents: EditorAssistanceTelemetryEvent[] = [];
+            let now = 100;
+            const telemetry = new EditorAssistanceTelemetry({
+                clock: { now: () => now++ },
+                sendEvent: (eventName, properties, measurements) =>
+                    telemetryEvents.push({ eventName, properties, measurements }),
+            });
             const registerToolStub = sinon.stub(vscode.lm, 'registerTool').callsFake((name: string) =>
                 new vscode.Disposable(() => disposed.push(name)));
             try {
-                const registration = registerEditorAssistanceTools(service);
+                const registration = registerEditorAssistanceTools(service, telemetry);
                 assert.strictEqual(registration.registered, true);
                 assert.deepStrictEqual(
                     registerToolStub.getCalls().map(call => call.args[0]),
@@ -2417,6 +2428,29 @@ suite('Editor assistance AppHost services', () => {
                     outcome: 'noRecordedFailure',
                     appHost: 'AppHost/AppHost.csproj',
                 });
+                assert.deepStrictEqual(telemetryEvents, [
+                    {
+                        eventName: 'aspire/vscode/editorAssistance/result',
+                        properties: {
+                            tool: aspireDebugSessionStatusToolName,
+                            outcome: 'notDebugging',
+                            source: 'languageModelTool',
+                            scope: 'appHost',
+                            controller: 'editor',
+                            state_bucket: 'notDebugging',
+                        },
+                        measurements: { duration_ms: 1 },
+                    },
+                    {
+                        eventName: 'aspire/vscode/editorAssistance/result',
+                        properties: {
+                            tool: aspireExplainLaunchFailureToolName,
+                            outcome: 'noRecordedFailure',
+                            source: 'languageModelTool',
+                        },
+                        measurements: { duration_ms: 1 },
+                    },
+                ]);
 
                 registration.dispose();
                 assert.deepStrictEqual(disposed, [

@@ -241,7 +241,8 @@ export async function activate(context: vscode.ExtensionContext) {
     readLatestLaunchFailures,
     uiHandoffService: editorUiHandoffService,
   });
-  context.subscriptions.push(registerEditorAssistanceTools(editorAssistanceToolService));
+  const editorAssistanceToolRegistration = registerEditorAssistanceTools(editorAssistanceToolService);
+  context.subscriptions.push(editorAssistanceToolRegistration);
 
   const getEnableSettingsFileCreationPromptOnStartup = () => vscode.workspace.getConfiguration('aspire').get<boolean>('enableSettingsFileCreationPromptOnStartup', true);
   const setEnableSettingsFileCreationPromptOnStartup = async (value: boolean) => await vscode.workspace.getConfiguration('aspire').update('enableSettingsFileCreationPromptOnStartup', value, vscode.ConfigurationTarget.Workspace);
@@ -283,7 +284,23 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(appHostLaunchService.onDidChangeLaunchingState(fireStateChanged));
   context.subscriptions.push(appHostTreeProvider.onDidChangeStoppingState(fireStateChanged));
   context.subscriptions.push(aspireExtensionContext.onDidChangeDebugSessions(fireStateChanged));
-  const e2eStateFileBridge = createE2eStateFileBridge(context, aspireExtensionContext, dataRepository, appHostLaunchService, appHostTreeProvider, terminalProvider, onDidChangeStateEmitter.event, appHostLifecycleToolRegistration.tools);
+  const e2eLanguageModelTools = new Map<string, {
+    readonly tool: vscode.LanguageModelTool<unknown>;
+    readonly registered: boolean;
+  }>();
+  for (const [name, tool] of appHostLifecycleToolRegistration.tools) {
+    e2eLanguageModelTools.set(name, {
+      tool,
+      registered: appHostLifecycleToolRegistration.registered,
+    });
+  }
+  for (const [name, tool] of editorAssistanceToolRegistration.tools) {
+    e2eLanguageModelTools.set(name, {
+      tool,
+      registered: editorAssistanceToolRegistration.registered,
+    });
+  }
+  const e2eStateFileBridge = createE2eStateFileBridge(context, aspireExtensionContext, dataRepository, appHostLaunchService, appHostTreeProvider, terminalProvider, onDidChangeStateEmitter.event, e2eLanguageModelTools);
   context.subscriptions.push(e2eStateFileBridge);
 
   await cliPathEnvironmentInitialization;

@@ -307,6 +307,15 @@
     <trans-unit id="command.expandAll">
       <source xml:lang="en">Expand all resources</source>
     </trans-unit>
+    <trans-unit id="languageModelTool.aspireExplainLaunchFailure.displayName">
+      <source xml:lang="en">Explain Aspire launch failure</source>
+    </trans-unit>
+    <trans-unit id="languageModelTool.aspireExplainLaunchFailure.userDescription">
+      <source xml:lang="en">Explain the latest safely recorded launch failure for an Aspire AppHost.</source>
+    </trans-unit>
+    <trans-unit id="languageModelTool.aspireExplainLaunchFailure.modelDescription">
+      <source xml:lang="en">Explain the latest sanitized launch failure recorded for one discovered AppHost. The result contains bounded failure categories and fixed recommended actions only; it never returns raw errors, logs, output, arguments, environment variables, URLs, process identifiers, or debug configurations.</source>
+    </trans-unit>
     <trans-unit id="walkthrough.getStarted.dashboard.title">
       <source xml:lang="en">Explore the dashboard</source>
     </trans-unit>
@@ -361,8 +370,14 @@
     <trans-unit id="aspire-vscode.strings.aspireCliPathEnvironmentDescription">
       <source xml:lang="en">Forwards aspire.aspireCliExecutablePath as AspireCliPath so MSBuild bundle resolution and integrated terminals use the configured Aspire CLI.</source>
     </trans-unit>
+    <trans-unit id="languageModelTool.aspireDebugSessionStatus.displayName">
+      <source xml:lang="en">Get Aspire debug session status</source>
+    </trans-unit>
     <trans-unit id="walkthrough.getStarted.title">
       <source xml:lang="en">Get started with Aspire</source>
+    </trans-unit>
+    <trans-unit id="languageModelTool.aspireDebugSessionStatus.userDescription">
+      <source xml:lang="en">Get the safe editor-owned debug status for an Aspire AppHost or resource.</source>
     </trans-unit>
     <trans-unit id="languageModelTool.aspireAppHostStart.mode.description">
       <source xml:lang="en">How to start the AppHost: &apos;run&apos; starts it without attaching the debugger, &apos;debug&apos; starts it with the debugger attached.</source>
@@ -372,6 +387,9 @@
     </trans-unit>
     <trans-unit id="command.init">
       <source xml:lang="en">Initialize Aspire in an existing codebase</source>
+    </trans-unit>
+    <trans-unit id="languageModelTool.aspireDebugSessionStatus.modelDescription">
+      <source xml:lang="en">Inspect the bounded status of an editor-owned Aspire debug session for one discovered AppHost, optionally scoped to an exact resource name. The result contains safe state fields only and never returns logs, output, process identifiers, debug configurations, or arbitrary resource data.</source>
     </trans-unit>
     <trans-unit id="command.installCli">
       <source xml:lang="en">Install Aspire CLI</source>
@@ -439,6 +457,15 @@
     <trans-unit id="configuration.aspire.enableAspireDashboardAutoLaunch">
       <source xml:lang="en">Legacy setting for Aspire Dashboard launch behavior. Use Aspire: Dashboard Browser instead. Explicit Aspire: Dashboard Browser none or notification values win. Otherwise, legacy notification or off values override browser-opening choices; launch uses Aspire: Dashboard Browser, falling back to VS Code&apos;s integrated browser for compatibility.</source>
     </trans-unit>
+    <trans-unit id="languageModelTool.aspireListDebugSessions.displayName">
+      <source xml:lang="en">List Aspire debug sessions</source>
+    </trans-unit>
+    <trans-unit id="languageModelTool.aspireListDebugSessions.userDescription">
+      <source xml:lang="en">List bounded safe summaries of editor-owned active Aspire debug sessions.</source>
+    </trans-unit>
+    <trans-unit id="languageModelTool.aspireListDebugSessions.modelDescription">
+      <source xml:lang="en">List editor-owned active Aspire debug sessions as bounded safe summaries. Results are capped and omit process identifiers, raw debug configurations, output, logs, URLs, environment variables, arguments, and arbitrary session data.</source>
+    </trans-unit>
     <trans-unit id="command.new">
       <source xml:lang="en">New Aspire project</source>
     </trans-unit>
@@ -499,6 +526,12 @@
     <trans-unit id="command.openAppHostSource">
       <source xml:lang="en">Open AppHost source</source>
     </trans-unit>
+    <trans-unit id="languageModelTool.aspireOpenDashboard.displayName">
+      <source xml:lang="en">Open Aspire Dashboard</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.editorAssistanceOpenDashboardConfirmationTitle">
+      <source xml:lang="en">Open Aspire Dashboard</source>
+    </trans-unit>
     <trans-unit id="command.codeLensOpenDashboard">
       <source xml:lang="en">Open Aspire Dashboard</source>
     </trans-unit>
@@ -544,6 +577,15 @@
     <trans-unit id="command.openResourceTerminal">
       <source xml:lang="en">Open terminal</source>
     </trans-unit>
+    <trans-unit id="languageModelTool.aspireOpenDashboard.userDescription">
+      <source xml:lang="en">Open the Aspire Dashboard for a running AppHost.</source>
+    </trans-unit>
+    <trans-unit id="languageModelTool.aspireOpenDashboard.modelDescription">
+      <source xml:lang="en">Open the Aspire Dashboard for a running discovered AppHost using the editor-configured presentation. This changes editor or browser UI after confirmation. The result reports only whether it opened and the bounded presentation; it never returns the Dashboard URL.</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.editorAssistanceOpenDashboardConfirmationMessage">
+      <source xml:lang="en">Open the Aspire Dashboard for {0}?</source>
+    </trans-unit>
     <trans-unit id="aspire-vscode.strings.dashboardLaunchIntegratedBrowserDescription">
       <source xml:lang="en">Open the dashboard in VS Code&apos;s integrated browser.</source>
     </trans-unit>
@@ -552,6 +594,12 @@
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.installCliViewAllOptionsDescription">
       <source xml:lang="en">Open the installation guide (includes the install script)</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.editorAssistanceOpenDashboardInvocationMessage">
+      <source xml:lang="en">Opening Aspire Dashboard for {0}...</source>
+    </trans-unit>
+    <trans-unit id="languageModelTool.aspireDebugSessionStatus.resourceName.description">
+      <source xml:lang="en">Optional exact Aspire resource name within the selected AppHost. The resource must already exist in the AppHost model.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.appHostPathLabel">
       <source xml:lang="en">Path</source>
@@ -676,6 +724,12 @@
     <trans-unit id="aspire-vscode.strings.selectDashboardLaunchBehavior">
       <source xml:lang="en">Select what should happen with the Aspire Dashboard when this launch configuration starts</source>
     </trans-unit>
+    <trans-unit id="languageModelTool.aspireOpenOutput.displayName">
+      <source xml:lang="en">Show Aspire Output</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.editorAssistanceOpenOutputConfirmationTitle">
+      <source xml:lang="en">Show Aspire Output</source>
+    </trans-unit>
     <trans-unit id="configuration.aspire.enableCodeLens">
       <source xml:lang="en">Show CodeLens actions (state, restart, stop, logs) inline above resource declarations in AppHost files.</source>
     </trans-unit>
@@ -697,8 +751,17 @@
     <trans-unit id="configuration.aspire.enableGutterDecorations">
       <source xml:lang="en">Show colored status dots in the editor gutter next to resource declarations in AppHost files.</source>
     </trans-unit>
+    <trans-unit id="languageModelTool.aspireOpenOutput.modelDescription">
+      <source xml:lang="en">Show the Aspire Output view in Visual Studio Code after confirmation without reading or returning its content.</source>
+    </trans-unit>
+    <trans-unit id="languageModelTool.aspireOpenOutput.userDescription">
+      <source xml:lang="en">Show the Aspire Output view without returning its content.</source>
+    </trans-unit>
     <trans-unit id="command.switchToWorkspaceView">
       <source xml:lang="en">Show workspace AppHosts</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.editorAssistanceOpenOutputInvocationMessage">
+      <source xml:lang="en">Showing Aspire Output...</source>
     </trans-unit>
     <trans-unit id="command.startResource">
       <source xml:lang="en">Start</source>
@@ -771,6 +834,9 @@
     </trans-unit>
     <trans-unit id="walkthrough.getStarted.dashboard.description">
       <source xml:lang="en">The Aspire Dashboard shows your resources, endpoints, logs, traces, and metrics — all in one place.&#10;&#10;[Open dashboard](command:aspire-vscode.openDashboard)</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.editorAssistanceOpenOutputConfirmationMessage">
+      <source xml:lang="en">The Aspire Output view will be shown.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.rustLaunchConfigurationMissingExecutable">
       <source xml:lang="en">The Aspire app host did not report which executable the Rust app in {0} produces, so there is nothing to debug.</source>

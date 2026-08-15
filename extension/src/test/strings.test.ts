@@ -61,6 +61,34 @@ suite('utils/strings tests', () => {
         }
     });
 
+    test('editor assistance confirmations are localized and generated into XLF', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const stringsSource = fs.readFileSync(path.join(extensionRoot, 'src', 'loc', 'strings.ts'), 'utf8');
+        const packageNls = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.nls.json'), 'utf8')) as Record<string, string>;
+        const xlf = fs.readFileSync(path.join(extensionRoot, 'loc', 'xlf', 'aspire-vscode.xlf'), 'utf8');
+        const expectedStrings = {
+            editorAssistanceOpenDashboardConfirmationTitle: 'Open Aspire Dashboard',
+            editorAssistanceOpenDashboardConfirmationMessage: 'Open the Aspire Dashboard for {0}?',
+            editorAssistanceOpenDashboardInvocationMessage: 'Opening Aspire Dashboard for {0}...',
+            editorAssistanceOpenOutputConfirmationTitle: 'Show Aspire Output',
+            editorAssistanceOpenOutputConfirmationMessage: 'The Aspire Output view will be shown.',
+            editorAssistanceOpenOutputInvocationMessage: 'Showing Aspire Output...',
+        };
+
+        for (const [name, value] of Object.entries(expectedStrings)) {
+            assert.ok(
+                stringsSource.includes(`vscode.l10n.t('${value}'`),
+                `Expected ${name} to register "${value}" in strings.ts.`);
+            assert.strictEqual(packageNls[`aspire-vscode.strings.${name}`], value);
+            assert.ok(
+                xlf.includes(`<trans-unit id="aspire-vscode.strings.${name}">`),
+                `Regenerate loc/xlf/aspire-vscode.xlf after adding ${name}.`);
+        }
+
+        assert.strictEqual(expectedStrings.editorAssistanceOpenOutputConfirmationMessage.includes('focused'), false);
+        assert.strictEqual(expectedStrings.editorAssistanceOpenOutputInvocationMessage.includes('focused'), false);
+    });
+
     test('Rust loc strings are present in package.nls.json and the generated XLF catalog', () => {
         // package.nls.json is the only input to the XLF catalog (see gulpfile.js), so a string that
         // only exists in strings.ts is shipped untranslated. Guard the Rust debugger strings, which

@@ -24,32 +24,43 @@ import {
     type OpenOutputToolInput,
 } from './editorAssistanceToolContracts';
 import { EditorAssistanceToolService } from './editorAssistanceToolService';
+import { EditorAssistanceTelemetry } from './editorAssistanceTelemetry';
 import { escapeMarkdown } from './languageModelToolUi';
 
 export class AspireDebugSessionStatusLanguageModelTool implements vscode.LanguageModelTool<DebugSessionStatusToolInput> {
-    constructor(private readonly _service: EditorAssistanceToolService) {
+    constructor(
+        private readonly _service: EditorAssistanceToolService,
+        private readonly _telemetry: EditorAssistanceTelemetry = new EditorAssistanceTelemetry()) {
     }
 
     async invoke(
         options: vscode.LanguageModelToolInvocationOptions<DebugSessionStatusToolInput>,
         token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        return createToolResult(await this._service.getDebugSessionStatus(options.input, token));
+        return createToolResult(await this._telemetry.capture(
+            aspireDebugSessionStatusToolName,
+            () => this._service.getDebugSessionStatus(options.input, token)));
     }
 }
 
 export class AspireExplainLaunchFailureLanguageModelTool implements vscode.LanguageModelTool<ExplainLaunchFailureToolInput> {
-    constructor(private readonly _service: EditorAssistanceToolService) {
+    constructor(
+        private readonly _service: EditorAssistanceToolService,
+        private readonly _telemetry: EditorAssistanceTelemetry = new EditorAssistanceTelemetry()) {
     }
 
     async invoke(
         options: vscode.LanguageModelToolInvocationOptions<ExplainLaunchFailureToolInput>,
         token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        return createToolResult(await this._service.explainLaunchFailure(options.input, token));
+        return createToolResult(await this._telemetry.capture(
+            aspireExplainLaunchFailureToolName,
+            () => this._service.explainLaunchFailure(options.input, token)));
     }
 }
 
 export class AspireOpenDashboardLanguageModelTool implements vscode.LanguageModelTool<OpenDashboardToolInput> {
-    constructor(private readonly _service: EditorAssistanceToolService) {
+    constructor(
+        private readonly _service: EditorAssistanceToolService,
+        private readonly _telemetry: EditorAssistanceTelemetry = new EditorAssistanceTelemetry()) {
     }
 
     async prepareInvocation(
@@ -69,12 +80,16 @@ export class AspireOpenDashboardLanguageModelTool implements vscode.LanguageMode
     async invoke(
         options: vscode.LanguageModelToolInvocationOptions<OpenDashboardToolInput>,
         token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        return createToolResult(await this._service.openDashboard(options.input, token));
+        return createToolResult(await this._telemetry.capture(
+            aspireOpenDashboardToolName,
+            () => this._service.openDashboard(options.input, token)));
     }
 }
 
 export class AspireOpenOutputLanguageModelTool implements vscode.LanguageModelTool<OpenOutputToolInput> {
-    constructor(private readonly _service: EditorAssistanceToolService) {
+    constructor(
+        private readonly _service: EditorAssistanceToolService,
+        private readonly _telemetry: EditorAssistanceTelemetry = new EditorAssistanceTelemetry()) {
     }
 
     async prepareInvocation(
@@ -92,18 +107,24 @@ export class AspireOpenOutputLanguageModelTool implements vscode.LanguageModelTo
     async invoke(
         options: vscode.LanguageModelToolInvocationOptions<OpenOutputToolInput>,
         token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        return createToolResult(await this._service.openOutput(options.input, token));
+        return createToolResult(await this._telemetry.capture(
+            aspireOpenOutputToolName,
+            () => this._service.openOutput(options.input, token)));
     }
 }
 
 export class AspireListDebugSessionsLanguageModelTool implements vscode.LanguageModelTool<ListDebugSessionsToolInput> {
-    constructor(private readonly _service: EditorAssistanceToolService) {
+    constructor(
+        private readonly _service: EditorAssistanceToolService,
+        private readonly _telemetry: EditorAssistanceTelemetry = new EditorAssistanceTelemetry()) {
     }
 
     async invoke(
         options: vscode.LanguageModelToolInvocationOptions<ListDebugSessionsToolInput>,
         token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        return createToolResult(await this._service.listDebugSessions(options.input, token));
+        return createToolResult(await this._telemetry.capture(
+            aspireListDebugSessionsToolName,
+            () => this._service.listDebugSessions(options.input, token)));
     }
 }
 
@@ -114,13 +135,15 @@ export class AspireListDebugSessionsLanguageModelTool implements vscode.Language
  * `invoke`. Dashboard and Output handoff change editor UI, so those two adapters alone
  * implement confirmation preparation.
  */
-export function registerEditorAssistanceTools(service: EditorAssistanceToolService): EditorAssistanceToolRegistration {
+export function registerEditorAssistanceTools(
+    service: EditorAssistanceToolService,
+    telemetry: EditorAssistanceTelemetry = new EditorAssistanceTelemetry()): EditorAssistanceToolRegistration {
     const registrations: vscode.Disposable[] = [];
-    const statusTool = new AspireDebugSessionStatusLanguageModelTool(service);
-    const explainTool = new AspireExplainLaunchFailureLanguageModelTool(service);
-    const dashboardTool = new AspireOpenDashboardLanguageModelTool(service);
-    const outputTool = new AspireOpenOutputLanguageModelTool(service);
-    const listTool = new AspireListDebugSessionsLanguageModelTool(service);
+    const statusTool = new AspireDebugSessionStatusLanguageModelTool(service, telemetry);
+    const explainTool = new AspireExplainLaunchFailureLanguageModelTool(service, telemetry);
+    const dashboardTool = new AspireOpenDashboardLanguageModelTool(service, telemetry);
+    const outputTool = new AspireOpenOutputLanguageModelTool(service, telemetry);
+    const listTool = new AspireListDebugSessionsLanguageModelTool(service, telemetry);
     const tools = new Map<string, vscode.LanguageModelTool<unknown>>([
         [aspireDebugSessionStatusToolName, statusTool as vscode.LanguageModelTool<unknown>],
         [aspireExplainLaunchFailureToolName, explainTool as vscode.LanguageModelTool<unknown>],

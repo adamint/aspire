@@ -18,7 +18,6 @@ import {
     type AppHostLifecycleToolResult,
     type AppHostStartToolInput,
     type AppHostStopToolInput,
-    type PreparableAppHostLifecycleTool,
 } from './appHostLifecycleToolContracts';
 import { AppHostLifecycleToolService } from './appHostLifecycleToolService';
 import { escapeMarkdown } from './languageModelToolUi';
@@ -81,12 +80,12 @@ export function registerAppHostLifecycleTools(service: AppHostLifecycleToolServi
     const registrations: vscode.Disposable[] = [];
     const startTool = new AppHostStartLanguageModelTool(service);
     const stopTool = new AppHostStopLanguageModelTool(service);
-    // The preparable view exists for E2E automation, which only has raw JSON input. The
-    // cast is safe because both tools validate every field of the input themselves and
-    // treat anything unexpected as invalid rather than trusting the declared type.
-    const tools = new Map<string, PreparableAppHostLifecycleTool>([
-        [aspireAppHostStartToolName, { prepareInvocation: (options, token) => startTool.prepareInvocation({ input: options.input as unknown as AppHostStartToolInput }, token) }],
-        [aspireAppHostStopToolName, { prepareInvocation: (options, token) => stopTool.prepareInvocation({ input: options.input as unknown as AppHostStopToolInput }, token) }],
+    // E2E automation supplies raw JSON, while the production tool API carries the
+    // manifest-declared input type. The cast is safe because both tools validate every
+    // field and reject unexpected input before performing lifecycle work.
+    const tools = new Map<string, vscode.LanguageModelTool<unknown>>([
+        [aspireAppHostStartToolName, startTool as unknown as vscode.LanguageModelTool<unknown>],
+        [aspireAppHostStopToolName, stopTool as unknown as vscode.LanguageModelTool<unknown>],
     ]);
     const registerTools = () => {
         if (registrations.length > 0) {

@@ -1,5 +1,10 @@
 import { getOrCreateIdentityForAbsolutePath, type OpaqueAppHostIdentity } from '../utils/appHostIdentity';
-import { isCommandCancellation } from '../utils/telemetry';
+import {
+    isCommandCancellation,
+    sendTelemetryEvent,
+    type EventMeasurements,
+    type EventProperties,
+} from '../utils/telemetry';
 
 export type LaunchFailureStage =
     | 'discovery'
@@ -74,6 +79,21 @@ export interface LaunchFailureJournalClock {
     now(): number;
 }
 
+const launchFailureRecordedEventName = 'aspire/vscode/launchFailure/recorded' as const;
+type LaunchFailureRecordedProperties = EventProperties<typeof launchFailureRecordedEventName>;
+type LaunchFailureRecordedMeasurements = EventMeasurements<typeof launchFailureRecordedEventName>;
+
+export interface LaunchFailureRecordedTelemetryEvent {
+    readonly eventName: typeof launchFailureRecordedEventName;
+    readonly properties: LaunchFailureRecordedProperties;
+    readonly measurements: LaunchFailureRecordedMeasurements;
+}
+
+export type LaunchFailureRecordAccepted = (
+    failure: SanitizedLaunchFailure,
+    journalSize: number) => void;
+
+const ignoreAcceptedLaunchFailure: LaunchFailureRecordAccepted = () => undefined;
 const launchFailureTtlMs = 30 * 60 * 1_000;
 const maxFailuresPerAppHost = 5;
 const maxFailuresGlobally = 50;
@@ -153,7 +173,9 @@ export class LaunchFailureJournal {
     private readonly _records: LaunchFailureRecord[] = [];
     private _nextSequence = 0;
 
-    constructor(private readonly _clock: LaunchFailureJournalClock = { now: Date.now }) {
+    constructor(
+        private readonly _clock: LaunchFailureJournalClock = { now: Date.now },
+        private readonly _onRecordAccepted: LaunchFailureRecordAccepted = ignoreAcceptedLaunchFailure) {
     }
 
     record(appHostIdentity: OpaqueAppHostIdentity, failure: SanitizedLaunchFailure): LaunchFailureRecord {
@@ -185,6 +207,7 @@ export class LaunchFailureJournal {
             this._records.shift();
         }
 
+        this._onRecordAccepted(toSanitizedLaunchFailure(record), this._records.length);
         return { ...record };
     }
 
@@ -215,7 +238,39 @@ export class LaunchFailureJournal {
     }
 }
 
-const defaultLaunchFailureJournal = new LaunchFailureJournal();
+/**
+ * Emits the finite launch-failure projection accepted by the in-memory journal.
+ *
+ * The journal calls this only after TTL and capacity maintenance. AppHost identity,
+ * timestamps, sequence numbers, and all raw capture input stay outside the callback.
+ */
+export function sendLaunchFailureRecordedTelemetry(
+    failure: SanitizedLaunchFailure,
+    journalSize: number,
+    sendEvent: (
+        eventName: typeof launchFailureRecordedEventName,
+        properties: LaunchFailureRecordedProperties,
+        measurements: LaunchFailureRecordedMeasurements) => void = sendTelemetryEvent): void {
+    sendEvent(
+        launchFailureRecordedEventName,
+        {
+            stage: stages.has(failure.stage) ? failure.stage : 'debugSession',
+            category: categories.has(failure.category) ? failure.category : 'unknown',
+            controller: controllers.has(failure.controller) ? failure.controller : 'editor',
+            mode: normalizeMode(failure.mode),
+            provider_kind: normalizeProviderKind(failure.providerKind),
+            exit_code_bucket: exitCodeBuckets.has(failure.exitCodeBucket) ? failure.exitCodeBucket : 'none',
+        },
+        {
+            journal_size: Number.isFinite(journalSize)
+                ? Math.min(maxFailuresGlobally, Math.max(0, Math.floor(journalSize)))
+                : 0,
+        });
+}
+
+const defaultLaunchFailureJournal = new LaunchFailureJournal(
+    { now: Date.now },
+    sendLaunchFailureRecordedTelemetry);
 
 export function recordLaunchFailureForAppHostPath(appHostPath: string, input: LaunchFailureInput): LaunchFailureRecord {
     return defaultLaunchFailureJournal.record(
@@ -238,6 +293,17 @@ export function resetLaunchFailureJournal(): void {
 
 export function __resetLaunchFailureJournalForTests(): void {
     resetLaunchFailureJournal();
+}
+
+function toSanitizedLaunchFailure(record: LaunchFailureRecord): SanitizedLaunchFailure {
+    return {
+        stage: record.stage,
+        category: record.category,
+        controller: record.controller,
+        mode: record.mode,
+        providerKind: record.providerKind,
+        exitCodeBucket: record.exitCodeBucket,
+    };
 }
 
 function normalizeCategory(input: LaunchFailureInput): LaunchFailureCategory {

@@ -162,13 +162,9 @@ export interface AppHostLifecycleToolRegistration extends vscode.Disposable {
     /**
      * The registered tool instances by tool name. VS Code does not surface
      * `prepareInvocation` through `vscode.lm`, so E2E automation needs a way to ask the
-     * extension's own instance for the confirmation it would present.
+     * extension's own instance for preparation and pre-cancelled invocation.
      */
-    readonly tools: ReadonlyMap<string, PreparableAppHostLifecycleTool>;
-}
-
-export interface PreparableAppHostLifecycleTool {
-    prepareInvocation(options: { readonly input: Record<string, unknown> }, token: vscode.CancellationToken): Promise<vscode.PreparedToolInvocation>;
+    readonly tools: ReadonlyMap<string, vscode.LanguageModelTool<unknown>>;
 }
 
 export function createResult(
