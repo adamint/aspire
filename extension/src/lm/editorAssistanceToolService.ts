@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 
 import { AspireCliParseError, type ResourceJson } from '../data/appHostCliContracts';
+import { appHostLifecycleUnresolvedPath } from '../loc/strings';
 import { type EditorResourceSessionSnapshot } from '../services/appHostLaunchContracts';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { isSamePath } from '../utils/paths/comparison';
@@ -8,8 +9,13 @@ import { isCommandCancellation } from '../utils/telemetry';
 import {
     aspireDebugSessionStatusToolName,
     aspireExplainLaunchFailureToolName,
+    aspireListDebugSessionsToolName,
+    aspireOpenDashboardToolName,
+    aspireOpenOutputToolName,
+    isValidEmptyObjectInput,
     isValidDebugSessionStatusInput,
     isValidExplainLaunchFailureInput,
+    isValidOpenDashboardInput,
     type DebugSessionStatusFailureResult,
     type DebugSessionStatusResourceFailureResult,
     type DebugSessionStatusResult,
@@ -20,6 +26,11 @@ import {
     type ExplainLaunchFailureFailureResult,
     type ExplainLaunchFailureFoundResult,
     type ExplainLaunchFailureToolResult,
+    type ListDebugSessionsToolResult,
+    type OpenDashboardFailureResult,
+    type OpenDashboardToolResult,
+    type OpenOutputFailureResult,
+    type OpenOutputToolResult,
 } from './editorAssistanceToolContracts';
 import { type EditorAppHostSummary } from './editorStateSnapshotService';
 import { type ResolvedAppHostTarget, type SafeAppHostTargetResolution } from './safeAppHostTargetResolver';
@@ -29,8 +40,8 @@ type ResolvedPreflight<T> =
     | { readonly resolved: false; readonly outcome: 'appHostNotFound' | 'ambiguousAppHost' | 'workspaceNotTrusted' | 'invalidInput' | 'canceled' | 'error' };
 
 /**
- * Provides read-only, model-safe answers about editor-owned Aspire sessions and
- * the latest sanitized AppHost launch failure.
+ * Provides model-safe editor assistance for AppHost state, diagnostics, and
+ * confirmation-gated editor UI handoffs.
  *
  * The service resolves every selector through {@link SafeAppHostTargetResolver}.
  * Resource data and editor session snapshots are used only for exact internal
@@ -40,6 +51,104 @@ type ResolvedPreflight<T> =
  */
 export class EditorAssistanceToolService {
     constructor(private readonly _dependencies: EditorAssistanceToolDependencies) {
+    }
+
+    async describeDashboardTarget(rawAppHost: unknown, token: vscode.CancellationToken): Promise<string> {
+        if (!vscode.workspace.isTrusted) {
+            return appHostLifecycleUnresolvedPath;
+        }
+
+        const resolution = await this._dependencies.targetResolver.resolveTarget(rawAppHost, token);
+        return resolution.resolved
+            ? resolution.target.displayPath
+            : appHostLifecycleUnresolvedPath;
+    }
+
+    async openDashboard(input: unknown, token: vscode.CancellationToken): Promise<OpenDashboardToolResult> {
+        const preflight = await this.preflight(
+            input,
+            token,
+            isValidOpenDashboardInput,
+            aspireOpenDashboardToolName);
+        if (!preflight.resolved) {
+            return createOpenDashboardFailure(preflight.outcome);
+        }
+
+        try {
+            const result = await this._dependencies.uiHandoffService.openDashboard(preflight.target, token);
+            if (result.outcome === 'opened') {
+                return {
+                    success: true,
+                    tool: aspireOpenDashboardToolName,
+                    outcome: 'opened',
+                    presentation: result.presentation,
+                };
+            }
+
+            return createOpenDashboardFailure(result.outcome);
+        }
+        catch (error) {
+            if (isCommandCancellation(error) || token.isCancellationRequested) {
+                return createOpenDashboardFailure('canceled');
+            }
+
+            // The handoff layer deliberately withholds its URL and raw browser error.
+            extensionLogOutputChannel.error(`Aspire language model tool ${aspireOpenDashboardToolName} failed.`);
+            return createOpenDashboardFailure('error');
+        }
+    }
+
+    async openOutput(input: unknown, token: vscode.CancellationToken): Promise<OpenOutputToolResult> {
+        const rejected = validateEmptyObjectInvocation(input, token);
+        if (rejected) {
+            return createOpenOutputFailure(rejected);
+        }
+
+        try {
+            const outcome = await this._dependencies.uiHandoffService.openOutput(token);
+            return outcome === 'opened'
+                ? {
+                    success: true,
+                    tool: aspireOpenOutputToolName,
+                    outcome: 'opened',
+                }
+                : createOpenOutputFailure('error');
+        }
+        catch (error) {
+            return createOpenOutputFailure(
+                isCommandCancellation(error) || token.isCancellationRequested
+                    ? 'canceled'
+                    : 'error');
+        }
+    }
+
+    async listDebugSessions(input: unknown, token: vscode.CancellationToken): Promise<ListDebugSessionsToolResult> {
+        const rejected = validateEmptyObjectInvocation(input, token);
+        if (rejected) {
+            return createListDebugSessionsFailure(rejected);
+        }
+
+        try {
+            const snapshot = await this._dependencies.snapshotService.createActiveSessionSnapshot(token);
+            throwIfCanceled(token);
+            return {
+                success: true,
+                tool: aspireListDebugSessionsToolName,
+                outcome: snapshot.appHosts.length > 0 ? 'sessionsFound' : 'noSessions',
+                sessions: snapshot.appHosts,
+                ...(snapshot.truncated ? { truncated: true } : {}),
+            };
+        }
+        catch (error) {
+            if (!isCommandCancellation(error) && !token.isCancellationRequested) {
+                extensionLogOutputChannel.error(`Aspire language model tool ${aspireListDebugSessionsToolName} failed.`);
+            }
+
+            return createListDebugSessionsFailure(
+                isCommandCancellation(error) || token.isCancellationRequested
+                    ? 'canceled'
+                    : 'error');
+        }
     }
 
     async getDebugSessionStatus(input: unknown, token: vscode.CancellationToken): Promise<DebugSessionStatusToolResult> {
@@ -320,6 +429,48 @@ function createExplainFailure(outcome: ExplainLaunchFailureFailureResult['outcom
         tool: aspireExplainLaunchFailureToolName,
         outcome,
     };
+}
+
+function createOpenDashboardFailure(outcome: OpenDashboardFailureResult['outcome']): OpenDashboardFailureResult {
+    return {
+        success: false,
+        tool: aspireOpenDashboardToolName,
+        outcome,
+    };
+}
+
+function createOpenOutputFailure(outcome: OpenOutputFailureResult['outcome']): OpenOutputFailureResult {
+    return {
+        success: false,
+        tool: aspireOpenOutputToolName,
+        outcome,
+    };
+}
+
+function createListDebugSessionsFailure(
+    outcome: Extract<ListDebugSessionsToolResult['outcome'], 'workspaceNotTrusted' | 'invalidInput' | 'canceled' | 'error'>): ListDebugSessionsToolResult {
+    return {
+        success: false,
+        tool: aspireListDebugSessionsToolName,
+        outcome,
+        sessions: [],
+    };
+}
+
+function validateEmptyObjectInvocation(
+    input: unknown,
+    token: vscode.CancellationToken): 'workspaceNotTrusted' | 'invalidInput' | 'canceled' | undefined {
+    if (token.isCancellationRequested) {
+        return 'canceled';
+    }
+    if (!vscode.workspace.isTrusted) {
+        return 'workspaceNotTrusted';
+    }
+    if (!isValidEmptyObjectInput(input)) {
+        return 'invalidInput';
+    }
+
+    return undefined;
 }
 
 function isModeMeaningful(outcome: DebugSessionStatusResult['outcome']): boolean {

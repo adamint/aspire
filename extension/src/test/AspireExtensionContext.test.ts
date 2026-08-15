@@ -94,6 +94,34 @@ suite('AspireExtensionContext', () => {
             ['appHostPath', 'mode', 'resourceExecutablePaths', 'state', 'targetPath']);
     });
 
+    test('returns only active Aspire sessions with the exact shared AppHost identity', () => {
+        __resetAppHostIdentityRegistryForTests();
+        const context = createContext([]);
+        const exactPath = '/workspace/AppHost/AppHost.csproj';
+        const exactSession = createContextDebugSession('exact', exactPath, exactPath);
+        const resolvedSession = createContextDebugSession('resolved', '/workspace', exactPath);
+        const otherSession = createContextDebugSession(
+            'other',
+            '/workspace/Other/AppHost.csproj',
+            '/workspace/Other/AppHost.csproj');
+        const publishSession = createContextDebugSession('publish', exactPath, exactPath, 'publish');
+        context.addAspireDebugSession(exactSession);
+        context.addAspireDebugSession(resolvedSession);
+        context.addAspireDebugSession(otherSession);
+        context.addAspireDebugSession(publishSession);
+
+        try {
+            const identity = getOrCreateIdentityForAbsolutePath(exactPath);
+
+            assert.deepStrictEqual(
+                context.getAspireDebugSessionsForAppHostIdentity(identity),
+                [exactSession, resolvedSession]);
+        }
+        finally {
+            __resetAppHostIdentityRegistryForTests();
+        }
+    });
+
     test('deactivation waits for every CLI stop request before disposing transport', async () => {
         const order: string[] = [];
         const context = createContext(order);
@@ -815,6 +843,27 @@ function addSession(
         finalizeForExtensionShutdown,
         dispose,
     } as unknown as AspireDebugSession);
+}
+
+function createContextDebugSession(
+    debugSessionId: string,
+    appHostPath: string,
+    resolvedAppHostPath: string,
+    operationKind: 'run' | 'publish' = 'run'): AspireDebugSession {
+    return {
+        debugSessionId,
+        appHostPath,
+        resolvedAppHostPath,
+        operationKind,
+        editorResourceSessions: [],
+        onDidChangeState: () => ({ dispose: () => { } }),
+        onDidSendDebugConsoleOutput: () => ({ dispose: () => { } }),
+        stopDebugging: () => Promise.resolve(),
+        requestCliStopForExtensionShutdown: () => Promise.resolve(),
+        terminateCliProcessTree: () => { },
+        finalizeForExtensionShutdown: () => { },
+        dispose: () => { },
+    } as unknown as AspireDebugSession;
 }
 
 function deactivateContext(context: AspireExtensionContext): Promise<void> {

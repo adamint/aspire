@@ -11,11 +11,23 @@ import {
     type LaunchFailureStage,
     type SanitizedLaunchFailure,
 } from '../services/launchFailureJournal';
-import { type EditorStateSnapshotService } from './editorStateSnapshotService';
-import { type SafeAppHostTargetResolver } from './safeAppHostTargetResolver';
+import { type EditorAppHostSummary, type EditorStateSnapshotService } from './editorStateSnapshotService';
+import {
+    type AppHostTargetIdentity,
+    type ResolvedAppHostTarget,
+    type SafeAppHostTargetResolver,
+} from './safeAppHostTargetResolver';
+import {
+    type DashboardBrowserType,
+    type DashboardPresentation,
+} from '../debugger/session/dashboardLauncher';
+import { type AppHostDisplayInfo } from '../data/appHostCliContracts';
 
 export const aspireDebugSessionStatusToolName = 'aspire_debug_session_status';
 export const aspireExplainLaunchFailureToolName = 'aspire_explain_launch_failure';
+export const aspireOpenDashboardToolName = 'aspire_open_dashboard';
+export const aspireOpenOutputToolName = 'aspire_open_output';
+export const aspireListDebugSessionsToolName = 'aspire_list_debug_sessions';
 
 const maxResourceNameLength = 256;
 const identityChangingCharacters = /[\u0000-\u001F\u007F-\u009F]|\p{Cf}/u;
@@ -45,6 +57,32 @@ export type ExplainLaunchFailureOutcome =
     | 'canceled'
     | 'error';
 
+export type OpenDashboardOutcome =
+    | 'opened'
+    | 'dashboardUnavailable'
+    | 'appHostNotRunning'
+    | 'appHostNotFound'
+    | 'ambiguousAppHost'
+    | 'workspaceNotTrusted'
+    | 'invalidInput'
+    | 'canceled'
+    | 'error';
+
+export type OpenOutputOutcome =
+    | 'opened'
+    | 'workspaceNotTrusted'
+    | 'invalidInput'
+    | 'canceled'
+    | 'error';
+
+export type ListDebugSessionsOutcome =
+    | 'sessionsFound'
+    | 'noSessions'
+    | 'workspaceNotTrusted'
+    | 'invalidInput'
+    | 'canceled'
+    | 'error';
+
 export type EditorAssistanceScope = 'appHost' | 'resource';
 export type EditorAssistanceMode = 'run' | 'debug' | 'other';
 
@@ -65,6 +103,13 @@ export interface DebugSessionStatusToolInput {
 export interface ExplainLaunchFailureToolInput {
     readonly appHostPath: string;
 }
+
+export interface OpenDashboardToolInput {
+    readonly appHostPath: string;
+}
+
+export type OpenOutputToolInput = Record<string, never>;
+export type ListDebugSessionsToolInput = Record<string, never>;
 
 export interface DebugSessionStatusResult {
     readonly success: true;
@@ -142,12 +187,85 @@ export type ExplainLaunchFailureToolResult =
     | ExplainLaunchFailureNotFoundResult
     | ExplainLaunchFailureFailureResult;
 
+export interface OpenDashboardSuccessResult {
+    readonly success: true;
+    readonly tool: typeof aspireOpenDashboardToolName;
+    readonly outcome: 'opened';
+    readonly presentation: DashboardPresentation;
+}
+
+export interface OpenDashboardFailureResult {
+    readonly success: false;
+    readonly tool: typeof aspireOpenDashboardToolName;
+    readonly outcome: Exclude<OpenDashboardOutcome, 'opened'>;
+}
+
+export type OpenDashboardToolResult =
+    | OpenDashboardSuccessResult
+    | OpenDashboardFailureResult;
+
+export interface OpenOutputSuccessResult {
+    readonly success: true;
+    readonly tool: typeof aspireOpenOutputToolName;
+    readonly outcome: 'opened';
+}
+
+export interface OpenOutputFailureResult {
+    readonly success: false;
+    readonly tool: typeof aspireOpenOutputToolName;
+    readonly outcome: Exclude<OpenOutputOutcome, 'opened'>;
+}
+
+export type OpenOutputToolResult =
+    | OpenOutputSuccessResult
+    | OpenOutputFailureResult;
+
+export interface ListDebugSessionsToolResult {
+    readonly success: boolean;
+    readonly tool: typeof aspireListDebugSessionsToolName;
+    readonly outcome: ListDebugSessionsOutcome;
+    readonly sessions: readonly EditorAppHostSummary[];
+    readonly truncated?: true;
+}
+
 export type EditorAssistanceToolResult =
     | DebugSessionStatusToolResult
-    | ExplainLaunchFailureToolResult;
+    | ExplainLaunchFailureToolResult
+    | OpenDashboardToolResult
+    | OpenOutputToolResult
+    | ListDebugSessionsToolResult;
 
 export interface EditorAssistanceResourceRepository {
     fetchAppHostResourcesOnce(appHostPath: string, token: vscode.CancellationToken): Promise<readonly ResourceJson[]>;
+}
+
+export interface EditorUiHandoffAppHostRepository {
+    fetchRunningAppHostsOnce(token: vscode.CancellationToken): Promise<readonly AppHostDisplayInfo[]>;
+}
+
+export interface EditorUiHandoffOutput {
+    show(preserveFocus?: boolean): void;
+}
+
+export interface EditorUiHandoffDebugSession {
+    readonly configuration: { readonly dashboardBrowser?: unknown };
+    openDashboard(url: string, browserType: DashboardBrowserType): Promise<DashboardPresentation | undefined>;
+}
+
+export type EditorUiHandoffDashboardResult =
+    | { readonly outcome: 'opened'; readonly presentation: DashboardPresentation }
+    | { readonly outcome: 'dashboardUnavailable' | 'appHostNotRunning' | 'ambiguousAppHost' | 'error' };
+
+export interface EditorUiHandoffOperations {
+    openDashboard(target: ResolvedAppHostTarget, token: vscode.CancellationToken): Promise<EditorUiHandoffDashboardResult>;
+    openOutput(token: vscode.CancellationToken): Promise<'opened' | 'error'>;
+}
+
+export interface EditorUiHandoffServiceDependencies {
+    readonly targetResolver: SafeAppHostTargetResolver;
+    readonly appHostRepository: EditorUiHandoffAppHostRepository;
+    readonly output: EditorUiHandoffOutput;
+    readonly getAspireDebugSessions: (identity: AppHostTargetIdentity) => readonly EditorUiHandoffDebugSession[];
 }
 
 export interface EditorAssistanceToolDependencies {
@@ -156,6 +274,7 @@ export interface EditorAssistanceToolDependencies {
     readonly resourceRepository: EditorAssistanceResourceRepository;
     readonly getEditorResourceSessions: () => readonly EditorResourceSessionSnapshot[];
     readonly readLatestLaunchFailures: (appHostPath: string) => readonly SanitizedLaunchFailure[];
+    readonly uiHandoffService: EditorUiHandoffOperations;
 }
 
 export interface EditorAssistanceToolRegistration extends vscode.Disposable {
@@ -182,6 +301,19 @@ export function isValidDebugSessionStatusInput(value: unknown): value is DebugSe
 export function isValidExplainLaunchFailureInput(value: unknown): value is ExplainLaunchFailureToolInput {
     return hasOnlyAllowedProperties(value, ['appHostPath']) &&
         typeof value.appHostPath === 'string';
+}
+
+export function isValidOpenDashboardInput(value: unknown): value is OpenDashboardToolInput {
+    return hasOnlyAllowedProperties(value, ['appHostPath']) &&
+        typeof value.appHostPath === 'string';
+}
+
+export function isValidEmptyObjectInput(value: unknown): value is OpenOutputToolInput | ListDebugSessionsToolInput {
+    return typeof value === 'object' &&
+        value !== null &&
+        !Array.isArray(value) &&
+        (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null) &&
+        Object.keys(value).length === 0;
 }
 
 function hasOnlyAllowedProperties<T extends string>(

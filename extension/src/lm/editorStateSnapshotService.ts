@@ -20,6 +20,11 @@ export interface EditorStateSnapshot {
     readonly appHosts: readonly EditorAppHostSummary[];
 }
 
+export interface ActiveEditorStateSnapshot {
+    readonly appHosts: readonly EditorAppHostSummary[];
+    readonly truncated?: true;
+}
+
 export interface EditorStateSnapshotServiceDependencies {
     readonly launchService: AppHostEditorStateLaunchService;
     readonly targetResolver: SafeAppHostTargetResolver;
@@ -30,7 +35,7 @@ export interface EditorStateSnapshotServiceDependencies {
  *
  * The snapshot intentionally stops at AppHost-level state. Resource details, debug
  * session ids, launch configurations, and process identifiers are all omitted so the
- * future `list_debug_sessions` surface can answer "what is the editor doing?" without
+ * `list_debug_sessions` surface can answer "what is the editor doing?" without
  * handing the model ambient handles into unrelated APIs.
  */
 export class EditorStateSnapshotService {
@@ -41,8 +46,37 @@ export class EditorStateSnapshotService {
     }
 
     async createSnapshot(token: vscode.CancellationToken): Promise<EditorStateSnapshot> {
+        const { representativeTargets, sessionsByIdentity } = await this.collectSnapshotState(token, maxSummaries);
+
+        return {
+            appHosts: representativeTargets.map(target =>
+                this.createSummary(target, sessionsByIdentity.get(target.identity) ?? [])),
+        };
+    }
+
+    async createActiveSessionSnapshot(token: vscode.CancellationToken): Promise<ActiveEditorStateSnapshot> {
+        const { representativeTargets, sessionsByIdentity } = await this.collectSnapshotState(token);
+        const activeSummaries = representativeTargets
+            .map(target => this.createSummary(target, sessionsByIdentity.get(target.identity) ?? []))
+            .filter(summary => summary.state !== 'notDebugging');
+        const appHosts = activeSummaries.slice(0, maxSummaries);
+
+        return activeSummaries.length > maxSummaries
+            ? { appHosts, truncated: true }
+            : { appHosts };
+    }
+
+    private async collectSnapshotState(
+        token: vscode.CancellationToken,
+        limit?: number): Promise<{
+            readonly representativeTargets: readonly ResolvedAppHostTarget[];
+            readonly sessionsByIdentity: ReadonlyMap<AppHostTargetIdentity, AppHostEditorSessionSnapshot[]>;
+        }> {
+        throwIfCanceled(token);
         const representativeTargets = selectRepresentativeTargets(
-            await this._dependencies.targetResolver.enumerateKnownAppHosts(token));
+            await this._dependencies.targetResolver.enumerateKnownAppHosts(token),
+            limit);
+        throwIfCanceled(token);
         const knownIdentities = new Set(representativeTargets.map(target => target.identity));
         const sessionsByIdentity = new Map<AppHostTargetIdentity, AppHostEditorSessionSnapshot[]>();
 
@@ -69,10 +103,11 @@ export class EditorStateSnapshotService {
                 sessionsByIdentity.set(identity, [session]);
             }
         }
+        throwIfCanceled(token);
 
         return {
-            appHosts: representativeTargets.map(target =>
-                this.createSummary(target, sessionsByIdentity.get(target.identity) ?? [])),
+            representativeTargets,
+            sessionsByIdentity,
         };
     }
 
@@ -153,7 +188,9 @@ function createSummary(appHost: string, state: EditorAppHostState, mode: EditorA
     };
 }
 
-function selectRepresentativeTargets(targets: readonly ResolvedAppHostTarget[]): readonly ResolvedAppHostTarget[] {
+function selectRepresentativeTargets(
+    targets: readonly ResolvedAppHostTarget[],
+    limit?: number): readonly ResolvedAppHostTarget[] {
     const sorted = [...targets].sort((left, right) => compareDisplayPath(left.displayPath, right.displayPath));
     const representatives: ResolvedAppHostTarget[] = [];
     const seen = new Set<AppHostTargetIdentity>();
@@ -164,7 +201,7 @@ function selectRepresentativeTargets(targets: readonly ResolvedAppHostTarget[]):
 
         seen.add(target.identity);
         representatives.push(target);
-        if (representatives.length === maxSummaries) {
+        if (representatives.length === limit) {
             break;
         }
     }

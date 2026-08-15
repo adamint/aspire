@@ -40,6 +40,7 @@ import { SafeAppHostTargetResolver } from './lm/safeAppHostTargetResolver';
 import { EditorStateSnapshotService } from './lm/editorStateSnapshotService';
 import { EditorAssistanceToolService } from './lm/editorAssistanceToolService';
 import { registerEditorAssistanceTools } from './lm/editorAssistanceToolAdapters';
+import { EditorUiHandoffService } from './lm/editorUiHandoffService';
 import { readLatestLaunchFailures } from './services/launchFailureJournal';
 
 let aspireExtensionContext = new AspireExtensionContext();
@@ -218,12 +219,19 @@ export async function activate(context: vscode.ExtensionContext) {
   const appHostLifecycleToolRegistration = registerAppHostLifecycleTools(appHostLifecycleToolService);
   context.subscriptions.push(appHostLifecycleToolRegistration);
 
-  // Read-only tools use the same safe AppHost registry and editor-owned session
-  // projections as lifecycle tools, but never expose confirmation or mutation hooks.
+  // Editor-assistance tools use the same safe AppHost registry and editor-owned session
+  // projections as lifecycle tools. UI side effects stay isolated behind the handoff service.
   const editorAssistanceTargetResolver = new SafeAppHostTargetResolver(appHostDiscoveryService);
   const editorStateSnapshotService = new EditorStateSnapshotService({
     launchService: appHostLaunchService,
     targetResolver: editorAssistanceTargetResolver,
+  });
+  const editorUiHandoffService = new EditorUiHandoffService({
+    targetResolver: editorAssistanceTargetResolver,
+    appHostRepository: dataRepository,
+    output: extensionLogOutputChannel,
+    getAspireDebugSessions: identity =>
+      aspireExtensionContext.getAspireDebugSessionsForAppHostIdentity(identity),
   });
   const editorAssistanceToolService = new EditorAssistanceToolService({
     targetResolver: editorAssistanceTargetResolver,
@@ -231,6 +239,7 @@ export async function activate(context: vscode.ExtensionContext) {
     resourceRepository: dataRepository,
     getEditorResourceSessions: () => aspireExtensionContext.editorResourceSessions,
     readLatestLaunchFailures,
+    uiHandoffService: editorUiHandoffService,
   });
   context.subscriptions.push(registerEditorAssistanceTools(editorAssistanceToolService));
 

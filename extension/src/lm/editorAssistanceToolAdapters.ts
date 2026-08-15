@@ -1,15 +1,30 @@
 import * as vscode from 'vscode';
 
+import {
+    editorAssistanceOpenDashboardConfirmationMessage,
+    editorAssistanceOpenDashboardConfirmationTitle,
+    editorAssistanceOpenDashboardInvocationMessage,
+    editorAssistanceOpenOutputConfirmationMessage,
+    editorAssistanceOpenOutputConfirmationTitle,
+    editorAssistanceOpenOutputInvocationMessage,
+} from '../loc/strings';
 import { extensionLogOutputChannel } from '../utils/logging';
 import {
     aspireDebugSessionStatusToolName,
     aspireExplainLaunchFailureToolName,
+    aspireListDebugSessionsToolName,
+    aspireOpenDashboardToolName,
+    aspireOpenOutputToolName,
     type DebugSessionStatusToolInput,
     type EditorAssistanceToolRegistration,
     type EditorAssistanceToolResult,
     type ExplainLaunchFailureToolInput,
+    type ListDebugSessionsToolInput,
+    type OpenDashboardToolInput,
+    type OpenOutputToolInput,
 } from './editorAssistanceToolContracts';
 import { EditorAssistanceToolService } from './editorAssistanceToolService';
+import { escapeMarkdown } from './languageModelToolUi';
 
 export class AspireDebugSessionStatusLanguageModelTool implements vscode.LanguageModelTool<DebugSessionStatusToolInput> {
     constructor(private readonly _service: EditorAssistanceToolService) {
@@ -33,18 +48,85 @@ export class AspireExplainLaunchFailureLanguageModelTool implements vscode.Langu
     }
 }
 
+export class AspireOpenDashboardLanguageModelTool implements vscode.LanguageModelTool<OpenDashboardToolInput> {
+    constructor(private readonly _service: EditorAssistanceToolService) {
+    }
+
+    async prepareInvocation(
+        options: vscode.LanguageModelToolInvocationPrepareOptions<OpenDashboardToolInput>,
+        token: vscode.CancellationToken): Promise<vscode.PreparedToolInvocation> {
+        const displayPath = escapeMarkdown(
+            await this._service.describeDashboardTarget(options.input?.appHostPath, token));
+        return {
+            invocationMessage: editorAssistanceOpenDashboardInvocationMessage(displayPath),
+            confirmationMessages: {
+                title: editorAssistanceOpenDashboardConfirmationTitle,
+                message: editorAssistanceOpenDashboardConfirmationMessage(displayPath),
+            },
+        };
+    }
+
+    async invoke(
+        options: vscode.LanguageModelToolInvocationOptions<OpenDashboardToolInput>,
+        token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
+        return createToolResult(await this._service.openDashboard(options.input, token));
+    }
+}
+
+export class AspireOpenOutputLanguageModelTool implements vscode.LanguageModelTool<OpenOutputToolInput> {
+    constructor(private readonly _service: EditorAssistanceToolService) {
+    }
+
+    async prepareInvocation(
+        _options: vscode.LanguageModelToolInvocationPrepareOptions<OpenOutputToolInput>,
+        _token: vscode.CancellationToken): Promise<vscode.PreparedToolInvocation> {
+        return {
+            invocationMessage: editorAssistanceOpenOutputInvocationMessage,
+            confirmationMessages: {
+                title: editorAssistanceOpenOutputConfirmationTitle,
+                message: editorAssistanceOpenOutputConfirmationMessage,
+            },
+        };
+    }
+
+    async invoke(
+        options: vscode.LanguageModelToolInvocationOptions<OpenOutputToolInput>,
+        token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
+        return createToolResult(await this._service.openOutput(options.input, token));
+    }
+}
+
+export class AspireListDebugSessionsLanguageModelTool implements vscode.LanguageModelTool<ListDebugSessionsToolInput> {
+    constructor(private readonly _service: EditorAssistanceToolService) {
+    }
+
+    async invoke(
+        options: vscode.LanguageModelToolInvocationOptions<ListDebugSessionsToolInput>,
+        token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
+        return createToolResult(await this._service.listDebugSessions(options.input, token));
+    }
+}
+
 /**
- * Registers the read-only editor-assistance tools when the stable language model
- * tool API exists. These adapters intentionally implement only `invoke`: status
- * and explanation calls neither mutate editor state nor require confirmation.
+ * Registers editor-assistance tools when the stable language model tool API exists.
+ *
+ * Status, explanation, and session listing are read-only and intentionally expose only
+ * `invoke`. Dashboard and Output handoff change editor UI, so those two adapters alone
+ * implement confirmation preparation.
  */
 export function registerEditorAssistanceTools(service: EditorAssistanceToolService): EditorAssistanceToolRegistration {
     const registrations: vscode.Disposable[] = [];
     const statusTool = new AspireDebugSessionStatusLanguageModelTool(service);
     const explainTool = new AspireExplainLaunchFailureLanguageModelTool(service);
+    const dashboardTool = new AspireOpenDashboardLanguageModelTool(service);
+    const outputTool = new AspireOpenOutputLanguageModelTool(service);
+    const listTool = new AspireListDebugSessionsLanguageModelTool(service);
     const tools = new Map<string, vscode.LanguageModelTool<unknown>>([
         [aspireDebugSessionStatusToolName, statusTool as vscode.LanguageModelTool<unknown>],
         [aspireExplainLaunchFailureToolName, explainTool as vscode.LanguageModelTool<unknown>],
+        [aspireOpenDashboardToolName, dashboardTool as vscode.LanguageModelTool<unknown>],
+        [aspireOpenOutputToolName, outputTool as vscode.LanguageModelTool<unknown>],
+        [aspireListDebugSessionsToolName, listTool as vscode.LanguageModelTool<unknown>],
     ]);
 
     if (typeof vscode.lm?.registerTool !== 'function') {
@@ -53,7 +135,10 @@ export function registerEditorAssistanceTools(service: EditorAssistanceToolServi
     else {
         registrations.push(
             vscode.lm.registerTool(aspireDebugSessionStatusToolName, statusTool),
-            vscode.lm.registerTool(aspireExplainLaunchFailureToolName, explainTool));
+            vscode.lm.registerTool(aspireExplainLaunchFailureToolName, explainTool),
+            vscode.lm.registerTool(aspireOpenDashboardToolName, dashboardTool),
+            vscode.lm.registerTool(aspireOpenOutputToolName, outputTool),
+            vscode.lm.registerTool(aspireListDebugSessionsToolName, listTool));
         extensionLogOutputChannel.info('Registered Aspire editor assistance language model tools.');
     }
 

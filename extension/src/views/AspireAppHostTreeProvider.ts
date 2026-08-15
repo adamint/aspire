@@ -36,6 +36,7 @@ import { AppHostLaunchService } from '../services/AppHostLaunchService';
 import { isSameFileSystemEntry } from '../utils/appHostDiscovery';
 import { isAppHostSourceFile, isProjectFile } from '../utils/paths/comparison';
 import { isCommandCancellation } from '../utils/telemetry';
+import { isWebDashboardUrl } from '../debugger/session/dashboardLauncher';
 import {
     getParentResourceName,
     getTerminalReplicaIndex,
@@ -1203,15 +1204,6 @@ function getBaseDashboardUrl(resourceDashboardUrl: string | null): string | null
     }
     const idx = resourceDashboardUrl.indexOf('/?resource=');
     return idx >= 0 ? resourceDashboardUrl.substring(0, idx) : resourceDashboardUrl;
-}
-
-function isWebDashboardUrl(url: string): boolean {
-    try {
-        const parsed = new URL(url);
-        return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-    } catch {
-        return false;
-    }
 }
 
 async function openDashboardUrlToSide(url: string): Promise<void> {

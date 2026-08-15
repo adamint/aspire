@@ -1505,8 +1505,9 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         sinon.stub(vscode.env, 'openExternal').resolves(true);
         const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
 
-        await aspireDebugSession.openDashboard('https://localhost:1234/private', 'debugEdge');
+        const presentation = await aspireDebugSession.openDashboard('https://localhost:1234/private', 'debugEdge');
 
+        assert.strictEqual(presentation, 'externalBrowser');
         assert.deepStrictEqual(readLatestLaunchFailures(appHostPath), []);
     });
 

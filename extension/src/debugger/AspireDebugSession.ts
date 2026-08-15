@@ -31,7 +31,7 @@ import type { AspireDebugConsoleOutputEvent } from "../types/extensionApi";
 import { recordLaunchFailureForAppHostPath, recordSanitizedLaunchFailureForAppHostPath, type LaunchFailureMode, type LaunchFailureProviderKind, type SanitizedLaunchFailure } from "../services/launchFailureJournal";
 import { appHostRestartSourceSessionIdConfigKey, appHostSelectionOriginConfigKey, appHostTelemetryTargetPathConfigKey } from "./AspireDebugConfigurationMetadata";
 import { AppHostParentOutputFilter } from "./session/appHostParentOutputFilter";
-import { DashboardLauncher, type DashboardBrowserType, type DashboardLauncherHost } from "./session/dashboardLauncher";
+import { DashboardLauncher, type DashboardBrowserType, type DashboardLauncherHost, type DashboardPresentation } from "./session/dashboardLauncher";
 import { describeStopFailure, startStop, stopSessionInBackground } from "./session/stopHelpers";
 import { AppHostBuildFailureError } from "./appHostBuildFailureError";
 import type { EditorResourceSessionMode, EditorResourceSessionSnapshot, EditorResourceSessionState } from "../services/appHostLaunchContracts";
@@ -247,7 +247,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
     }
   }
 
-  openDashboard(url: string, browserType: DashboardBrowserType): Promise<void> {
+  openDashboard(url: string, browserType: DashboardBrowserType): Promise<DashboardPresentation | undefined> {
     return this._dashboardLauncher.openDashboard(url, browserType);
   }
 
@@ -1998,4 +1998,4 @@ function isErrorWithStreamedDebugConsoleOutput(err: unknown): boolean {
 
 export { AppHostParentOutputFilter } from "./session/appHostParentOutputFilter";
 export type { AppHostParentOutput } from "./session/appHostParentOutputFilter";
-export type { DashboardLaunchBehavior, DashboardBrowserType } from "./session/dashboardLauncher";
+export type { DashboardLaunchBehavior, DashboardBrowserType, DashboardPresentation } from "./session/dashboardLauncher";
