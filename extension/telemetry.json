@@ -316,7 +316,7 @@
       "requested_strategy": {
         "classification": "SystemMetaData",
         "purpose": "FeatureInsight",
-        "comment": "The bounded resource debug strategy requested by the caller: attach."
+        "comment": "The bounded resource debug strategy requested by the caller: auto, attach, or invalid."
       },
       "controller": {
         "classification": "SystemMetaData",
@@ -343,12 +343,12 @@
       "requested_strategy": {
         "classification": "SystemMetaData",
         "purpose": "FeatureInsight",
-        "comment": "The bounded resource debug strategy requested by the caller: attach."
+        "comment": "The bounded resource debug strategy requested by the caller: auto, attach, or invalid."
       },
       "effective_strategy": {
         "classification": "SystemMetaData",
         "purpose": "FeatureInsight",
-        "comment": "Whether a bounded attach strategy was effective, or no strategy was used."
+        "comment": "The bounded effective resource debug strategy: attach or none."
       },
       "outcome": {
         "classification": "SystemMetaData",
@@ -410,7 +410,7 @@
       "requested_strategy": {
         "classification": "SystemMetaData",
         "purpose": "FeatureInsight",
-        "comment": "The bounded resource debug strategy requested by the caller: attach."
+        "comment": "The bounded resource debug strategy requested by the caller: auto or attach."
       },
       "effective_strategy": {
         "classification": "SystemMetaData",
