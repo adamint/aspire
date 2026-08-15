@@ -9,7 +9,9 @@ import * as os from 'os';
 import * as fs from 'fs';
 import { doesFileExist } from '../../utils/io';
 import { AspireResourceExtendedDebugConfiguration, EnvVar, ExecutableLaunchConfiguration, isProjectLaunchConfiguration, ProjectLaunchConfiguration } from '../../dcp/types';
-import { AttachDebuggerConfigurationError, DebuggableResourceSnapshot, ResourceDebuggerExtension } from '../debuggerExtensions';
+import { ResourceDebuggerExtension } from '../debuggerExtensions';
+import { ResourceAttachConfigurationError, type ResourceDebugResourceSnapshot } from '../resourceDebugContracts';
+import type { ResourceAttachProvider } from '../resourceAttachProviders';
 import {
     readLaunchSettings,
     determineBaseLaunchProfile,
@@ -457,7 +459,7 @@ function configureDotNetRunDebugConfiguration(
     ));
 }
 
-function getDotNetAttachDebuggerResourceInfo(resource: DebuggableResourceSnapshot): DotNetAttachDebuggerResourceInfo | undefined {
+function getDotNetAttachDebuggerResourceInfo(resource: ResourceDebugResourceSnapshot): DotNetAttachDebuggerResourceInfo | undefined {
     if (resource.resourceType !== 'Project' || resource.state !== 'Running') {
         return undefined;
     }
@@ -495,7 +497,7 @@ function getDotNetAttachDebuggerResourceInfo(resource: DebuggableResourceSnapsho
     };
 }
 
-function getDotNetLaunchConfiguration(resource: DebuggableResourceSnapshot): string | undefined {
+function getDotNetLaunchConfiguration(resource: ResourceDebugResourceSnapshot): string | undefined {
     const executableArgs: unknown = resource.properties?.[executableArgsPropertyName];
     if (!Array.isArray(executableArgs)) {
         return undefined;
@@ -526,17 +528,17 @@ function getDotNetLaunchConfiguration(resource: DebuggableResourceSnapshot): str
     return undefined;
 }
 
-function getResourceParentName(resource: DebuggableResourceSnapshot): string | null {
+function getResourceParentName(resource: ResourceDebugResourceSnapshot): string | null {
     const value: unknown = resource.properties?.[resourceParentNamePropertyName];
     return typeof value === 'string' ? value : null;
 }
 
-function getLaunchConfigurationType(resource: DebuggableResourceSnapshot): string | null {
+function getLaunchConfigurationType(resource: ResourceDebugResourceSnapshot): string | null {
     const value: unknown = resource.properties?.[resourceLaunchConfigurationTypePropertyName];
     return typeof value === 'string' ? value.trim().toLowerCase() : null;
 }
 
-function getAttachDebuggerProcessId(resource: DebuggableResourceSnapshot): number | undefined {
+function getAttachDebuggerProcessId(resource: ResourceDebugResourceSnapshot): number | undefined {
     const value: unknown = resource.properties?.[executablePidPropertyName];
     if (typeof value === 'number' && Number.isInteger(value) && value > 0) {
         return value;
@@ -554,7 +556,7 @@ function getAttachDebuggerProcessId(resource: DebuggableResourceSnapshot): numbe
     return processId;
 }
 
-function isDotNetExecutable(resource: DebuggableResourceSnapshot): boolean {
+function isDotNetExecutable(resource: ResourceDebugResourceSnapshot): boolean {
     const executablePath: unknown = resource.properties?.[executablePathPropertyName];
     if (typeof executablePath !== 'string') {
         return false;
@@ -564,10 +566,10 @@ function isDotNetExecutable(resource: DebuggableResourceSnapshot): boolean {
     return executableName === 'dotnet' || executableName === 'dotnet.exe';
 }
 
-async function createDotNetAttachDebugSessionConfiguration(resource: DebuggableResourceSnapshot, dotNetService: IDotNetService): Promise<vscode.DebugConfiguration> {
+export async function createDotNetAttachDebugSessionConfiguration(resource: ResourceDebugResourceSnapshot, dotNetService: IDotNetService): Promise<vscode.DebugConfiguration> {
     const attachInfo = getDotNetAttachDebuggerResourceInfo(resource);
     if (!attachInfo) {
-        throw new AttachDebuggerConfigurationError('ResourceNotAttachable', invalidLaunchConfiguration(JSON.stringify(resource)));
+        throw new ResourceAttachConfigurationError('resourceNotAttachable', invalidLaunchConfiguration(JSON.stringify(resource)));
     }
 
     let targetInfo: DotNetAttachTargetInfo;
@@ -575,15 +577,15 @@ async function createDotNetAttachDebugSessionConfiguration(resource: DebuggableR
         targetInfo = await dotNetService.getDotNetAttachTargetInfo(attachInfo.projectPath, attachInfo.configuration);
     }
     catch (error) {
-        throw new AttachDebuggerConfigurationError(
-            'ResourceNotAttachable',
+        throw new ResourceAttachConfigurationError(
+            'resourceNotAttachable',
             error instanceof Error ? error.message : String(error));
     }
 
     // Without an apphost, dotnet run starts the target DLL under another process named "dotnet".
     // That name is not unique enough to identify this resource without introducing process-tree discovery.
     if (!targetInfo.useAppHost) {
-        throw new AttachDebuggerConfigurationError('ResourceNotAttachable', attachDebuggerUnavailable);
+        throw new ResourceAttachConfigurationError('resourceNotAttachable', attachDebuggerUnavailable);
     }
 
     // `executable.pid` is the DCP launcher (`dotnet run`), not necessarily the managed
@@ -592,7 +594,7 @@ async function createDotNetAttachDebugSessionConfiguration(resource: DebuggableR
     const fileName = targetInfo.targetPath.split(/[\\/]/).pop() ?? '';
     const processName = fileName.replace(/\.(dll|exe)$/i, '');
     if (processName.length === 0) {
-        throw new AttachDebuggerConfigurationError('ResourceNotAttachable', noOutputFromMsbuild);
+        throw new ResourceAttachConfigurationError('resourceNotAttachable', noOutputFromMsbuild);
     }
 
     return {
@@ -616,10 +618,6 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
             }
 
             throw new Error(invalidLaunchConfiguration(JSON.stringify(launchConfig)));
-        },
-        canAttachToResource: (resource) => getDotNetAttachDebuggerResourceInfo(resource) !== undefined,
-        createAttachDebugSessionConfigurationCallback: async (resource): Promise<vscode.DebugConfiguration> => {
-            return await createDotNetAttachDebugSessionConfiguration(resource, dotNetServiceProducer(undefined));
         },
         createDebugSessionConfigurationCallback: async (launchConfig, args, env, launchOptions, debugConfiguration: AspireResourceExtendedDebugConfiguration): Promise<void> => {
             if (!isProjectLaunchConfiguration(launchConfig)) {
@@ -847,3 +845,19 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
 }
 
 export const projectDebuggerExtension: ResourceDebuggerExtension = createProjectDebuggerExtension(debugSession => new DotNetService(debugSession));
+
+export function createProjectResourceAttachProvider(dotNetServiceProducer: () => IDotNetService): ResourceAttachProvider {
+    return {
+        id: 'dotnet',
+        requiredDebuggerExtensions: [{
+            id: 'ms-dotnettools.csharp',
+            label: 'C#',
+        }],
+        canAttachToResource: resource => getDotNetAttachDebuggerResourceInfo(resource) !== undefined,
+        createDebugConfiguration: async resource =>
+            await createDotNetAttachDebugSessionConfiguration(resource, dotNetServiceProducer()),
+    };
+}
+
+export const projectResourceAttachProvider: ResourceAttachProvider =
+    createProjectResourceAttachProvider(() => new DotNetService(undefined));

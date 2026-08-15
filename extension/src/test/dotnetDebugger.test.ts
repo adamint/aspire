@@ -4,10 +4,11 @@ import { EventEmitter } from 'events';
 import * as nodePath from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
-import { createProjectDebuggerExtension, DotNetService, projectDebuggerExtension, quoteCommandLineArgument } from '../debugger/languages/dotnet';
+import { createProjectDebuggerExtension, createProjectResourceAttachProvider, DotNetService, projectDebuggerExtension, quoteCommandLineArgument } from '../debugger/languages/dotnet';
 import { AspireExtendedDebugConfiguration, AspireResourceExtendedDebugConfiguration, ExecutableLaunchConfiguration, ProjectLaunchConfiguration } from '../dcp/types';
 import * as io from '../utils/io';
 import { createDebugSessionConfiguration, ResourceDebuggerExtension } from '../debugger/debuggerExtensions';
+import type { ResourceAttachProvider } from '../debugger/resourceAttachProviders';
 import { AppHostParentOutputFilter, AspireDebugSession } from '../debugger/AspireDebugSession';
 import * as hotReload from '../debugger/hotReload';
 
@@ -81,15 +82,20 @@ suite('Dotnet Debugger Extension Tests', () => {
 
     teardown(() => sinon.restore());
 
-    function createDebuggerExtension(outputPath: string, rejectBuild: Error | null, hasDevKit: boolean, doesOutputFileExist: boolean): { dotNetService: TestDotNetService, extension: ResourceDebuggerExtension, doesFileExistStub: sinon.SinonStub } {
+    function createDebuggerExtension(outputPath: string, rejectBuild: Error | null, hasDevKit: boolean, doesOutputFileExist: boolean): { dotNetService: TestDotNetService, extension: ResourceDebuggerExtension, attachProvider: ResourceAttachProvider, doesFileExistStub: sinon.SinonStub } {
         const fakeDotNetService = new TestDotNetService(outputPath, rejectBuild, hasDevKit);
-        return { dotNetService: fakeDotNetService, extension: createProjectDebuggerExtension(() => fakeDotNetService), doesFileExistStub: sinon.stub(io, 'doesFileExist').resolves(doesOutputFileExist) };
+        return {
+            dotNetService: fakeDotNetService,
+            extension: createProjectDebuggerExtension(() => fakeDotNetService),
+            attachProvider: createProjectResourceAttachProvider(() => fakeDotNetService),
+            doesFileExistStub: sinon.stub(io, 'doesFileExist').resolves(doesOutputFileExist),
+        };
     }
 
     test('attach configuration uses the project TargetPath process name instead of the launcher process ID', async () => {
-        const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/FromTargetPath.dll', null, true, true);
+        const { attachProvider, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/FromTargetPath.dll', null, true, true);
 
-        const configuration = await extension.createAttachDebugSessionConfigurationCallback!({
+        const configuration = await attachProvider.createDebugConfiguration({
             name: 'api',
             displayName: 'API',
             resourceType: 'Project',
@@ -111,9 +117,9 @@ suite('Dotnet Debugger Extension Tests', () => {
     });
 
     test('attach configuration evaluates TargetPath with the launched project configuration', async () => {
-        const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Release/net10.0/ReleaseApi.dll', null, true, true);
+        const { attachProvider, dotNetService } = createDebuggerExtension('/repo/bin/Release/net10.0/ReleaseApi.dll', null, true, true);
 
-        const configuration = await extension.createAttachDebugSessionConfigurationCallback!({
+        const configuration = await attachProvider.createDebugConfiguration({
             name: 'api',
             displayName: 'API',
             resourceType: 'Project',
@@ -142,10 +148,10 @@ suite('Dotnet Debugger Extension Tests', () => {
             }),
             stderr: '',
         });
-        const extension = createProjectDebuggerExtension(() => dotNetService);
+        const attachProvider = createProjectResourceAttachProvider(() => dotNetService);
 
         await assert.rejects(
-            extension.createAttachDebugSessionConfigurationCallback!({
+            attachProvider.createDebugConfiguration({
                 name: 'api',
                 displayName: 'API',
                 resourceType: 'Project',
@@ -158,8 +164,8 @@ suite('Dotnet Debugger Extension Tests', () => {
                 },
             }),
             (error: unknown) => error instanceof Error
-                && error.name === 'AttachDebuggerConfigurationError'
-                && (error as Error & { errorKind?: string }).errorKind === 'ResourceNotAttachable');
+                && error.name === 'ResourceAttachConfigurationError'
+                && (error as Error & { errorKind?: string }).errorKind === 'resourceNotAttachable');
 
         assert.deepStrictEqual(execFileAsync.firstCall.args[1], [
             'msbuild',
@@ -174,10 +180,10 @@ suite('Dotnet Debugger Extension Tests', () => {
     });
 
     test('attach configuration rejects file-based project resources', async () => {
-        const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/Api.dll', null, true, true);
+        const { attachProvider, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/Api.dll', null, true, true);
 
         await assert.rejects(
-            extension.createAttachDebugSessionConfigurationCallback!({
+            attachProvider.createDebugConfiguration({
                 name: 'api',
                 displayName: 'API',
                 resourceType: 'Project',
@@ -189,16 +195,16 @@ suite('Dotnet Debugger Extension Tests', () => {
                 },
             }),
             (error: unknown) => error instanceof Error
-                && error.name === 'AttachDebuggerConfigurationError'
-                && (error as Error & { errorKind?: string }).errorKind === 'ResourceNotAttachable');
+                && error.name === 'ResourceAttachConfigurationError'
+                && (error as Error & { errorKind?: string }).errorKind === 'resourceNotAttachable');
 
         assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
     });
 
     test('attach configuration keeps parented project resources attachable', async () => {
-        const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/FromTargetPath.dll', null, true, true);
+        const { attachProvider, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/FromTargetPath.dll', null, true, true);
 
-        const configuration = await extension.createAttachDebugSessionConfigurationCallback!({
+        const configuration = await attachProvider.createDebugConfiguration({
             name: 'api-grouped',
             displayName: 'API',
             resourceType: 'Project',
@@ -218,10 +224,10 @@ suite('Dotnet Debugger Extension Tests', () => {
     });
 
     test('attach configuration rejects parented MAUI platform resources', async () => {
-        const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/FromTargetPath.dll', null, true, true);
+        const { attachProvider, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/FromTargetPath.dll', null, true, true);
 
         await assert.rejects(
-            extension.createAttachDebugSessionConfigurationCallback!({
+            attachProvider.createDebugConfiguration({
                 name: 'mauiapp-android-emulator',
                 displayName: 'MAUI',
                 resourceType: 'Project',
@@ -235,17 +241,17 @@ suite('Dotnet Debugger Extension Tests', () => {
                 },
             }),
             (error: unknown) => error instanceof Error
-                && error.name === 'AttachDebuggerConfigurationError'
-                && (error as Error & { errorKind?: string }).errorKind === 'ResourceNotAttachable');
+                && error.name === 'ResourceAttachConfigurationError'
+                && (error as Error & { errorKind?: string }).errorKind === 'resourceNotAttachable');
 
         assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
     });
 
     test('attach configuration rejects parented resources without explicit launch metadata', async () => {
-        const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/FromTargetPath.dll', null, true, true);
+        const { attachProvider, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/FromTargetPath.dll', null, true, true);
 
         await assert.rejects(
-            extension.createAttachDebugSessionConfigurationCallback!({
+            attachProvider.createDebugConfiguration({
                 name: 'legacy-parented',
                 displayName: 'Legacy parented project',
                 resourceType: 'Project',
@@ -258,8 +264,8 @@ suite('Dotnet Debugger Extension Tests', () => {
                 },
             }),
             (error: unknown) => error instanceof Error
-                && error.name === 'AttachDebuggerConfigurationError'
-                && (error as Error & { errorKind?: string }).errorKind === 'ResourceNotAttachable');
+                && error.name === 'ResourceAttachConfigurationError'
+                && (error as Error & { errorKind?: string }).errorKind === 'resourceNotAttachable');
 
         assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
     });

@@ -9,7 +9,7 @@ import {
 } from '../../loc/strings';
 import { isLinkableUrl } from '../../utils/urlSchemes';
 import { ResourceCommandJson, ResourceJson } from '../../data/AppHostDataRepository';
-import * as debuggerExtensions from '../../debugger/debuggerExtensions';
+import { getInstalledResourceAttachProviderForResource } from '../../debugger/resourceAttachProviders';
 import { getComparisonKey } from '../../utils/paths/comparison';
 import {
     buildResourceDescription,
@@ -146,6 +146,6 @@ export class ResourceItem extends vscode.TreeItem {
         this.tooltip = buildResourceTooltip(resource);
         this.contextValue = getResourceContextValue(
             resource,
-            debuggerExtensions.getAttachDebuggerExtensionForResource(resource) !== undefined);
+            getInstalledResourceAttachProviderForResource(resource) !== undefined);
     }
 }

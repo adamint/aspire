@@ -35,6 +35,9 @@ import { registerInstrumentedCommand } from './activation/instrumentedCommand';
 import { registerCliCommands } from './activation/registerCliCommands';
 import { registerTreeViewCommands } from './activation/registerTreeViewCommands';
 import { registerCodeLensCommands } from './activation/registerCodeLensCommands';
+import { createResourceAttachProviderRegistry } from './debugger/resourceAttachProviders';
+import { ResourceDebugService } from './debugger/resourceDebugService';
+import { ResourceDebugSessionRegistry } from './debugger/resourceDebugSessionRegistry';
 
 let aspireExtensionContext = new AspireExtensionContext();
 
@@ -108,6 +111,14 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Aspire panel - running app hosts tree view
   const dataRepository = new AppHostDataRepository(terminalProvider, appHostDiscoveryService, configInfoProvider);
+  const resourceDebugService = new ResourceDebugService({
+    appHostRepository: dataRepository,
+    attachProviders: createResourceAttachProviderRegistry(),
+    sessionRegistry: new ResourceDebugSessionRegistry(),
+    startDebugging: (workspaceFolder, configuration) =>
+      vscode.debug.startDebugging(workspaceFolder, configuration),
+  });
+  context.subscriptions.push(resourceDebugService);
   appHostLaunchService.setEditorSessionProvider(() => aspireExtensionContext.aspireDebugSessions);
   appHostLaunchService.setRunningAppHostProvider(async token => {
     const appHosts = await dataRepository.fetchRunningAppHostsOnce(token);
@@ -115,7 +126,7 @@ export async function activate(context: vscode.ExtensionContext) {
   });
   appHostLaunchService.setExternalAppHostStopper((appHostPath, token) =>
     stopExternalAppHost(terminalProvider, appHostPath, token));
-  const appHostTreeProvider = new AspireAppHostTreeProvider(dataRepository, terminalProvider, appHostLaunchService, context.globalState);
+  const appHostTreeProvider = new AspireAppHostTreeProvider(dataRepository, terminalProvider, appHostLaunchService, context.globalState, undefined, resourceDebugService);
   const appHostTreeView = vscode.window.createTreeView('aspire-vscode.appHosts', {
     treeDataProvider: appHostTreeProvider,
     showCollapseAll: true,

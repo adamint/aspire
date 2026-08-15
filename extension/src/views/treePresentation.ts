@@ -13,7 +13,7 @@ import {
 } from '../loc/strings';
 import { isLinkableUrl } from '../utils/urlSchemes';
 import { ResourceCommandJson, ResourceJson } from '../data/AppHostDataRepository';
-import * as debuggerExtensions from '../debugger/debuggerExtensions';
+import { getKnownResourceAttachProviderForResource } from '../debugger/resourceAttachProviders';
 
 export const integratedBrowserOpenCommand = 'workbench.action.browser.open';
 export const terminalEnabledPropertyName = 'terminal.enabled';
@@ -113,7 +113,7 @@ export function getResourceContextValue(resource: ResourceJson, canAttachDebugge
     if (isTerminalEnabled(resource)) {
         parts.push('canOpenTerminal');
     }
-    if (canAttachDebugger && debuggerExtensions.getKnownAttachDebuggerExtensionForResource(resource) !== undefined) {
+    if (canAttachDebugger && getKnownResourceAttachProviderForResource(resource) !== undefined) {
         parts.push('canAttachDebugger');
     }
     return parts.join(':');

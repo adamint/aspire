@@ -40,7 +40,9 @@ import { AppHostLaunchService } from '../services/AppHostLaunchService';
 import { isSameFileSystemEntry } from '../utils/appHostDiscovery';
 import { isAppHostSourceFile, isProjectFile } from '../utils/paths/comparison';
 import { isCommandCancellation } from '../utils/telemetry';
-import * as debuggerExtensions from '../debugger/debuggerExtensions';
+import { createResourceAttachProviderRegistry } from '../debugger/resourceAttachProviders';
+import { ResourceDebugService } from '../debugger/resourceDebugService';
+import { ResourceDebugSessionRegistry } from '../debugger/resourceDebugSessionRegistry';
 import {
     getParentResourceName,
     getTerminalReplicaIndex,
@@ -114,6 +116,8 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
     private _contentProviderRegistration: vscode.Disposable | undefined;
     private readonly _appHostSourceContents = new Map<string, string>();
     private _treeView: vscode.TreeView<TreeElement> | undefined;
+    private readonly _resourceDebugService: ResourceDebugService;
+    private readonly _ownsResourceDebugService: boolean;
 
     private _documentCloseSubscription: vscode.Disposable | undefined;
 
@@ -123,7 +127,16 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         private readonly _launchService: AppHostLaunchService,
         private readonly _secretWarningState?: vscode.Memento,
         private readonly _clipboard: Clipboard = vscode.env.clipboard,
+        resourceDebugService?: ResourceDebugService,
     ) {
+        this._ownsResourceDebugService = resourceDebugService === undefined;
+        this._resourceDebugService = resourceDebugService ?? new ResourceDebugService({
+            appHostRepository: this._repository,
+            attachProviders: createResourceAttachProviderRegistry(),
+            sessionRegistry: new ResourceDebugSessionRegistry(),
+            startDebugging: (workspaceFolder, configuration) =>
+                vscode.debug.startDebugging(workspaceFolder, configuration),
+        });
         this._dataSubscription = this._repository.onDidChangeData(() => {
             this._clearLaunchingPathsForRunningAppHosts();
             this._clearStoppingPathsForStoppedAppHosts();
@@ -178,6 +191,9 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
     }
 
     dispose(): void {
+        if (this._ownsResourceDebugService) {
+            this._resourceDebugService.dispose();
+        }
         this._dataSubscription.dispose();
         this._launchingSubscription.dispose();
         for (const timeout of this._stoppingAppHostTimeouts.values()) {
@@ -983,43 +999,44 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
             return { success: false, errorKind: 'ResourceNotFound' };
         }
 
-        const latestElement = this.findResourceElement(element.resource.name, ownerAppHostPath);
-        if (!(latestElement instanceof ResourceItem)) {
-            vscode.window.showWarningMessage(attachDebuggerResourceNotFound);
-            return { success: false, errorKind: 'ResourceNotFound' };
-        }
+        const result = await this._resourceDebugService.debug({
+            source: 'tree',
+            appHost: {
+                absolutePath: ownerAppHostPath,
+                displayPath: vscode.workspace.asRelativePath(ownerAppHostPath),
+            },
+            resourceName: element.resource.name,
+        });
+        switch (result.outcome) {
+            case 'started':
+            case 'alreadyDebugging':
+            case 'cancelled':
+                return;
+            case 'appHostNotFound':
+            case 'resourceNotFound':
+                vscode.window.showWarningMessage(attachDebuggerResourceNotFound);
+                return { success: false, errorKind: 'ResourceNotFound' };
+            case 'debuggerExtensionMissing':
+                if (result.debuggerExtensions.some(extension => extension.id === 'ms-dotnettools.csharp')) {
+                    vscode.window.showWarningMessage(attachDebuggerCsharpExtensionRequired);
+                    return { success: false, errorKind: 'CSharpExtensionMissing' };
+                }
 
-        const resource = latestElement.resource;
-        const debuggerExtension = debuggerExtensions.getAttachDebuggerExtensionForResource(resource);
-        if (!debuggerExtension) {
-            const missingDebuggerExtension = debuggerExtensions.getMissingAttachDebuggerExtensionForResource(resource);
-            if (missingDebuggerExtension?.extensionId === 'ms-dotnettools.csharp') {
-                vscode.window.showWarningMessage(attachDebuggerCsharpExtensionRequired);
-                return { success: false, errorKind: 'CSharpExtensionMissing' };
-            }
+                vscode.window.showWarningMessage(attachDebuggerUnavailable);
+                return { success: false, errorKind: 'ResourceNotAttachable' };
+            case 'resourceNotRunning':
+            case 'unsupportedResource':
+                vscode.window.showWarningMessage(attachDebuggerUnavailable);
+                return { success: false, errorKind: 'ResourceNotAttachable' };
+            case 'error':
+                if (result.errorKind === 'debuggerStartDeclined') {
+                    const error = new Error(attachDebuggerDeclined(element.resource.displayName ?? element.resource.name));
+                    error.name = 'StartDebuggingDeclined';
+                    throw error;
+                }
 
-            vscode.window.showWarningMessage(attachDebuggerUnavailable);
-            return { success: false, errorKind: 'ResourceNotAttachable' };
-        }
-
-        let configuration: vscode.DebugConfiguration;
-        try {
-            configuration = await debuggerExtensions.createAttachDebugSessionConfiguration(resource, debuggerExtension);
-        } catch (error) {
-            if (error instanceof debuggerExtensions.AttachDebuggerConfigurationError) {
-                vscode.window.showWarningMessage(error.message);
-                return { success: false, errorKind: error.errorKind };
-            }
-
-            throw error;
-        }
-
-        const resourceLabel = resource.displayName ?? resource.name;
-        const started = await vscode.debug.startDebugging(undefined, configuration);
-        if (!started) {
-            const error = new Error(attachDebuggerDeclined(resourceLabel));
-            error.name = 'StartDebuggingDeclined';
-            throw error;
+                vscode.window.showWarningMessage(attachDebuggerUnavailable);
+                return { success: false, errorKind: 'ResourceNotAttachable' };
         }
     }
 

@@ -6,7 +6,7 @@ import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import * as capabilities from '../capabilities';
-import * as debuggerExtensions from '../debugger/debuggerExtensions';
+import { projectResourceAttachProvider } from '../debugger/languages/dotnet';
 import * as cliModule from '../utils/process/cliProcess';
 import * as cliPathModule from '../utils/cliPath';
 import * as configInfoProvider from '../utils/configInfoProvider';
@@ -105,6 +105,7 @@ function makeTreeProvider(appHosts: readonly AppHostDisplayInfo[], viewMode: Vie
         workspaceAppHostName: undefined,
         workspaceAppHostDescription,
         onDidChangeData,
+        fetchAppHostsOnce: async () => appHosts,
     } as unknown as AppHostDataRepository;
 
     return new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
@@ -2650,8 +2651,8 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
                 ],
             }),
         ]);
-        sandbox.stub(capabilities, 'isCsharpInstalled').returns(true);
-        sandbox.stub(debuggerExtensions, 'createAttachDebugSessionConfiguration').resolves({
+        sandbox.stub(capabilities, 'isExtensionInstalled').returns(true);
+        sandbox.stub(projectResourceAttachProvider, 'createDebugConfiguration').resolves({
             type: 'coreclr',
             request: 'attach',
             name: 'Attach debugger: API',
@@ -2683,8 +2684,8 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             ],
         });
         const provider = makeTreeProvider([appHost]);
-        sandbox.stub(capabilities, 'isCsharpInstalled').returns(true);
-        const createConfigurationStub = sandbox.stub(debuggerExtensions, 'createAttachDebugSessionConfiguration').resolves({
+        sandbox.stub(capabilities, 'isExtensionInstalled').returns(true);
+        const createConfigurationStub = sandbox.stub(projectResourceAttachProvider, 'createDebugConfiguration').resolves({
             type: 'coreclr',
             request: 'attach',
             name: 'Attach debugger: API',
@@ -2739,8 +2740,8 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             }),
         ];
         const provider = makeTreeProvider(appHosts);
-        sandbox.stub(capabilities, 'isCsharpInstalled').returns(true);
-        const createConfigurationStub = sandbox.stub(debuggerExtensions, 'createAttachDebugSessionConfiguration').resolves({
+        sandbox.stub(capabilities, 'isExtensionInstalled').returns(true);
+        const createConfigurationStub = sandbox.stub(projectResourceAttachProvider, 'createDebugConfiguration').resolves({
             type: 'coreclr',
             request: 'attach',
             name: 'Attach debugger: Second API',
@@ -2774,7 +2775,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             }),
         ];
         const provider = makeTreeProvider(appHosts);
-        sandbox.stub(capabilities, 'isCsharpInstalled').returns(true);
+        sandbox.stub(capabilities, 'isExtensionInstalled').returns(true);
         const startDebuggingStub = sandbox.stub(vscode.debug, 'startDebugging').resolves(true);
         const warningStub = sandbox.stub(vscode.window, 'showWarningMessage');
         const resourceItem = getFirstResourceItem(provider);
@@ -2801,7 +2802,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             ],
         });
         const provider = makeTreeProvider([appHost]);
-        sandbox.stub(capabilities, 'isCsharpInstalled').returns(true);
+        sandbox.stub(capabilities, 'isExtensionInstalled').returns(true);
         const startDebuggingStub = sandbox.stub(vscode.debug, 'startDebugging').resolves(true);
         const warningStub = sandbox.stub(vscode.window, 'showWarningMessage');
         const resourceItem = getFirstResourceItem(provider);
@@ -2837,7 +2838,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
                 ],
             }),
         ]);
-        sandbox.stub(capabilities, 'isCsharpInstalled').returns(false);
+        sandbox.stub(capabilities, 'isExtensionInstalled').returns(false);
         const startDebuggingStub = sandbox.stub(vscode.debug, 'startDebugging').resolves(true);
         const warningStub = sandbox.stub(vscode.window, 'showWarningMessage');
 
@@ -2863,8 +2864,8 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
                 ],
             }),
         ]);
-        sandbox.stub(capabilities, 'isCsharpInstalled').returns(true);
-        sandbox.stub(debuggerExtensions, 'createAttachDebugSessionConfiguration').resolves({
+        sandbox.stub(capabilities, 'isExtensionInstalled').returns(true);
+        sandbox.stub(projectResourceAttachProvider, 'createDebugConfiguration').resolves({
             type: 'coreclr',
             request: 'attach',
             name: 'Attach debugger: API',
