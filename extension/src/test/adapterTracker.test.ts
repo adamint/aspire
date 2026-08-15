@@ -520,6 +520,34 @@ suite('Debug Adapter Tracker Tests', () => {
         disposable.dispose();
     });
 
+    test('does not treat a launch configuration restart property as an AppHost restart request', () => {
+        const restartRequested = sinon.stub().returns(true);
+        const disposable = createDebugAdapterTracker(
+            dcpServer as any,
+            'pwa-node',
+            restartRequested);
+        const factory = registerFactoryStub.lastCall.args[1];
+        const tracker = factory.createDebugAdapterTracker({
+            ...debugSession,
+            configuration: {
+                ...debugSession.configuration,
+                isApphost: true
+            }
+        });
+        const launchRequest = {
+            type: 'request',
+            seq: 1,
+            command: 'launch',
+            arguments: { restart: true }
+        };
+
+        tracker.onWillReceiveMessage(launchRequest);
+
+        sinon.assert.notCalled(restartRequested);
+        assert.strictEqual(launchRequest.arguments.restart, true);
+        disposable.dispose();
+    });
+
     test('non-telemetry output events are sent as service logs', async () => {
         const disposable = createDebugAdapterTracker(dcpServer as any, 'node');
         const factory = registerFactoryStub.lastCall.args[1];

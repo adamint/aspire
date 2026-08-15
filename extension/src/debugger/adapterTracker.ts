@@ -40,7 +40,10 @@ export function createDebugAdapterTracker(
 
             return {
                 onWillReceiveMessage: message => {
-                    if (configuration.isApphost && !appHostExitObserved && debugSessionId) {
+                    if (configuration.isApphost &&
+                        (message.command === 'disconnect' || message.command === 'terminate') &&
+                        !appHostExitObserved &&
+                        debugSessionId) {
                         if (message.arguments?.restart) {
                             const shouldSuppress = onAppHostRestartRequested?.(debugSessionId) ?? false;
                             if (shouldSuppress) {
