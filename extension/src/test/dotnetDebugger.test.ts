@@ -322,6 +322,12 @@ suite('Dotnet Debugger Extension Tests', () => {
             executable: '/usr/local/share/dotnet/dotnet',
             command: `dotnet run ${targetPath}`,
         }), false);
+        assert.strictEqual(processIdentity.isCandidate({
+            pid: 4324,
+            parentPid: 1234,
+            executable: '/usr/local/share/dotnet/dotnet',
+            command: `dotnet exec /repo/bin/Debug/net10.0/Other.dll ${targetPath}`,
+        }), false);
     });
 
     test('matches a structured framework-dependent TargetPath without accepting other dotnet children', async () => {
@@ -361,6 +367,18 @@ suite('Dotnet Debugger Extension Tests', () => {
             executable: '/usr/local/share/dotnet/dotnet',
             command: 'dotnet exec malformed-posix-command',
             commandLineArguments: ['dotnet', 'exec', `${targetPath}.bak`],
+        }), false);
+        assert.strictEqual(processIdentity.isCandidate({
+            pid: 4323,
+            parentPid: 1234,
+            executable: '/usr/local/share/dotnet/dotnet',
+            command: 'dotnet exec malformed-posix-command',
+            commandLineArguments: [
+                'dotnet',
+                'exec',
+                '/repo/bin/Debug/net10.0/Other.dll',
+                targetPath,
+            ],
         }), false);
     });
 
@@ -525,6 +543,12 @@ suite('Dotnet Debugger Extension Tests', () => {
             executable: 'C:\\repo\\bin\\Release\\net10.0\\API.EXE',
             command: 'C:\\repo\\bin\\Release\\net10.0\\API.EXE',
         }), true);
+        assert.strictEqual(processIdentity.isCandidate({
+            pid: 4325,
+            parentPid: 1234,
+            executable: 'API.EXE',
+            command: 'API.EXE',
+        }), true);
     });
 
     test('older TargetName fallback remains scoped to the selected launcher tree', async () => {
@@ -591,6 +615,49 @@ suite('Dotnet Debugger Extension Tests', () => {
             (error: unknown) => error instanceof Error
                 && error.message === 'This resource cannot be attached to a debugger.');
 
+        assert.strictEqual(resolver.resolveProcessId.called, false);
+    });
+
+    test('older TargetName fallback rejects present invalid safe metadata', async () => {
+        const dotNetService = new TestDotNetService('/repo/bin/Debug/net10.0/Api.dll', null, true);
+        dotNetService.getDotNetAttachTargetInfoStub.resolves({
+            targetPath: '/repo/bin/Debug/net10.0/Api.dll',
+            targetName: 'Api',
+            useAppHost: false,
+        });
+        const resolver = {
+            resolveProcessId: sinon.stub().resolves(4321),
+        };
+        const attachProvider = createProjectResourceAttachProvider(
+            () => dotNetService,
+            resolver as unknown as LaunchedChildProcessResolver);
+        const invalidProperties = [
+            ['project.configuration', ''],
+            ['project.targetFramework', null],
+            ['project.configuration', 42],
+        ] as const;
+
+        for (const [index, [propertyName, propertyValue]] of invalidProperties.entries()) {
+            const resourceName = `api-${index}`;
+            await assert.rejects(
+                attachProvider.createDebugConfiguration({
+                    name: resourceName,
+                    displayName: 'API',
+                    resourceType: 'Project',
+                    state: 'Running',
+                    properties: {
+                        'executable.pid': '1234',
+                        'executable.path': 'dotnet',
+                        'executable.args': null,
+                        'project.path': '/repo/api/Api.csproj',
+                        [propertyName]: propertyValue,
+                    },
+                }),
+                (error: unknown) => error instanceof Error
+                    && error.message === `Invalid launch configuration for ${resourceName}.`);
+        }
+
+        assert.strictEqual(dotNetService.getDotNetAttachTargetInfoStub.called, false);
         assert.strictEqual(resolver.resolveProcessId.called, false);
     });
 

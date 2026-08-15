@@ -648,9 +648,18 @@ function canRecognizeDotNetAttachDebuggerResource(resource: ResourceDebugResourc
 function getDotNetLaunchMetadata(
     resource: ResourceDebugResourceSnapshot,
 ): Pick<DotNetAttachDebuggerResourceInfo, 'configuration' | 'framework' | 'launchCommand' | 'useTargetNameFallback'> | undefined {
+    const properties = resource.properties;
+    const hasConfiguration = properties !== null && properties !== undefined &&
+        Object.prototype.hasOwnProperty.call(properties, projectConfigurationPropertyName);
+    const hasFramework = properties !== null && properties !== undefined &&
+        Object.prototype.hasOwnProperty.call(properties, projectTargetFrameworkPropertyName);
     const configuration = getNonEmptyStringProperty(resource, projectConfigurationPropertyName);
     const framework = getNonEmptyStringProperty(resource, projectTargetFrameworkPropertyName);
-    const properties = resource.properties;
+    if ((hasConfiguration && configuration === undefined) ||
+        (hasFramework && framework === undefined)) {
+        return undefined;
+    }
+
     const hasLaunchCommand = properties !== null && properties !== undefined &&
         Object.prototype.hasOwnProperty.call(properties, projectLaunchCommandPropertyName);
     const launchCommandValue = properties?.[projectLaunchCommandPropertyName];
@@ -664,8 +673,8 @@ function getDotNetLaunchMetadata(
         launchCommand: launchCommandValue as DotNetLaunchCommand | undefined,
         useTargetNameFallback: !hasLaunchCommand &&
             properties?.[executableArgsPropertyName] === null &&
-            configuration === undefined &&
-            framework === undefined,
+            !hasConfiguration &&
+            !hasFramework,
     };
 }
 
@@ -797,12 +806,15 @@ function getFirstDllArgumentAfterDotNetExec(command: string): string | undefined
         return undefined;
     }
 
+    const dllArgument = getFirstDllArgumentMatch(command.slice(dotNetExec[0].length));
+    return dllArgument?.[1] ?? dllArgument?.[2] ?? dllArgument?.[3];
+}
+
+function getFirstDllArgumentMatch(command: string): RegExpExecArray | null {
     // Raw process text has the shape:
     //   dotnet exec "/repo/bin/Release/net10.0/Api.dll" --flag /app/Other.dll
     // Only the first DLL token is the host target; later DLL values are application arguments.
-    const dllArgument = /(?:^|\s)(?:"([^"]+\.dll)"|'([^']+\.dll)'|(\S+\.dll))(?=$|\s)/i.exec(
-        command.slice(dotNetExec[0].length));
-    return dllArgument?.[1] ?? dllArgument?.[2] ?? dllArgument?.[3];
+    return /(?:^|\s)(?:"([^"]+\.dll)"|'([^']+\.dll)'|(\S+\.dll))(?=$|\s)/i.exec(command);
 }
 
 function doesProcessPathStemMatchTargetName(
@@ -818,8 +830,12 @@ function doesProcessPathStemMatchTargetName(
     const stem = fileName.toLowerCase().endsWith(extension)
         ? fileName.slice(0, -extension.length)
         : fileName;
-    const isWindowsPath = /^(?:[a-z]:[\\/]|\\\\)/i.test(processPath);
-    return isWindowsPath
+    // Windows CIM can omit ExecutablePath and return only Name, such as `API.EXE`, so the
+    // executable suffix must also identify Windows semantics when no path is available.
+    const isWindowsIdentity = /^(?:[a-z]:[\\/]|\\\\)/i.test(processPath) ||
+        processPath.includes('\\') ||
+        /\.exe$/i.test(fileName);
+    return isWindowsIdentity
         ? stem.toLowerCase() === targetName.toLowerCase()
         : stem === targetName;
 }
@@ -875,9 +891,8 @@ async function getCanonicalAppHostPaths(
 }
 
 function commandLineArgumentsContainTargetPath(argumentsList: readonly string[], targetPath: string): boolean {
-    const execIndex = argumentsList.indexOf('exec');
-    return execIndex >= 1 &&
-        argumentsList.slice(execIndex + 1).some(argument => areProcessPathsEqual(argument, targetPath));
+    const targetArgument = getFirstDllArgumentAfterExec(argumentsList);
+    return targetArgument !== undefined && areProcessPathsEqual(targetArgument, targetPath);
 }
 
 function commandContainsPathArgumentAfterDotNetExec(command: string, targetPath: string): boolean {
@@ -886,16 +901,22 @@ function commandContainsPathArgumentAfterDotNetExec(command: string, targetPath:
         return false;
     }
 
-    return commandContainsPathArgument(command.slice(dotNetExec[0].length), targetPath);
+    const commandAfterExec = command.slice(dotNetExec[0].length);
+    const targetPathIndex = getPathArgumentIndex(commandAfterExec, targetPath);
+    const firstDllArgumentIndex = getFirstDllArgumentMatch(commandAfterExec)?.index;
+    return targetPathIndex !== undefined &&
+        firstDllArgumentIndex !== undefined &&
+        targetPathIndex <= firstDllArgumentIndex;
 }
 
-function commandContainsPathArgument(command: string, targetPath: string): boolean {
+function getPathArgumentIndex(command: string, targetPath: string): number | undefined {
     const normalizedCommand = command.replace(/\\/g, '/');
     const normalizedTargetPath = targetPath.replace(/\\/g, '/');
     const isWindowsPath = /^[a-z]:\//i.test(normalizedCommand) || /^[a-z]:\//i.test(normalizedTargetPath);
-    return new RegExp(
+    const match = new RegExp(
         `(?:^|\\s|["'])${escapeRegularExpression(normalizedTargetPath)}(?=$|\\s|["'])`,
-        isWindowsPath ? 'i' : undefined).test(normalizedCommand);
+        isWindowsPath ? 'i' : undefined).exec(normalizedCommand);
+    return match?.index;
 }
 
 function escapeRegularExpression(value: string): string {
