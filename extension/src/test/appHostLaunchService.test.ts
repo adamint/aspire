@@ -7,9 +7,14 @@ import * as vscode from 'vscode';
 import { AspireExtendedDebugConfiguration, type AspireResourceDebugSession } from '../dcp/types';
 import { appHostLaunchReservationIdConfigKey, appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
 import { isAspireDebugConfigurationExtensionOwned } from '../debugger/AspireDebugConfigurationProviderInternal';
+import {
+    __resetLaunchFailureJournalForTests,
+    readLatestLaunchFailures,
+    type LaunchFailureRecord,
+} from '../lm/launchFailureJournal';
 import { appHostLifecycleBusy } from '../loc/strings';
 import { AppHostLaunchService, AppHostLifecycleLockTimeoutError, AppHostStopCancellationError, appHostLifecycleLockMaxHoldMs, appHostLifecycleLockWaitTimeoutMs, externalLaunchReservationTimeoutMs, type AppHostLaunchSession } from '../services/AppHostLaunchService';
-import { getAppHostIdentityKey } from '../utils/appHostIdentity';
+import { __resetAppHostIdentityRegistryForTests, getAppHostIdentityKey } from '../utils/appHostIdentity';
 import * as cliPathModule from '../utils/cliPath';
 import { __resetCommonPropertiesForTests, __setReporterForTests } from '../utils/telemetry';
 
@@ -72,6 +77,8 @@ suite('AppHostLaunchService', () => {
     let onDidTerminateDebugSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
 
     setup(() => {
+        __resetAppHostIdentityRegistryForTests();
+        __resetLaunchFailureJournalForTests();
         onDidStartDebugSessionStub = sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
             onDidStartDebugSessionCallback = callback;
             return new vscode.Disposable(() => { });
@@ -87,6 +94,8 @@ suite('AppHostLaunchService', () => {
     });
 
     teardown(() => {
+        __resetLaunchFailureJournalForTests();
+        __resetAppHostIdentityRegistryForTests();
         service.dispose();
         startDebuggingStub.restore();
         stopDebuggingStub.restore();
@@ -189,6 +198,14 @@ suite('AppHostLaunchService', () => {
 
             assert.strictEqual(resolveCliPathStub.calledOnce, true);
             assert.strictEqual(startDebuggingStub.called, false);
+            assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures('/repo/AppHost.csproj')[0]), {
+                stage: 'cliLaunch',
+                category: 'cliUnavailable',
+                controller: 'editor',
+                mode: 'deploy',
+                providerKind: 'dotnet',
+                exitCodeBucket: 'none',
+            });
         }
         finally {
             showErrorMessageStub.restore();
@@ -1398,6 +1415,14 @@ suite('AppHostLaunchService', () => {
         await assert.rejects(service.launch('/repo/AppHost.csproj', 'run', true), /did not start the Aspire run session/);
 
         assert.strictEqual(service.isLaunching('/repo/AppHost.csproj'), false);
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures('/repo/AppHost.csproj')[0]), {
+            stage: 'cliLaunch',
+            category: 'unknown',
+            controller: 'editor',
+            mode: 'run',
+            providerKind: 'dotnet',
+            exitCodeBucket: 'none',
+        });
     });
 
     test('launch reports error telemetry when startDebugging returns false', async () => {
@@ -1452,6 +1477,29 @@ suite('AppHostLaunchService', () => {
         await assert.rejects(service.launch('/repo/AppHost.csproj', 'run', true), /boom/);
 
         assert.strictEqual(service.isLaunching('/repo/AppHost.csproj'), false);
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures('/repo/AppHost.csproj')[0]), {
+            stage: 'cliLaunch',
+            category: 'unknown',
+            controller: 'editor',
+            mode: 'run',
+            providerKind: 'dotnet',
+            exitCodeBucket: 'none',
+        });
+    });
+
+    test('launch records cancellation only when startDebugging is canceled', async () => {
+        startDebuggingStub.rejects(new vscode.CancellationError());
+
+        await assert.rejects(service.launch('/repo/AppHost.csproj', 'run', false), vscode.CancellationError);
+
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures('/repo/AppHost.csproj')[0]), {
+            stage: 'cliLaunch',
+            category: 'canceled',
+            controller: 'editor',
+            mode: 'debug',
+            providerKind: 'dotnet',
+            exitCodeBucket: 'none',
+        });
     });
 
     test('launch emits one bounded result telemetry event', async () => {
@@ -1476,6 +1524,18 @@ suite('AppHostLaunchService', () => {
             __resetCommonPropertiesForTests();
         }
     });
+
+    function getFailureDetails(record: LaunchFailureRecord | undefined) {
+        assert.ok(record);
+        return {
+            stage: record.stage,
+            category: record.category,
+            controller: record.controller,
+            mode: record.mode,
+            providerKind: record.providerKind,
+            exitCodeBucket: record.exitCodeBucket,
+        };
+    }
 
     test('terminated run sessions include appHostPath and stop refresh semantics', () => {
         let terminationEvent: { appHostPath: string; command?: string; shouldRequestStopRefresh: boolean; shouldMarkAppHostStopping: boolean } | undefined;

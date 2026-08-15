@@ -28,6 +28,7 @@ import { classifyAppHostPath, classifyAppHostDirectory, type AppHostLanguage } f
 import { bucketAspireCommand } from "../utils/telemetryBuckets";
 import { getAppHostTargetVersion } from "../utils/appHostTargetVersion";
 import type { AspireDebugConsoleOutputEvent } from "../types/extensionApi";
+import { recordLaunchFailureForAppHostPath, recordSanitizedLaunchFailureForAppHostPath, type LaunchFailureMode, type LaunchFailureProviderKind, type SanitizedLaunchFailure } from "../lm/launchFailureJournal";
 import { appHostRestartSourceSessionIdConfigKey, appHostSelectionOriginConfigKey, appHostTelemetryTargetPathConfigKey } from "./AspireDebugConfigurationMetadata";
 import { AppHostParentOutputFilter } from "./session/appHostParentOutputFilter";
 import { DashboardLauncher, type DashboardBrowserType, type DashboardLauncherHost } from "./session/dashboardLauncher";
@@ -151,6 +152,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
   private _pendingCliStopWithoutRpcClient: { resolve: () => void; reject: (reason: unknown) => void } | undefined;
   private _stopCliWhenRpcClientConnects: ((client: ICliRpcClient) => void) | undefined;
   private _cliProcess: ChildProcessWithoutNullStreams | undefined;
+  private _cliSpawnErrorRecorded = false;
   private _cliTerminationTimer: ReturnType<typeof setTimeout> | undefined;
   private _cliProcessTreeTerminationAttempted = false;
   private _extensionShutdownRequested = false;
@@ -217,8 +219,19 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
     return this._session;
   }
 
+  get dashboardLaunchFailureMode(): LaunchFailureMode {
+    return getLaunchFailureMode(this.operationKind, this._appHostModeAtLaunch === 'run');
+  }
+
   notifyStateChanged(): void {
     this._onDidChangeState.fire();
+  }
+
+  recordDashboardLaunchFailure(failure: SanitizedLaunchFailure): void {
+    const appHostPath = this.resolvedAppHostPath ?? this.appHostPath;
+    if (!this.isShuttingDown && appHostPath) {
+      recordSanitizedLaunchFailureForAppHostPath(appHostPath, failure);
+    }
   }
 
   openDashboard(url: string, browserType: DashboardBrowserType): Promise<void> {
@@ -1023,7 +1036,18 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
       return partial;
     };
 
-    const cliPath = await this._terminalProvider.getAspireCliExecutablePath();
+    this._cliSpawnErrorRecorded = false;
+    let cliPath: string;
+    try {
+      cliPath = await this._terminalProvider.getAspireCliExecutablePath();
+    }
+    catch (error) {
+      this.handleCliLaunchError(error, noDebug, commandLabel);
+      disposable.dispose();
+      this.completePendingCliStopWithoutRpcClient();
+      return;
+    }
+
     if (this.isShuttingDown) {
       // CLI resolution can outlive shutdown. Spawning now would create a detached `aspire run`
       // after every teardown owner has already started or completed its cleanup.
@@ -1033,7 +1057,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
       return;
     }
 
-    this._cliProcess = spawnCliProcess(
+    const spawn = () => spawnCliProcess(
       this._terminalProvider,
       cliPath,
       args,
@@ -1045,10 +1069,24 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
           stderrBuffer = handleChunk(data, stderrBuffer, 'stderr');
         },
         errorCallback: (error) => {
-          extensionLogOutputChannel.error(`Error spawning aspire process: ${error}`);
-          vscode.window.showErrorMessage(processExceptionOccurred(error.message, commandLabel));
+          this.handleCliLaunchError(error, noDebug, commandLabel);
         },
         exitCallback: (code) => {
+          const signal = this._cliProcess?.signalCode;
+          if (!this.isShuttingDown &&
+            !this._startupCompleted &&
+            !this._cliSpawnErrorRecorded &&
+            (code !== 0 || signal !== null)) {
+            this.recordLaunchFailure({
+              stage: 'cliLaunch',
+              category: 'processExited',
+              controller: 'cli',
+              mode: getLaunchFailureMode(this.operationKind, noDebug),
+              providerKind: getAppHostProviderKind(this.resolvedAppHostPath ?? this.appHostPath),
+              exitCode: code,
+              signal,
+            });
+          }
           // A detached POSIX leader's descendants can keep the process group alive after the
           // leader exits, and the group id can be reused later, so collect that group immediately.
           // Windows taskkill needs the target PID to still identify a live process tree; after the
@@ -1089,6 +1127,15 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
         createProcessGroup: true,
       },
     );
+    try {
+      this._cliProcess = spawn();
+    }
+    catch (error) {
+      this.handleCliLaunchError(error, noDebug, commandLabel);
+      disposable.dispose();
+      this.completePendingCliStopWithoutRpcClient();
+      return;
+    }
 
     this._disposables.push({
       dispose: () => {
@@ -1109,6 +1156,32 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
       // ConEmu/iTerm2 progress-reporting OSC sequence (`OSC 9;4;<state>;<value> ST`).
       return /^\u001b\]9;4;\d+\u001b\\$/.test(line.trim());
     }
+  }
+
+  private recordLaunchFailure(input: Parameters<typeof recordLaunchFailureForAppHostPath>[1]): boolean {
+    const appHostPath = this.resolvedAppHostPath ?? this.appHostPath;
+    if (!appHostPath) {
+      return false;
+    }
+
+    recordLaunchFailureForAppHostPath(appHostPath, input);
+    return true;
+  }
+
+  private handleCliLaunchError(error: unknown, noDebug: boolean, commandLabel: string): void {
+    if (!this.isShuttingDown) {
+      this._cliSpawnErrorRecorded = this.recordLaunchFailure({
+        stage: 'cliLaunch',
+        controller: 'cli',
+        mode: getLaunchFailureMode(this.operationKind, noDebug),
+        providerKind: getAppHostProviderKind(this.resolvedAppHostPath ?? this.appHostPath),
+        error,
+      });
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    extensionLogOutputChannel.error(`Error spawning aspire process: ${String(error)}`);
+    void vscode.window.showErrorMessage(processExceptionOccurred(message, commandLabel));
   }
 
   createDebugAdapterTrackerCore(debugAdapter: string, onAppHostRestartRequested?: AppHostRestartHandler, onAppHostOutput?: AppHostOutputHandler) {
@@ -1235,6 +1308,19 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
           this._appHostStopped = true;
           this._resourceDebugSessions = this._resourceDebugSessions.filter(resourceSession => resourceSession.id !== session.id);
 
+          if (this.operationKind === 'run' &&
+            !this._startupCompleted &&
+            !this.isShuttingDown &&
+            !this._appHostRestartRequested) {
+            this.recordLaunchFailure({
+              stage: 'dcpStartup',
+              category: 'processExited',
+              controller: 'editor',
+              mode: getLaunchFailureMode(this.operationKind, !debug),
+              providerKind: getAppHostProviderKind(projectFile),
+            });
+          }
+
           if (!this._appHostRestartRequested) {
             this.sendMessageWithEmoji("ℹ️", applyTextStyle(appHostSessionTerminated, AnsiColors.Yellow));
           }
@@ -1281,6 +1367,17 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
       this._disposables.push(disposable);
     }
     catch (err) {
+      if (!this.isShuttingDown) {
+        const buildFailure = isErrorWithStreamedDebugConsoleOutput(err);
+        this.recordLaunchFailure({
+          stage: buildFailure ? 'build' : 'debugSession',
+          category: buildFailure ? 'buildFailed' : undefined,
+          controller: 'editor',
+          mode: getLaunchFailureMode(this.operationKind, !debug),
+          providerKind: getAppHostProviderKind(projectFile),
+          error: err,
+        });
+      }
       const errorMessage = err instanceof Error ? err.message : String(err);
       const errorDetails = err instanceof Error ? (err.stack ?? err.message) : String(err);
       extensionLogOutputChannel.error(`Error starting AppHost debug session: ${errorDetails}`);
@@ -1466,6 +1563,15 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
         disposable.dispose();
         cleanupRun(debugConfig.runId);
         extensionLogOutputChannel.error(`Failed to start debug session: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+        if (!this.isShuttingDown) {
+          this.recordLaunchFailure({
+            stage: 'debugSession',
+            controller: 'editor',
+            mode: debugConfig.noDebug === true ? 'run' : 'debug',
+            providerKind: debugConfig.type,
+            error,
+          });
+        }
         resolved = true;
         resolve(undefined);
         return;
@@ -1474,6 +1580,15 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
       if (!started) {
         disposable.dispose();
         cleanupRun(debugConfig.runId);
+        if (!this.isShuttingDown) {
+          this.recordLaunchFailure({
+            stage: 'debugSession',
+            category: 'unknown',
+            controller: 'editor',
+            mode: debugConfig.noDebug === true ? 'run' : 'debug',
+            providerKind: debugConfig.type,
+          });
+        }
         resolved = true;
         resolve(undefined);
       }
@@ -1482,6 +1597,15 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
         if (!resolved) {
           disposable.dispose();
           cleanupRun(debugConfig.runId);
+          if (!this.isShuttingDown) {
+            this.recordLaunchFailure({
+              stage: 'debugSession',
+              controller: 'editor',
+              mode: debugConfig.noDebug === true ? 'run' : 'debug',
+              providerKind: debugConfig.type,
+              timedOut: true,
+            });
+          }
           resolved = true;
           resolve(undefined);
         }
@@ -1707,6 +1831,30 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
     this._startupCompleted = true;
     this._onDidChangeState.fire();
     extensionLogOutputChannel.info(`AppHost startup completed and dashboard is running.`);
+  }
+}
+
+function getLaunchFailureMode(operationKind: AspireOperationKind, noDebug: boolean): LaunchFailureMode {
+  if (operationKind === 'deploy' || operationKind === 'publish') {
+    return operationKind;
+  }
+  if (operationKind === 'run') {
+    return noDebug ? 'run' : 'debug';
+  }
+
+  return 'other';
+}
+
+function getAppHostProviderKind(appHostPath: string | undefined): LaunchFailureProviderKind {
+  switch (classifyAppHostPath(appHostPath)) {
+    case 'csharp':
+      return 'dotnet';
+    case 'typescript':
+      return 'node';
+    case 'rust':
+      return 'rust';
+    default:
+      return 'other';
   }
 }
 

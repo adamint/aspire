@@ -3,6 +3,7 @@ import os from "os";
 import { extensionLogOutputChannel } from "../../utils/logging";
 import { aspireDashboard, debugSessionStartTimedOut } from "../../loc/strings";
 import { describeStopFailure, startStop, stopSessionInBackground } from "./stopHelpers";
+import { normalizeLaunchFailure, type LaunchFailureMode, type SanitizedLaunchFailure } from "../../lm/launchFailureJournal";
 
 export type DashboardLaunchBehavior = 'none' | 'notification' | DashboardBrowserType;
 export type DashboardBrowserType = 'openExternalBrowser' | 'integratedBrowser' | 'debugChrome' | 'debugEdge' | 'debugFirefox';
@@ -18,7 +19,9 @@ export interface DashboardLauncherHost {
   readonly isShuttingDown: boolean;
   readonly isStopAttemptInProgress: boolean;
   readonly isExtensionShutdownRequested: boolean;
+  readonly dashboardLaunchFailureMode: LaunchFailureMode;
   notifyStateChanged(): void;
+  recordDashboardLaunchFailure(failure: SanitizedLaunchFailure): void;
   stopWithinBudget(operation: () => Thenable<void>, sessionName: string, deadline: number, onTimeout?: () => void): Promise<void>;
   waitWithinBudget(stop: PromiseLike<void>, sessionName: string, deadline: number, onTimeout?: () => void, timeoutMessage?: (sessionName: string, seconds: number) => string): Promise<void>;
 }
@@ -87,13 +90,13 @@ export class DashboardLauncher implements vscode.Disposable {
         break;
 
       case 'integratedBrowser':
-        await vscode.commands.executeCommand('simpleBrowser.show', url);
+        await this.openDashboardCore(() => vscode.commands.executeCommand('simpleBrowser.show', url));
         break;
 
       case 'openExternalBrowser':
       default:
         // Use VS Code's default external browser handling
-        await vscode.env.openExternal(vscode.Uri.parse(url));
+        await this.openDashboardCore(() => vscode.env.openExternal(vscode.Uri.parse(url)));
         break;
     }
   }
@@ -139,15 +142,28 @@ export class DashboardLauncher implements vscode.Disposable {
     });
 
     let didStart: boolean;
-    const start = Promise.resolve(vscode.debug.startDebugging(
-      undefined,
-      debugConfig,
-      this._host.parentSession));
+    let start: Promise<boolean>;
+    try {
+      start = Promise.resolve(vscode.debug.startDebugging(
+        undefined,
+        debugConfig,
+        this._host.parentSession));
+    }
+    catch (error) {
+      disposable.dispose();
+      this.recordDashboardLaunchFailure(error);
+      throw error;
+    }
     const completion = start.then(() => undefined, () => undefined);
     this._pendingDashboardDebugSessionStarts.add(completion);
     try {
       // Start as a child debug session so it is stopped alongside this session in `dispose`.
       didStart = await start;
+    }
+    catch (error) {
+      disposable.dispose();
+      this.recordDashboardLaunchFailure(error);
+      throw error;
     }
     finally {
       this._pendingDashboardDebugSessionStarts.delete(completion);
@@ -156,6 +172,7 @@ export class DashboardLauncher implements vscode.Disposable {
     if (!didStart) {
       disposable.dispose();
       extensionLogOutputChannel.warn(`Failed to start debug browser (${debugType}), falling back to default browser`);
+      this.recordDashboardLaunchFailure();
 
       // Falling back after disposal would pop an untracked browser window open during
       // teardown, long after the user stopped the session.
@@ -163,8 +180,33 @@ export class DashboardLauncher implements vscode.Disposable {
         return;
       }
 
-      await vscode.env.openExternal(vscode.Uri.parse(url));
+      await this.openDashboardCore(() => vscode.env.openExternal(vscode.Uri.parse(url)));
     }
+  }
+
+  private async openDashboardCore(operation: () => Thenable<unknown>): Promise<void> {
+    try {
+      await operation();
+    }
+    catch (error) {
+      this.recordDashboardLaunchFailure(error);
+      throw error;
+    }
+  }
+
+  private recordDashboardLaunchFailure(error?: unknown): void {
+    if (this._host.isShuttingDown) {
+      return;
+    }
+
+    this._host.recordDashboardLaunchFailure(normalizeLaunchFailure({
+      stage: 'dashboard',
+      category: error === undefined ? 'unknown' : undefined,
+      controller: 'editor',
+      mode: this._host.dashboardLaunchFailureMode,
+      providerKind: 'browser',
+      error,
+    }));
   }
 
   /**

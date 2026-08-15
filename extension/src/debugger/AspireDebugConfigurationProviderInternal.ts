@@ -5,6 +5,8 @@ import type { AspireExtendedDebugConfiguration } from '../dcp/types';
 const extensionOwnedConfigurationMarker = `__aspireAppHostLaunchServiceConfiguration_${randomUUID()}`;
 const extensionOwnedConfigurationValue = randomUUID();
 const externalLaunchReservationMarker = `__aspireExternalLaunchReservation_${randomUUID()}`;
+const recordedDiscoveryFailureMarker = `__aspireRecordedDiscoveryFailure_${randomUUID()}`;
+const recordedDiscoveryFailureValue = randomUUID();
 
 interface ExternalLaunchReservationMarker {
     reservationId: string;
@@ -46,9 +48,20 @@ export function getAspireDebugConfigurationExternalLaunchReservation(configurati
         : undefined;
 }
 
+export function tryMarkAspireDebugConfigurationDiscoveryFailureRecorded(configuration: vscode.DebugConfiguration): boolean {
+    const configRecord = configuration as Record<string, unknown>;
+    if (configRecord[recordedDiscoveryFailureMarker] === recordedDiscoveryFailureValue) {
+        return false;
+    }
+
+    configRecord[recordedDiscoveryFailureMarker] = recordedDiscoveryFailureValue;
+    return true;
+}
+
 export function stripAspireDebugConfigurationProviderInternalProperties(configuration: vscode.DebugConfiguration): void {
     const configRecord = configuration as Record<string, unknown>;
     delete configRecord[extensionOwnedConfigurationMarker];
     delete configRecord[externalLaunchReservationMarker];
+    delete configRecord[recordedDiscoveryFailureMarker];
     delete configRecord.launchedByExtension;
 }

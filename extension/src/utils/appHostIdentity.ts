@@ -6,6 +6,11 @@ import { isAppHostSourceFile } from './paths/comparison';
 /** Whether two paths name the same AppHost. */
 export type AppHostIdentityRelation = 'same' | 'different' | 'ambiguous';
 
+declare const opaqueAppHostIdentityBrand: unique symbol;
+
+/** Opaque, extension-window-scoped identity for one lexical AppHost target. */
+export type OpaqueAppHostIdentity = string & { readonly [opaqueAppHostIdentityBrand]: true };
+
 export interface AppHostIdentityKeyInfo {
     readonly key: string;
     readonly pathKeys: readonly string[];
@@ -13,6 +18,8 @@ export interface AppHostIdentityKeyInfo {
 
 const appHostProjectFileExtensions = ['.csproj'];
 const appHostAliasKeySuffix = '\u0000apphost';
+const opaqueIdentityRegistry = new Map<string, OpaqueAppHostIdentity>();
+let nextOpaqueIdentity = 0;
 
 export function getAppHostPathComparisonKey(value: string): string {
     return canonicalize(path.normalize(path.resolve(value)));
@@ -73,10 +80,14 @@ export function getAppHostIdentityKey(appHostPath: string): string {
  * lexical directory proves there is exactly one candidate of each shape.
  */
 export function getLexicalAppHostIdentityKey(appHostPath: string): string {
+    return getLexicalAppHostIdentityKeyInfo(appHostPath).key;
+}
+
+function getLexicalAppHostIdentityKeyInfo(appHostPath: string): AppHostIdentityKeyInfo {
     const resolvedPath = path.normalize(path.resolve(appHostPath));
     const resolvedKey = getLexicalPathComparisonKey(resolvedPath);
     if (!isAppHostProjectFile(resolvedPath) && !isAppHostSourceFile(resolvedPath)) {
-        return resolvedKey;
+        return { key: resolvedKey, pathKeys: [resolvedKey] };
     }
 
     const directory = path.dirname(resolvedPath);
@@ -87,9 +98,50 @@ export function getLexicalAppHostIdentityKey(appHostPath: string): string {
         [...shapes.projectFiles, ...shapes.sourceFiles]
             .some(candidate => getLexicalPathComparisonKey(candidate) === resolvedKey);
 
-    return isAliasedPair
-        ? `${getLexicalPathComparisonKey(directory)}${appHostAliasKeySuffix}`
-        : resolvedKey;
+    if (!isAliasedPair) {
+        return { key: resolvedKey, pathKeys: [resolvedKey] };
+    }
+
+    return {
+        key: `${getLexicalPathComparisonKey(directory)}${appHostAliasKeySuffix}`,
+        pathKeys: [
+            getLexicalPathComparisonKey(shapes.projectFiles[0]),
+            getLexicalPathComparisonKey(shapes.sourceFiles[0]),
+        ],
+    };
+}
+
+/**
+ * Returns the shared window-scoped identity for an absolute AppHost path.
+ *
+ * The registry owns the path-to-identity relationship so privacy-sensitive consumers can
+ * retain only the opaque value. Lexical keys intentionally keep a launched symlink bound
+ * to the target the user selected even if the link is retargeted later.
+ */
+export function getOrCreateIdentityForAbsolutePath(appHostPath: string): OpaqueAppHostIdentity {
+    const keyInfo = getLexicalAppHostIdentityKeyInfo(appHostPath);
+    let identity = opaqueIdentityRegistry.get(keyInfo.key);
+    if (!identity) {
+        for (const pathKey of keyInfo.pathKeys) {
+            identity = opaqueIdentityRegistry.get(pathKey);
+            if (identity) {
+                break;
+            }
+        }
+    }
+
+    identity ??= `apphost-${++nextOpaqueIdentity}` as OpaqueAppHostIdentity;
+    opaqueIdentityRegistry.set(keyInfo.key, identity);
+    for (const pathKey of keyInfo.pathKeys) {
+        opaqueIdentityRegistry.set(pathKey, identity);
+    }
+
+    return identity;
+}
+
+export function __resetAppHostIdentityRegistryForTests(): void {
+    opaqueIdentityRegistry.clear();
+    nextOpaqueIdentity = 0;
 }
 
 export function getAppHostIdentityKeyInfo(appHostPath: string): AppHostIdentityKeyInfo {

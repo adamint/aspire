@@ -1,0 +1,317 @@
+import { getOrCreateIdentityForAbsolutePath, type OpaqueAppHostIdentity } from '../utils/appHostIdentity';
+import { isCommandCancellation } from '../utils/telemetry';
+
+export type LaunchFailureStage =
+    | 'discovery'
+    | 'validation'
+    | 'cliLaunch'
+    | 'build'
+    | 'dcpStartup'
+    | 'debugSession'
+    | 'dashboard';
+
+export type LaunchFailureCategory =
+    | 'invalidConfiguration'
+    | 'missingDependency'
+    | 'cliUnavailable'
+    | 'buildFailed'
+    | 'processExited'
+    | 'timeout'
+    | 'portConflict'
+    | 'permissionDenied'
+    | 'unsupported'
+    | 'canceled'
+    | 'unknown';
+
+export type LaunchFailureController = 'editor' | 'cli';
+export type LaunchFailureMode = 'run' | 'debug' | 'deploy' | 'publish' | 'other';
+export type LaunchFailureProviderKind =
+    | 'dotnet'
+    | 'node'
+    | 'python'
+    | 'java'
+    | 'go'
+    | 'rust'
+    | 'maui'
+    | 'azureFunctions'
+    | 'browser'
+    | 'bun'
+    | 'other';
+export type LaunchFailureExitCodeBucket = 'none' | 'zero' | 'one' | 'signal' | 'other';
+
+export interface SanitizedLaunchFailure {
+    readonly stage: LaunchFailureStage;
+    readonly category: LaunchFailureCategory;
+    readonly controller: LaunchFailureController;
+    readonly mode: LaunchFailureMode;
+    readonly providerKind: LaunchFailureProviderKind;
+    readonly exitCodeBucket: LaunchFailureExitCodeBucket;
+}
+
+export interface LaunchFailureRecord extends SanitizedLaunchFailure {
+    readonly appHostIdentity: OpaqueAppHostIdentity;
+    readonly recordedAt: number;
+    readonly sequence: number;
+}
+
+export interface LaunchFailureInput {
+    readonly stage: LaunchFailureStage;
+    readonly category?: LaunchFailureCategory | unknown;
+    readonly controller: LaunchFailureController;
+    readonly mode?: LaunchFailureMode | unknown;
+    readonly providerKind?: LaunchFailureProviderKind | string | unknown;
+    readonly exitCode?: number | null | unknown;
+    readonly signal?: string | null | unknown;
+    readonly error?: unknown;
+    /**
+     * Set only when the boundary owns the timeout. A CancellationError without this
+     * marker remains a cancellation rather than being guessed to be a timeout.
+     */
+    readonly timedOut?: boolean;
+}
+
+export interface LaunchFailureJournalClock {
+    now(): number;
+}
+
+const launchFailureTtlMs = 30 * 60 * 1_000;
+const maxFailuresPerAppHost = 5;
+const maxFailuresGlobally = 50;
+const opaqueAppHostIdentityPattern = /^apphost-[1-9]\d*$/;
+
+const stages = new Set<LaunchFailureStage>([
+    'discovery',
+    'validation',
+    'cliLaunch',
+    'build',
+    'dcpStartup',
+    'debugSession',
+    'dashboard',
+]);
+const categories = new Set<LaunchFailureCategory>([
+    'invalidConfiguration',
+    'missingDependency',
+    'cliUnavailable',
+    'buildFailed',
+    'processExited',
+    'timeout',
+    'portConflict',
+    'permissionDenied',
+    'unsupported',
+    'canceled',
+    'unknown',
+]);
+const controllers = new Set<LaunchFailureController>(['editor', 'cli']);
+const modes = new Set<LaunchFailureMode>(['run', 'debug', 'deploy', 'publish', 'other']);
+const exitCodeBuckets = new Set<LaunchFailureExitCodeBucket>(['none', 'zero', 'one', 'signal', 'other']);
+
+const providerKindByAlias = new Map<string, LaunchFailureProviderKind>([
+    ['dotnet', 'dotnet'],
+    ['project', 'dotnet'],
+    ['coreclr', 'dotnet'],
+    ['clr', 'dotnet'],
+    ['node', 'node'],
+    ['pwa-node', 'node'],
+    ['python', 'python'],
+    ['debugpy', 'python'],
+    ['java', 'java'],
+    ['go', 'go'],
+    ['rust', 'rust'],
+    ['lldb', 'rust'],
+    ['cppdbg', 'rust'],
+    ['cppvsdbg', 'rust'],
+    ['maui', 'maui'],
+    ['azure-functions', 'azureFunctions'],
+    ['azurefunctions', 'azureFunctions'],
+    ['browser', 'browser'],
+    ['pwa-chrome', 'browser'],
+    ['pwa-msedge', 'browser'],
+    ['firefox', 'browser'],
+    ['bun', 'bun'],
+    ['other', 'other'],
+]);
+
+/**
+ * Projects transient failure context into a newly allocated, finite record.
+ *
+ * Raw errors are inspected only for stable names/codes and cancellation identity. No
+ * message, stack, output, path, URL, arguments, environment, or configuration object is
+ * copied into the returned value.
+ */
+export function normalizeLaunchFailure(input: LaunchFailureInput): SanitizedLaunchFailure {
+    return {
+        stage: stages.has(input.stage) ? input.stage : 'debugSession',
+        category: normalizeCategory(input),
+        controller: controllers.has(input.controller) ? input.controller : 'editor',
+        mode: normalizeMode(input.mode),
+        providerKind: normalizeProviderKind(input.providerKind),
+        exitCodeBucket: normalizeExitCodeBucket(input.exitCode, input.signal),
+    };
+}
+
+export class LaunchFailureJournal {
+    private readonly _records: LaunchFailureRecord[] = [];
+    private _nextSequence = 0;
+
+    constructor(private readonly _clock: LaunchFailureJournalClock = { now: Date.now }) {
+    }
+
+    record(appHostIdentity: OpaqueAppHostIdentity, failure: SanitizedLaunchFailure): LaunchFailureRecord {
+        if (!opaqueAppHostIdentityPattern.test(appHostIdentity)) {
+            throw new TypeError('Launch failure journal requires an opaque AppHost identity.');
+        }
+
+        this.pruneExpired();
+        const record: LaunchFailureRecord = {
+            appHostIdentity,
+            stage: stages.has(failure.stage) ? failure.stage : 'debugSession',
+            category: categories.has(failure.category) ? failure.category : 'unknown',
+            controller: controllers.has(failure.controller) ? failure.controller : 'editor',
+            mode: normalizeMode(failure.mode),
+            providerKind: normalizeProviderKind(failure.providerKind),
+            exitCodeBucket: exitCodeBuckets.has(failure.exitCodeBucket) ? failure.exitCodeBucket : 'none',
+            recordedAt: this._clock.now(),
+            sequence: ++this._nextSequence,
+        };
+        this._records.push(record);
+
+        const appHostRecords = this._records.filter(candidate => candidate.appHostIdentity === appHostIdentity);
+        if (appHostRecords.length > maxFailuresPerAppHost) {
+            const oldest = appHostRecords[0];
+            this._records.splice(this._records.indexOf(oldest), 1);
+        }
+
+        while (this._records.length > maxFailuresGlobally) {
+            this._records.shift();
+        }
+
+        return { ...record };
+    }
+
+    readLatest(appHostIdentity?: OpaqueAppHostIdentity): readonly LaunchFailureRecord[] {
+        this.pruneExpired();
+        const records = appHostIdentity
+            ? this._records.filter(record => record.appHostIdentity === appHostIdentity)
+            : this._records;
+
+        return records.slice().reverse().map(record => ({ ...record }));
+    }
+
+    clear(): void {
+        this._records.splice(0);
+        this._nextSequence = 0;
+    }
+
+    private pruneExpired(): void {
+        const oldestAllowed = this._clock.now() - launchFailureTtlMs;
+        let expired = 0;
+        while (expired < this._records.length && this._records[expired].recordedAt <= oldestAllowed) {
+            expired++;
+        }
+
+        if (expired > 0) {
+            this._records.splice(0, expired);
+        }
+    }
+}
+
+const defaultLaunchFailureJournal = new LaunchFailureJournal();
+
+export function recordLaunchFailureForAppHostPath(appHostPath: string, input: LaunchFailureInput): LaunchFailureRecord {
+    return defaultLaunchFailureJournal.record(
+        getOrCreateIdentityForAbsolutePath(appHostPath),
+        normalizeLaunchFailure(input));
+}
+
+export function recordSanitizedLaunchFailureForAppHostPath(appHostPath: string, failure: SanitizedLaunchFailure): LaunchFailureRecord {
+    return defaultLaunchFailureJournal.record(getOrCreateIdentityForAbsolutePath(appHostPath), failure);
+}
+
+export function readLatestLaunchFailures(appHostPath?: string): readonly LaunchFailureRecord[] {
+    const identity = appHostPath ? getOrCreateIdentityForAbsolutePath(appHostPath) : undefined;
+    return defaultLaunchFailureJournal.readLatest(identity);
+}
+
+export function __resetLaunchFailureJournalForTests(): void {
+    defaultLaunchFailureJournal.clear();
+}
+
+function normalizeCategory(input: LaunchFailureInput): LaunchFailureCategory {
+    if (categories.has(input.category as LaunchFailureCategory)) {
+        return input.category as LaunchFailureCategory;
+    }
+
+    if (input.timedOut === true) {
+        return 'timeout';
+    }
+
+    if (isCommandCancellation(input.error)) {
+        return 'canceled';
+    }
+
+    const identifiers = getErrorIdentifiers(input.error);
+    if (identifiers.some(identifier => identifier === 'EADDRINUSE')) {
+        return 'portConflict';
+    }
+    if (identifiers.some(identifier => identifier === 'EACCES' || identifier === 'EPERM')) {
+        return 'permissionDenied';
+    }
+    if (identifiers.some(identifier =>
+        identifier === 'ENOENT' ||
+        identifier === 'MODULE_NOT_FOUND' ||
+        identifier === 'ERR_MODULE_NOT_FOUND')) {
+        return 'missingDependency';
+    }
+    if (identifiers.some(identifier =>
+        identifier === 'UnsupportedError' ||
+        identifier === 'NotSupportedError' ||
+        identifier === 'ERR_UNSUPPORTED_OPERATION')) {
+        return 'unsupported';
+    }
+
+    return 'unknown';
+}
+
+function normalizeMode(mode: LaunchFailureInput['mode']): LaunchFailureMode {
+    return modes.has(mode as LaunchFailureMode) ? mode as LaunchFailureMode : 'other';
+}
+
+function normalizeProviderKind(providerKind: LaunchFailureInput['providerKind']): LaunchFailureProviderKind {
+    return typeof providerKind === 'string'
+        ? providerKindByAlias.get(providerKind.toLowerCase()) ?? 'other'
+        : 'other';
+}
+
+function normalizeExitCodeBucket(exitCode: LaunchFailureInput['exitCode'], signal: LaunchFailureInput['signal']): LaunchFailureExitCodeBucket {
+    if (typeof signal === 'string' && signal.length > 0) {
+        return 'signal';
+    }
+    if (exitCode === undefined || exitCode === null) {
+        return 'none';
+    }
+    if (exitCode === 0) {
+        return 'zero';
+    }
+    if (exitCode === 1) {
+        return 'one';
+    }
+
+    return 'other';
+}
+
+function getErrorIdentifiers(error: unknown): readonly string[] {
+    if (!error || typeof error !== 'object') {
+        return [];
+    }
+
+    const candidate = error as { code?: unknown; name?: unknown };
+    const identifiers: string[] = [];
+    if (typeof candidate.code === 'string') {
+        identifiers.push(candidate.code);
+    }
+    if (typeof candidate.name === 'string') {
+        identifiers.push(candidate.name);
+    }
+
+    return identifiers;
+}

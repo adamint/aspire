@@ -1,7 +1,9 @@
 import * as vscode from 'vscode';
 import { AspireCommandType, AspireExtendedDebugConfiguration, type AspireResourceDebugSession } from '../dcp/types';
 import { startDebuggingDeclined } from '../loc/strings';
+import { recordLaunchFailureForAppHostPath, type LaunchFailureCategory, type LaunchFailureMode, type LaunchFailureProviderKind } from '../lm/launchFailureJournal';
 import { compareAppHostIdentity, getAppHostIdentityKeyInfo, isAppHostPathWithinDirectory, type AppHostIdentityKeyInfo, type AppHostIdentityRelation } from '../utils/appHostIdentity';
+import { classifyAppHostPath } from '../utils/appHostLanguage';
 import { classifyError, isCommandCancellation, sendTelemetryEvent, type EventProperties } from '../utils/telemetry';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
@@ -713,9 +715,11 @@ export class AppHostLaunchService implements vscode.Disposable {
             return;
         }
 
+        let failureCategory: LaunchFailureCategory | undefined;
         try {
             const cliAvailability = await checkCliAvailableOrRedirect('debug_gate');
             if (!cliAvailability.available) {
+                failureCategory = 'cliUnavailable';
                 throw new vscode.CancellationError();
             }
             throwIfCancelled(token);
@@ -741,6 +745,14 @@ export class AppHostLaunchService implements vscode.Disposable {
         } catch (err) {
             this._pendingRunPathByToken.delete(launchToken);
             this.clearMatchingLaunching(appHostPath, reservationId);
+            recordLaunchFailureForAppHostPath(appHostPath, {
+                stage: 'cliLaunch',
+                category: failureCategory,
+                controller: 'editor',
+                mode: getLaunchFailureMode(command, noDebug),
+                providerKind: getAppHostProviderKind(appHostPath),
+                error: err,
+            });
             const canceled = isCommandCancellation(err);
             const properties: EventProperties<'aspire/vscode/apphost/launch/result'> = {
                 ...telemetryProperties,
@@ -768,6 +780,30 @@ export class AppHostLaunchService implements vscode.Disposable {
         }
 
         return launchToken;
+    }
+}
+
+function getLaunchFailureMode(command: AspireCommandType, noDebug: boolean): LaunchFailureMode {
+    if (command === 'deploy' || command === 'publish') {
+        return command;
+    }
+    if (command === 'run') {
+        return noDebug ? 'run' : 'debug';
+    }
+
+    return 'other';
+}
+
+function getAppHostProviderKind(appHostPath: string): LaunchFailureProviderKind {
+    switch (classifyAppHostPath(appHostPath)) {
+        case 'csharp':
+            return 'dotnet';
+        case 'typescript':
+            return 'node';
+        case 'rust':
+            return 'rust';
+        default:
+            return 'other';
     }
 }
 

@@ -2,7 +2,11 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 
 import { extensionLogOutputChannel } from '../utils/logging';
-import { getLexicalAppHostIdentityKey, isAppHostPathWithinDirectory } from '../utils/appHostIdentity';
+import {
+    getOrCreateIdentityForAbsolutePath,
+    isAppHostPathWithinDirectory,
+    type OpaqueAppHostIdentity,
+} from '../utils/appHostIdentity';
 import { isCommandCancellation } from '../utils/telemetry';
 import { type AppHostLifecycleDiscoveryService } from './appHostLifecycleToolContracts';
 
@@ -36,9 +40,7 @@ const maxReportedKnownAppHosts = 32;
  */
 const identityChangingCharacters = /[\u0000-\u001F\u007F-\u009F]|\p{Cf}/u;
 
-declare const appHostTargetIdentityBrand: unique symbol;
-
-export type AppHostTargetIdentity = string & { readonly [appHostTargetIdentityBrand]: true };
+export type AppHostTargetIdentity = OpaqueAppHostIdentity;
 
 /**
  * One entry of the AppHost registry, projected into the form the editor-assistance
@@ -86,9 +88,6 @@ export type SafeAppHostTargetResolution =
  * launch pipeline. Whatever resolves is one of Aspire's own enumerated candidates.
  */
 export class SafeAppHostTargetResolver {
-    private readonly _identityRegistry = new Map<string, AppHostTargetIdentity>();
-    private _nextIdentity = 0;
-
     constructor(
         private readonly _discoveryService: AppHostLifecycleDiscoveryService,
         private readonly _toSelectorKey: (value: string) => string = toSelectorKey) {
@@ -101,7 +100,7 @@ export class SafeAppHostTargetResolver {
      * retarget cannot move an active session to another list item.
      */
     getIdentityForAppHostPath(appHostPath: string): AppHostTargetIdentity {
-        return this.getOrCreateIdentity(getLexicalAppHostIdentityKey(appHostPath));
+        return getOrCreateIdentityForAbsolutePath(appHostPath);
     }
 
     /**
@@ -244,16 +243,6 @@ export class SafeAppHostTargetResolver {
             target.displayPath.length <= maxConfirmationPathLength);
     }
 
-    private getOrCreateIdentity(identityKey: string): AppHostTargetIdentity {
-        const existing = this._identityRegistry.get(identityKey);
-        if (existing) {
-            return existing;
-        }
-
-        const created = `apphost-${++this._nextIdentity}` as AppHostTargetIdentity;
-        this._identityRegistry.set(identityKey, created);
-        return created;
-    }
 }
 
 function createWorkspaceFolderQualifiers(

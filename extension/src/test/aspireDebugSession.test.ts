@@ -13,9 +13,15 @@ import { AspireDebugSession, buildAspireCommandArgs, getLoggableDebugConfigurati
 import { extensionLogOutputChannel } from '../utils/logging';
 import { appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
 import { AspireResourceExtendedDebugConfiguration, RustLaunchConfiguration } from '../dcp/types';
+import {
+    __resetLaunchFailureJournalForTests,
+    readLatestLaunchFailures,
+    type LaunchFailureRecord,
+} from '../lm/launchFailureJournal';
 import { __resetCommonPropertiesForTests, __setReporterForTests } from '../utils/telemetry';
 import { aspireDashboard, debugSessionStopTimedOut } from '../loc/strings';
 import { registerRunCleanup } from '../debugger/runCleanupRegistry';
+import { __resetAppHostIdentityRegistryForTests } from '../utils/appHostIdentity';
 
 interface RecordedEvent {
     name: string;
@@ -59,7 +65,14 @@ suite('AspireDebugSession tests', () => {
         return dir;
     }
 
+    setup(() => {
+        __resetAppHostIdentityRegistryForTests();
+        __resetLaunchFailureJournalForTests();
+    });
+
     teardown(() => {
+        __resetLaunchFailureJournalForTests();
+        __resetAppHostIdentityRegistryForTests();
         sinon.restore();
         __resetCommonPropertiesForTests();
         for (const dir of tempDirs) {
@@ -156,6 +169,150 @@ suite('AspireDebugSession tests', () => {
         finally {
             spawnStub.restore();
         }
+    });
+
+    test('records a sanitized CLI spawn failure for the owning AppHost', async () => {
+        const appHostPath = join(makeTempDir(), 'AppHost.csproj');
+        const cliProcess = createFakeCliProcess(4330);
+        const spawnStub = sinon.stub(cliModule, 'spawnCliProcess').returns(cliProcess);
+        sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined);
+        const aspireDebugSession = createSessionForSpawn();
+        aspireDebugSession.configuration = {
+            type: 'aspire',
+            request: 'launch',
+            name: 'Aspire',
+            program: appHostPath,
+            command: 'run',
+            noDebug: false,
+        };
+        const rawError = Object.assign(new Error('raw-spawn-message'), {
+            code: 'ENOENT',
+            path: '/private/raw-cli-path',
+            token: 'raw-cli-token',
+        });
+
+        await aspireDebugSession.spawnAspireCommand(['run'], dirname(appHostPath), false, 'aspire run');
+        spawnStub.firstCall.args[3]?.errorCallback?.(rawError);
+
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+            stage: 'cliLaunch',
+            category: 'missingDependency',
+            controller: 'cli',
+            mode: 'debug',
+            providerKind: 'dotnet',
+            exitCodeBucket: 'none',
+        });
+        const serialized = JSON.stringify(readLatestLaunchFailures(appHostPath));
+        assert.strictEqual(serialized.includes(rawError.message), false);
+        assert.strictEqual(serialized.includes(rawError.path), false);
+        assert.strictEqual(serialized.includes(rawError.token), false);
+    });
+
+    test('records a sanitized CLI executable resolution failure for the owning AppHost', async () => {
+        const appHostPath = join(makeTempDir(), 'AppHost.csproj');
+        const rawError = Object.assign(new Error('raw-resolution-message'), {
+            code: 'ENOENT',
+            path: '/private/raw-cli-path',
+            environment: { RAW_SECRET: 'raw-environment-secret' },
+        });
+        const spawnStub = sinon.stub(cliModule, 'spawnCliProcess');
+        sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined);
+        const aspireDebugSession = createSessionForSpawn(async () => {
+            throw rawError;
+        });
+        aspireDebugSession.configuration = {
+            type: 'aspire',
+            request: 'launch',
+            name: 'Aspire',
+            program: appHostPath,
+            command: 'run',
+            noDebug: false,
+        };
+
+        await aspireDebugSession.spawnAspireCommand(['run'], dirname(appHostPath), false, 'aspire run');
+
+        sinon.assert.notCalled(spawnStub);
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+            stage: 'cliLaunch',
+            category: 'missingDependency',
+            controller: 'cli',
+            mode: 'debug',
+            providerKind: 'dotnet',
+            exitCodeBucket: 'none',
+        });
+        const serialized = JSON.stringify(readLatestLaunchFailures(appHostPath));
+        assert.strictEqual(serialized.includes(rawError.message), false);
+        assert.strictEqual(serialized.includes(rawError.path), false);
+        assert.strictEqual(serialized.includes(rawError.environment.RAW_SECRET), false);
+    });
+
+    test('records a sanitized synchronous CLI spawn failure for the owning AppHost', async () => {
+        const appHostPath = join(makeTempDir(), 'AppHost.csproj');
+        const rawError = Object.assign(new Error('raw-synchronous-spawn-message'), {
+            code: 'EACCES',
+            path: '/private/raw-cli-path',
+            arguments: ['--raw-secret'],
+        });
+        sinon.stub(cliModule, 'spawnCliProcess').throws(rawError);
+        sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined);
+        const aspireDebugSession = createSessionForSpawn();
+        aspireDebugSession.configuration = {
+            type: 'aspire',
+            request: 'launch',
+            name: 'Aspire',
+            program: appHostPath,
+            command: 'run',
+            noDebug: true,
+        };
+
+        await aspireDebugSession.spawnAspireCommand(['run'], dirname(appHostPath), true, 'aspire run');
+
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+            stage: 'cliLaunch',
+            category: 'permissionDenied',
+            controller: 'cli',
+            mode: 'run',
+            providerKind: 'dotnet',
+            exitCodeBucket: 'none',
+        });
+        const serialized = JSON.stringify(readLatestLaunchFailures(appHostPath));
+        assert.strictEqual(serialized.includes(rawError.message), false);
+        assert.strictEqual(serialized.includes(rawError.path), false);
+        assert.strictEqual(serialized.includes(rawError.arguments[0]), false);
+    });
+
+    test('records a nonzero CLI exit before startup and ignores shutdown exits', async () => {
+        const appHostPath = join(makeTempDir(), 'AppHost.csproj');
+        const cliProcess = createFakeCliProcess(4331, 1);
+        const spawnStub = sinon.stub(cliModule, 'spawnCliProcess').returns(cliProcess);
+        sinon.stub(cliModule, 'terminateCliProcess');
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = createSessionForSpawn();
+        aspireDebugSession.configuration = {
+            type: 'aspire',
+            request: 'launch',
+            name: 'Aspire',
+            program: appHostPath,
+            command: 'run',
+            noDebug: true,
+        };
+
+        await aspireDebugSession.spawnAspireCommand(['run'], dirname(appHostPath), true, 'aspire run');
+        spawnStub.firstCall.args[3]?.exitCallback?.(1);
+
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+            stage: 'cliLaunch',
+            category: 'processExited',
+            controller: 'cli',
+            mode: 'run',
+            providerKind: 'dotnet',
+            exitCodeBucket: 'one',
+        });
+
+        __resetLaunchFailureJournalForTests();
+        (aspireDebugSession as any)._stopping = true;
+        spawnStub.firstCall.args[3]?.exitCallback?.(1);
+        assert.deepStrictEqual(readLatestLaunchFailures(appHostPath), []);
     });
 
     test('terminateCliProcessTree signals a running CLI process and still collects an exited one', () => {
@@ -1286,11 +1443,18 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
     });
 
     test('launching the dashboard browser does not fall back to an external browser after the Aspire session was disposed', async () => {
+        const appHostPath = '/workspace/AppHost/AppHost.csproj';
         const parentDebugSession = {
             id: 'aspire-session',
             type: 'aspire',
             name: 'Aspire',
-            configuration: {},
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: appHostPath,
+                command: 'run',
+            },
         } as unknown as vscode.DebugSession;
         sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(() => ({ dispose: sinon.stub() }));
         let resolveStartDebugging: ((didStart: boolean) => void) | undefined;
@@ -1308,6 +1472,134 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         await openPromise;
 
         assert.strictEqual(openExternal.called, false);
+        assert.deepStrictEqual(readLatestLaunchFailures(appHostPath), []);
+    });
+
+    test('records a dashboard debug-browser start decline before falling back', async () => {
+        const appHostPath = '/workspace/AppHost/AppHost.csproj';
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: appHostPath,
+                command: 'run',
+            },
+        } as unknown as vscode.DebugSession;
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').returns({ dispose: sinon.stub() });
+        sinon.stub(vscode.debug, 'startDebugging').resolves(false);
+        sinon.stub(vscode.env, 'openExternal').resolves(true);
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+
+        await aspireDebugSession.openDashboard('https://localhost:1234/private', 'debugEdge');
+
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+            stage: 'dashboard',
+            category: 'unknown',
+            controller: 'editor',
+            mode: 'run',
+            providerKind: 'browser',
+            exitCodeBucket: 'none',
+        });
+    });
+
+    test('records dashboard debug-browser start exceptions without retaining the URL or error', async () => {
+        const appHostPath = '/workspace/AppHost/AppHost.csproj';
+        const dashboardUrl = 'https://localhost:1234/private?token=secret';
+        const rawError = new Error(`Failed to open ${dashboardUrl}`);
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: appHostPath,
+                command: 'run',
+            },
+        } as unknown as vscode.DebugSession;
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').returns({ dispose: sinon.stub() });
+        sinon.stub(vscode.debug, 'startDebugging').throws(rawError);
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+
+        await assert.rejects(() => aspireDebugSession.openDashboard(dashboardUrl, 'debugChrome'), rawError);
+
+        const records = readLatestLaunchFailures(appHostPath);
+        assert.deepStrictEqual(getFailureDetails(records[0]), {
+            stage: 'dashboard',
+            category: 'unknown',
+            controller: 'editor',
+            mode: 'run',
+            providerKind: 'browser',
+            exitCodeBucket: 'none',
+        });
+        const serialized = JSON.stringify(records);
+        assert.ok(!serialized.includes(dashboardUrl));
+        assert.ok(!serialized.includes(rawError.message));
+    });
+
+    test('records integrated dashboard open exceptions', async () => {
+        const appHostPath = '/workspace/AppHost/AppHost.csproj';
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: appHostPath,
+                command: 'run',
+            },
+        } as unknown as vscode.DebugSession;
+        const rawError = new Error('raw-integrated-browser-error');
+        sinon.stub(vscode.commands, 'executeCommand').rejects(rawError);
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+
+        await assert.rejects(() => aspireDebugSession.openDashboard('https://localhost:1234', 'integratedBrowser'), rawError);
+
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+            stage: 'dashboard',
+            category: 'unknown',
+            controller: 'editor',
+            mode: 'run',
+            providerKind: 'browser',
+            exitCodeBucket: 'none',
+        });
+    });
+
+    test('records external dashboard open exceptions from stable error codes', async () => {
+        const appHostPath = '/workspace/AppHost/AppHost.csproj';
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: appHostPath,
+                command: 'run',
+            },
+        } as unknown as vscode.DebugSession;
+        const rawError = Object.assign(new Error('raw-external-browser-error'), { code: 'EACCES' });
+        sinon.stub(vscode.env, 'openExternal').rejects(rawError);
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+
+        await assert.rejects(() => aspireDebugSession.openDashboard('https://localhost:1234', 'openExternalBrowser'), rawError);
+
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+            stage: 'dashboard',
+            category: 'permissionDenied',
+            controller: 'editor',
+            mode: 'run',
+            providerKind: 'browser',
+            exitCodeBucket: 'none',
+        });
     });
 
     test('stopDebugging stops resource sessions before the AppHost and Aspire parent sessions', async () => {
@@ -3252,6 +3544,234 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(trackAppHostDebugSession.calledOnceWithExactly(aspireDebugSession, appHostPath, childDebugSession), true);
     });
 
+    test('records AppHost termination before startup completion at the DCP startup boundary', async () => {
+        const appHostPath = join(makeTempDir(), 'apphost.mts');
+        writeFileSync(appHostPath, '');
+        const parentDebugSession = {
+            id: 'aspire-session',
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: appHostPath,
+                command: 'run',
+            },
+        } as unknown as vscode.DebugSession;
+        const appHostVsCodeSession = {
+            id: 'apphost-session',
+            type: 'pwa-node',
+            name: 'AppHost',
+            configuration: { noDebug: false },
+        } as unknown as vscode.DebugSession;
+        const appHostDebugSession = {
+            id: appHostVsCodeSession.id,
+            session: appHostVsCodeSession,
+            stopSession: sinon.stub().resolves(),
+        };
+        let terminateCallback: ((session: vscode.DebugSession) => Promise<void>) | undefined;
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(callback => {
+            terminateCallback = callback as (session: vscode.DebugSession) => Promise<void>;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(debuggerExtensionsModule, 'createDebugSessionConfiguration').resolves({
+            type: 'pwa-node',
+            name: 'AppHost',
+            request: 'launch',
+            runId: '',
+        } as AspireResourceExtendedDebugConfiguration);
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+        sinon.stub(aspireDebugSession, 'createDebugAdapterTrackerCore');
+        sinon.stub(aspireDebugSession, 'startAndGetDebugSession').resolves(appHostDebugSession);
+        sinon.stub(aspireDebugSession as any, 'stopDebuggingInBackground');
+        await aspireDebugSession.startAppHost(appHostPath, [], [], true, { forceBuild: false });
+
+        await terminateCallback!(appHostVsCodeSession);
+
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+            stage: 'dcpStartup',
+            category: 'processExited',
+            controller: 'editor',
+            mode: 'debug',
+            providerKind: 'node',
+            exitCodeBucket: 'none',
+        });
+    });
+
+    test('does not record DCP startup failure after startup completion', async () => {
+        const appHostPath = join(makeTempDir(), 'AppHost.csproj');
+        writeFileSync(appHostPath, '');
+        const parentDebugSession = {
+            id: 'aspire-session',
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: appHostPath,
+                command: 'run',
+            },
+        } as unknown as vscode.DebugSession;
+        const appHostVsCodeSession = {
+            id: 'apphost-session',
+            type: 'coreclr',
+            name: 'AppHost',
+            configuration: { noDebug: true },
+        } as unknown as vscode.DebugSession;
+        const appHostDebugSession = {
+            id: appHostVsCodeSession.id,
+            session: appHostVsCodeSession,
+            stopSession: sinon.stub().resolves(),
+        };
+        let terminateCallback: ((session: vscode.DebugSession) => Promise<void>) | undefined;
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(callback => {
+            terminateCallback = callback as (session: vscode.DebugSession) => Promise<void>;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(debuggerExtensionsModule, 'createDebugSessionConfiguration').resolves({
+            type: 'coreclr',
+            name: 'AppHost',
+            request: 'launch',
+            runId: '',
+        } as AspireResourceExtendedDebugConfiguration);
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+        sinon.stub(aspireDebugSession, 'createDebugAdapterTrackerCore');
+        sinon.stub(aspireDebugSession, 'startAndGetDebugSession').resolves(appHostDebugSession);
+        sinon.stub(aspireDebugSession as any, 'stopDebuggingInBackground');
+        await aspireDebugSession.startAppHost(appHostPath, [], [], false, { forceBuild: false });
+        aspireDebugSession.notifyAppHostStartupCompleted();
+
+        await terminateCallback!(appHostVsCodeSession);
+
+        assert.deepStrictEqual(readLatestLaunchFailures(appHostPath), []);
+    });
+
+    test('does not record a successful pipeline AppHost exit as a DCP startup failure', async () => {
+        const appHostPath = join(makeTempDir(), 'AppHost.csproj');
+        writeFileSync(appHostPath, '');
+        const parentDebugSession = {
+            id: 'aspire-session',
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: appHostPath,
+                command: 'publish',
+            },
+        } as unknown as vscode.DebugSession;
+        const appHostVsCodeSession = {
+            id: 'apphost-session',
+            type: 'coreclr',
+            name: 'AppHost',
+            configuration: { noDebug: true },
+        } as unknown as vscode.DebugSession;
+        const appHostDebugSession = {
+            id: appHostVsCodeSession.id,
+            session: appHostVsCodeSession,
+            stopSession: sinon.stub().resolves(),
+        };
+        let terminateCallback: ((session: vscode.DebugSession) => Promise<void>) | undefined;
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(callback => {
+            terminateCallback = callback as (session: vscode.DebugSession) => Promise<void>;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(debuggerExtensionsModule, 'createDebugSessionConfiguration').resolves({
+            type: 'coreclr',
+            name: 'AppHost',
+            request: 'launch',
+            runId: '',
+        } as AspireResourceExtendedDebugConfiguration);
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(
+            parentDebugSession,
+            {} as any,
+            {} as any,
+            {} as any,
+            () => { },
+            () => { },
+            'debug-1',
+            'publish');
+        sinon.stub(aspireDebugSession, 'createDebugAdapterTrackerCore');
+        sinon.stub(aspireDebugSession, 'startAndGetDebugSession').resolves(appHostDebugSession);
+        sinon.stub(aspireDebugSession as any, 'stopDebuggingInBackground');
+        await aspireDebugSession.startAppHost(appHostPath, [], [], false, { forceBuild: false });
+
+        await terminateCallback!(appHostVsCodeSession);
+
+        assert.deepStrictEqual(readLatestLaunchFailures(appHostPath), []);
+    });
+
+    test('records typed AppHost build failures as build failures', async () => {
+        const appHostPath = join(makeTempDir(), 'AppHost.csproj');
+        writeFileSync(appHostPath, '');
+        const rawBuildError = Object.assign(new Error('raw-build-output'), {
+            debugConsoleOutputAlreadyWritten: true,
+            stack: 'raw-build-stack',
+        });
+        sinon.stub(debuggerExtensionsModule, 'createDebugSessionConfiguration').rejects(rawBuildError);
+        sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined);
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const parentDebugSession = {
+            id: 'aspire-session',
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: appHostPath,
+                command: 'run',
+                noDebug: false,
+            },
+        } as unknown as vscode.DebugSession;
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+        sinon.stub(aspireDebugSession, 'createDebugAdapterTrackerCore');
+
+        await aspireDebugSession.startAppHost(appHostPath, [], [], true, { forceBuild: true });
+
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+            stage: 'build',
+            category: 'buildFailed',
+            controller: 'editor',
+            mode: 'debug',
+            providerKind: 'dotnet',
+            exitCodeBucket: 'none',
+        });
+        const serialized = JSON.stringify(readLatestLaunchFailures(appHostPath));
+        assert.strictEqual(serialized.includes(rawBuildError.message), false);
+        assert.strictEqual(serialized.includes(rawBuildError.stack ?? ''), false);
+    });
+
+    test('records untyped AppHost configuration failures as debug-session failures', async () => {
+        const appHostPath = join(makeTempDir(), 'apphost.ts');
+        writeFileSync(appHostPath, '');
+        sinon.stub(debuggerExtensionsModule, 'createDebugSessionConfiguration').rejects(new Error('raw-configuration-error'));
+        sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined);
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const parentDebugSession = {
+            id: 'aspire-session',
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: appHostPath,
+                command: 'run',
+                noDebug: true,
+            },
+        } as unknown as vscode.DebugSession;
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+        sinon.stub(aspireDebugSession, 'createDebugAdapterTrackerCore');
+
+        await aspireDebugSession.startAppHost(appHostPath, [], [], false, { forceBuild: false });
+
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+            stage: 'debugSession',
+            category: 'unknown',
+            controller: 'editor',
+            mode: 'run',
+            providerKind: 'node',
+            exitCodeBucket: 'none',
+        });
+    });
+
     test('launches a Rust AppHost with the Rust debugger', async () => {
         const appHostPath = join(makeTempDir(), 'apphost.rs');
         writeFileSync(appHostPath, '');
@@ -3849,6 +4369,146 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(startDebuggingStub.calledOnce, true);
         assert.strictEqual(startDebuggingStub.firstCall.args[0], workspaceFolder);
         assert.strictEqual(startDebuggingStub.firstCall.args[2], parentDebugSession);
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures('/workspace/MauiAppHost/MauiAppHost.csproj')[0]), {
+            stage: 'debugSession',
+            category: 'unknown',
+            controller: 'editor',
+            mode: 'debug',
+            providerKind: 'dotnet',
+            exitCodeBucket: 'none',
+        });
+    });
+
+    test('records resource debug-session start exceptions', async () => {
+        const appHostPath = '/workspace/AppHost/AppHost.csproj';
+        const parentDebugSession = {
+            id: 'aspire-session',
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: appHostPath,
+                command: 'run',
+            },
+        } as unknown as vscode.DebugSession;
+        const debugConfig = {
+            runId: 'run-1',
+            debugSessionId: 'debug-1',
+            type: 'debugpy',
+            name: 'Python',
+            request: 'launch',
+            noDebug: false,
+        } as AspireResourceExtendedDebugConfiguration;
+        sinon.stub(vscode.workspace, 'getWorkspaceFolder').returns(undefined);
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').returns({ dispose: sinon.stub() });
+        sinon.stub(vscode.debug, 'startDebugging').rejects(new Error('raw-resource-start-error'));
+        const aspireDebugSession = new AspireDebugSession(
+            parentDebugSession,
+            {} as any,
+            {} as any,
+            { isDebugConfigEnvironmentLoggingEnabled: () => false } as any,
+            () => { });
+
+        const result = await aspireDebugSession.startAndGetDebugSession(debugConfig);
+
+        assert.strictEqual(result, undefined);
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+            stage: 'debugSession',
+            category: 'unknown',
+            controller: 'editor',
+            mode: 'debug',
+            providerKind: 'python',
+            exitCodeBucket: 'none',
+        });
+    });
+
+    test('does not record a resource debug-session start decline after shutdown begins', async () => {
+        const appHostPath = '/workspace/AppHost/AppHost.csproj';
+        const parentDebugSession = {
+            id: 'aspire-session',
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: appHostPath,
+                command: 'run',
+            },
+        } as unknown as vscode.DebugSession;
+        const debugConfig = {
+            runId: 'run-1',
+            debugSessionId: 'debug-1',
+            type: 'debugpy',
+            name: 'Python',
+            request: 'launch',
+            noDebug: false,
+        } as AspireResourceExtendedDebugConfiguration;
+        let resolveStart!: (started: boolean) => void;
+        const start = new Promise<boolean>(resolve => {
+            resolveStart = resolve;
+        });
+        sinon.stub(vscode.workspace, 'getWorkspaceFolder').returns(undefined);
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').returns({ dispose: sinon.stub() });
+        sinon.stub(vscode.debug, 'startDebugging').returns(start);
+        const aspireDebugSession = new AspireDebugSession(
+            parentDebugSession,
+            {} as any,
+            {} as any,
+            { isDebugConfigEnvironmentLoggingEnabled: () => false } as any,
+            () => { });
+
+        const resultPromise = aspireDebugSession.startAndGetDebugSession(debugConfig);
+        await Promise.resolve();
+        (aspireDebugSession as any)._stopping = true;
+        resolveStart(false);
+
+        assert.strictEqual(await resultPromise, undefined);
+        assert.deepStrictEqual(readLatestLaunchFailures(appHostPath), []);
+    });
+
+    test('records resource debug-session start timeouts at the timeout boundary', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const appHostPath = '/workspace/AppHost/AppHost.csproj';
+        const parentDebugSession = {
+            id: 'aspire-session',
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: appHostPath,
+                command: 'run',
+            },
+        } as unknown as vscode.DebugSession;
+        const debugConfig = {
+            runId: 'run-1',
+            debugSessionId: 'debug-1',
+            type: 'go',
+            name: 'Go',
+            request: 'launch',
+            noDebug: true,
+        } as AspireResourceExtendedDebugConfiguration;
+        sinon.stub(vscode.workspace, 'getWorkspaceFolder').returns(undefined);
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').returns({ dispose: sinon.stub() });
+        sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+        const aspireDebugSession = new AspireDebugSession(
+            parentDebugSession,
+            {} as any,
+            {} as any,
+            { isDebugConfigEnvironmentLoggingEnabled: () => false } as any,
+            () => { });
+
+        const resultPromise = aspireDebugSession.startAndGetDebugSession(debugConfig);
+        await clock.tickAsync(10_000);
+        const result = await resultPromise;
+
+        assert.strictEqual(result, undefined);
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+            stage: 'debugSession',
+            category: 'timeout',
+            controller: 'editor',
+            mode: 'run',
+            providerKind: 'go',
+            exitCodeBucket: 'none',
+        });
     });
 
     test('tracks an already-started resource and reports its process without launching another debug session', async () => {
@@ -4404,6 +5064,18 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
             await clock.tickAsync(10);
         }
+    }
+
+    function getFailureDetails(record: LaunchFailureRecord | undefined) {
+        assert.ok(record);
+        return {
+            stage: record.stage,
+            category: record.category,
+            controller: record.controller,
+            mode: record.mode,
+            providerKind: record.providerKind,
+            exitCodeBucket: record.exitCodeBucket,
+        };
     }
 
     function createSessionForSpawn(
