@@ -281,7 +281,9 @@ suite('Dotnet Debugger Extension Tests', () => {
     });
 
     test('attach configuration resolves an apphost child by its evaluated executable identity', async () => {
-        const { dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/EvaluatedAppHost', null, true, true);
+        const targetPath = '/repo/OneDrive - Microsoft/über-long-path/My Attach Service';
+        const { dotNetService } = createDebuggerExtension(targetPath, null, true, true);
+        dotNetService.getDotNetAttachTargetInfoStub.resolves({ targetPath, useAppHost: true });
         const resolver = {
             resolveProcessId: sinon.stub().resolves(4321),
         };
@@ -309,14 +311,14 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(processIdentity.isCandidate({
             pid: 4321,
             parentPid: 1234,
-            executable: '/repo/bin/Debug/net10.0/EvaluatedAppHost',
-            command: '/repo/bin/Debug/net10.0/EvaluatedAppHost --urls http://localhost:5000',
+            executable: '/repo/OneDrive',
+            command: `"${targetPath}" "" --urls http://localhost:5000`,
         }), true);
         assert.strictEqual(processIdentity.isCandidate({
             pid: 4322,
             parentPid: 1234,
-            executable: '/repo/bin/Debug/net10.0/EvaluatedAppHostWorker',
-            command: '/repo/bin/Debug/net10.0/EvaluatedAppHostWorker',
+            executable: '/repo/OneDrive',
+            command: `"${targetPath} Worker"`,
         }), false);
     });
 

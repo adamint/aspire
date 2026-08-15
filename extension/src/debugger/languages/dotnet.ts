@@ -755,7 +755,10 @@ function getAppHostPaths(targetPath: string): readonly string[] {
 }
 
 function commandStartsWithPath(command: string, targetPath: string): boolean {
-    return new RegExp(`^\\s*(?:"|')?${escapeRegularExpression(targetPath)}(?:"|')?(?=\\s|$)`).test(command);
+    const escapedPath = escapeRegularExpression(targetPath);
+    // A quoted program path must close with the same quote. Without that constraint,
+    // `"My Attach Service Worker"` would be mistaken for the apphost `"My Attach Service"`.
+    return new RegExp(`^\\s*(?:"${escapedPath}"|'${escapedPath}'|${escapedPath})(?=\\s|$)`).test(command);
 }
 
 function commandContainsPathArgument(command: string, targetPath: string): boolean {
