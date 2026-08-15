@@ -13,11 +13,13 @@ export type ResourceDebugStrategy = 'auto' | 'attach';
 
 /**
  * An AppHost selected by a caller. The absolute path remains internal to the editor
- * control plane; only the safe display path may be used by presentation layers.
+ * control plane; only the safe display path may be used by presentation layers. The
+ * optional process ID preserves exact tree-item identity when one path has overlapping runs.
  */
 export interface ResourceDebugAppHostTarget {
     readonly absolutePath: string;
     readonly displayPath: string;
+    readonly appHostPid?: number;
 }
 
 export interface ResourceDebugRequest {

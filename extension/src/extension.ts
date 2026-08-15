@@ -126,6 +126,8 @@ export async function activate(context: vscode.ExtensionContext) {
     sessionRegistry: resourceDebugSessionRegistry,
     startDebugging: (workspaceFolder, configuration) =>
       vscode.debug.startDebugging(workspaceFolder, configuration),
+    isProcessAlreadyDebugged: processId =>
+      aspireExtensionContext.aspireDebugSessions.some(session => session.hasResourceDebugSessionProcess(processId)),
     telemetry: resourceDebugTelemetry,
     clock: resourceDebugClock,
   });

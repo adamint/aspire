@@ -72,6 +72,8 @@ const executableArgsPropertyName = 'executable.args';
 const executablePidPropertyName = 'executable.pid';
 const executablePathPropertyName = 'executable.path';
 const projectPathPropertyName = 'project.path';
+const projectConfigurationPropertyName = 'project.configuration';
+const projectTargetFrameworkPropertyName = 'project.targetFramework';
 const resourceParentNamePropertyName = 'resource.parentName';
 const resourceLaunchConfigurationTypePropertyName = 'resource.launchConfigurationType';
 const dotNetProjectFileExtensions = new Set(['.csproj', '.fsproj', '.vbproj']);
@@ -626,17 +628,17 @@ function canRecognizeDotNetAttachDebuggerResource(resource: ResourceDebugResourc
 }
 
 function getDotNetLaunchConfiguration(resource: ResourceDebugResourceSnapshot): Pick<DotNetAttachDebuggerResourceInfo, 'configuration' | 'framework'> {
+    let configuration = getNonEmptyStringProperty(resource, projectConfigurationPropertyName);
+    let framework = getNonEmptyStringProperty(resource, projectTargetFrameworkPropertyName);
     const executableArgs: unknown = resource.properties?.[executableArgsPropertyName];
     if (!Array.isArray(executableArgs)) {
-        return {};
+        return { configuration, framework };
     }
 
     // Project launcher arguments have the shape:
     //   ["run", "--project", "/repo/api.csproj", "--configuration", "Release", "--no-launch-profile", "--", ...appArgs]
     // Stop at the application-argument separator so an app's own --configuration value is not mistaken
     // for the MSBuild configuration DCP used to launch the project.
-    let configuration: string | undefined;
-    let framework: string | undefined;
     for (let index = 0; index < executableArgs.length; index++) {
         const argument = executableArgs[index];
         if (typeof argument !== 'string') {
@@ -649,29 +651,34 @@ function getDotNetLaunchConfiguration(resource: ResourceDebugResourceSnapshot): 
 
         if (argument === '--configuration' || argument === '-c') {
             const nextConfiguration = executableArgs[index + 1];
-            if (typeof nextConfiguration === 'string' && nextConfiguration.trim().length > 0) {
+            if (configuration === undefined && typeof nextConfiguration === 'string' && nextConfiguration.trim().length > 0) {
                 configuration = nextConfiguration.trim();
             }
         }
 
         if (argument === '--framework' || argument === '-f') {
             const nextFramework = executableArgs[index + 1];
-            if (typeof nextFramework === 'string' && nextFramework.trim().length > 0) {
+            if (framework === undefined && typeof nextFramework === 'string' && nextFramework.trim().length > 0) {
                 framework = nextFramework.trim();
             }
         }
 
         const [option, value] = argument.split('=', 2);
-        if ((option === '--configuration' || option === '-c') && value?.trim()) {
+        if (configuration === undefined && (option === '--configuration' || option === '-c') && value?.trim()) {
             configuration = value.trim();
         }
 
-        if ((option === '--framework' || option === '-f') && value?.trim()) {
+        if (framework === undefined && (option === '--framework' || option === '-f') && value?.trim()) {
             framework = value.trim();
         }
     }
 
     return { configuration, framework };
+}
+
+function getNonEmptyStringProperty(resource: ResourceDebugResourceSnapshot, propertyName: string): string | undefined {
+    const value: unknown = resource.properties?.[propertyName];
+    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function getResourceParentName(resource: ResourceDebugResourceSnapshot): string | null {

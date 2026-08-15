@@ -179,6 +179,7 @@ internal class ResourceSnapshotBuilder
         ImmutableArray<ResourcePropertySnapshot> launchConfigurationProperties = launchConfigurationType is null
             ? []
             : [new(KnownProperties.Resource.LaunchConfigurationType, launchConfigurationType)];
+        var dotNetRunProperties = GetDotNetRunProperties(executable.Spec.ExecutablePath, effectiveArgs);
 
         if (projectPath is not null)
         {
@@ -196,6 +197,7 @@ internal class ResourceSnapshotBuilder
                     ResourcePropertySnapshotMetadata.Create(KnownResourceTypes.Project, KnownProperties.Project.LaunchProfile, launchProfileName),
                     new(KnownProperties.Resource.AppArgs, launchArguments?.Args) { IsSensitive = launchArguments?.IsSensitive ?? false },
                     new(KnownProperties.Resource.AppArgsSensitivity, launchArguments?.ArgsAreSensitive) { IsSensitive = launchArguments?.IsSensitive ?? false },
+                    .. dotNetRunProperties,
                     .. launchConfigurationProperties,
                 ]),
                 EnvironmentVariables = environment,
@@ -233,6 +235,107 @@ internal class ResourceSnapshotBuilder
     private static bool IsNotStartedExecutableState(string? state)
     {
         return string.IsNullOrEmpty(state) || state == ExecutableState.Unknown;
+    }
+
+    private static ImmutableArray<ResourcePropertySnapshot> GetDotNetRunProperties(string? executablePath, IReadOnlyList<string>? effectiveArgs)
+    {
+        var executableName = Path.GetFileName(executablePath);
+        if (!string.Equals(executableName, "dotnet", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(executableName, "dotnet.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            return [];
+        }
+
+        if (effectiveArgs is not [var command, ..] ||
+            !string.Equals(command, "run", StringComparison.OrdinalIgnoreCase))
+        {
+            return [];
+        }
+
+        string? configuration = null;
+        string? targetFramework = null;
+
+        // DCP reports dotnet-run arguments as:
+        //   ["run", "--project", "/repo/api.csproj", "--configuration", "Release", "--framework=net10.0", "--", ...appArgs]
+        // Only launcher arguments before "--" are safe launch metadata; application arguments can
+        // contain unrelated values and remain sensitive in executable.args.
+        for (var index = 1; index < effectiveArgs.Count; index++)
+        {
+            var argument = effectiveArgs[index];
+            if (argument == "--")
+            {
+                break;
+            }
+
+            if (TryReadOptionValue(argument, "--configuration", "-c", out var inlineConfiguration))
+            {
+                configuration = inlineConfiguration;
+                continue;
+            }
+
+            if (TryReadOptionValue(argument, "--framework", "-f", out var inlineTargetFramework))
+            {
+                targetFramework = inlineTargetFramework;
+                continue;
+            }
+
+            if (argument is "--configuration" or "-c")
+            {
+                configuration = ReadNextValue(effectiveArgs, ref index);
+                continue;
+            }
+
+            if (argument is "--framework" or "-f")
+            {
+                targetFramework = ReadNextValue(effectiveArgs, ref index);
+            }
+        }
+
+        var properties = ImmutableArray.CreateBuilder<ResourcePropertySnapshot>(2);
+        if (configuration is not null)
+        {
+            properties.Add(new(KnownProperties.Project.Configuration, configuration));
+        }
+
+        if (targetFramework is not null)
+        {
+            properties.Add(new(KnownProperties.Project.TargetFramework, targetFramework));
+        }
+
+        return properties.ToImmutable();
+
+        static bool TryReadOptionValue(string argument, string longOption, string shortOption, out string? value)
+        {
+            foreach (var option in new[] { longOption, shortOption })
+            {
+                var prefix = option + "=";
+                if (argument.StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    value = NormalizeValue(argument[prefix.Length..]);
+                    return true;
+                }
+            }
+
+            value = null;
+            return false;
+        }
+
+        static string? ReadNextValue(IReadOnlyList<string> arguments, ref int index)
+        {
+            if (index + 1 >= arguments.Count || arguments[index + 1] == "--")
+            {
+                return null;
+            }
+
+            index++;
+            return NormalizeValue(arguments[index]);
+        }
+
+        static string? NormalizeValue(string value)
+        {
+            var normalized = value.Trim();
+            return normalized.Length > 0 ? normalized : null;
+        }
     }
 
     private static (ImmutableArray<string> Args, ImmutableArray<int>? ArgsAreSensitive, bool IsSensitive)? GetLaunchArgs(CustomResource resource, IReadOnlyList<string>? effectiveArgs)

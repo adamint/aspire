@@ -45,6 +45,8 @@ public class ResourceSnapshotMapperTests
             {
                 [KnownProperties.Project.Path] = JsonValue.Create("/repo/maui/MauiApp.csproj"),
                 [KnownProperties.Project.LaunchProfile] = JsonValue.Create("AndroidEmulator"),
+                [KnownProperties.Project.Configuration] = JsonValue.Create("Release"),
+                [KnownProperties.Project.TargetFramework] = JsonValue.Create("net10.0"),
                 [KnownProperties.Resource.LaunchConfigurationType] = JsonValue.Create("maui"),
                 [KnownProperties.Resource.ParentName] = JsonValue.Create("mauiapp"),
             }
@@ -53,6 +55,8 @@ public class ResourceSnapshotMapperTests
         var result = ResourceSnapshotMapper.MapToResourceJson(snapshot, [snapshot]);
 
         Assert.Equal("maui", result.Properties![KnownProperties.Resource.LaunchConfigurationType]!.GetValue<string>());
+        Assert.Equal("Release", result.Properties[KnownProperties.Project.Configuration]!.GetValue<string>());
+        Assert.Equal("net10.0", result.Properties[KnownProperties.Project.TargetFramework]!.GetValue<string>());
         Assert.Equal("MauiApp.csproj", result.Source);
     }
 

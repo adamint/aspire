@@ -81,7 +81,7 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
     }
 
     hasActiveSession(appHost: ResourceDebugAppHostTarget, resourceName: string): boolean {
-        const attemptMarkers = this._attemptsByResource.get(this._getResourceKey(appHost.absolutePath, resourceName));
+        const attemptMarkers = this._attemptsByResource.get(this._getResourceKey(appHost, resourceName));
         if (!attemptMarkers) {
             return false;
         }
@@ -99,7 +99,7 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
         operation: () => Promise<T>,
         getCancelledResult: () => T,
     ): Promise<T> {
-        const resourceKey = this._getResourceKey(appHost.absolutePath, resourceName);
+        const resourceKey = this._getResourceKey(appHost, resourceName);
         const precedingOperation = this._resourceLocks.get(resourceKey);
         let releaseCurrentOperation: (() => void) | undefined;
         const currentOperationGate = new Promise<void>(resolve => {
@@ -137,7 +137,7 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
         configuration: vscode.DebugConfiguration,
         telemetry: ResourceDebugAttachSessionMetadata,
     ): ResourceDebugSessionAttempt {
-        const resourceKey = this._getResourceKey(appHost.absolutePath, resourceName);
+        const resourceKey = this._getResourceKey(appHost, resourceName);
         const marker = ++this._nextMarker;
         const attempt: TrackedAttachAttempt = {
             marker,
@@ -311,7 +311,8 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
         });
     }
 
-    private _getResourceKey(appHostPath: string, resourceName: string): string {
-        return `${getAppHostIdentityKey(appHostPath)}\u0000${resourceName}`;
+    private _getResourceKey(appHost: ResourceDebugAppHostTarget, resourceName: string): string {
+        const appHostProcessIdentity = appHost.appHostPid?.toString() ?? '';
+        return `${getAppHostIdentityKey(appHost.absolutePath)}\u0000${appHostProcessIdentity}\u0000${resourceName}`;
     }
 }

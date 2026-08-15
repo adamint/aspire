@@ -111,6 +111,55 @@ public class ResourceSnapshotBuilderTests
         Assert.Equal("project", Assert.IsType<string>(launchConfigurationType.Value));
     }
 
+    [Theory]
+    [InlineData("--configuration", "--framework=net10.0")]
+    [InlineData("-c", "-f")]
+    [InlineData("--configuration=Release", "--framework")]
+    [InlineData("-c=Release", "-f=net10.0")]
+    public void ProjectSnapshotIncludesSafeDotNetRunConfigurationAndTargetFramework(
+        string configurationArgument,
+        string targetFrameworkArgument)
+    {
+        var project = new ProjectResource("project");
+        project.Annotations.Add(new TestProjectMetadata());
+
+        var effectiveArgs = new List<string>
+        {
+            "run",
+            "--project",
+            "/app/project.csproj",
+            configurationArgument
+        };
+        if (!configurationArgument.Contains('='))
+        {
+            effectiveArgs.Add("Release");
+        }
+        effectiveArgs.Add(targetFrameworkArgument);
+        if (!targetFrameworkArgument.Contains('='))
+        {
+            effectiveArgs.Add("net10.0");
+        }
+        effectiveArgs.AddRange(["--", "--configuration", "Private", "--framework", "private"]);
+
+        var executable = Executable.Create("project", "dotnet");
+        executable.Annotate(DcpCustomResource.ResourceNameAnnotation, project.Name);
+        executable.Status = new ExecutableStatus
+        {
+            EffectiveArgs = effectiveArgs,
+            ProcessId = 1234
+        };
+
+        var snapshot = CreateSnapshotBuilder(new Dictionary<string, IResource>
+        {
+            [project.Name] = project
+        }).ToSnapshot(executable, CreatePreviousSnapshot());
+
+        Assert.Equal("Release", Assert.IsType<string>(GetProperty(snapshot, KnownProperties.Project.Configuration).Value));
+        Assert.Equal("net10.0", Assert.IsType<string>(GetProperty(snapshot, KnownProperties.Project.TargetFramework).Value));
+        Assert.False(GetProperty(snapshot, KnownProperties.Project.Configuration).IsSensitive);
+        Assert.False(GetProperty(snapshot, KnownProperties.Project.TargetFramework).IsSensitive);
+    }
+
     [Fact]
     public void ProjectSnapshotRejectsMultipleProjectMetadataAnnotations()
     {

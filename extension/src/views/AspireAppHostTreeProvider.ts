@@ -1028,6 +1028,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
             appHost: {
                 absolutePath: ownerAppHostPath,
                 displayPath: vscode.workspace.asRelativePath(ownerAppHostPath),
+                appHostPid: element.appHostPid ?? undefined,
             },
             resourceName: element.resource.name,
             cancellationToken,

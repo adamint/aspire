@@ -14,6 +14,10 @@ const target: ResourceDebugAppHostTarget = {
     absolutePath: '/repo/AppHost.csproj',
     displayPath: 'AppHost.csproj',
 };
+const resolvedTarget: ResourceDebugAppHostTarget = {
+    ...target,
+    appHostPid: 42,
+};
 
 function createResource(overrides: Partial<ResourceJson> = {}): ResourceJson {
     return {
@@ -180,6 +184,7 @@ function createService(options: {
     telemetry?: TestResourceDebugTelemetry;
     clock?: { now(): number };
     pendingStartTimeoutMs?: number;
+    isProcessAlreadyDebugged?: (processId: number) => boolean;
 } = {}): {
     service: ResourceDebugService;
     repository: ResourceDebugAppHostRepository;
@@ -211,6 +216,7 @@ function createService(options: {
         compareAppHostIdentity: options.compareAppHostIdentity,
         telemetry,
         clock,
+        isProcessAlreadyDebugged: options.isProcessAlreadyDebugged,
     } as unknown as ResourceDebugServiceDependencies);
 
     return { service, repository, sessions, events, telemetry };
@@ -457,6 +463,36 @@ suite('Resource debug service', () => {
         sessions.dispose();
     });
 
+    test('resolves the selected AppHost process when one path has overlapping snapshots', async () => {
+        const appHosts = [
+            createAppHost({ appHostPid: 1111 }),
+            createAppHost({ appHostPid: 2222 }),
+        ];
+        const { service, sessions } = createService({ appHosts });
+
+        assert.deepStrictEqual(await service.debug(createRequest({
+            appHost: {
+                ...target,
+                appHostPid: 2222,
+            },
+        })), { outcome: 'started', providerId: 'dotnet' });
+        sessions.dispose();
+    });
+
+    test('rejects an AppHost process that no longer matches the selected tree item', async () => {
+        const { service, sessions } = createService({
+            appHosts: [createAppHost({ appHostPid: 2222 })],
+        });
+
+        assert.deepStrictEqual(await service.debug(createRequest({
+            appHost: {
+                ...target,
+                appHostPid: 1111,
+            },
+        })), { outcome: 'appHostNotFound' });
+        sessions.dispose();
+    });
+
     test('fails closed when a resource is stale or duplicated', async () => {
         const missing = createService({
             appHosts: [createAppHost({ resources: [] })],
@@ -480,6 +516,27 @@ suite('Resource debug service', () => {
             outcome: 'debuggerExtensionMissing',
             debuggerExtensions: [{ id: 'ms-dotnettools.csharp', label: 'C#' }],
         });
+        sessions.dispose();
+    });
+
+    test('returns alreadyDebugging when Aspire already owns the reported resource process', async () => {
+        const startDebugging = sinon.stub().resolves(true);
+        const { service, sessions } = createService({
+            appHosts: [createAppHost({
+                resources: [createResource({
+                    properties: {
+                        'project.path': '/repo/api/Api.csproj',
+                        'executable.path': 'dotnet',
+                        'executable.pid': 4242,
+                    } as unknown as ResourceJson['properties'],
+                })],
+            })],
+            isProcessAlreadyDebugged: processId => processId === 4242,
+            startDebugging,
+        });
+
+        assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'alreadyDebugging' });
+        assert.strictEqual(startDebugging.called, false);
         sessions.dispose();
     });
 
@@ -911,6 +968,40 @@ suite('Resource debug service', () => {
         }
     });
 
+    test('tracks attach sessions separately for overlapping AppHost processes', () => {
+        const events = new TestDebugSessionEvents();
+        const sessions = new ResourceDebugSessionRegistry(events);
+        const firstTarget = {
+            ...target,
+            appHostPid: 1111,
+        };
+        const secondTarget = {
+            ...target,
+            appHostPid: 2222,
+        };
+        const attempt = sessions.createAttempt(firstTarget, 'api', {
+            type: 'coreclr',
+            request: 'attach',
+            name: 'Attach debugger: API',
+        }, {
+            source: 'tree',
+            provider: 'dotnet',
+            resource_type: 'project',
+            requested_strategy: 'attach',
+            effective_strategy: 'attach',
+        });
+
+        try {
+            attempt.markStarted();
+
+            assert.strictEqual(sessions.hasActiveSession(firstTarget, 'api'), true);
+            assert.strictEqual(sessions.hasActiveSession(secondTarget, 'api'), false);
+        }
+        finally {
+            sessions.dispose();
+        }
+    });
+
     test('serializes aliases that resolve to the same running AppHost', async () => {
         let completeStart: ((value: boolean) => void) | undefined;
         let signalStart: (() => void) | undefined;
@@ -1092,7 +1183,7 @@ suite('Resource debug service', () => {
                 await service.debug(createRequest({ cancellationToken: cancellation.token })),
                 { outcome: 'started', providerId: 'dotnet' });
             assert.ok(startedConfiguration);
-            assert.strictEqual(sessions.hasActiveSession(target, 'api'), true);
+            assert.strictEqual(sessions.hasActiveSession(resolvedTarget, 'api'), true);
         }
         finally {
             cancellation.dispose();
@@ -1112,11 +1203,11 @@ suite('Resource debug service', () => {
 
         assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
         assert.ok(startedConfiguration);
-        assert.strictEqual(sessions.hasActiveSession(target, 'api'), true);
+        assert.strictEqual(sessions.hasActiveSession(resolvedTarget, 'api'), true);
 
         events.terminate(startedConfiguration!);
 
-        assert.strictEqual(sessions.hasActiveSession(target, 'api'), false);
+        assert.strictEqual(sessions.hasActiveSession(resolvedTarget, 'api'), false);
         sessions.dispose();
     });
 
@@ -1700,7 +1791,7 @@ suite('Resource debug service', () => {
             events.terminate(events.startedConfiguration);
 
             assert.strictEqual(recordSessionEnd.callCount, 1);
-            assert.strictEqual(fixture.sessions.hasActiveSession(target, 'api'), false);
+            assert.strictEqual(fixture.sessions.hasActiveSession(resolvedTarget, 'api'), false);
         }
         finally {
             fixture.sessions.dispose();

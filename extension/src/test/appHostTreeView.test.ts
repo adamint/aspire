@@ -2916,6 +2916,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
 
         const debugRequest = request as ResourceDebugRequest;
         assert.strictEqual(debugRequest.appHost.absolutePath, appHostPath);
+        assert.strictEqual(debugRequest.appHost.appHostPid, 2222);
         assert.strictEqual(debugRequest.resourceName, 'api');
 
         const workspaceResourceItem = new ResourceItem(makeResource({ name: 'workspace-api' }), null, false, undefined, appHostPath);

@@ -883,6 +883,50 @@ suite('Dotnet Debugger Extension Tests', () => {
             '/repo/api/Api.csproj', 'Release', undefined, 'net10.0'));
     });
 
+    test('attach configuration uses safe snapshot properties when executable arguments are redacted', async () => {
+        const { attachProvider, dotNetService } = createDebuggerExtension('/repo/bin/Release/net10.0/Api.dll', null, true, true);
+
+        await attachProvider.createDebugConfiguration({
+            name: 'api',
+            displayName: 'API',
+            resourceType: 'Project',
+            state: 'Running',
+            properties: {
+                'executable.pid': '1234',
+                'executable.path': 'dotnet',
+                'executable.args': null,
+                'project.path': '/repo/api/Api.csproj',
+                'project.configuration': 'Release',
+                'project.targetFramework': 'net10.0',
+            },
+        });
+
+        assert.ok(dotNetService.getDotNetAttachTargetInfoStub.calledOnceWithExactly(
+            '/repo/api/Api.csproj', 'Release', undefined, 'net10.0'));
+    });
+
+    test('attach configuration prefers safe snapshot properties over legacy executable arguments', async () => {
+        const { attachProvider, dotNetService } = createDebuggerExtension('/repo/bin/Release/net10.0/Api.dll', null, true, true);
+
+        await attachProvider.createDebugConfiguration({
+            name: 'api',
+            displayName: 'API',
+            resourceType: 'Project',
+            state: 'Running',
+            properties: {
+                'executable.pid': '1234',
+                'executable.path': 'dotnet',
+                'executable.args': ['run', '--configuration', 'Debug', '--framework', 'net9.0'],
+                'project.path': '/repo/api/Api.csproj',
+                'project.configuration': 'Release',
+                'project.targetFramework': 'net10.0',
+            },
+        });
+
+        assert.ok(dotNetService.getDotNetAttachTargetInfoStub.calledOnceWithExactly(
+            '/repo/api/Api.csproj', 'Release', undefined, 'net10.0'));
+    });
+
     test('attach configuration passes cancellation to target discovery', async () => {
         const { attachProvider, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/Api.dll', null, true, true);
         const cancellation = new vscode.CancellationTokenSource();

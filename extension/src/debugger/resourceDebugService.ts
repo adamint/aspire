@@ -45,6 +45,7 @@ export interface ResourceDebugServiceDependencies {
     readonly sessionRegistry: ResourceDebugSessionRegistry;
     readonly startDebugging: ResourceDebugStartDebugging;
     readonly compareAppHostIdentity?: ResourceDebugAppHostIdentityComparer;
+    readonly isProcessAlreadyDebugged?: (processId: number) => boolean;
     readonly telemetry?: ResourceDebugTelemetry;
     readonly clock?: ResourceDebugClock;
 }
@@ -113,6 +114,7 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
             const resolvedTarget: ResourceDebugAppHostTarget = {
                 absolutePath: resolvedAppHost.appHostPath,
                 displayPath: request.appHost.displayPath,
+                appHostPid: resolvedAppHost.appHostPid,
             };
             result = await this._dependencies.sessionRegistry.runSerialized(
                 resolvedTarget,
@@ -165,7 +167,9 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
 
         const matchingAppHosts = appHostMatches
             .filter(match => match.relation === 'same')
-            .map(match => match.appHost);
+            .map(match => match.appHost)
+            .filter(appHost => request.appHost.appHostPid === undefined
+                || appHost.appHostPid === request.appHost.appHostPid);
         if (matchingAppHosts.length !== 1) {
             return { outcome: 'appHostNotFound' };
         }
@@ -252,6 +256,11 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
             return { outcome: 'alreadyDebugging' };
         }
 
+        const processId = getResourceProcessId(resource);
+        if (processId !== undefined && this._dependencies.isProcessAlreadyDebugged?.(processId)) {
+            return { outcome: 'alreadyDebugging' };
+        }
+
         let missingDebuggerExtensions: readonly ResourceDebugExtensionRequirement[];
         try {
             if (!provider.canAttachToResource(resource)) {
@@ -331,6 +340,20 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
     private _logFailure(operation: string, error: unknown): void {
         extensionLogOutputChannel.error(`Resource debugger failed while ${operation}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
     }
+}
+
+function getResourceProcessId(resource: ResourceJson): number | undefined {
+    const value: unknown = resource.properties?.['executable.pid'];
+    if (typeof value === 'number') {
+        return Number.isInteger(value) && value > 0 ? value : undefined;
+    }
+
+    if (typeof value === 'string') {
+        const processId = Number(value);
+        return Number.isInteger(processId) && processId > 0 ? processId : undefined;
+    }
+
+    return undefined;
 }
 
 class ResourceDebugOperationTelemetry {

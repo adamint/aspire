@@ -231,5 +231,5 @@ function assertSafeResourceDebugResult(result: ResourceDebugToolResult): void {
     const serialized = JSON.stringify(result);
     assert.deepStrictEqual(JSON.parse(serialized), result);
     assert.ok(!path.isAbsolute(result.appHost));
-    assert.doesNotMatch(serialized, /\b(?:pid|process|configuration|args|env|token)\b|https?:\/\/|\/(?:Users|private|var|tmp)\b/i);
+    assert.doesNotMatch(serialized, /(?:pid|process|configuration|arguments?|args|environment|env|secret|token|executable)|https?:\/\/|\/(?:Users|private|var|tmp)\b/i);
 }

@@ -275,8 +275,10 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
                     {
                         [KnownProperties.Executable.Args] = null,
                         [KnownProperties.Executable.Path] = JsonValue.Create("dotnet"),
+                        [KnownProperties.Project.Configuration] = JsonValue.Create("Release"),
                         [KnownProperties.Project.LaunchProfile] = JsonValue.Create("https"),
                         [KnownProperties.Project.Path] = JsonValue.Create("/repo/api/Api.csproj"),
+                        [KnownProperties.Project.TargetFramework] = JsonValue.Create("net10.0"),
                         [KnownProperties.Resource.LaunchConfigurationType] = JsonValue.Create("project"),
                         [KnownProperties.Resource.ParentName] = JsonValue.Create("group"),
                     }
@@ -316,8 +318,10 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
                   "properties": {
                     "executable.args": null,
                     "executable.path": "dotnet",
+                    "project.configuration": "Release",
                     "project.launchProfile": "https",
                     "project.path": "/repo/api/Api.csproj",
+                    "project.targetFramework": "net10.0",
                     "resource.launchConfigurationType": "project",
                     "resource.parentName": "group"
                   }
