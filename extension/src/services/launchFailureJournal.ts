@@ -6,7 +6,7 @@ import {
     type EventProperties,
 } from '../utils/telemetry';
 
-export const launchFailureStages = [
+export const launchFailureStages = Object.freeze([
     'discovery',
     'validation',
     'cliLaunch',
@@ -14,10 +14,10 @@ export const launchFailureStages = [
     'dcpStartup',
     'debugSession',
     'dashboard',
-] as const;
+] as const);
 export type LaunchFailureStage = typeof launchFailureStages[number];
 
-export const launchFailureCategories = [
+export const launchFailureCategories = Object.freeze([
     'invalidConfiguration',
     'missingDependency',
     'cliUnavailable',
@@ -29,16 +29,16 @@ export const launchFailureCategories = [
     'unsupported',
     'canceled',
     'unknown',
-] as const;
+] as const);
 export type LaunchFailureCategory = typeof launchFailureCategories[number];
 
-export const launchFailureControllers = ['editor', 'cli'] as const;
+export const launchFailureControllers = Object.freeze(['editor', 'cli'] as const);
 export type LaunchFailureController = typeof launchFailureControllers[number];
 
-export const launchFailureModes = ['run', 'debug', 'deploy', 'publish', 'other'] as const;
+export const launchFailureModes = Object.freeze(['run', 'debug', 'deploy', 'publish', 'other'] as const);
 export type LaunchFailureMode = typeof launchFailureModes[number];
 
-export const launchFailureProviderKinds = [
+export const launchFailureProviderKinds = Object.freeze([
     'dotnet',
     'node',
     'python',
@@ -50,10 +50,10 @@ export const launchFailureProviderKinds = [
     'browser',
     'bun',
     'other',
-] as const;
+] as const);
 export type LaunchFailureProviderKind = typeof launchFailureProviderKinds[number];
 
-export const launchFailureExitCodeBuckets = ['none', 'zero', 'one', 'signal', 'other'] as const;
+export const launchFailureExitCodeBuckets = Object.freeze(['none', 'zero', 'one', 'signal', 'other'] as const);
 export type LaunchFailureExitCodeBucket = typeof launchFailureExitCodeBuckets[number];
 
 export interface SanitizedLaunchFailure {

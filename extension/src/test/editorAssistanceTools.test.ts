@@ -41,6 +41,12 @@ import { EditorStateSnapshotService } from '../lm/editorStateSnapshotService';
 import {
     __resetLaunchFailureJournalForTests,
     LaunchFailureJournal,
+    launchFailureCategories,
+    launchFailureControllers,
+    launchFailureExitCodeBuckets,
+    launchFailureModes,
+    launchFailureProviderKinds,
+    launchFailureStages,
     normalizeLaunchFailure,
     readLatestLaunchFailures,
     recordLaunchFailureForAppHostPath,
@@ -3287,6 +3293,35 @@ suite('Editor assistance AppHost services', () => {
             mode: 'debug',
             providerKind: 'dotnet',
             ...overrides,
+        });
+
+        test('rejects runtime mutation of canonical launch failure collections', () => {
+            const canonicalCollections = [
+                ['stages', launchFailureStages],
+                ['categories', launchFailureCategories],
+                ['controllers', launchFailureControllers],
+                ['modes', launchFailureModes],
+                ['provider kinds', launchFailureProviderKinds],
+                ['exit code buckets', launchFailureExitCodeBuckets],
+            ] as const;
+
+            for (const [name, collection] of canonicalCollections) {
+                const original = [...collection];
+                const mutableCollection = collection as unknown as string[];
+
+                try {
+                    assert.throws(
+                        () => mutableCollection.push(`unsafe-${name}`),
+                        TypeError,
+                        `${name} should reject runtime mutation`);
+                    assert.deepStrictEqual(collection, original);
+                }
+                finally {
+                    if (mutableCollection.length > original.length) {
+                        mutableCollection.splice(original.length);
+                    }
+                }
+            }
         });
 
         test('uses the shared opaque AppHost identity registry', () => {

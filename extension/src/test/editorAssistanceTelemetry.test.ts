@@ -20,13 +20,120 @@ import {
     launchFailureProviderKinds,
     launchFailureStages,
     normalizeLaunchFailure,
-    type LaunchFailureExitCodeBucket,
     type LaunchFailureInput,
     type SanitizedLaunchFailure,
 } from '../services/launchFailureJournal';
 
+const expectedLaunchFailureStages = [
+    'discovery',
+    'validation',
+    'cliLaunch',
+    'build',
+    'dcpStartup',
+    'debugSession',
+    'dashboard',
+] as const;
+const expectedLaunchFailureCategories = [
+    'invalidConfiguration',
+    'missingDependency',
+    'cliUnavailable',
+    'buildFailed',
+    'processExited',
+    'timeout',
+    'portConflict',
+    'permissionDenied',
+    'unsupported',
+    'canceled',
+    'unknown',
+] as const;
+const expectedLaunchFailureControllers = ['editor', 'cli'] as const;
+const expectedLaunchFailureModes = ['run', 'debug', 'deploy', 'publish', 'other'] as const;
+const expectedLaunchFailureProviderKinds = [
+    'dotnet',
+    'node',
+    'python',
+    'java',
+    'go',
+    'rust',
+    'maui',
+    'azureFunctions',
+    'browser',
+    'bun',
+    'other',
+] as const;
+const expectedLaunchFailureExitCodeCases = [
+    ['none', {}],
+    ['zero', { exitCode: 0 }],
+    ['one', { exitCode: 1 }],
+    ['signal', { signal: 'SIGTERM' }],
+    ['other', { exitCode: 2 }],
+] as const;
+const expectedLaunchFailureProviderMappings = [
+    ['dotnet', 'dotnet'],
+    ['project', 'dotnet'],
+    ['coreclr', 'dotnet'],
+    ['clr', 'dotnet'],
+    ['node', 'node'],
+    ['pwa-node', 'node'],
+    ['python', 'python'],
+    ['debugpy', 'python'],
+    ['java', 'java'],
+    ['go', 'go'],
+    ['rust', 'rust'],
+    ['lldb', 'rust'],
+    ['cppdbg', 'rust'],
+    ['cppvsdbg', 'rust'],
+    ['maui', 'maui'],
+    ['azure-functions', 'azureFunctions'],
+    ['azurefunctions', 'azureFunctions'],
+    ['browser', 'browser'],
+    ['pwa-chrome', 'browser'],
+    ['pwa-msedge', 'browser'],
+    ['firefox', 'browser'],
+    ['bun', 'bun'],
+    ['other', 'other'],
+] as const;
+const baseLaunchFailureInput = {
+    stage: 'debugSession',
+    category: 'unknown',
+    controller: 'editor',
+    mode: 'other',
+    providerKind: 'other',
+} as const satisfies LaunchFailureInput;
+const baseSanitizedLaunchFailure = {
+    ...baseLaunchFailureInput,
+    exitCodeBucket: 'none',
+} as const satisfies SanitizedLaunchFailure;
+
 suite('editor assistance telemetry', () => {
-    test('accepts every normalized bounded launch failure value and bounds unknown values', async () => {
+    test('matches independent pre-refactor bounded launch failure fixtures', () => {
+        assert.deepStrictEqual(launchFailureStages, expectedLaunchFailureStages);
+        assert.deepStrictEqual(launchFailureCategories, expectedLaunchFailureCategories);
+        assert.deepStrictEqual(launchFailureControllers, expectedLaunchFailureControllers);
+        assert.deepStrictEqual(launchFailureModes, expectedLaunchFailureModes);
+        assert.deepStrictEqual(launchFailureProviderKinds, expectedLaunchFailureProviderKinds);
+        assert.deepStrictEqual(
+            launchFailureExitCodeBuckets,
+            expectedLaunchFailureExitCodeCases.map(([exitCodeBucket]) => exitCodeBucket));
+    });
+
+    test('preserves every pre-refactor provider spelling and case normalization', () => {
+        for (const [providerKind, expected] of expectedLaunchFailureProviderMappings) {
+            assert.strictEqual(
+                normalizeLaunchFailure({ ...baseLaunchFailureInput, providerKind }).providerKind,
+                expected,
+                providerKind);
+            assert.strictEqual(
+                normalizeLaunchFailure({
+                    ...baseLaunchFailureInput,
+                    providerKind: providerKind.toUpperCase(),
+                }).providerKind,
+                expected,
+                `${providerKind} uppercase`);
+        }
+    });
+
+    test('normalizes and projects every independently expected bounded launch failure value', async () => {
         const events: EditorAssistanceTelemetryEvent[] = [];
         let now = 0;
         const telemetry = new EditorAssistanceTelemetry({
@@ -35,59 +142,60 @@ suite('editor assistance telemetry', () => {
                 events.push({ eventName, properties, measurements });
             },
         });
-        const baseInput = {
-            stage: 'debugSession',
-            category: 'unknown',
-            controller: 'editor',
-            mode: 'other',
-            providerKind: 'other',
-        } satisfies LaunchFailureInput;
 
-        for (const stage of launchFailureStages) {
-            await assertNormalizedFailureIsProjected(telemetry, events, normalizeLaunchFailure({
-                ...baseInput,
-                stage,
-            }));
+        for (const stage of expectedLaunchFailureStages) {
+            await assertLaunchFailureIsNormalizedAndProjected(
+                telemetry,
+                events,
+                { ...baseLaunchFailureInput, stage },
+                { ...baseSanitizedLaunchFailure, stage });
         }
-        for (const category of launchFailureCategories) {
-            await assertNormalizedFailureIsProjected(telemetry, events, normalizeLaunchFailure({
-                ...baseInput,
-                category,
-            }));
+        for (const category of expectedLaunchFailureCategories) {
+            await assertLaunchFailureIsNormalizedAndProjected(
+                telemetry,
+                events,
+                { ...baseLaunchFailureInput, category },
+                { ...baseSanitizedLaunchFailure, category });
         }
-        for (const controller of launchFailureControllers) {
-            await assertNormalizedFailureIsProjected(telemetry, events, normalizeLaunchFailure({
-                ...baseInput,
-                controller,
-            }));
+        for (const controller of expectedLaunchFailureControllers) {
+            await assertLaunchFailureIsNormalizedAndProjected(
+                telemetry,
+                events,
+                { ...baseLaunchFailureInput, controller },
+                { ...baseSanitizedLaunchFailure, controller });
         }
-        for (const mode of launchFailureModes) {
-            await assertNormalizedFailureIsProjected(telemetry, events, normalizeLaunchFailure({
-                ...baseInput,
-                mode,
-            }));
+        for (const mode of expectedLaunchFailureModes) {
+            await assertLaunchFailureIsNormalizedAndProjected(
+                telemetry,
+                events,
+                { ...baseLaunchFailureInput, mode },
+                { ...baseSanitizedLaunchFailure, mode });
         }
-        for (const providerKind of launchFailureProviderKinds) {
-            await assertNormalizedFailureIsProjected(telemetry, events, normalizeLaunchFailure({
-                ...baseInput,
-                providerKind,
-            }));
+        for (const providerKind of expectedLaunchFailureProviderKinds) {
+            await assertLaunchFailureIsNormalizedAndProjected(
+                telemetry,
+                events,
+                { ...baseLaunchFailureInput, providerKind },
+                { ...baseSanitizedLaunchFailure, providerKind });
         }
+        for (const [exitCodeBucket, input] of expectedLaunchFailureExitCodeCases) {
+            await assertLaunchFailureIsNormalizedAndProjected(
+                telemetry,
+                events,
+                { ...baseLaunchFailureInput, ...input },
+                { ...baseSanitizedLaunchFailure, exitCodeBucket });
+        }
+    });
 
-        const exitCodeInputs: Record<LaunchFailureExitCodeBucket, Partial<LaunchFailureInput>> = {
-            none: {},
-            zero: { exitCode: 0 },
-            one: { exitCode: 1 },
-            signal: { signal: 'SIGTERM' },
-            other: { exitCode: 2 },
-        };
-        for (const exitCodeBucket of launchFailureExitCodeBuckets) {
-            await assertNormalizedFailureIsProjected(telemetry, events, normalizeLaunchFailure({
-                ...baseInput,
-                ...exitCodeInputs[exitCodeBucket],
-            }));
-        }
-
+    test('bounds unknown launch failure values and omits them from telemetry', async () => {
+        const events: EditorAssistanceTelemetryEvent[] = [];
+        let now = 0;
+        const telemetry = new EditorAssistanceTelemetry({
+            clock: { now: () => now++ },
+            sendEvent: (eventName, properties, measurements) => {
+                events.push({ eventName, properties, measurements });
+            },
+        });
         const unknownValues = [
             'private-stage',
             'private-category',
@@ -97,6 +205,22 @@ suite('editor assistance telemetry', () => {
             'private-exit-code',
             'private-outcome',
         ];
+        assert.deepStrictEqual(normalizeLaunchFailure({
+            stage: unknownValues[0],
+            category: unknownValues[1],
+            controller: unknownValues[2],
+            mode: unknownValues[3],
+            providerKind: unknownValues[4],
+            exitCode: unknownValues[5],
+        } as unknown as LaunchFailureInput), {
+            stage: 'debugSession',
+            category: 'unknown',
+            controller: 'editor',
+            mode: 'other',
+            providerKind: 'other',
+            exitCodeBucket: 'other',
+        });
+
         await telemetry.capture(aspireExplainLaunchFailureToolName, async () => ({
             success: true,
             tool: aspireExplainLaunchFailureToolName,
@@ -401,10 +525,15 @@ function createTelemetry(
     });
 }
 
-async function assertNormalizedFailureIsProjected(
+async function assertLaunchFailureIsNormalizedAndProjected(
     telemetry: EditorAssistanceTelemetry,
     events: EditorAssistanceTelemetryEvent[],
-    failure: SanitizedLaunchFailure): Promise<void> {
+    input: LaunchFailureInput,
+    expectedFailure: SanitizedLaunchFailure): Promise<void> {
+    const failure = normalizeLaunchFailure(input);
+    assert.deepStrictEqual(failure, expectedFailure);
+    const previousEventCount = events.length;
+
     await telemetry.capture(aspireExplainLaunchFailureToolName, async () => ({
         success: true,
         tool: aspireExplainLaunchFailureToolName,
@@ -414,18 +543,19 @@ async function assertNormalizedFailureIsProjected(
         recommendedActions: [],
     }));
 
+    assert.strictEqual(events.length, previousEventCount + 1);
     assert.deepStrictEqual(events.at(-1), {
         eventName: 'aspire/vscode/editorassistance/result',
         properties: {
             tool: aspireExplainLaunchFailureToolName,
             outcome: 'failureFound',
             source: 'languageModelTool',
-            controller: failure.controller,
-            mode: failure.mode,
-            stage: failure.stage,
-            category: failure.category,
-            provider_kind: failure.providerKind,
-            exit_code_bucket: failure.exitCodeBucket,
+            controller: expectedFailure.controller,
+            mode: expectedFailure.mode,
+            stage: expectedFailure.stage,
+            category: expectedFailure.category,
+            provider_kind: expectedFailure.providerKind,
+            exit_code_bucket: expectedFailure.exitCodeBucket,
         },
         measurements: { duration_ms: 1 },
     });
