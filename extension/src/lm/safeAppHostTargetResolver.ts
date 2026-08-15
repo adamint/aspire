@@ -3,8 +3,10 @@ import * as vscode from 'vscode';
 
 import { extensionLogOutputChannel } from '../utils/logging';
 import {
+    compareAppHostIdentity,
     getOrCreateIdentityForAbsolutePath,
     isAppHostPathWithinDirectory,
+    type AppHostIdentityRelation,
     type OpaqueAppHostIdentity,
 } from '../utils/appHostIdentity';
 import { isCommandCancellation } from '../utils/telemetry';
@@ -101,6 +103,16 @@ export class SafeAppHostTargetResolver {
      */
     getIdentityForAppHostPath(appHostPath: string): AppHostTargetIdentity {
         return getOrCreateIdentityForAbsolutePath(appHostPath);
+    }
+
+    /**
+     * Compares a fresh CLI-reported AppHost path to a resolved registry target using the
+     * same filesystem and project/source equivalence rules as editor lifecycle ownership.
+     */
+    compareTargetToAppHostPath(
+        target: ResolvedAppHostTarget,
+        appHostPath: string | undefined): AppHostIdentityRelation {
+        return compareAppHostIdentity(target.absolutePath, appHostPath);
     }
 
     /**

@@ -66,6 +66,18 @@ suite('AspireDebugSession tests', () => {
         return dir;
     }
 
+    function trackDashboardDebugSession(
+        aspireDebugSession: AspireDebugSession,
+        dashboardDebugSession: vscode.DebugSession): void {
+        (aspireDebugSession as any)._dashboardLauncher.trackDashboardDebugSession(dashboardDebugSession);
+    }
+
+    function getTrackedDashboardDebugSessions(
+        aspireDebugSession: AspireDebugSession): readonly vscode.DebugSession[] {
+        return [...(aspireDebugSession as any)._dashboardLauncher._dashboardDebugSessions.values()]
+            .map((tracked: { session: vscode.DebugSession }) => tracked.session);
+    }
+
     setup(() => {
         __resetAppHostIdentityRegistryForTests();
         __resetLaunchFailureJournalForTests();
@@ -1041,7 +1053,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         } as vscode.WorkspaceConfiguration);
         const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').resolves();
         const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
-        (aspireDebugSession as any)._dashboardLauncher._dashboardDebugSession = dashboardDebugSession;
+        trackDashboardDebugSession(aspireDebugSession, dashboardDebugSession);
 
         aspireDebugSession.dispose();
         await aspireDebugSession.stopDebugging();
@@ -1070,13 +1082,13 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         } as vscode.WorkspaceConfiguration);
         const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').resolves();
         const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
-        (aspireDebugSession as any)._dashboardLauncher._dashboardDebugSession = dashboardDebugSession;
+        trackDashboardDebugSession(aspireDebugSession, dashboardDebugSession);
 
         aspireDebugSession.dispose();
         await aspireDebugSession.stopDebugging();
 
         sinon.assert.calledOnceWithExactly(stopDebugging, parentDebugSession);
-        assert.strictEqual((aspireDebugSession as any)._dashboardLauncher._dashboardDebugSession, null);
+        assert.deepStrictEqual(getTrackedDashboardDebugSessions(aspireDebugSession), []);
     });
 
     test('stopDebugging retries a failed dashboard debug session stop', async () => {
@@ -1103,7 +1115,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             }
         });
         const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
-        (aspireDebugSession as any)._dashboardLauncher._dashboardDebugSession = dashboardDebugSession;
+        trackDashboardDebugSession(aspireDebugSession, dashboardDebugSession);
 
         await assert.rejects(() => aspireDebugSession.stopDebugging(), /Dashboard stop failed/);
         await aspireDebugSession.stopDebugging();
@@ -1149,6 +1161,190 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         await aspireDebugSession.stopDebugging();
 
         sinon.assert.calledOnceWithExactly(stopDebugging, parentDebugSession);
+    });
+
+    test('stopDebugging stops every explicitly opened dashboard debug session', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        const firstDashboardDebugSession = {
+            id: 'first-dashboard-session',
+            type: 'pwa-msedge',
+            name: aspireDashboard,
+            configuration: { name: aspireDashboard },
+            parentSession: parentDebugSession,
+        } as unknown as vscode.DebugSession;
+        const secondDashboardDebugSession = {
+            id: 'second-dashboard-session',
+            type: 'pwa-chrome',
+            name: aspireDashboard,
+            configuration: { name: aspireDashboard },
+            parentSession: parentDebugSession,
+        } as unknown as vscode.DebugSession;
+        sinon.stub(vscode.workspace, 'getConfiguration').withArgs('aspire').returns({
+            get: <T>(section: string, defaultValue: T) =>
+                section === 'closeDashboardOnDebugEnd' ? true as T : defaultValue,
+        } as vscode.WorkspaceConfiguration);
+        const startListeners: Array<{
+            callback: (session: vscode.DebugSession) => void;
+            disposed: boolean;
+        }> = [];
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            const listener = { callback, disposed: false };
+            startListeners.push(listener);
+            return { dispose: () => { listener.disposed = true; } };
+        });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').returns({ dispose: sinon.stub() });
+        sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+
+        const firstOpen = aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
+        startListeners.filter(listener => !listener.disposed)
+            .forEach(listener => listener.callback(firstDashboardDebugSession));
+        await firstOpen;
+        const secondOpen = aspireDebugSession.openDashboard('https://localhost:1234', 'debugChrome');
+        startListeners.filter(listener => !listener.disposed)
+            .forEach(listener => listener.callback(secondDashboardDebugSession));
+        await secondOpen;
+
+        await aspireDebugSession.stopDebugging();
+
+        assert.deepStrictEqual(
+            stopDebugging.getCalls().map(call => call.args[0]),
+            [firstDashboardDebugSession, secondDashboardDebugSession, parentDebugSession]);
+        assert.strictEqual((aspireDebugSession as any)._dashboardLauncher.hasSessionsToStop, false);
+    });
+
+    test('overlapping same-browser dashboard launches keep start-event ownership isolated', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        sinon.stub(vscode.workspace, 'getConfiguration').withArgs('aspire').returns({
+            get: <T>(section: string, defaultValue: T) =>
+                section === 'closeDashboardOnDebugEnd' ? true as T : defaultValue,
+        } as vscode.WorkspaceConfiguration);
+        const startListeners: Array<{
+            callback: (session: vscode.DebugSession) => void;
+            disposed: boolean;
+        }> = [];
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            const listener = { callback, disposed: false };
+            startListeners.push(listener);
+            return { dispose: () => { listener.disposed = true; } };
+        });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').returns({ dispose: sinon.stub() });
+        let resolveFirstStart!: (didStart: boolean) => void;
+        let resolveSecondStart!: (didStart: boolean) => void;
+        const startDebugging = sinon.stub(vscode.debug, 'startDebugging');
+        startDebugging.onFirstCall().returns(new Promise<boolean>(resolve => {
+            resolveFirstStart = resolve;
+        }));
+        startDebugging.onSecondCall().returns(new Promise<boolean>(resolve => {
+            resolveSecondStart = resolve;
+        }));
+        const openExternal = sinon.stub(vscode.env, 'openExternal').resolves(true);
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+
+        const firstOpen = aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
+        const secondOpen = aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
+        const secondDebugConfiguration = startDebugging.secondCall.args[1] as vscode.DebugConfiguration;
+        const secondDashboardDebugSession = {
+            id: 'second-dashboard-session',
+            type: 'pwa-msedge',
+            name: aspireDashboard,
+            configuration: secondDebugConfiguration,
+            parentSession: parentDebugSession,
+        } as unknown as vscode.DebugSession;
+
+        startListeners.filter(listener => !listener.disposed)
+            .forEach(listener => listener.callback(secondDashboardDebugSession));
+        resolveFirstStart(false);
+        resolveSecondStart(true);
+
+        assert.deepStrictEqual(await Promise.all([firstOpen, secondOpen]), ['externalBrowser', 'debugBrowser']);
+        assert.strictEqual(openExternal.callCount, 1);
+        assert.strictEqual(startListeners.every(listener => listener.disposed), true);
+        assert.deepStrictEqual(getTrackedDashboardDebugSessions(aspireDebugSession), [secondDashboardDebugSession]);
+
+        await aspireDebugSession.stopDebugging();
+        assert.deepStrictEqual(
+            stopDebugging.getCalls().map(call => call.args[0]),
+            [secondDashboardDebugSession, parentDebugSession]);
+    });
+
+    test('natural dashboard termination keeps other opened dashboard sessions tracked', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        const firstDashboardDebugSession = {
+            id: 'first-dashboard-session',
+            type: 'pwa-msedge',
+            name: aspireDashboard,
+            configuration: { name: aspireDashboard },
+            parentSession: parentDebugSession,
+        } as unknown as vscode.DebugSession;
+        const secondDashboardDebugSession = {
+            id: 'second-dashboard-session',
+            type: 'pwa-chrome',
+            name: aspireDashboard,
+            configuration: { name: aspireDashboard },
+            parentSession: parentDebugSession,
+        } as unknown as vscode.DebugSession;
+        sinon.stub(vscode.workspace, 'getConfiguration').withArgs('aspire').returns({
+            get: <T>(section: string, defaultValue: T) =>
+                section === 'closeDashboardOnDebugEnd' ? true as T : defaultValue,
+        } as vscode.WorkspaceConfiguration);
+        const startListeners: Array<{
+            callback: (session: vscode.DebugSession) => void;
+            disposed: boolean;
+        }> = [];
+        const terminationListeners: Array<{
+            callback: (session: vscode.DebugSession) => void;
+            disposed: boolean;
+        }> = [];
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            const listener = { callback, disposed: false };
+            startListeners.push(listener);
+            return { dispose: () => { listener.disposed = true; } };
+        });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(callback => {
+            const listener = { callback, disposed: false };
+            terminationListeners.push(listener);
+            return { dispose: () => { listener.disposed = true; } };
+        });
+        sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+
+        const firstOpen = aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
+        startListeners.filter(listener => !listener.disposed)
+            .forEach(listener => listener.callback(firstDashboardDebugSession));
+        await firstOpen;
+        const secondOpen = aspireDebugSession.openDashboard('https://localhost:1234', 'debugChrome');
+        startListeners.filter(listener => !listener.disposed)
+            .forEach(listener => listener.callback(secondDashboardDebugSession));
+        await secondOpen;
+
+        terminationListeners.filter(listener => !listener.disposed)
+            .forEach(listener => listener.callback(secondDashboardDebugSession));
+
+        assert.strictEqual((aspireDebugSession as any)._dashboardLauncher.hasSessionsToStop, true);
+        await aspireDebugSession.stopDebugging();
+        assert.deepStrictEqual(
+            stopDebugging.getCalls().map(call => call.args[0]),
+            [firstDashboardDebugSession, parentDebugSession]);
+        assert.strictEqual((aspireDebugSession as any)._dashboardLauncher.hasSessionsToStop, false);
     });
 
     test('stopDebugging retries a failed dashboard stop that started during shutdown', async () => {
@@ -1355,7 +1551,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         } as vscode.WorkspaceConfiguration);
         const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').resolves();
         const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
-        (aspireDebugSession as any)._dashboardLauncher._dashboardDebugSession = dashboardDebugSession;
+        trackDashboardDebugSession(aspireDebugSession, dashboardDebugSession);
 
         aspireDebugSession.finalizeForExtensionShutdown();
         await Promise.resolve();
@@ -1403,12 +1599,12 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         const openPromise = aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
         await Promise.resolve();
         startSessionCallback?.(foreignDashboardSession);
-        const trackedAfterForeignSession = (aspireDebugSession as any)._dashboardLauncher._dashboardDebugSession;
+        const trackedAfterForeignSession = getTrackedDashboardDebugSessions(aspireDebugSession);
         startSessionCallback?.(ownDashboardSession);
         await openPromise;
 
-        assert.strictEqual(trackedAfterForeignSession, null);
-        assert.strictEqual((aspireDebugSession as any)._dashboardLauncher._dashboardDebugSession, ownDashboardSession);
+        assert.deepStrictEqual(trackedAfterForeignSession, []);
+        assert.deepStrictEqual(getTrackedDashboardDebugSessions(aspireDebugSession), [ownDashboardSession]);
     });
 
     test('launching the dashboard browser stops a session that starts after the Aspire session was disposed', async () => {
@@ -1450,7 +1646,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         await aspireDebugSession.stopDebugging();
 
         assert.strictEqual(stopDebugging.calledWith(dashboardDebugSession), true);
-        assert.strictEqual((aspireDebugSession as any)._dashboardLauncher._dashboardDebugSession, null);
+        assert.deepStrictEqual(getTrackedDashboardDebugSessions(aspireDebugSession), []);
     });
 
     test('launching the dashboard browser does not fall back to an external browser after the Aspire session was disposed', async () => {

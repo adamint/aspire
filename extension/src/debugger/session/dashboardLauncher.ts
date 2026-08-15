@@ -21,6 +21,7 @@ export type ResolvedDashboardLaunchBehavior = {
   readonly source: DashboardLaunchBehaviorSource;
 };
 
+const dashboardLaunchIdConfigKey = '__aspireDashboardLaunchId';
 const preOptInDefaultDashboardBrowser: DashboardLaunchBehavior = 'integratedBrowser';
 
 export function normalizeDashboardLaunchBehavior(value: unknown): DashboardLaunchBehavior | undefined {
@@ -131,13 +132,9 @@ export interface DashboardLaunchNotificationOptions {
   readonly delayMs?: number;
 }
 
-export async function showDashboardLaunchNotification(options: DashboardLaunchNotificationOptions): Promise<void> {
+export function showDashboardLaunchNotification(options: DashboardLaunchNotificationOptions): void {
   if (options.delayMs && options.delayMs > 0) {
-    await new Promise<void>(resolve => {
-      setTimeout(() => {
-        void showDashboardLaunchNotification({ ...options, delayMs: 0 }).finally(resolve);
-      }, options.delayMs);
-    });
+    setTimeout(() => showDashboardLaunchNotification({ ...options, delayMs: 0 }), options.delayMs);
     return;
   }
 
@@ -147,7 +144,23 @@ export async function showDashboardLaunchNotification(options: DashboardLaunchNo
   }
   actions.push({ title: settingsLabel });
 
-  const selected = await vscode.window.showInformationMessage(openAspireDashboard, ...actions);
+  let selection: Thenable<vscode.MessageItem | undefined>;
+  try {
+    selection = vscode.window.showInformationMessage(openAspireDashboard, ...actions);
+  }
+  catch {
+    extensionLogOutputChannel.error('Failed to show the Aspire Dashboard notification.');
+    return;
+  }
+
+  void Promise.resolve(selection)
+    .then(selected => handleDashboardLaunchNotificationSelection(selected, options))
+    .catch(() => extensionLogOutputChannel.error('Failed to handle the Aspire Dashboard notification.'));
+}
+
+async function handleDashboardLaunchNotificationSelection(
+  selected: vscode.MessageItem | undefined,
+  options: DashboardLaunchNotificationOptions): Promise<void> {
   if (!selected) {
     return;
   }
@@ -176,16 +189,23 @@ async function openDashboardNotificationLink(url: string): Promise<void> {
 }
 
 export function openDashboardLaunchBehaviorSettings(source: DashboardLaunchBehaviorSource): void {
-  if (source === 'debugConfiguration') {
-    void vscode.commands.executeCommand('workbench.action.debug.configure');
+  let command: Thenable<unknown>;
+  try {
+    command = source === 'debugConfiguration'
+      ? vscode.commands.executeCommand('workbench.action.debug.configure')
+      : vscode.commands.executeCommand(
+        'workbench.action.openSettings',
+        source === 'legacyConfiguration'
+          ? 'aspire.enableAspireDashboardAutoLaunch'
+          : 'aspire.dashboardBrowser');
+  }
+  catch {
+    extensionLogOutputChannel.error('Failed to open the Aspire Dashboard launch settings.');
     return;
   }
 
-  void vscode.commands.executeCommand(
-    'workbench.action.openSettings',
-    source === 'legacyConfiguration'
-      ? 'aspire.enableAspireDashboardAutoLaunch'
-      : 'aspire.dashboardBrowser');
+  void Promise.resolve(command).catch(
+    () => extensionLogOutputChannel.error('Failed to open the Aspire Dashboard launch settings.'));
 }
 
 type DashboardDebugType = 'pwa-chrome' | 'pwa-msedge' | 'firefox';
@@ -316,6 +336,14 @@ export interface DashboardLauncherHost {
   waitWithinBudget(stop: PromiseLike<void>, sessionName: string, deadline: number, onTimeout?: () => void, timeoutMessage?: (sessionName: string, seconds: number) => string): Promise<void>;
 }
 
+interface TrackedDashboardDebugSession {
+  readonly session: vscode.DebugSession;
+  readonly terminationDisposable: vscode.Disposable;
+  readonly terminationPromise: Promise<void>;
+  readonly resolveTermination: () => void;
+  stopPromise?: Promise<void>;
+}
+
 export class DashboardLauncher implements vscode.Disposable {
   /**
    * Dashboard browsers are optional UI children. Give their launch/stop a smaller share of the
@@ -325,13 +353,10 @@ export class DashboardLauncher implements vscode.Disposable {
 
   private readonly _host: DashboardLauncherHost;
 
-  private _dashboardDebugSession: vscode.DebugSession | null = null;
-  private _dashboardStopPromise: Promise<void> | undefined;
-  private _dashboardTerminationDisposable: vscode.Disposable | undefined;
-  private _dashboardTerminationPromise: Promise<void> | undefined;
-  private _resolveDashboardTermination: (() => void) | undefined;
+  private readonly _dashboardDebugSessions = new Map<string, TrackedDashboardDebugSession>();
   private readonly _pendingDashboardDebugSessionStarts = new Set<Promise<void>>();
   private _dashboardUrl: string | undefined;
+  private _nextDashboardLaunchId = 0;
 
   constructor(host: DashboardLauncherHost) {
     this._host = host;
@@ -346,7 +371,7 @@ export class DashboardLauncher implements vscode.Disposable {
    * produced its session yet.
    */
   get hasSessionsToStop(): boolean {
-    return this._dashboardDebugSession !== null
+    return this._dashboardDebugSessions.size > 0
       || this._pendingDashboardDebugSessionStarts.size > 0;
   }
 
@@ -384,6 +409,8 @@ export class DashboardLauncher implements vscode.Disposable {
     url: string,
     debugType: DashboardDebugType): Promise<DashboardPresentation | undefined> {
     const debugConfig = createDashboardDebugConfiguration(url, debugType);
+    const launchId = ++this._nextDashboardLaunchId;
+    debugConfig[dashboardLaunchIdConfigKey] = launchId;
 
     // Register listener before starting so we don't miss the event.
     // The started session must be matched to *this* Aspire session: concurrent Aspire
@@ -392,9 +419,16 @@ export class DashboardLauncher implements vscode.Disposable {
     // another session's browser.
     const disposable = vscode.debug.onDidStartDebugSession((session) => {
       if (session.parentSession?.id === this._host.parentSession.id && session.configuration.name === aspireDashboard && session.type === debugType) {
-        this._dashboardDebugSession = session;
+        const startedLaunchId = session.configuration[dashboardLaunchIdConfigKey];
+        if (startedLaunchId !== undefined && startedLaunchId !== launchId) {
+          return;
+        }
+        if (this._dashboardDebugSessions.has(session.id)) {
+          return;
+        }
+
         disposable.dispose();
-        this.trackDashboardTermination(session);
+        this.trackDashboardDebugSession(session);
         if (this._host.isShuttingDown) {
           this.closeDashboardInBackground();
         }
@@ -485,51 +519,30 @@ export class DashboardLauncher implements vscode.Disposable {
   private closeDashboard(): Promise<void> {
     const aspireConfig = vscode.workspace.getConfiguration('aspire');
     const shouldClose = aspireConfig.get<boolean>('closeDashboardOnDebugEnd', true);
+    const dashboardDebugSessions = [...this._dashboardDebugSessions.values()];
 
     if (!shouldClose) {
-      if (this._dashboardDebugSession) {
-        this.clearDashboardDebugSession(this._dashboardDebugSession);
+      for (const tracked of dashboardDebugSessions) {
+        this.clearDashboardDebugSession(tracked.session);
       }
       return Promise.resolve();
     }
 
-    const dashboardDebugSession = this._dashboardDebugSession;
-    if (!dashboardDebugSession) {
+    if (dashboardDebugSessions.length === 0) {
       return Promise.resolve();
     }
 
-    if (this._dashboardStopPromise) {
-      return this._dashboardStopPromise;
-    }
-
     extensionLogOutputChannel.info('Closing dashboard browser...');
-    const stopRequest = startStop(() => vscode.debug.stopDebugging(dashboardDebugSession));
-    const stop = this._dashboardTerminationPromise
-      ? Promise.race([stopRequest, this._dashboardTerminationPromise])
-      : stopRequest;
-    const attempt = stop.then(
-      () => {
-        this.clearDashboardDebugSession(dashboardDebugSession);
-        if (this._dashboardStopPromise === attempt) {
-          this._dashboardStopPromise = undefined;
+    return Promise.allSettled(
+      dashboardDebugSessions.map(tracked => this.closeDashboardDebugSession(tracked)))
+      .then(results => {
+        const failures = results
+          .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+          .map(result => result.reason);
+        if (failures.length > 0) {
+          throw failures[0];
         }
-        extensionLogOutputChannel.info('Dashboard debug session stopped.');
-      },
-      err => {
-        // A natural termination can race the stop request and remove the session before VS Code
-        // settles the request. The termination event is authoritative: there is nothing left to
-        // retry even if the stale stop request rejects.
-        if (this._dashboardDebugSession !== dashboardDebugSession) {
-          return;
-        }
-        if (this._dashboardStopPromise === attempt) {
-          this._dashboardStopPromise = undefined;
-        }
-        throw err;
       });
-    this._dashboardStopPromise = attempt;
-
-    return attempt;
   }
 
   async stopDashboardWithinBudget(shutdownDeadline: number): Promise<void> {
@@ -556,36 +569,79 @@ export class DashboardLauncher implements vscode.Disposable {
 
     await this._host.stopWithinBudget(
       () => this.closeDashboard(),
-      this._dashboardDebugSession?.name ?? aspireDashboard,
+      this._dashboardDebugSessions.values().next().value?.session.name ?? aspireDashboard,
       deadline,
-      () => { this._dashboardStopPromise = undefined; });
+      () => this.resetDashboardStopAttempts());
   }
 
-  private trackDashboardTermination(session: vscode.DebugSession): void {
-    this._dashboardTerminationDisposable?.dispose();
-    this._dashboardTerminationPromise = new Promise<void>(resolve => {
-      this._resolveDashboardTermination = resolve;
+  private closeDashboardDebugSession(tracked: TrackedDashboardDebugSession): Promise<void> {
+    if (this._dashboardDebugSessions.get(tracked.session.id) !== tracked) {
+      return Promise.resolve();
+    }
+    if (tracked.stopPromise) {
+      return tracked.stopPromise;
+    }
+
+    const stopRequest = startStop(() => vscode.debug.stopDebugging(tracked.session));
+    const attempt = Promise.race([stopRequest, tracked.terminationPromise]).then(
+      () => {
+        this.clearDashboardDebugSession(tracked.session);
+        if (tracked.stopPromise === attempt) {
+          tracked.stopPromise = undefined;
+        }
+        extensionLogOutputChannel.info('Dashboard debug session stopped.');
+      },
+      err => {
+        // A natural termination can race the stop request and remove the session before VS Code
+        // settles the request. The termination event is authoritative: there is nothing left to
+        // retry even if the stale stop request rejects.
+        if (this._dashboardDebugSessions.get(tracked.session.id) !== tracked) {
+          return;
+        }
+        if (tracked.stopPromise === attempt) {
+          tracked.stopPromise = undefined;
+        }
+        throw err;
+      });
+    tracked.stopPromise = attempt;
+
+    return attempt;
+  }
+
+  private trackDashboardDebugSession(session: vscode.DebugSession): void {
+    let resolveTermination!: () => void;
+    const terminationPromise = new Promise<void>(resolve => {
+      resolveTermination = resolve;
     });
     const disposable = vscode.debug.onDidTerminateDebugSession(terminatedSession => {
       if (terminatedSession.id === session.id) {
         this.clearDashboardDebugSession(session);
       }
     });
-    this._dashboardTerminationDisposable = disposable;
+    this._dashboardDebugSessions.set(session.id, {
+      session,
+      terminationDisposable: disposable,
+      terminationPromise,
+      resolveTermination,
+    });
   }
 
   private clearDashboardDebugSession(session: vscode.DebugSession): void {
-    if (this._dashboardDebugSession !== session) {
+    const tracked = this._dashboardDebugSessions.get(session.id);
+    if (!tracked || tracked.session !== session) {
       return;
     }
 
-    this._resolveDashboardTermination?.();
-    this._dashboardDebugSession = null;
-    this._dashboardStopPromise = undefined;
-    this._dashboardTerminationDisposable?.dispose();
-    this._dashboardTerminationDisposable = undefined;
-    this._dashboardTerminationPromise = undefined;
-    this._resolveDashboardTermination = undefined;
+    tracked.resolveTermination();
+    tracked.stopPromise = undefined;
+    tracked.terminationDisposable.dispose();
+    this._dashboardDebugSessions.delete(session.id);
+  }
+
+  private resetDashboardStopAttempts(): void {
+    for (const tracked of this._dashboardDebugSessions.values()) {
+      tracked.stopPromise = undefined;
+    }
   }
 
   private closeDashboardInBackground(): void {
@@ -595,7 +651,7 @@ export class DashboardLauncher implements vscode.Disposable {
       // Once disposal has released this session from the extension context, no later caller can
       // retry a browser that arrived after the ordered shutdown's launch budget. Give that narrow
       // finalization race one fresh VS Code stop request before giving up.
-      if (this._host.isDisposed && this._dashboardDebugSession) {
+      if (this._host.isDisposed && this._dashboardDebugSessions.size > 0) {
         stopSessionInBackground(() => this.closeDashboard(), 'dashboard debug session after finalization');
       }
     });
@@ -605,7 +661,5 @@ export class DashboardLauncher implements vscode.Disposable {
     // Normal teardown awaits this stop as part of stopAllSessions. Keep an idempotent background
     // fallback for direct finalization during extension shutdown.
     this.closeDashboardInBackground();
-    this._dashboardTerminationDisposable?.dispose();
-    this._dashboardTerminationDisposable = undefined;
   }
 }

@@ -274,6 +274,6 @@ export const appHostLifecycleLaunchAlreadyClaimed = vscode.l10n.t('This Aspire A
 export const editorAssistanceOpenDashboardConfirmationTitle = vscode.l10n.t('Open Aspire Dashboard');
 export const editorAssistanceOpenDashboardConfirmationMessage = (appHostPath: string) => vscode.l10n.t('Open the Aspire Dashboard for {0}?', appHostPath);
 export const editorAssistanceOpenDashboardInvocationMessage = (appHostPath: string) => vscode.l10n.t('Opening Aspire Dashboard for {0}...', appHostPath);
-export const editorAssistanceOpenOutputConfirmationTitle = vscode.l10n.t('Focus Aspire Output');
-export const editorAssistanceOpenOutputConfirmationMessage = vscode.l10n.t('Aspire Output will receive editor focus.');
-export const editorAssistanceOpenOutputInvocationMessage = vscode.l10n.t('Focusing Aspire Output...');
+export const editorAssistanceOpenOutputConfirmationTitle = vscode.l10n.t('Show Aspire Output');
+export const editorAssistanceOpenOutputConfirmationMessage = vscode.l10n.t('The Aspire Output view will be shown.');
+export const editorAssistanceOpenOutputInvocationMessage = vscode.l10n.t('Showing Aspire Output...');

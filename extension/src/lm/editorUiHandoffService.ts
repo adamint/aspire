@@ -35,9 +35,21 @@ export class EditorUiHandoffService implements EditorUiHandoffOperations {
             const appHosts = await this._dependencies.appHostRepository.fetchRunningAppHostsOnce(token);
             throwIfCanceled(token);
 
-            const matches = appHosts.filter(appHost =>
-                this._dependencies.targetResolver.getIdentityForAppHostPath(appHost.appHostPath) === target.identity);
-            const runningMatches = matches.filter(appHost => appHost.status?.toLowerCase() !== 'stopped');
+            const runningMatches: Array<(typeof appHosts)[number]> = [];
+            for (const appHost of appHosts) {
+                if (appHost.status?.toLowerCase() === 'stopped') {
+                    continue;
+                }
+
+                const relation = this._dependencies.targetResolver.compareTargetToAppHostPath(target, appHost.appHostPath);
+                if (relation === 'ambiguous') {
+                    return { outcome: 'ambiguousAppHost' };
+                }
+                if (relation === 'same') {
+                    runningMatches.push(appHost);
+                }
+            }
+
             if (runningMatches.length === 0) {
                 return { outcome: 'appHostNotRunning' };
             }
@@ -51,14 +63,18 @@ export class EditorUiHandoffService implements EditorUiHandoffOperations {
             }
 
             const sessions = this._dependencies.getAspireDebugSessions(target.identity);
-            const editorSession = sessions.length === 1 ? sessions[0] : undefined;
+            const cliPid = runningMatches[0].cliPid;
+            const matchingSessions = typeof cliPid === 'number'
+                ? sessions.filter(session => session.cliProcessId === cliPid)
+                : [];
+            const editorSession = matchingSessions.length === 1 ? matchingSessions[0] : undefined;
             const resolvedBehavior = resolveExplicitDashboardLaunchBehavior(
                 vscode.workspace.getConfiguration('aspire'),
                 editorSession?.configuration.dashboardBrowser);
             throwIfCanceled(token);
 
             if (resolvedBehavior.behavior === 'notification') {
-                await showDashboardLaunchNotification({
+                showDashboardLaunchNotification({
                     baseUrl: dashboardUrl,
                     source: resolvedBehavior.source,
                 });

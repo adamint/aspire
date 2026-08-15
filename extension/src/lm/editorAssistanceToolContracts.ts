@@ -248,6 +248,7 @@ export interface EditorUiHandoffOutput {
 }
 
 export interface EditorUiHandoffDebugSession {
+    readonly cliProcessId: number | undefined;
     readonly configuration: { readonly dashboardBrowser?: unknown };
     openDashboard(url: string, browserType: DashboardBrowserType): Promise<DashboardPresentation | undefined>;
 }
