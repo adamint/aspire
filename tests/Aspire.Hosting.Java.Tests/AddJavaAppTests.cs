@@ -597,6 +597,43 @@ public class AddJavaAppTests
     }
 
     [Fact]
+    public async Task WithOtelAgent_AgentPathContainingSpaces_IsQuotedForTheJvm()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
+
+        var agentPath = OperatingSystem.IsWindows()
+            ? @"C:\opt\java agents\opentelemetry-javaagent.jar"
+            : "/opt/java agents/opentelemetry-javaagent.jar";
+
+        var app = builder.AddJavaApp("api", AppContext.BaseDirectory)
+            .WithOtelAgent(agentPath);
+
+        var envVars = await EnvironmentVariableEvaluator.GetEnvironmentVariablesAsync(
+            app.Resource, DistributedApplicationOperation.Run, TestServiceProvider.Instance);
+
+        // The JVM splits JAVA_TOOL_OPTIONS on whitespace but honours double quotes, so an unquoted path
+        // containing a space aborts startup with "Unrecognized option: agents/opentelemetry-javaagent.jar"
+        // before any application code runs. -javaagent: has no '=' so the whole option is quoted.
+        Assert.Equal($"\"-javaagent:{agentPath}\"", envVars["JAVA_TOOL_OPTIONS"]);
+    }
+
+    [Fact]
+    public async Task WithJvmArgs_ValueContainingSpaces_IsQuotedAfterTheAssignment()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
+
+        var app = builder.AddJavaApp("api", AppContext.BaseDirectory)
+            .WithJvmArgs(["-Dapp.data.dir=/var/lib/my app"]);
+
+        var envVars = await EnvironmentVariableEvaluator.GetEnvironmentVariablesAsync(
+            app.Resource, DistributedApplicationOperation.Run, TestServiceProvider.Instance);
+
+        // For an option with an '=' only the value is quoted. Quoting the whole option would make the JVM
+        // treat "-Dapp.data.dir" as part of the property name and the property would silently not be set.
+        Assert.Equal("-Dapp.data.dir=\"/var/lib/my app\"", envVars["JAVA_TOOL_OPTIONS"]);
+    }
+
+    [Fact]
     public async Task WithOtelAgent_RelativeAgentPath_IsMadeAbsoluteInRunMode()
     {
         using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
