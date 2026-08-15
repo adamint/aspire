@@ -52,10 +52,15 @@ class FakeDiscoveryService implements AppHostLifecycleDiscoveryService {
 
 class FakeEditorStateLaunchService implements AppHostEditorStateLaunchService {
     readonly launchingPaths = new Set<string>();
+    readonly pendingOrActiveRunLaunchPaths = new Set<string>();
     readonly editorSessions: TestEditorSession[] = [];
 
     isLaunching(appHostPath: string): boolean {
         return this.launchingPaths.has(path.resolve(appHostPath));
+    }
+
+    hasPendingOrActiveRunLaunch(appHostPath: string): boolean {
+        return this.pendingOrActiveRunLaunchPaths.has(path.resolve(appHostPath));
     }
 
     getEditorRunSessions(appHostPath: string): AppHostLifecycleEditorSessions {
@@ -256,6 +261,39 @@ suite('Editor assistance AppHost services', () => {
             }
         });
 
+        test('uses selector comparison keys to disambiguate case-insensitive workspace folder names', async () => {
+            const secondRoot = createFixtureDirectory('second-workspace');
+            try {
+                const secondAppHost = path.join(secondRoot, 'AppHost', 'AppHost.csproj');
+                fs.mkdirSync(path.dirname(secondAppHost), { recursive: true });
+                fs.writeFileSync(secondAppHost, appHostProjectContents);
+                addCandidate(discoveryService, secondRoot, secondAppHost);
+                workspaceFoldersStub.value([
+                    createWorkspaceFolder(workspaceRoot, 'Foo', 0),
+                    createWorkspaceFolder(secondRoot, 'foo', 1),
+                ]);
+                const windowsSelectorKey = (value: string) =>
+                    value.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+                const caseInsensitiveResolver = new SafeAppHostTargetResolver(discoveryService, windowsSelectorKey);
+
+                const knownTargets = await caseInsensitiveResolver.enumerateKnownAppHosts(new vscode.CancellationTokenSource().token);
+                const firstResolution = await caseInsensitiveResolver.resolveTarget('foo (1)/AppHost/AppHost.csproj', new vscode.CancellationTokenSource().token);
+                const secondResolution = await caseInsensitiveResolver.resolveTarget('FOO (2)/AppHost/AppHost.csproj', new vscode.CancellationTokenSource().token);
+
+                assert.deepStrictEqual(knownTargets.map(target => target.displayPath), [
+                    'Foo (1)/AppHost/AppHost.csproj',
+                    'foo (2)/AppHost/AppHost.csproj',
+                ]);
+                assertResolved(firstResolution);
+                assertResolved(secondResolution);
+                assert.strictEqual(firstResolution.target.absolutePath, appHostProjectPath);
+                assert.strictEqual(secondResolution.target.absolutePath, secondAppHost);
+            }
+            finally {
+                fs.rmSync(secondRoot, { recursive: true, force: true });
+            }
+        });
+
         test('reports canceled when discovery is canceled', async () => {
             discoveryService.discoverError = new vscode.CancellationError();
 
@@ -404,14 +442,28 @@ suite('Editor assistance AppHost services', () => {
             });
         });
 
-        test('reports starting from a launch reservation before a session exists', async () => {
+        test('reports starting while a run launch is pending before a session exists', async () => {
             launchService.launchingPaths.add(path.resolve(appHostProjectPath));
+            launchService.pendingOrActiveRunLaunchPaths.add(path.resolve(appHostProjectPath));
 
             const snapshot = await snapshotService.createSnapshot(new vscode.CancellationTokenSource().token);
 
             assert.deepStrictEqual(snapshot.appHosts, [{
                 appHost: 'AppHost/AppHost.csproj',
                 state: 'starting',
+                mode: 'other',
+                controller: 'editor',
+            }]);
+        });
+
+        test('does not report starting from a non-run launch reservation', async () => {
+            launchService.launchingPaths.add(path.resolve(appHostProjectPath));
+
+            const snapshot = await snapshotService.createSnapshot(new vscode.CancellationTokenSource().token);
+
+            assert.deepStrictEqual(snapshot.appHosts, [{
+                appHost: 'AppHost/AppHost.csproj',
+                state: 'notDebugging',
                 mode: 'other',
                 controller: 'editor',
             }]);

@@ -501,6 +501,18 @@ export class AppHostLaunchService implements vscode.Disposable {
         return this._reservations.isLaunching(appHostPath);
     }
 
+    /**
+     * Returns whether an editor-owned `run` launch is pending or active for this AppHost.
+     *
+     * This intentionally exposes only a boolean. Editor-assistance callers do not need
+     * launch arguments, configurations, or debug session identifiers.
+     */
+    hasPendingOrActiveRunLaunch(appHostPath: string): boolean {
+        return [...this._pendingRunPathByToken.values(), ...this._activeRunDebugSessionPaths.values()]
+            .some(runPath => compareAppHostIdentity(runPath, appHostPath) === 'same') ||
+            this._reservations.hasPendingExternalRunLaunch(appHostPath);
+    }
+
     tryReserveLaunch(appHostPath: string): boolean {
         return this._reservations.tryReserveLaunch(appHostPath);
     }

@@ -89,7 +89,9 @@ export class SafeAppHostTargetResolver {
     private readonly _identityRegistry = new Map<string, AppHostTargetIdentity>();
     private _nextIdentity = 0;
 
-    constructor(private readonly _discoveryService: AppHostLifecycleDiscoveryService) {
+    constructor(
+        private readonly _discoveryService: AppHostLifecycleDiscoveryService,
+        private readonly _toSelectorKey: (value: string) => string = toSelectorKey) {
     }
 
     /**
@@ -145,8 +147,8 @@ export class SafeAppHostTargetResolver {
             return { resolved: false, outcome: 'error' };
         }
 
-        const requestedKey = toSelectorKey(selector);
-        const displayMatches = knownAppHosts.filter(candidate => toSelectorKey(candidate.displayPath) === requestedKey);
+        const requestedKey = this._toSelectorKey(selector);
+        const displayMatches = knownAppHosts.filter(candidate => this._toSelectorKey(candidate.displayPath) === requestedKey);
         if ((vscode.workspace.workspaceFolders?.length ?? 0) > 1) {
             // A bare relative selector is not stable in a multi-root workspace: a later
             // invocation could re-resolve the same text under a different root. Require
@@ -160,7 +162,7 @@ export class SafeAppHostTargetResolver {
                 return { resolved: false, outcome: 'ambiguousAppHost', knownAppHosts: describeKnownAppHosts(displayMatches) };
             }
 
-            const relativeMatches = knownAppHosts.filter(candidate => toSelectorKey(candidate.relativePath) === requestedKey);
+            const relativeMatches = knownAppHosts.filter(candidate => this._toSelectorKey(candidate.relativePath) === requestedKey);
             if (relativeMatches.length > 0) {
                 return { resolved: false, outcome: 'ambiguousAppHost', knownAppHosts: describeKnownAppHosts(relativeMatches) };
             }
@@ -169,8 +171,8 @@ export class SafeAppHostTargetResolver {
         }
 
         const matches = knownAppHosts.filter(candidate =>
-            toSelectorKey(candidate.relativePath) === requestedKey ||
-            toSelectorKey(candidate.displayPath) === requestedKey);
+            this._toSelectorKey(candidate.relativePath) === requestedKey ||
+            this._toSelectorKey(candidate.displayPath) === requestedKey);
         if (matches.length === 0) {
             return { resolved: false, outcome: 'appHostNotFound', knownAppHosts: describeKnownAppHosts(knownAppHosts) };
         }
@@ -191,7 +193,7 @@ export class SafeAppHostTargetResolver {
      */
     async enumerateKnownAppHosts(token: vscode.CancellationToken): Promise<readonly ResolvedAppHostTarget[]> {
         const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
-        const folderQualifiers = createWorkspaceFolderQualifiers(workspaceFolders);
+        const folderQualifiers = createWorkspaceFolderQualifiers(workspaceFolders, this._toSelectorKey);
         const candidatesByFolder = await Promise.all(workspaceFolders.map(async (folder, index) => ({
             folder,
             folderQualifier: folderQualifiers[index],
@@ -220,7 +222,7 @@ export class SafeAppHostTargetResolver {
                 // Nested workspace folders enumerate the same lexical candidate twice.
                 // Collapse only that duplicate; distinct symlink aliases must remain
                 // independently selectable even when they currently reach one real file.
-                const key = toSelectorKey(candidate.path);
+                const key = this._toSelectorKey(candidate.path);
                 const existing = targets.get(key);
                 if (existing && existing.relativePath.length <= relativePath.length) {
                     continue;
@@ -254,7 +256,9 @@ export class SafeAppHostTargetResolver {
     }
 }
 
-function createWorkspaceFolderQualifiers(workspaceFolders: readonly vscode.WorkspaceFolder[]): readonly string[] {
+function createWorkspaceFolderQualifiers(
+    workspaceFolders: readonly vscode.WorkspaceFolder[],
+    toComparisonKey: (value: string) => string): readonly string[] {
     const nameCounts = new Map<string, number>();
     for (const folder of workspaceFolders) {
         nameCounts.set(folder.name, (nameCounts.get(folder.name) ?? 0) + 1);
@@ -270,7 +274,7 @@ function createWorkspaceFolderQualifiers(workspaceFolders: readonly vscode.Works
         nameOrdinals.set(folder.name, ordinal);
         return `${folder.name} (${ordinal})`;
     });
-    if (new Set(qualifiers).size === qualifiers.length) {
+    if (new Set(qualifiers.map(toComparisonKey)).size === qualifiers.length) {
         return qualifiers;
     }
 

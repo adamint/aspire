@@ -92,7 +92,7 @@ export class EditorStateSnapshotService {
 
         return createSummary(
             target.displayPath,
-            this._dependencies.launchService.isLaunching(target.absolutePath) ? 'starting' : 'notDebugging',
+            this._dependencies.launchService.hasPendingOrActiveRunLaunch(target.absolutePath) ? 'starting' : 'notDebugging',
             'other');
     }
 }

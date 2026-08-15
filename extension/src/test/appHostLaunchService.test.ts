@@ -107,6 +107,37 @@ suite('AppHostLaunchService', () => {
         assert.strictEqual(service.isLaunching('/repo/AppHost.csproj'), true);
     });
 
+    test('run launch state excludes non-run launch reservations', async () => {
+        const runPath = '/repo/Run/AppHost.csproj';
+        const publishPath = '/repo/Publish/AppHost.csproj';
+
+        await service.launch(runPath, 'run', true);
+        await service.launch(publishPath, 'publish', true);
+
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(runPath), true);
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(publishPath), false);
+
+        const runConfiguration = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
+        assert.ok(onDidStartDebugSessionCallback);
+        onDidStartDebugSessionCallback({
+            id: 'run-session',
+            configuration: runConfiguration,
+        } as unknown as vscode.DebugSession);
+
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(runPath), true);
+    });
+
+    test('run launch state includes only exact external reservations', () => {
+        const concretePath = '/repo/Concrete/AppHost.csproj';
+        const directoryPath = '/repo/Unresolved';
+
+        assert.strictEqual(typeof service.tryReserveExternalLaunch(concretePath), 'string');
+        assert.strictEqual(typeof service.tryReserveExternalLaunch(directoryPath, true), 'string');
+
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(concretePath), true);
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch('/repo/Unresolved/AppHost.csproj'), false);
+    });
+
     test('launch fires onDidChangeLaunchingState event', async () => {
         let fired = false;
         service.onDidChangeLaunchingState(() => { fired = true; });

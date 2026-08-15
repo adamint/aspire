@@ -58,6 +58,10 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
         return this.launchingPaths.has(path.resolve(appHostPath));
     }
 
+    hasPendingOrActiveRunLaunch(appHostPath: string): boolean {
+        return this.isLaunching(appHostPath);
+    }
+
     tryReserveLaunch(appHostPath: string): boolean {
         this.reserveLaunchAttempts++;
         if (this.isLaunching(appHostPath)) {

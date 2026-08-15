@@ -84,10 +84,11 @@ export interface AppHostLifecycleToolResult {
  * `getEditorRunSessions` preserves the same path-comparison semantics the lifecycle
  * tools already depend on, while `getEditorSessions` exposes a bounded, safe projection
  * for callers that need to distinguish non-`run` sessions without inheriting VS Code's
- * raw session identifiers or full launch configurations.
+ * raw session identifiers or full launch configurations. Pending launch state is exposed
+ * only for `run`, so publish/deploy/do reservations cannot look like AppHost startup.
  */
 export interface AppHostEditorStateLaunchService {
-    isLaunching(appHostPath: string): boolean;
+    hasPendingOrActiveRunLaunch(appHostPath: string): boolean;
     getEditorRunSessions(appHostPath: string): AppHostLifecycleEditorSessions;
     getEditorSessions(): readonly AppHostEditorSessionSnapshot[];
 }
@@ -98,6 +99,7 @@ export interface AppHostEditorStateLaunchService {
  * as the Aspire tree so editor and CLI-started AppHosts follow one policy.
  */
 export interface AppHostLifecycleLaunchService extends AppHostEditorStateLaunchService {
+    isLaunching(appHostPath: string): boolean;
     /**
      * Synchronously claims the launching slot, or reports that another launch already
      * holds it. See `AppHostLaunchService.tryReserveLaunch`.
