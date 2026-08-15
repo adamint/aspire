@@ -146,7 +146,7 @@ suite('Launched child process discovery', () => {
         assert.strictEqual(new SystemLaunchedChildProcessQuery('linux').canTrustListedProcessIdentity, false);
     });
 
-    test('target-queries Windows processes when bulk CIM identity is incomplete', async () => {
+    test('trusts the Windows Name fallback when ExecutablePath is unavailable', async () => {
         const targetedProcessReads: number[] = [];
         const commandRunner: LaunchedChildProcessCommandRunner = {
             async run(_command, args): Promise<string> {
@@ -177,7 +177,7 @@ suite('Launched child process discovery', () => {
                         ProcessId: 10,
                         ParentProcessId: 1,
                         Name: 'launcher.exe',
-                        ExecutablePath: 'C:\\tool\\launcher.exe',
+                        ExecutablePath: null,
                         CommandLine: '"C:\\tool\\launcher.exe" --run',
                     },
                     {
@@ -197,7 +197,7 @@ suite('Launched child process discovery', () => {
         const windowsIdentity: LaunchedChildProcessIdentity = {
             requiresDirectChild: true,
             isLauncher: candidate =>
-                candidate.executable === 'C:\\tool\\launcher.exe' &&
+                candidate.executable === 'launcher.exe' &&
                 candidate.command === '"C:\\tool\\launcher.exe" --run',
             isCandidate: candidate =>
                 candidate.executable === 'C:\\target\\api.exe' &&

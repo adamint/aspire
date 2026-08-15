@@ -87,6 +87,8 @@ export function parseWindowsProcessList(output: string): readonly LaunchedChildP
 
         const values = row as Record<string, unknown>;
         const executablePath = getNonEmptyString(values.ExecutablePath);
+        // CIM can omit ExecutablePath. Name plus CommandLine is still usable listed identity:
+        // exact-path matchers fail closed on Name, and selected ancestry is freshly queried.
         const process = createProcessInfo(
             values.ProcessId,
             values.ParentProcessId,
