@@ -35,10 +35,9 @@ import { registerInstrumentedCommand } from './activation/instrumentedCommand';
 import { registerCliCommands } from './activation/registerCliCommands';
 import { registerTreeViewCommands } from './activation/registerTreeViewCommands';
 import { registerCodeLensCommands } from './activation/registerCodeLensCommands';
-import { ResourceAttachProviderRegistry } from './debugger/resourceAttachProviders';
+import { extensionResourceAttachProviders, ResourceAttachProviderRegistry } from './debugger/resourceAttachProviders';
 import { ResourceDebugService } from './debugger/resourceDebugService';
 import { ResourceDebugSessionRegistry } from './debugger/resourceDebugSessionRegistry';
-import { projectResourceAttachProvider } from './debugger/languages/dotnet';
 
 let aspireExtensionContext = new AspireExtensionContext();
 
@@ -114,7 +113,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const dataRepository = new AppHostDataRepository(terminalProvider, appHostDiscoveryService, configInfoProvider);
   const resourceDebugService = new ResourceDebugService({
     appHostRepository: dataRepository,
-    attachProviders: new ResourceAttachProviderRegistry([projectResourceAttachProvider]),
+    attachProviders: new ResourceAttachProviderRegistry(extensionResourceAttachProviders),
     sessionRegistry: new ResourceDebugSessionRegistry(),
     startDebugging: (workspaceFolder, configuration) =>
       vscode.debug.startDebugging(workspaceFolder, configuration),

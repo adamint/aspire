@@ -7,6 +7,7 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import * as capabilities from '../capabilities';
 import { projectResourceAttachProvider } from '../debugger/languages/dotnet';
+import { goResourceAttachProvider } from '../debugger/languages/go';
 import type { ResourceDebugger, ResourceDebugRequest, ResourceDebugResult } from '../debugger/resourceDebugContracts';
 import * as cliModule from '../utils/process/cliProcess';
 import * as cliPathModule from '../utils/cliPath';
@@ -1822,6 +1823,32 @@ suite('getResourceContextValue', () => {
         assert.strictEqual(result, 'resource:canAttachDebugger');
     });
 
+    test('running provider-approved Go resource includes attach debugger tree context', () => {
+        const resource = makeResource({
+            resourceType: 'Executable',
+            state: ResourceState.Running,
+            properties: {
+                'resource.launchConfigurationType': 'go',
+                'executable.path': 'go',
+                'executable.pid': '4242',
+            },
+        });
+        const resourceDebugger: ResourceDebugger = {
+            debug: async () => ({ outcome: 'started', providerId: 'go' }),
+            canAttachToResource: candidate => goResourceAttachProvider.canAttachToResource(candidate),
+        };
+        const provider = makeTreeProvider([
+            makeAppHost({ resources: [resource] }),
+        ], 'global', undefined, resourceDebugger);
+
+        try {
+            assert.strictEqual(getFirstResourceItem(provider).contextValue, 'resource:canAttachDebugger');
+        }
+        finally {
+            provider.dispose();
+        }
+    });
+
     test('project without provider approval does not include attach debugger context', () => {
         const result = getResourceContextValue(makeResource({
             resourceType: 'Project',
@@ -2877,6 +2904,36 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
 
         assert.deepStrictEqual(outcome, { success: false, errorKind: 'CSharpExtensionMissing' });
         assert.ok(warningStub.calledOnce);
+        provider.dispose();
+    });
+
+    test('attachDebuggerToResource reports missing Go debugger support without .NET-specific text', async () => {
+        const provider = makeTreeProvider([
+            makeAppHost({
+                resources: [
+                    makeResource({
+                        name: 'api',
+                        displayName: 'API',
+                        resourceType: 'Executable',
+                        state: ResourceState.Running,
+                        properties: {
+                            'resource.launchConfigurationType': 'go',
+                            'executable.path': 'go',
+                            'executable.pid': '4242',
+                        },
+                    }),
+                ],
+            }),
+        ], 'global', undefined, makeResourceDebugger({
+            outcome: 'debuggerExtensionMissing',
+            debuggerExtensions: [{ id: 'golang.go', label: 'Go' }],
+        }));
+        const warningStub = sandbox.stub(vscode.window, 'showWarningMessage');
+
+        const outcome = await (provider as any).attachDebuggerToResource(getFirstResourceItem(provider));
+
+        assert.deepStrictEqual(outcome, { success: false, errorKind: 'ResourceNotAttachable' });
+        assert.ok(warningStub.calledOnceWith('Install Go to attach the debugger to this resource.'));
         provider.dispose();
     });
 

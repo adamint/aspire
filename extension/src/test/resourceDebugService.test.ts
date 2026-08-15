@@ -3,6 +3,7 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import type { AppHostDisplayInfo, ResourceJson } from '../data/AppHostDataRepository';
 import { createProjectResourceAttachProvider, projectDebuggerExtension, projectResourceAttachProvider } from '../debugger/languages/dotnet';
+import { createGoResourceAttachProvider } from '../debugger/languages/go';
 import { ResourceAttachProviderRegistry } from '../debugger/resourceAttachProviders';
 import { ResourceDebugAppHostIdentityComparer, ResourceDebugAppHostRepository, ResourceDebugService } from '../debugger/resourceDebugService';
 import { ResourceDebugSessionEvents, ResourceDebugSessionRegistry } from '../debugger/resourceDebugSessionRegistry';
@@ -33,6 +34,18 @@ function createResource(overrides: Partial<ResourceJson> = {}): ResourceJson {
         },
         ...overrides,
     };
+}
+
+function createGoResource(overrides: Partial<ResourceJson> = {}): ResourceJson {
+    return createResource({
+        resourceType: 'Executable',
+        properties: {
+            'resource.launchConfigurationType': 'go',
+            'executable.path': 'go',
+            'executable.pid': '1234',
+        },
+        ...overrides,
+    });
 }
 
 function createAppHost(overrides: Partial<AppHostDisplayInfo> = {}): AppHostDisplayInfo {
@@ -405,6 +418,54 @@ suite('Resource debug service', () => {
             debuggerExtensions: [{ id: 'ms-dotnettools.csharp', label: 'C#' }],
         });
         sessions.dispose();
+    });
+
+    test('reports the missing Go debugger extension using only its requirement metadata', async () => {
+        const resolver = {
+            resolveApplicationPid: sinon.stub().rejects(new Error('/private/go-build123/b001/exe/api 4567')),
+        };
+        const { service, sessions } = createService({
+            appHosts: [createAppHost({ resources: [createGoResource()] })],
+            provider: createGoResourceAttachProvider(resolver),
+            isExtensionInstalled: () => false,
+        });
+
+        try {
+            assert.strictEqual(service.canAttachToResource(createGoResource()), true);
+            const result = await service.debug(createRequest());
+
+            assert.deepStrictEqual(result, {
+                outcome: 'debuggerExtensionMissing',
+                debuggerExtensions: [{ id: 'golang.go', label: 'Go' }],
+            });
+            assert.doesNotMatch(JSON.stringify(result), /1234|4567|go-build|\/private/);
+            assert.strictEqual(resolver.resolveApplicationPid.called, false);
+        }
+        finally {
+            sessions.dispose();
+        }
+    });
+
+    test('normalizes Go process discovery failures without exposing process details', async () => {
+        const resolver = {
+            resolveApplicationPid: async () => {
+                throw new Error('/private/go-build123/b001/exe/api --port 8080 4567');
+            },
+        };
+        const { service, sessions } = createService({
+            appHosts: [createAppHost({ resources: [createGoResource()] })],
+            provider: createGoResourceAttachProvider(resolver),
+        });
+
+        try {
+            const result = await service.debug(createRequest());
+
+            assert.deepStrictEqual(result, { outcome: 'error', errorKind: 'configurationFailed' });
+            assert.doesNotMatch(JSON.stringify(result), /1234|4567|go-build|\/private|8080/);
+        }
+        finally {
+            sessions.dispose();
+        }
     });
 
     test('checks attach eligibility before reporting a missing debugger extension', async () => {

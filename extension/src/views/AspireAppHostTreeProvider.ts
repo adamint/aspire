@@ -19,6 +19,7 @@ import {
     attachDebuggerUnavailable,
     attachDebuggerResourceNotFound,
     attachDebuggerCsharpExtensionRequired,
+    attachDebuggerExtensionsRequired,
     attachDebuggerDeclined,
     dashboardUrlNotFound,
     dashboardUrlUnsupported,
@@ -1044,7 +1045,8 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
                     return { success: false, errorKind: 'CSharpExtensionMissing' };
                 }
 
-                vscode.window.showWarningMessage(attachDebuggerUnavailable);
+                vscode.window.showWarningMessage(attachDebuggerExtensionsRequired(
+                    result.debuggerExtensions.map(extension => extension.label).join(', ')));
                 return { success: false, errorKind: 'ResourceNotAttachable' };
             case 'resourceNotRunning':
             case 'unsupportedResource':

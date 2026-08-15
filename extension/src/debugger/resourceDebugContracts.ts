@@ -2,7 +2,7 @@ import type * as vscode from 'vscode';
 
 export type ResourceDebugSource = 'tree' | 'languageModelTool';
 
-export type ResourceAttachProviderId = 'dotnet';
+export type ResourceAttachProviderId = 'dotnet' | 'go';
 
 /**
  * An AppHost selected by a caller. The absolute path remains internal to the editor

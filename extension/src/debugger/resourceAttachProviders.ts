@@ -1,9 +1,16 @@
 import { isExtensionInstalled } from '../capabilities';
+import { projectResourceAttachProvider } from './languages/dotnet';
+import { goResourceAttachProvider } from './languages/go';
 import {
     type ResourceAttachProvider,
     type ResourceDebugExtensionRequirement,
     type ResourceDebugResourceSnapshot,
 } from './resourceDebugContracts';
+
+export const extensionResourceAttachProviders: readonly ResourceAttachProvider[] = [
+    projectResourceAttachProvider,
+    goResourceAttachProvider,
+];
 
 export class ResourceAttachProviderRegistry {
     constructor(

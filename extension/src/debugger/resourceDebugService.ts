@@ -53,8 +53,7 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
         try {
             const provider = this._dependencies.attachProviders.getRecognizedProviderForResource(resource);
             return provider !== undefined
-                && provider.canAttachToResource(resource)
-                && this._dependencies.attachProviders.getMissingDebuggerExtensions(provider).length === 0;
+                && provider.canAttachToResource(resource);
         }
         catch (error) {
             this._logFailure('checking whether a resource can be attached', error);
