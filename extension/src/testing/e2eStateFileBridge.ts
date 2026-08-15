@@ -16,7 +16,7 @@ import { AspireTerminalCommandEvent, AspireTerminalProvider } from '../utils/Asp
 import { delay } from '../utils/async';
 import { dashboardDefaultChangedNotificationKey } from '../utils/dashboardNotificationState';
 import { extensionLogOutputChannel } from '../utils/logging';
-import { onDidInvokeCommand } from '../utils/telemetry';
+import { isCommandCancellation, onDidInvokeCommand } from '../utils/telemetry';
 import { AspireAppHostTreeProvider } from '../views/AspireAppHostTreeProvider';
 import { AppHostDataRepository } from '../data/AppHostDataRepository';
 
@@ -349,7 +349,11 @@ async function processE2eControlFile(
 }
 
 function getE2eErrorMessage(error: unknown): string {
-  return error instanceof Error ? (error.stack ?? error.message) : String(error);
+  // State files are copied to E2E diagnostics. Preserve only whether the bridge command was
+  // cancelled or failed; error messages can include paths, process data, and command arguments.
+  return isCommandCancellation(error)
+    ? 'E2E control command cancelled.'
+    : 'E2E control command failed.';
 }
 
 async function executeE2eControlCommand(
@@ -603,17 +607,39 @@ async function executeE2eControlCommand(
     case 'invokeLanguageModelTool': {
       markStarted();
       const invocationCount = Math.max(1, command.times ?? 1);
-      const invocationResults = await Promise.all(Array.from({ length: invocationCount }, () => vscode.lm.invokeTool(command.toolName, {
-        input: command.input,
-        toolInvocationToken: undefined,
-      })));
+      const cancellationDelayMs = getE2eCancellationDelay(command.cancelAfterMs);
+      const cancellationSource = cancellationDelayMs === undefined
+        ? undefined
+        : new vscode.CancellationTokenSource();
+      const cancellationTimer = cancellationSource
+        ? setTimeout(() => cancellationSource.cancel(), cancellationDelayMs)
+        : undefined;
+      try {
+        const invocationResults = await Promise.all(Array.from({ length: invocationCount }, () => vscode.lm.invokeTool(command.toolName, {
+          input: command.input,
+          toolInvocationToken: undefined,
+        }, cancellationSource?.token)));
 
-      return {
-        results: invocationResults.map(invocationResult => invocationResult.content
-          .filter((part): part is vscode.LanguageModelTextPart => part instanceof vscode.LanguageModelTextPart)
-          .map(part => part.value)
-          .join('')),
-      };
+        return {
+          results: invocationResults.map(invocationResult => invocationResult.content
+            .filter((part): part is vscode.LanguageModelTextPart => part instanceof vscode.LanguageModelTextPart)
+            .map(part => part.value)
+            .join('')),
+        };
+      }
+      catch (error) {
+        if (isCommandCancellation(error)) {
+          return { results: [], cancelled: true };
+        }
+
+        throw error;
+      }
+      finally {
+        if (cancellationTimer !== undefined) {
+          clearTimeout(cancellationTimer);
+        }
+        cancellationSource?.dispose();
+      }
     }
     case 'getDebugSessionProcessInfo': {
       markStarted();
@@ -1464,6 +1490,18 @@ function getE2ePositiveInteger(value: unknown, defaultValue: number, propertyNam
 
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
     throw new Error(`Aspire extension E2E MAUI proof ${propertyName} must be a non-negative integer when provided.`);
+  }
+
+  return value;
+}
+
+function getE2eCancellationDelay(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 10000) {
+    throw new Error('Aspire extension E2E language-model cancellation delay must be an integer between 0 and 10000.');
   }
 
   return value;

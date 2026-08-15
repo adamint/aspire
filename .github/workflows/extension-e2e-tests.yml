@@ -249,6 +249,22 @@ jobs:
             cliBinary: aspire.exe
             useXvfb: false
           - name: Linux
+            shardName: resource-debug-tools
+            spec: out/test-e2e/test-e2e/resourceDebugTools.e2e.test.js
+            runner: ubuntu-latest
+            rid: linux-x64
+            archivePattern: aspire-cli-linux-x64*.tar.gz
+            cliBinary: aspire
+            useXvfb: true
+          - name: Windows
+            shardName: resource-debug-tools
+            spec: out/test-e2e/test-e2e/resourceDebugTools.e2e.test.js
+            runner: windows-latest
+            rid: win-x64
+            archivePattern: aspire-cli-win-x64*.zip
+            cliBinary: aspire.exe
+            useXvfb: false
+          - name: Linux
             shardName: edge-cases
             spec: out/test-e2e/test-e2e/edgeCases.e2e.test.js
             runner: ubuntu-latest
