@@ -179,7 +179,7 @@ internal class ResourceSnapshotBuilder
         ImmutableArray<ResourcePropertySnapshot> launchConfigurationProperties = launchConfigurationType is null
             ? []
             : [new(KnownProperties.Resource.LaunchConfigurationType, launchConfigurationType)];
-        var dotNetRunProperties = GetDotNetRunProperties(executable.Spec.ExecutablePath, effectiveArgs);
+        var dotNetLaunchProperties = GetDotNetLaunchProperties(executable.Spec.ExecutablePath, effectiveArgs);
 
         if (projectPath is not null)
         {
@@ -197,7 +197,7 @@ internal class ResourceSnapshotBuilder
                     ResourcePropertySnapshotMetadata.Create(KnownResourceTypes.Project, KnownProperties.Project.LaunchProfile, launchProfileName),
                     new(KnownProperties.Resource.AppArgs, launchArguments?.Args) { IsSensitive = launchArguments?.IsSensitive ?? false },
                     new(KnownProperties.Resource.AppArgsSensitivity, launchArguments?.ArgsAreSensitive) { IsSensitive = launchArguments?.IsSensitive ?? false },
-                    .. dotNetRunProperties,
+                    .. dotNetLaunchProperties,
                     .. launchConfigurationProperties,
                 ]),
                 EnvironmentVariables = environment,
@@ -237,7 +237,7 @@ internal class ResourceSnapshotBuilder
         return string.IsNullOrEmpty(state) || state == ExecutableState.Unknown;
     }
 
-    private static ImmutableArray<ResourcePropertySnapshot> GetDotNetRunProperties(string? executablePath, IReadOnlyList<string>? effectiveArgs)
+    private static ImmutableArray<ResourcePropertySnapshot> GetDotNetLaunchProperties(string? executablePath, IReadOnlyList<string>? effectiveArgs)
     {
         var executableName = Path.GetFileName(executablePath);
         if (!string.Equals(executableName, "dotnet", StringComparison.OrdinalIgnoreCase) &&
@@ -247,7 +247,8 @@ internal class ResourceSnapshotBuilder
         }
 
         if (effectiveArgs is not [var command, ..] ||
-            !string.Equals(command, "run", StringComparison.OrdinalIgnoreCase))
+            (!string.Equals(command, "run", StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(command, "watch", StringComparison.OrdinalIgnoreCase)))
         {
             return [];
         }
@@ -255,10 +256,10 @@ internal class ResourceSnapshotBuilder
         string? configuration = null;
         string? targetFramework = null;
 
-        // DCP reports dotnet-run arguments as:
-        //   ["run", "--project", "/repo/api.csproj", "--configuration", "Release", "--framework=net10.0", "--", ...appArgs]
-        // Only launcher arguments before "--" are safe launch metadata; application arguments can
-        // contain unrelated values and remain sensitive in executable.args.
+        // DCP reports dotnet launch arguments as:
+        //   ["watch", "--project", "/repo/api.csproj", "--configuration", "Release", "--framework=net10.0", "--", ...appArgs]
+        // Only launcher arguments before "--" are safe to publish as launch metadata. Application
+        // arguments after the separator can contain unrelated values and remain sensitive in executable.args.
         for (var index = 1; index < effectiveArgs.Count; index++)
         {
             var argument = effectiveArgs[index];
@@ -291,7 +292,9 @@ internal class ResourceSnapshotBuilder
             }
         }
 
-        var properties = ImmutableArray.CreateBuilder<ResourcePropertySnapshot>(2);
+        var launchCommand = command.ToLowerInvariant();
+        var properties = ImmutableArray.CreateBuilder<ResourcePropertySnapshot>(3);
+        properties.Add(new(KnownProperties.Project.LaunchCommand, launchCommand));
         if (configuration is not null)
         {
             properties.Add(new(KnownProperties.Project.Configuration, configuration));

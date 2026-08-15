@@ -112,11 +112,16 @@ public class ResourceSnapshotBuilderTests
     }
 
     [Theory]
-    [InlineData("--configuration", "--framework=net10.0")]
-    [InlineData("-c", "-f")]
-    [InlineData("--configuration=Release", "--framework")]
-    [InlineData("-c=Release", "-f=net10.0")]
-    public void ProjectSnapshotIncludesSafeDotNetRunConfigurationAndTargetFramework(
+    [InlineData("run", "--configuration", "--framework=net10.0")]
+    [InlineData("run", "-c", "-f")]
+    [InlineData("run", "--configuration=Release", "--framework")]
+    [InlineData("run", "-c=Release", "-f=net10.0")]
+    [InlineData("watch", "--configuration", "--framework=net10.0")]
+    [InlineData("watch", "-c", "-f")]
+    [InlineData("watch", "--configuration=Release", "--framework")]
+    [InlineData("watch", "-c=Release", "-f=net10.0")]
+    public void ProjectSnapshotIncludesSafeDotNetLaunchMetadata(
+        string command,
         string configurationArgument,
         string targetFrameworkArgument)
     {
@@ -125,7 +130,7 @@ public class ResourceSnapshotBuilderTests
 
         var effectiveArgs = new List<string>
         {
-            "run",
+            command,
             "--project",
             "/app/project.csproj",
             configurationArgument
@@ -154,8 +159,10 @@ public class ResourceSnapshotBuilderTests
             [project.Name] = project
         }).ToSnapshot(executable, CreatePreviousSnapshot());
 
+        Assert.Equal(command, Assert.IsType<string>(GetProperty(snapshot, KnownProperties.Project.LaunchCommand).Value));
         Assert.Equal("Release", Assert.IsType<string>(GetProperty(snapshot, KnownProperties.Project.Configuration).Value));
         Assert.Equal("net10.0", Assert.IsType<string>(GetProperty(snapshot, KnownProperties.Project.TargetFramework).Value));
+        Assert.False(GetProperty(snapshot, KnownProperties.Project.LaunchCommand).IsSensitive);
         Assert.False(GetProperty(snapshot, KnownProperties.Project.Configuration).IsSensitive);
         Assert.False(GetProperty(snapshot, KnownProperties.Project.TargetFramework).IsSensitive);
     }
