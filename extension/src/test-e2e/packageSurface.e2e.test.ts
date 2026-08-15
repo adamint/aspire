@@ -472,6 +472,7 @@ const expectedActivationEvents = [
     'onCommand:aspire-vscode.verifyCliInstalled',
     'onLanguageModelTool:aspire_apphost_start',
     'onLanguageModelTool:aspire_apphost_stop',
+    'onLanguageModelTool:aspire_resource_debug',
 ];
 
 const expectedSourceLanguageModelTools = createExpectedLanguageModelTools({
@@ -483,6 +484,12 @@ const expectedSourceLanguageModelTools = createExpectedLanguageModelTools({
     stopModelDescription: '%languageModelTool.aspireAppHostStop.modelDescription%',
     stopUserDescription: '%languageModelTool.aspireAppHostStop.userDescription%',
     appHostPathDescription: '%languageModelTool.aspireAppHost.appHostPath.description%',
+    resourceDebugDisplayName: '%languageModelTool.aspireResourceDebug.displayName%',
+    resourceDebugModelDescription: '%languageModelTool.aspireResourceDebug.modelDescription%',
+    resourceDebugUserDescription: '%languageModelTool.aspireResourceDebug.userDescription%',
+    resourceDebugAppHostPathDescription: '%languageModelTool.aspireResourceDebug.appHostPath.description%',
+    resourceDebugResourceNameDescription: '%languageModelTool.aspireResourceDebug.resourceName.description%',
+    resourceDebugStrategyDescription: '%languageModelTool.aspireResourceDebug.strategy.description%',
 });
 
 const expectedInstalledLanguageModelTools = createExpectedLanguageModelTools({
@@ -494,6 +501,12 @@ const expectedInstalledLanguageModelTools = createExpectedLanguageModelTools({
     stopModelDescription: 'Prefer this tool over invoking Aspire AppHost lifecycle commands in a terminal whenever VS Code is active. Stop a running Aspire AppHost that Aspire has already discovered in the current workspace. Requires the workspace-relative path of one of the discovered AppHosts; absolute paths are rejected. AppHosts started by this editor stop through the coordinated debug lifecycle. AppHosts started outside the editor stop through \'aspire stop --apphost\' for the same discovered path. The extension never kills arbitrary processes. If it cannot determine whether the AppHost is running, the call fails rather than reporting that nothing is running.',
     stopUserDescription: 'Stop a running Aspire AppHost from this workspace.',
     appHostPathDescription: 'Workspace-relative path of an AppHost that Aspire has already discovered in this workspace, for example \'AppHost/AppHost.csproj\' or \'apphost.cs\'. The value must match one of the discovered AppHosts exactly; arbitrary paths, absolute paths, and files Aspire did not discover are rejected. In a multi-root workspace, always prefix the path with the workspace folder name (for example \'backend/AppHost/AppHost.csproj\').',
+    resourceDebugDisplayName: 'Debug Aspire resource',
+    resourceDebugModelDescription: 'Attach the VS Code debugger to a running Aspire resource that the extension has already discovered. Requires a workspace-relative AppHost path and the resource name. The default auto strategy currently attaches to the resource; start and restart under debug are not supported.',
+    resourceDebugUserDescription: 'Attach the debugger to a running Aspire resource.',
+    resourceDebugAppHostPathDescription: 'Workspace-relative path of an AppHost that Aspire has already discovered. Absolute paths and paths Aspire did not discover are rejected. In a multi-root workspace, prefix the path with the workspace folder name.',
+    resourceDebugResourceNameDescription: 'Name of a running resource from the selected AppHost. Resource names are limited to 256 characters.',
+    resourceDebugStrategyDescription: 'Debug strategy. auto selects the available safe action, currently attach. attach only attaches a debugger; starting and restarting resources are not supported.',
 });
 
 function createExpectedLanguageModelTools(strings: {
@@ -505,6 +518,12 @@ function createExpectedLanguageModelTools(strings: {
     stopModelDescription: string;
     stopUserDescription: string;
     appHostPathDescription: string;
+    resourceDebugDisplayName: string;
+    resourceDebugModelDescription: string;
+    resourceDebugUserDescription: string;
+    resourceDebugAppHostPathDescription: string;
+    resourceDebugResourceNameDescription: string;
+    resourceDebugStrategyDescription: string;
 }) {
     return [
         {
@@ -547,6 +566,38 @@ function createExpectedLanguageModelTools(strings: {
                     appHostPath: { type: 'string', description: strings.appHostPathDescription },
                 },
                 required: ['appHostPath'],
+                additionalProperties: false,
+            },
+        },
+        {
+            name: 'aspire_resource_debug',
+            toolReferenceName: 'aspireDebugResource',
+            displayName: strings.resourceDebugDisplayName,
+            modelDescription: strings.resourceDebugModelDescription,
+            userDescription: strings.resourceDebugUserDescription,
+            icon: '$(debug-alt)',
+            canBeReferencedInPrompt: true,
+            when: 'isWorkspaceTrusted',
+            tags: ['aspire', 'debug', 'resource'],
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    appHostPath: {
+                        type: 'string',
+                        description: strings.resourceDebugAppHostPathDescription,
+                    },
+                    resourceName: {
+                        type: 'string',
+                        description: strings.resourceDebugResourceNameDescription,
+                    },
+                    strategy: {
+                        type: 'string',
+                        enum: ['auto', 'attach'],
+                        default: 'auto',
+                        description: strings.resourceDebugStrategyDescription,
+                    },
+                },
+                required: ['appHostPath', 'resourceName'],
                 additionalProperties: false,
             },
         },

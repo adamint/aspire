@@ -5,6 +5,13 @@ export type ResourceDebugSource = 'tree' | 'languageModelTool';
 export type ResourceAttachProviderId = 'dotnet' | 'go';
 
 /**
+ * The caller's requested behavior. `auto` is intentionally bounded to the same attach
+ * action as `attach` today; the debug service owns that selection so callers cannot
+ * introduce start or restart behavior by interpreting it themselves.
+ */
+export type ResourceDebugStrategy = 'auto' | 'attach';
+
+/**
  * An AppHost selected by a caller. The absolute path remains internal to the editor
  * control plane; only the safe display path may be used by presentation layers.
  */
@@ -15,6 +22,7 @@ export interface ResourceDebugAppHostTarget {
 
 export interface ResourceDebugRequest {
     readonly source: ResourceDebugSource;
+    readonly strategy: ResourceDebugStrategy;
     readonly appHost: ResourceDebugAppHostTarget;
     readonly resourceName: string;
     readonly cancellationToken?: vscode.CancellationToken;

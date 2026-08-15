@@ -103,6 +103,9 @@
     <trans-unit id="aspire-vscode.strings.resourceDebugToolConfirmationMessage">
       <source xml:lang="en">Attach the debugger to resource {0} from Aspire AppHost {1}?</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.resourceDebugToolUnresolvedConfirmationMessage">
+      <source xml:lang="en">Attach the debugger to the requested Aspire resource?</source>
+    </trans-unit>
     <trans-unit id="aspire-vscode.strings.resourceDebugToolInvocationMessage">
       <source xml:lang="en">Attaching debugger to Aspire resource {0}...</source>
     </trans-unit>
@@ -243,6 +246,9 @@
     </trans-unit>
     <trans-unit id="languageModelTool.aspireResourceDebug.displayName">
       <source xml:lang="en">Debug Aspire resource</source>
+    </trans-unit>
+    <trans-unit id="languageModelTool.aspireResourceDebug.strategy.description">
+      <source xml:lang="en">Debug strategy. auto selects the available safe action, currently attach. attach only attaches a debugger; starting and restarting resources are not supported.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.dashboardLaunchChromeLabel">
       <source xml:lang="en">Debug with Chrome</source>
@@ -474,6 +480,9 @@
     </trans-unit>
     <trans-unit id="configuration.aspire.enableAspireDashboardAutoLaunch">
       <source xml:lang="en">Legacy setting for Aspire Dashboard launch behavior. Use Aspire: Dashboard Browser instead. Explicit Aspire: Dashboard Browser none or notification values win. Otherwise, legacy notification or off values override browser-opening choices; launch uses Aspire: Dashboard Browser, falling back to VS Code&apos;s integrated browser for compatibility.</source>
+    </trans-unit>
+    <trans-unit id="languageModelTool.aspireResourceDebug.resourceName.description">
+      <source xml:lang="en">Name of a running resource from the selected AppHost. Resource names are limited to 256 characters.</source>
     </trans-unit>
     <trans-unit id="command.new">
       <source xml:lang="en">New Aspire project</source>
@@ -957,6 +966,9 @@
     </trans-unit>
     <trans-unit id="languageModelTool.aspireAppHost.appHostPath.description">
       <source xml:lang="en">Workspace-relative path of an AppHost that Aspire has already discovered in this workspace, for example &apos;AppHost/AppHost.csproj&apos; or &apos;apphost.cs&apos;. The value must match one of the discovered AppHosts exactly; arbitrary paths, absolute paths, and files Aspire did not discover are rejected. In a multi-root workspace, always prefix the path with the workspace folder name (for example &apos;backend/AppHost/AppHost.csproj&apos;).</source>
+    </trans-unit>
+    <trans-unit id="languageModelTool.aspireResourceDebug.appHostPath.description">
+      <source xml:lang="en">Workspace-relative path of an AppHost that Aspire has already discovered. Absolute paths and paths Aspire did not discover are rejected. In a multi-root workspace, prefix the path with the workspace folder name.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.yesLabel">
       <source xml:lang="en">Yes</source>

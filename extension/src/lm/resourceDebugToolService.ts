@@ -14,12 +14,13 @@ import {
     type AspireResourceDebugToolResult,
 } from './resourceDebugToolContracts';
 
-const maxInputLength = 4096;
+const maxAppHostPathLength = 4096;
+const maxResourceNameLength = 256;
 
 // Invisible and bidi controls can make a confirmation differ from what the model sent.
 // Match the AppHost lifecycle resolver's identity boundary before resource names reach
 // either confirmation text or the resource-debug service.
-const identityChangingCharacters = /[\u0000-\u001F\u007F-\u009F]|\p{Cf}/u;
+const identityChangingCharacters = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]|\p{Cf}/u;
 
 interface ParsedInput {
     readonly appHostPath: string;
@@ -63,7 +64,7 @@ export class AspireResourceDebugToolService implements vscode.Disposable {
 
         try {
             const resolution = await this._dependencies.targetResolver.resolveTarget(parsed.appHostPath, token);
-            if (token.isCancellationRequested) {
+            if (this._disposed || token.isCancellationRequested) {
                 return this.reject('cancelled', '', parsed);
             }
 
@@ -89,9 +90,29 @@ export class AspireResourceDebugToolService implements vscode.Disposable {
             return preparation.result;
         }
 
+        if (this._disposed || token.isCancellationRequested) {
+            return this.createResult(
+                'cancelled',
+                preparation.target.displayPath,
+                preparation.resourceName,
+                preparation.requestedStrategy);
+        }
+
         try {
+            // Re-check immediately before crossing into the shared debugger service. A
+            // deactivating extension must not initiate a new attach after preparation won
+            // the race with disposal.
+            if (this._disposed || token.isCancellationRequested) {
+                return this.createResult(
+                    'cancelled',
+                    preparation.target.displayPath,
+                    preparation.resourceName,
+                    preparation.requestedStrategy);
+            }
+
             const result = await this._dependencies.resourceDebugger.debug({
                 source: 'languageModelTool',
+                strategy: preparation.requestedStrategy,
                 appHost: preparation.target,
                 resourceName: preparation.resourceName,
                 cancellationToken: token,
@@ -164,8 +185,8 @@ function parseInput(value: unknown): ParsedInput | undefined {
         const appHostPath = input.appHostPath;
         const resourceName = input.resourceName;
         const strategy = input.strategy;
-        if (!isSafeNonBlankString(appHostPath) ||
-            !isSafeNonBlankString(resourceName) ||
+        if (!isSafeNonBlankString(appHostPath, maxAppHostPathLength) ||
+            !isSafeNonBlankString(resourceName, maxResourceNameLength) ||
             (strategy !== undefined && strategy !== 'auto' && strategy !== 'attach')) {
             return undefined;
         }
@@ -184,10 +205,10 @@ function parseInput(value: unknown): ParsedInput | undefined {
     }
 }
 
-function isSafeNonBlankString(value: unknown): value is string {
+function isSafeNonBlankString(value: unknown, maxLength: number): value is string {
     return typeof value === 'string' &&
         value.trim().length > 0 &&
-        value.length <= maxInputLength &&
+        value.length <= maxLength &&
         !identityChangingCharacters.test(value);
 }
 

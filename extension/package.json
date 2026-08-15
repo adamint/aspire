@@ -140,10 +140,12 @@
           "type": "object",
           "properties": {
             "appHostPath": {
-              "type": "string"
+              "type": "string",
+              "description": "%languageModelTool.aspireResourceDebug.appHostPath.description%"
             },
             "resourceName": {
-              "type": "string"
+              "type": "string",
+              "description": "%languageModelTool.aspireResourceDebug.resourceName.description%"
             },
             "strategy": {
               "type": "string",
@@ -151,7 +153,8 @@
                 "auto",
                 "attach"
               ],
-              "default": "auto"
+              "default": "auto",
+              "description": "%languageModelTool.aspireResourceDebug.strategy.description%"
             }
           },
           "required": [

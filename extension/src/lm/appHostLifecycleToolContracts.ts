@@ -1,8 +1,17 @@
 import * as vscode from 'vscode';
 
-import { type CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
 import { type AppHostIdentityRelation } from '../utils/appHostIdentity';
 import { type AppHostStopResult } from '../services/AppHostLaunchService';
+import type {
+    AppHostTarget,
+    AppHostTargetDiscoveryService,
+    AppHostTargetResolution,
+    AppHostTargetResolver,
+} from './appHostTargetResolverContracts';
+import type {
+    PreparableLanguageModelTool,
+    PreparableLanguageModelToolRegistration,
+} from './languageModelToolContracts';
 
 /**
  * Names of the contributed language model tools. These must match the `name`
@@ -100,15 +109,6 @@ export interface AppHostLifecycleLaunchService {
 }
 
 /**
- * Narrow view of `AppHostDiscoveryService`. This is the registry the AppHost view, the
- * status bar, and the Run/Debug commands already resolve against, and it is populated by
- * the CLI's own `aspire ls --format json` output.
- */
-export interface AppHostLifecycleDiscoveryService {
-    discover(workspaceFolder: vscode.WorkspaceFolder, forceRefresh?: boolean, cancellationToken?: vscode.CancellationToken): Promise<readonly CandidateAppHostDisplayInfo[]>;
-}
-
-/**
  * Editor-created sessions for a requested AppHost, plus whether any session's relationship
  * to it could not be proven. See {@link AppHostIdentityRelation}.
  */
@@ -139,55 +139,17 @@ export interface AppHostLifecycleEditorSession {
 
 export interface AppHostLifecycleToolDependencies {
     readonly launchService: AppHostLifecycleLaunchService;
-    readonly discoveryService: AppHostLifecycleDiscoveryService;
+    readonly targetResolver: AppHostTargetResolver;
 }
 
-/**
- * A registry-approved AppHost identity safe for a caller to pass to an editor-owned
- * operation. `absolutePath` remains internal; presentation layers may render only
- * `displayPath`.
- */
-export interface SafeAppHostTarget {
-    readonly absolutePath: string;
-    readonly displayPath: string;
-}
-
-/**
- * The intentionally small result shape shared by tools that need to select an AppHost
- * but must not own AppHost discovery or path-security policy.
- */
-export type SafeAppHostTargetResolution =
-    | { readonly resolved: true; readonly target: SafeAppHostTarget }
-    | {
-        readonly resolved: false;
-        readonly outcome: Extract<
-            AppHostLifecycleOutcome,
-            'invalidInput' | 'unknownAppHost' | 'ambiguousAppHost' | 'discoveryFailed' | 'cancelled'
-        >;
-    };
-
-/**
- * Resolves a model selector only against the editor's discovered AppHost registry.
- *
- * Consumers must not recreate discovery, containment, or multi-root selection logic.
- */
-export interface SafeAppHostTargetResolver {
-    resolveTarget(rawAppHost: unknown, token: vscode.CancellationToken): Promise<SafeAppHostTargetResolution>;
-}
-
-export interface AppHostLifecycleToolRegistration extends vscode.Disposable {
-    readonly registered: boolean;
-    /**
-     * The registered tool instances by tool name. VS Code does not surface
-     * `prepareInvocation` through `vscode.lm`, so E2E automation needs a way to ask the
-     * extension's own instance for the confirmation it would present.
-     */
-    readonly tools: ReadonlyMap<string, PreparableAppHostLifecycleTool>;
-}
-
-export interface PreparableAppHostLifecycleTool {
-    prepareInvocation(options: { readonly input: Record<string, unknown> }, token: vscode.CancellationToken): Promise<vscode.PreparedToolInvocation>;
-}
+export type AppHostLifecycleToolRegistration = PreparableLanguageModelToolRegistration;
+export type PreparableAppHostLifecycleTool = PreparableLanguageModelTool;
+export type {
+    AppHostTarget as SafeAppHostTarget,
+    AppHostTargetDiscoveryService as AppHostLifecycleDiscoveryService,
+    AppHostTargetResolution as SafeAppHostTargetResolution,
+    AppHostTargetResolver as SafeAppHostTargetResolver,
+};
 
 export function createResult(
     tool: string,

@@ -11,6 +11,7 @@ import {
     type ResourceDebugger,
     type ResourceDebugRequest,
     type ResourceDebugResult,
+    type ResourceDebugStrategy,
 } from './resourceDebugContracts';
 import { ResourceAttachProviderRegistry } from './resourceAttachProviders';
 import { ResourceDebugSessionRegistry } from './resourceDebugSessionRegistry';
@@ -81,11 +82,22 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
     }
 
     async debug(request: ResourceDebugRequest): Promise<ResourceDebugResult> {
-        const telemetry = new ResourceDebugOperationTelemetry(this._telemetry, this._clock, request.source);
+        const requestedStrategy = getRequestedStrategy(request.strategy);
+        const effectiveStrategy = selectEffectiveStrategy(requestedStrategy);
+        const telemetry = new ResourceDebugOperationTelemetry(
+            this._telemetry,
+            this._clock,
+            request.source,
+            requestedStrategy ?? 'auto');
         telemetry.recordStart();
         let result: ResourceDebugResult = { outcome: 'error', errorKind: 'unexpected' };
 
         try {
+            if (effectiveStrategy === undefined) {
+                result = { outcome: 'error', errorKind: 'unexpected' };
+                return result;
+            }
+
             if (request.cancellationToken?.isCancellationRequested) {
                 result = { outcome: 'cancelled' };
                 return result;
@@ -329,6 +341,7 @@ class ResourceDebugOperationTelemetry {
         private readonly _telemetry: ResourceDebugTelemetry,
         private readonly _clock: ResourceDebugClock,
         private readonly _source: ResourceDebugRequest['source'],
+        private readonly _requestedStrategy: ResourceDebugStrategy,
     ) {
         this._startedAt = this._getTimestamp();
     }
@@ -336,7 +349,7 @@ class ResourceDebugOperationTelemetry {
     recordStart(): void {
         this._record(() => this._telemetry.recordStart({
             source: this._source,
-            requested_strategy: 'attach',
+            requested_strategy: this._requestedStrategy,
             controller: 'editor',
         }));
     }
@@ -384,7 +397,7 @@ class ResourceDebugOperationTelemetry {
             source: this._source,
             provider: this._provider,
             ...(this._resourceType === undefined ? {} : { resource_type: this._resourceType }),
-            requested_strategy: 'attach',
+            requested_strategy: this._requestedStrategy,
             effective_strategy: result.outcome === 'started' || result.outcome === 'alreadyDebugging'
                 ? 'attach'
                 : 'none',
@@ -452,5 +465,19 @@ function getResourceTypeBucket(resourceType: unknown): ResourceDebugResourceType
             return 'container';
         default:
             return 'other';
+    }
+}
+
+function getRequestedStrategy(strategy: unknown): ResourceDebugStrategy | undefined {
+    return strategy === 'auto' || strategy === 'attach' ? strategy : undefined;
+}
+
+function selectEffectiveStrategy(strategy: ResourceDebugStrategy | undefined): 'attach' | undefined {
+    switch (strategy) {
+        case 'auto':
+        case 'attach':
+            return 'attach';
+        default:
+            return undefined;
     }
 }

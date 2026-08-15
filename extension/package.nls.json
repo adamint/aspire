@@ -323,6 +323,7 @@
   "aspire-vscode.strings.appHostLifecycleLaunchAlreadyClaimed": "This Aspire AppHost is already starting or running. The new debug session was cancelled so only one AppHost runs.",
   "aspire-vscode.strings.resourceDebugToolConfirmationTitle": "Attach debugger to Aspire resource",
   "aspire-vscode.strings.resourceDebugToolConfirmationMessage": "Attach the debugger to resource {0} from Aspire AppHost {1}?",
+  "aspire-vscode.strings.resourceDebugToolUnresolvedConfirmationMessage": "Attach the debugger to the requested Aspire resource?",
   "aspire-vscode.strings.resourceDebugToolInvocationMessage": "Attaching debugger to Aspire resource {0}...",
   "aspire-vscode.strings.resourceDebugToolUnavailableInvocationMessage": "Unable to attach debugger to the requested Aspire resource.",
   "languageModelTool.aspireAppHostStart.displayName": "Start Aspire AppHost",
@@ -336,5 +337,8 @@
   "languageModelTool.aspireResourceDebug.displayName": "Debug Aspire resource",
   "languageModelTool.aspireResourceDebug.modelDescription": "Attach the VS Code debugger to a running Aspire resource that the extension has already discovered. Requires a workspace-relative AppHost path and the resource name. The default auto strategy currently attaches to the resource; start and restart under debug are not supported.",
   "languageModelTool.aspireResourceDebug.userDescription": "Attach the debugger to a running Aspire resource.",
+  "languageModelTool.aspireResourceDebug.appHostPath.description": "Workspace-relative path of an AppHost that Aspire has already discovered. Absolute paths and paths Aspire did not discover are rejected. In a multi-root workspace, prefix the path with the workspace folder name.",
+  "languageModelTool.aspireResourceDebug.resourceName.description": "Name of a running resource from the selected AppHost. Resource names are limited to 256 characters.",
+  "languageModelTool.aspireResourceDebug.strategy.description": "Debug strategy. auto selects the available safe action, currently attach. attach only attaches a debugger; starting and restarting resources are not supported.",
   "command.openDashboardToSide": "Open Aspire Dashboard to the Side"
 }

@@ -1,15 +1,15 @@
-import type * as vscode from 'vscode';
-
 import type {
     ResourceDebugErrorKind,
     ResourceDebugExtensionRequirement,
     ResourceDebugger,
+    ResourceDebugStrategy,
 } from '../debugger/resourceDebugContracts';
-import type { SafeAppHostTarget, SafeAppHostTargetResolver } from './appHostLifecycleToolContracts';
+import type { AppHostTarget, AppHostTargetResolver } from './appHostTargetResolverContracts';
+import type { PreparableLanguageModelToolRegistration } from './languageModelToolContracts';
 
 export const aspireResourceDebugToolName = 'aspire_resource_debug';
 
-export type AspireResourceDebugStrategy = 'auto' | 'attach';
+export type AspireResourceDebugStrategy = ResourceDebugStrategy;
 
 export interface AspireResourceDebugToolInput {
     readonly appHostPath: string;
@@ -53,14 +53,14 @@ export interface AspireResourceDebugToolResult {
 }
 
 export interface AspireResourceDebugToolDependencies {
-    readonly targetResolver: SafeAppHostTargetResolver;
+    readonly targetResolver: AppHostTargetResolver;
     readonly resourceDebugger: ResourceDebugger;
 }
 
 export type AspireResourceDebugToolPreparation =
     | {
         readonly canDebug: true;
-        readonly target: SafeAppHostTarget;
+        readonly target: AppHostTarget;
         readonly resourceName: string;
         readonly requestedStrategy: AspireResourceDebugStrategy;
     }
@@ -69,8 +69,10 @@ export type AspireResourceDebugToolPreparation =
         readonly result: AspireResourceDebugToolResult;
     };
 
-export interface AspireResourceDebugToolRegistration extends vscode.Disposable {
-    readonly registered: boolean;
-}
+export type AspireResourceDebugToolRegistration = PreparableLanguageModelToolRegistration;
 
-export type { SafeAppHostTargetResolver, SafeAppHostTargetResolution } from './appHostLifecycleToolContracts';
+export type {
+    AppHostTarget as SafeAppHostTarget,
+    AppHostTargetResolution as SafeAppHostTargetResolution,
+    AppHostTargetResolver as SafeAppHostTargetResolver,
+} from './appHostTargetResolverContracts';

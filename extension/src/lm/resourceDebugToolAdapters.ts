@@ -4,6 +4,7 @@ import {
     resourceDebugToolConfirmationMessage,
     resourceDebugToolConfirmationTitle,
     resourceDebugToolInvocationMessage,
+    resourceDebugToolUnresolvedConfirmationMessage,
     resourceDebugToolUnavailableInvocationMessage,
 } from '../loc/strings';
 import { extensionLogOutputChannel } from '../utils/logging';
@@ -14,6 +15,7 @@ import {
     type AspireResourceDebugToolResult,
 } from './resourceDebugToolContracts';
 import { AspireResourceDebugToolService } from './resourceDebugToolService';
+import { escapeMarkdownForConfirmation } from './markdown';
 
 export class AspireResourceDebugLanguageModelTool implements vscode.LanguageModelTool<AspireResourceDebugToolInput> {
     constructor(private readonly _service: AspireResourceDebugToolService) {
@@ -25,13 +27,20 @@ export class AspireResourceDebugLanguageModelTool implements vscode.LanguageMode
     ): Promise<vscode.PreparedToolInvocation> {
         const preparation = await this._service.prepare(options.input, token);
         if (!preparation.canDebug) {
-            // There is no safe target to confirm, so never fabricate a path for the
-            // progress message. Invocation independently resolves and bounds its result.
-            return { invocationMessage: resourceDebugToolUnavailableInvocationMessage };
+            // Do not let a transient discovery failure bypass VS Code's confirmation step.
+            // The generic message contains no model input or unresolved target; invocation
+            // resolves again and still applies trust and validation checks.
+            return {
+                invocationMessage: resourceDebugToolUnavailableInvocationMessage,
+                confirmationMessages: {
+                    title: resourceDebugToolConfirmationTitle,
+                    message: resourceDebugToolUnresolvedConfirmationMessage,
+                },
+            };
         }
 
-        const resourceName = escapeMarkdown(preparation.resourceName);
-        const appHost = escapeMarkdown(preparation.target.displayPath);
+        const resourceName = escapeMarkdownForConfirmation(preparation.resourceName);
+        const appHost = escapeMarkdownForConfirmation(preparation.target.displayPath);
         return {
             invocationMessage: resourceDebugToolInvocationMessage(resourceName),
             confirmationMessages: {
@@ -51,12 +60,19 @@ export class AspireResourceDebugLanguageModelTool implements vscode.LanguageMode
 
 export function registerAspireResourceDebugTool(service: AspireResourceDebugToolService): AspireResourceDebugToolRegistration {
     const registrations: vscode.Disposable[] = [];
+    const tool = new AspireResourceDebugLanguageModelTool(service);
+    const tools = new Map([
+        [aspireResourceDebugToolName, {
+            prepareInvocation: (options: { readonly input: Record<string, unknown> }, token: vscode.CancellationToken) =>
+                tool.prepareInvocation({ input: options.input as unknown as AspireResourceDebugToolInput }, token),
+        }],
+    ]);
 
     if (typeof vscode.lm?.registerTool !== 'function') {
         extensionLogOutputChannel.info('Skipping Aspire resource debug language model tool: the language model tool API is unavailable.');
     }
     else {
-        registrations.push(vscode.lm.registerTool(aspireResourceDebugToolName, new AspireResourceDebugLanguageModelTool(service)));
+        registrations.push(vscode.lm.registerTool(aspireResourceDebugToolName, tool));
         extensionLogOutputChannel.info('Registered Aspire resource debug language model tool.');
     }
 
@@ -64,6 +80,7 @@ export function registerAspireResourceDebugTool(service: AspireResourceDebugTool
         get registered() {
             return registrations.length > 0;
         },
+        tools,
         dispose() {
             registrations.forEach(registration => registration.dispose());
             registrations.length = 0;
@@ -73,8 +90,4 @@ export function registerAspireResourceDebugTool(service: AspireResourceDebugTool
 
 function createToolResult(result: AspireResourceDebugToolResult): vscode.LanguageModelToolResult {
     return new vscode.LanguageModelToolResult([new vscode.LanguageModelTextPart(JSON.stringify(result))]);
-}
-
-function escapeMarkdown(value: string): string {
-    return value.replace(/[\\`*_[\]()<>#+~|!&]/g, character => `\\${character}`);
 }

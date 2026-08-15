@@ -62,6 +62,7 @@ function createAppHost(overrides: Partial<AppHostDisplayInfo> = {}): AppHostDisp
 function createRequest(overrides: Partial<ResourceDebugRequest> = {}): ResourceDebugRequest {
     return {
         source: 'tree',
+        strategy: 'attach',
         appHost: target,
         resourceName: 'api',
         ...overrides,
@@ -1135,6 +1136,53 @@ suite('Resource debug service', () => {
                     },
                 },
             ]);
+        }
+        finally {
+            sessions.dispose();
+        }
+    });
+
+    test('selects attach centrally for the auto strategy and records the requested strategy', async () => {
+        const telemetry = new TestResourceDebugTelemetry();
+        const { service, sessions } = createService({ telemetry });
+
+        try {
+            assert.deepStrictEqual(
+                await service.debug(createRequest({ source: 'languageModelTool', strategy: 'auto' })),
+                { outcome: 'started', providerId: 'dotnet' });
+            assert.deepStrictEqual(
+                telemetry.events.map(event => ({
+                    name: event.name,
+                    requestedStrategy: event.properties.requested_strategy,
+                    effectiveStrategy: event.properties.effective_strategy,
+                })),
+                [
+                    {
+                        name: 'aspire/vscode/resourcedebug/start',
+                        requestedStrategy: 'auto',
+                        effectiveStrategy: undefined,
+                    },
+                    {
+                        name: 'aspire/vscode/resourcedebug/result',
+                        requestedStrategy: 'auto',
+                        effectiveStrategy: 'attach',
+                    },
+                ]);
+        }
+        finally {
+            sessions.dispose();
+        }
+    });
+
+    test('fails closed when a caller bypasses the bounded debug strategy contract', async () => {
+        const startDebugging = sinon.stub().resolves(true);
+        const { service, sessions } = createService({ startDebugging });
+
+        try {
+            assert.deepStrictEqual(
+                await service.debug(createRequest({ strategy: 'restart' as never })),
+                { outcome: 'error', errorKind: 'unexpected' });
+            assert.strictEqual(startDebugging.callCount, 0);
         }
         finally {
             sessions.dispose();

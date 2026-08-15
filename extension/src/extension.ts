@@ -31,6 +31,7 @@ import type { AspireAppHostState, AspireExtensionApi, AspireExtensionStateSnapsh
 import { AppHostsViewTelemetry } from './views/AppHostsViewTelemetry';
 import { initializeCliPathEnvironmentSync } from './utils/cliPathEnvironment';
 import { AppHostLifecycleToolService, registerAppHostLifecycleTools } from './lm/appHostLifecycleTools';
+import { AppHostTargetResolverService } from './lm/appHostTargetResolverService';
 import { AspireResourceDebugToolService, registerAspireResourceDebugTool } from './lm/resourceDebugTools';
 import { registerInstrumentedCommand } from './activation/instrumentedCommand';
 import { registerCliCommands } from './activation/registerCliCommands';
@@ -222,19 +223,23 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Language model tools that let an agent use the same AppHost lifecycle service as the
   // editor and Aspire tree instead of maintaining a separate start/stop policy.
+  const appHostTargetResolver = new AppHostTargetResolverService({
+    discoveryService: appHostDiscoveryService,
+  });
   const appHostLifecycleToolService = new AppHostLifecycleToolService({
     launchService: appHostLaunchService,
-    discoveryService: appHostDiscoveryService,
+    targetResolver: appHostTargetResolver,
   });
   context.subscriptions.push(appHostLifecycleToolService);
   const appHostLifecycleToolRegistration = registerAppHostLifecycleTools(appHostLifecycleToolService);
   context.subscriptions.push(appHostLifecycleToolRegistration);
   const resourceDebugToolService = new AspireResourceDebugToolService({
-    targetResolver: appHostLifecycleToolService,
+    targetResolver: appHostTargetResolver,
     resourceDebugger: resourceDebugService,
   });
   context.subscriptions.push(resourceDebugToolService);
-  context.subscriptions.push(registerAspireResourceDebugTool(resourceDebugToolService));
+  const resourceDebugToolRegistration = registerAspireResourceDebugTool(resourceDebugToolService);
+  context.subscriptions.push(resourceDebugToolRegistration);
 
   const getEnableSettingsFileCreationPromptOnStartup = () => vscode.workspace.getConfiguration('aspire').get<boolean>('enableSettingsFileCreationPromptOnStartup', true);
   const setEnableSettingsFileCreationPromptOnStartup = async (value: boolean) => await vscode.workspace.getConfiguration('aspire').update('enableSettingsFileCreationPromptOnStartup', value, vscode.ConfigurationTarget.Workspace);
@@ -276,7 +281,11 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(appHostLaunchService.onDidChangeLaunchingState(fireStateChanged));
   context.subscriptions.push(appHostTreeProvider.onDidChangeStoppingState(fireStateChanged));
   context.subscriptions.push(aspireExtensionContext.onDidChangeDebugSessions(fireStateChanged));
-  const e2eStateFileBridge = createE2eStateFileBridge(context, aspireExtensionContext, dataRepository, appHostLaunchService, appHostTreeProvider, terminalProvider, onDidChangeStateEmitter.event, appHostLifecycleToolRegistration.tools);
+  const preparableLanguageModelTools = new Map([
+    ...appHostLifecycleToolRegistration.tools,
+    ...resourceDebugToolRegistration.tools,
+  ]);
+  const e2eStateFileBridge = createE2eStateFileBridge(context, aspireExtensionContext, dataRepository, appHostLaunchService, appHostTreeProvider, terminalProvider, onDidChangeStateEmitter.event, preparableLanguageModelTools);
   context.subscriptions.push(e2eStateFileBridge);
 
   await cliPathEnvironmentInitialization;

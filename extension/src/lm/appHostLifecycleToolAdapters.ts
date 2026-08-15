@@ -21,6 +21,7 @@ import {
     type PreparableAppHostLifecycleTool,
 } from './appHostLifecycleToolContracts';
 import { AppHostLifecycleToolService } from './appHostLifecycleToolService';
+import { escapeMarkdownForConfirmation } from './markdown';
 
 export class AppHostStartLanguageModelTool implements vscode.LanguageModelTool<AppHostStartToolInput> {
     constructor(private readonly _service: AppHostLifecycleToolService) {
@@ -30,7 +31,7 @@ export class AppHostStartLanguageModelTool implements vscode.LanguageModelTool<A
     // confirmation shows the exact target `invoke` will act on. It performs discovery but
     // no lifecycle work, which is what the API requires of a preparation step.
     async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<AppHostStartToolInput>, token: vscode.CancellationToken): Promise<vscode.PreparedToolInvocation> {
-        const displayPath = escapeMarkdown(await this._service.describeTarget(options.input?.appHostPath, token));
+        const displayPath = escapeMarkdownForConfirmation(await this._service.describeTarget(options.input?.appHostPath, token));
         const displayMode = describeRequestedMode(options.input?.mode);
         return {
             invocationMessage: appHostLifecycleStartInvocationMessage(displayPath),
@@ -51,7 +52,7 @@ export class AppHostStopLanguageModelTool implements vscode.LanguageModelTool<Ap
     }
 
     async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<AppHostStopToolInput>, token: vscode.CancellationToken): Promise<vscode.PreparedToolInvocation> {
-        const displayPath = escapeMarkdown(await this._service.describeTarget(options.input?.appHostPath, token));
+        const displayPath = escapeMarkdownForConfirmation(await this._service.describeTarget(options.input?.appHostPath, token));
         return {
             invocationMessage: appHostLifecycleStopInvocationMessage(displayPath),
             confirmationMessages: {
@@ -137,6 +138,3 @@ function describeRequestedMode(value: unknown): string {
  * in real project paths.
  * See https://spec.commonmark.org/0.31.2/#backslash-escapes
  */
-function escapeMarkdown(value: string): string {
-    return value.replace(/[\\`*_[\]()<>#+~|!&]/g, character => `\\${character}`);
-}

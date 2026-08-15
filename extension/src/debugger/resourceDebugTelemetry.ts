@@ -1,4 +1,10 @@
-import { type ResourceAttachProviderId, type ResourceDebugErrorKind, type ResourceDebugResult, type ResourceDebugSource } from './resourceDebugContracts';
+import {
+    type ResourceAttachProviderId,
+    type ResourceDebugErrorKind,
+    type ResourceDebugResult,
+    type ResourceDebugSource,
+    type ResourceDebugStrategy,
+} from './resourceDebugContracts';
 import { sendTelemetryEvent } from '../utils/telemetry';
 
 export type ResourceDebugResourceType = 'project' | 'executable' | 'container' | 'other';
@@ -11,7 +17,7 @@ export interface ResourceDebugClock {
 
 export interface ResourceDebugStartTelemetryProperties {
     readonly source: ResourceDebugSource;
-    readonly requested_strategy: 'attach';
+    readonly requested_strategy: ResourceDebugStrategy;
     readonly controller: 'editor';
 }
 
@@ -19,7 +25,7 @@ export interface ResourceDebugResultTelemetryProperties {
     readonly source: ResourceDebugSource;
     readonly provider: ResourceAttachProviderId | 'none';
     readonly resource_type?: ResourceDebugResourceType;
-    readonly requested_strategy: 'attach';
+    readonly requested_strategy: ResourceDebugStrategy;
     readonly effective_strategy: 'attach' | 'none';
     readonly outcome: ResourceDebugResult['outcome'];
     readonly controller: 'editor';

@@ -1024,6 +1024,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
 
         const result = await this._resourceDebugService.debug({
             source: 'tree',
+            strategy: 'attach',
             appHost: {
                 absolutePath: ownerAppHostPath,
                 displayPath: vscode.workspace.asRelativePath(ownerAppHostPath),

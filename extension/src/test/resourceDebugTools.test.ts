@@ -24,6 +24,7 @@ import {
     type SafeAppHostTargetResolver,
     type SafeAppHostTargetResolution,
 } from '../lm/resourceDebugTools';
+import { AppHostTargetResolverService } from '../lm/appHostTargetResolverService';
 
 const absoluteAppHostPath = '/private/workspace/AppHost/AppHost.csproj';
 const safeAppHostPath = 'AppHost/AppHost.csproj';
@@ -34,6 +35,7 @@ class FakeTargetResolver implements SafeAppHostTargetResolver {
         resolved: true,
         target: {
             absolutePath: absoluteAppHostPath,
+            relativePath: safeAppHostPath,
             displayPath: safeAppHostPath,
         },
     }];
@@ -150,12 +152,19 @@ suite('Aspire resource debug language model tool', () => {
             assert.deepStrictEqual(tool.inputSchema, {
                 type: 'object',
                 properties: {
-                    appHostPath: { type: 'string' },
-                    resourceName: { type: 'string' },
+                    appHostPath: {
+                        type: 'string',
+                        description: '%languageModelTool.aspireResourceDebug.appHostPath.description%',
+                    },
+                    resourceName: {
+                        type: 'string',
+                        description: '%languageModelTool.aspireResourceDebug.resourceName.description%',
+                    },
                     strategy: {
                         type: 'string',
                         enum: ['auto', 'attach'],
                         default: 'auto',
+                        description: '%languageModelTool.aspireResourceDebug.strategy.description%',
                     },
                 },
                 required: ['appHostPath', 'resourceName'],
@@ -183,6 +192,9 @@ suite('Aspire resource debug language model tool', () => {
                     display: packageNls['languageModelTool.aspireResourceDebug.displayName'],
                     model: packageNls['languageModelTool.aspireResourceDebug.modelDescription'],
                     user: packageNls['languageModelTool.aspireResourceDebug.userDescription'],
+                    appHostPath: packageNls['languageModelTool.aspireResourceDebug.appHostPath.description'],
+                    resourceName: packageNls['languageModelTool.aspireResourceDebug.resourceName.description'],
+                    strategy: packageNls['languageModelTool.aspireResourceDebug.strategy.description'],
                 },
                 {
                     title: 'Attach debugger to Aspire resource',
@@ -191,6 +203,9 @@ suite('Aspire resource debug language model tool', () => {
                     display: 'Debug Aspire resource',
                     model: 'Attach the VS Code debugger to a running Aspire resource that the extension has already discovered. Requires a workspace-relative AppHost path and the resource name. The default auto strategy currently attaches to the resource; start and restart under debug are not supported.',
                     user: 'Attach the debugger to a running Aspire resource.',
+                    appHostPath: 'Workspace-relative path of an AppHost that Aspire has already discovered. Absolute paths and paths Aspire did not discover are rejected. In a multi-root workspace, prefix the path with the workspace folder name.',
+                    resourceName: 'Name of a running resource from the selected AppHost. Resource names are limited to 256 characters.',
+                    strategy: 'Debug strategy. auto selects the available safe action, currently attach. attach only attaches a debugger; starting and restarting resources are not supported.',
                 });
         });
     });
@@ -206,6 +221,7 @@ suite('Aspire resource debug language model tool', () => {
 
             assert.strictEqual(registration.registered, true);
             assert.deepStrictEqual(registerToolStub.getCalls().map(call => call.args[0]), [aspireResourceDebugToolName]);
+            assert.deepStrictEqual([...registration.tools.keys()], [aspireResourceDebugToolName]);
             registration.dispose();
             assert.deepStrictEqual(disposed, [aspireResourceDebugToolName]);
         });
@@ -243,8 +259,13 @@ suite('Aspire resource debug language model tool', () => {
                 { resourceName: 'api' },
                 createInput({ appHostPath: '   ' }),
                 createInput({ appHostPath: 'AppHost/\u200bAppHost.csproj' }),
+                createInput({ appHostPath: 'AppHost\u2028/AppHost.csproj' }),
+                createInput({ appHostPath: 'AppHost\u2029/AppHost.csproj' }),
                 createInput({ resourceName: '\t' }),
                 createInput({ resourceName: 'api\u200b' }),
+                createInput({ resourceName: 'api\u2028injected' }),
+                createInput({ resourceName: 'api\u2029injected' }),
+                createInput({ resourceName: 'a'.repeat(257) }),
                 createInput({ strategy: 'restart' }),
                 createInput({ unexpected: 'value' }),
                 throwingInput,
@@ -293,6 +314,7 @@ suite('Aspire resource debug language model tool', () => {
                         controller: 'editor',
                     });
                 assert.strictEqual(resourceDebugger.calls[0].source, 'languageModelTool');
+                    assert.strictEqual(resourceDebugger.calls[0].strategy, requestedStrategy);
             }
         });
 
@@ -338,6 +360,7 @@ suite('Aspire resource debug language model tool', () => {
                 resolved: true,
                 target: {
                     absolutePath: '/private/workspace/backend/AppHost/AppHost.csproj',
+                    relativePath: 'AppHost/AppHost.csproj',
                     displayPath: 'backend/AppHost/AppHost.csproj',
                 },
             }];
@@ -360,6 +383,7 @@ suite('Aspire resource debug language model tool', () => {
                 resolved: true,
                 target: {
                     absolutePath: absoluteAppHostPath,
+                    relativePath: safeAppHostPath,
                     displayPath: 'backend/AppHost/AppHost.csproj',
                 },
             }];
@@ -379,18 +403,76 @@ suite('Aspire resource debug language model tool', () => {
             assert.strictEqual(confirmation.includes('debug configuration'), false);
         });
 
-        test('does not invent an AppHost path when confirmation resolution fails', async () => {
+        test('always requires a generic confirmation when preparation cannot resolve the AppHost', async () => {
             const resolver = new FakeTargetResolver();
-            resolver.results = [{ resolved: false, outcome: 'unknownAppHost' }];
+            for (const outcome of ['unknownAppHost', 'discoveryFailed', 'cancelled'] as const) {
+                resolver.calls = 0;
+                resolver.results = [
+                    { resolved: false, outcome },
+                    {
+                        resolved: true,
+                        target: {
+                            absolutePath: absoluteAppHostPath,
+                            relativePath: safeAppHostPath,
+                            displayPath: safeAppHostPath,
+                        },
+                    },
+                ];
+                const { service, resourceDebugger } = createService(resolver);
+                const tool = new AspireResourceDebugLanguageModelTool(service);
+                const input = createInput({ appHostPath: '../private/token=secret' });
+
+                const prepared = await tool.prepareInvocation(
+                    { input: input as unknown as AspireResourceDebugToolInput },
+                    new vscode.CancellationTokenSource().token);
+                const result = readToolResultPayload(await tool.invoke(
+                    { input: input as unknown as AspireResourceDebugToolInput, toolInvocationToken: undefined },
+                    new vscode.CancellationTokenSource().token));
+
+                assert.deepStrictEqual(prepared.confirmationMessages, {
+                    title: 'Attach debugger to Aspire resource',
+                    message: 'Attach the debugger to the requested Aspire resource?',
+                });
+                assert.strictEqual(prepared.invocationMessage, 'Unable to attach debugger to the requested Aspire resource.');
+                assert.strictEqual(JSON.stringify(prepared).includes('../private/token=secret'), false);
+                assert.strictEqual(JSON.stringify(prepared).includes(absoluteAppHostPath), false);
+                assert.strictEqual(result.outcome, 'started');
+                assert.strictEqual(resourceDebugger.calls.length, 1);
+            }
+
+            const { service } = createService();
+            const tool = new AspireResourceDebugLanguageModelTool(service);
+            const prepared = await tool.prepareInvocation(
+                { input: createInput({ resourceName: 'api\u2028injected' }) as unknown as AspireResourceDebugToolInput },
+                new vscode.CancellationTokenSource().token);
+
+            assert.deepStrictEqual(prepared.confirmationMessages, {
+                title: 'Attach debugger to Aspire resource',
+                message: 'Attach the debugger to the requested Aspire resource?',
+            });
+            assert.strictEqual(JSON.stringify(prepared).includes('injected'), false);
+        });
+
+        test('escapes confirmed resource and AppHost identities with the shared Markdown helper', async () => {
+            const resolver = new FakeTargetResolver();
+            resolver.results = [{
+                resolved: true,
+                target: {
+                    absolutePath: absoluteAppHostPath,
+                    relativePath: 'AppHost/[unsafe]*.csproj',
+                    displayPath: 'AppHost/[unsafe]*.csproj',
+                },
+            }];
             const { service } = createService(resolver);
             const tool = new AspireResourceDebugLanguageModelTool(service);
 
             const prepared = await tool.prepareInvocation(
-                { input: createInput({ appHostPath: '../private/token=secret' }) as unknown as AspireResourceDebugToolInput },
+                { input: createInput({ resourceName: 'api_[unsafe]*' }) as unknown as AspireResourceDebugToolInput },
                 new vscode.CancellationTokenSource().token);
 
-            assert.strictEqual(prepared.confirmationMessages, undefined);
-            assert.strictEqual(prepared.invocationMessage, 'Unable to attach debugger to the requested Aspire resource.');
+            assert.strictEqual(
+                prepared.confirmationMessages?.message,
+                'Attach the debugger to resource api\\_\\[unsafe\\]\\* from Aspire AppHost AppHost/\\[unsafe\\]\\*.csproj?');
         });
 
         test('re-resolves the AppHost immediately after confirmation', async () => {
@@ -400,6 +482,7 @@ suite('Aspire resource debug language model tool', () => {
                     resolved: true,
                     target: {
                         absolutePath: '/private/workspace/first/AppHost.csproj',
+                        relativePath: 'first/AppHost.csproj',
                         displayPath: 'first/AppHost.csproj',
                     },
                 },
@@ -407,6 +490,7 @@ suite('Aspire resource debug language model tool', () => {
                     resolved: true,
                     target: {
                         absolutePath: '/private/workspace/second/AppHost.csproj',
+                        relativePath: 'second/AppHost.csproj',
                         displayPath: 'second/AppHost.csproj',
                     },
                 },
@@ -444,6 +528,17 @@ suite('Aspire resource debug language model tool', () => {
             const debugToken = new vscode.CancellationTokenSource();
             duringDebug.resourceDebugger.onDebug = () => debugToken.cancel();
             assert.strictEqual((await duringDebug.service.debug(createInput(), debugToken.token)).outcome, 'cancelled');
+        });
+
+        test('fails closed when disposal races AppHost resolution before an attach starts', async () => {
+            const resolver = new FakeTargetResolver();
+            const { service, resourceDebugger } = createService(resolver);
+            resolver.onResolve = () => service.dispose();
+
+            const result = await service.debug(createInput(), new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'cancelled');
+            assert.strictEqual(resourceDebugger.calls.length, 0);
         });
 
         test('maps every bounded resource debug result', async () => {
@@ -536,7 +631,8 @@ suite('Aspire resource debug language model tool', () => {
         });
     });
 
-    test('continues to expose the existing lifecycle resolver without invoking lifecycle policy', () => {
-        assert.strictEqual(typeof AppHostLifecycleToolService.prototype.resolveTarget, 'function');
+    test('uses the neutral AppHost target resolver contract without importing lifecycle policy', () => {
+        assert.strictEqual(typeof AppHostTargetResolverService.prototype.resolveTarget, 'function');
+        assert.strictEqual(AppHostLifecycleToolService.prototype.isPrototypeOf(AppHostTargetResolverService.prototype), false);
     });
 });

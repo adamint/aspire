@@ -9,7 +9,7 @@ import { spawnCliProcess } from '../utils/process/cliProcess';
 import { cleanupRun } from '../debugger/runCleanupRegistry';
 import type { AspireResourceExtendedDebugConfiguration, EnvVar, ExecutableLaunchConfiguration } from '../dcp/types';
 import { createStateSnapshot, getSensitiveDashboardUrl, isSamePath } from '../extensionState';
-import type { PreparableAppHostLifecycleTool } from '../lm/appHostLifecycleTools';
+import type { PreparableLanguageModelTool } from '../lm/languageModelToolContracts';
 import { AppHostLaunchRequestedEvent, AppHostLaunchService } from '../services/AppHostLaunchService';
 import type { AspireDebugConsoleOutputEvent, AspireExtensionE2EBrowserDebugSession, AspireExtensionE2ECommandInvocation, AspireExtensionE2EControlCommand, AspireExtensionE2EControlPayload, AspireExtensionE2EControlStatus, AspireExtensionE2EDebugConsoleOutput, AspireExtensionE2EDebugLaunch, AspireExtensionE2EStoppingPathEvent, AspireExtensionE2ETaskProcessEvent, AspireExtensionE2ETerminalCommand, AspireExtensionStateSnapshot } from '../types/extensionApi';
 import { AspireTerminalCommandEvent, AspireTerminalProvider } from '../utils/AspireTerminalProvider';
@@ -30,7 +30,7 @@ export function createE2eStateFileBridge(
   appHostTreeProvider: AspireAppHostTreeProvider,
   terminalProvider: AspireTerminalProvider,
   onDidChangeState: vscode.Event<AspireExtensionStateSnapshot>,
-  appHostLifecycleTools: ReadonlyMap<string, PreparableAppHostLifecycleTool>,
+  preparableLanguageModelTools: ReadonlyMap<string, PreparableLanguageModelTool>,
 ): vscode.Disposable {
   const stateFile = process.env.ASPIRE_EXTENSION_E2E_STATE_FILE;
   const controlFile = process.env.ASPIRE_EXTENSION_E2E_CONTROL_FILE;
@@ -245,7 +245,7 @@ export function createE2eStateFileBridge(
               }
             };
 
-            const result = await executeE2eControlCommand(context, aspireContext, dataRepository, appHostLaunchService, appHostTreeProvider, terminalProvider, clipboardSnapshot, clipboardExpectation, appHostLifecycleTools, payload.command, markCommandStarted);
+            const result = await executeE2eControlCommand(context, aspireContext, dataRepository, appHostLaunchService, appHostTreeProvider, terminalProvider, clipboardSnapshot, clipboardExpectation, preparableLanguageModelTools, payload.command, markCommandStarted);
             controlStatus = { revision, status: 'applied', startedObserved: commandStarted, result };
           }
           else {
@@ -361,7 +361,7 @@ async function executeE2eControlCommand(
   terminalProvider: AspireTerminalProvider,
   clipboardSnapshot: E2eClipboardSnapshot,
   clipboardExpectation: E2eClipboardExpectation,
-  appHostLifecycleTools: ReadonlyMap<string, PreparableAppHostLifecycleTool>,
+  preparableLanguageModelTools: ReadonlyMap<string, PreparableLanguageModelTool>,
   command: AspireExtensionE2EControlCommand,
   markStarted: () => void
 ): Promise<unknown> {
@@ -588,7 +588,7 @@ async function executeE2eControlCommand(
     }
     case 'prepareLanguageModelToolInvocation': {
       markStarted();
-      const tool = appHostLifecycleTools.get(command.toolName);
+      const tool = preparableLanguageModelTools.get(command.toolName);
       if (!tool) {
         throw new Error(`Language model tool '${command.toolName}' is not registered.`);
       }
