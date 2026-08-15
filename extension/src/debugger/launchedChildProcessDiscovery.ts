@@ -27,6 +27,12 @@ export interface LaunchedChildProcessCommandRunner {
     run(command: string, args: readonly string[], cancellationToken?: vscode.CancellationToken, timeoutMs?: number): Promise<string>;
 }
 
+export type LaunchedChildProcessSpawner = (
+    command: string,
+    args: readonly string[],
+    options: childProcess.SpawnOptions,
+) => childProcess.ChildProcessWithoutNullStreams;
+
 const maxProcessListingLength = 16 * 1024 * 1024;
 const windowsProcessProperties = 'ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine';
 const windowsProcessQuery = `$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); Get-CimInstance Win32_Process | Select-Object ${windowsProcessProperties} | ConvertTo-Json -Compress`;
@@ -291,13 +297,19 @@ export class SystemLaunchedChildProcessQuery implements LaunchedChildProcessQuer
 }
 
 export class SystemLaunchedChildProcessCommandRunner implements LaunchedChildProcessCommandRunner {
+    constructor(
+        private readonly _spawn: LaunchedChildProcessSpawner =
+            childProcess.spawn as unknown as LaunchedChildProcessSpawner,
+    ) {
+    }
+
     run(command: string, args: readonly string[], cancellationToken?: vscode.CancellationToken, timeoutMs = 1_000): Promise<string> {
         return new Promise((resolve, reject) => {
             let completed = false;
             let cancellationRegistration: vscode.Disposable | undefined;
             let timeout: ReturnType<typeof setTimeout> | undefined;
             let output = '';
-            const process = childProcess.spawn(command, args, {
+            const process = this._spawn(command, args, {
                 stdio: 'pipe',
                 windowsHide: true,
             });

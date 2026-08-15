@@ -1,4 +1,6 @@
 import * as assert from 'assert';
+import type * as childProcess from 'child_process';
+import { EventEmitter } from 'events';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import {
@@ -6,6 +8,7 @@ import {
     parsePosixProcessList,
     parseWindowsProcessList,
     SystemLaunchedChildProcessQuery,
+    SystemLaunchedChildProcessCommandRunner,
     type LaunchedChildProcess,
     type LaunchedChildProcessClock,
     type LaunchedChildProcessCommandRunner,
@@ -48,6 +51,22 @@ class SequenceProcessQuery implements LaunchedChildProcessQuery {
 
 function process(pid: number, parentPid: number, executable: string, command = executable): LaunchedChildProcess {
     return { pid, parentPid, executable, command };
+}
+
+function createCommandProcess(): childProcess.ChildProcessWithoutNullStreams {
+    const child = new EventEmitter() as childProcess.ChildProcessWithoutNullStreams;
+    const stdout = Object.assign(new EventEmitter(), { setEncoding: () => { } });
+    const stderr = Object.assign(new EventEmitter(), { resume: sinon.stub() });
+    Object.assign(child, {
+        killed: false,
+        stdout,
+        stderr,
+        kill: sinon.stub().callsFake(() => {
+            (child as unknown as { killed: boolean }).killed = true;
+            return true;
+        }),
+    });
+    return child;
 }
 
 const identity: LaunchedChildProcessIdentity = {
@@ -107,6 +126,7 @@ suite('Launched child process discovery', () => {
                         ExecutablePath: 'C:\\tool\\launcher.exe',
                         CommandLine: 'launcher --run',
                     });
+
             },
         };
 
@@ -129,6 +149,49 @@ suite('Launched child process discovery', () => {
                 ],
             },
         ]);
+    });
+
+    test('command runner returns UTF-8/BOM output after draining stderr', async () => {
+        const child = createCommandProcess();
+        const result = new SystemLaunchedChildProcessCommandRunner(() => child).run('ps', [], undefined, 100);
+
+        child.stdout.emit('data', '\uFEFF日本語');
+        child.stderr.emit('data', 'diagnostic');
+        child.emit('close', 0);
+
+        assert.strictEqual(await result, '\uFEFF日本語');
+        assert.strictEqual((child.stderr.resume as sinon.SinonStub).calledOnce, true);
+    });
+
+    test('command runner rejects and cleans up on nonzero exit, cancellation, timeout, and output cap', async () => {
+        const children = [createCommandProcess(), createCommandProcess(), createCommandProcess(), createCommandProcess()];
+        const spawn = sinon.stub();
+        spawn.onCall(0).returns(children[0]);
+        spawn.onCall(1).returns(children[1]);
+        spawn.onCall(2).returns(children[2]);
+        spawn.onCall(3).returns(children[3]);
+        const runner = new SystemLaunchedChildProcessCommandRunner(spawn);
+        const cancellation = new vscode.CancellationTokenSource();
+
+        const nonzero = runner.run('ps', [], undefined, 100);
+        children[0].emit('close', 1);
+        await assert.rejects(nonzero);
+
+        const cancelled = runner.run('ps', [], cancellation.token, 100);
+        cancellation.cancel();
+        await assert.rejects(cancelled);
+
+        const capped = runner.run('ps', [], undefined, 100);
+        children[2].stdout.emit('data', 'x'.repeat(16 * 1024 * 1024 + 1));
+        await assert.rejects(capped);
+
+        const timedOut = runner.run('ps', [], undefined, 1);
+        await assert.rejects(timedOut);
+        assert.strictEqual((children[0].kill as sinon.SinonStub).called, false);
+        assert.strictEqual((children[1].kill as sinon.SinonStub).calledOnce, true);
+        assert.strictEqual((children[2].kill as sinon.SinonStub).calledOnce, true);
+        assert.strictEqual((children[3].kill as sinon.SinonStub).calledOnce, true);
+        cancellation.dispose();
     });
 
     test('resolves a stable nested child only beneath its launcher', async () => {
