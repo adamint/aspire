@@ -1,2 +1,8 @@
+# The Maven and Gradle wrapper shell scripts are executed by /bin/sh, which rejects CRLF
+# line endings ("bad interpreter: No such file or directory"), so they must stay LF even on
+# Windows checkouts where core.autocrlf is true. Their Windows counterparts need CRLF because
+# cmd.exe mis-parses LF-terminated batch files.
 /mvnw text eol=lf
+/gradlew text eol=lf
 *.cmd text eol=crlf
+*.bat text eol=crlf

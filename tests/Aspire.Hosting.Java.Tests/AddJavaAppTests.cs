@@ -13,20 +13,54 @@ public class AddJavaAppTests
 {
     // ---- Manifest: baseline ------------------------------------------------
 
+    // The wrapper is an absolute host path, so escape it the same way the manifest writer does.
+    private static string JsonEscape(string value) => System.Text.Json.JsonSerializer.Serialize(value).Trim('"');
+
     [Fact]
-    public async Task VerifyManifest_AddJavaApp_Baseline()
+    public async Task VerifyManifest_AddJavaApp_MavenGoal()
     {
-        using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish).WithResourceCleanUp(true);
+        using var tempDir = new TempJavaAppDirectory();
 
-        var app = builder.AddJavaApp("api", AppContext.BaseDirectory);
+        var app = builder.AddJavaApp("api", tempDir.Path).WithMavenGoal("spring-boot:run");
 
-        var manifest = await ManifestUtils.GetManifest(app.Resource);
+        // The manifest directory is the application directory so paths in the manifest are relative to it.
+        var manifest = await ManifestUtils.GetManifest(app.Resource, tempDir.Path);
 
-        var expected = """
+        // The wrapper has to be the command in publish mode too. Emitting "java" here while the goal was
+        // still contributed as an argument produced the uninvokable command line "java spring-boot:run".
+        var expected = $$"""
             {
               "type": "executable.v0",
               "workingDirectory": ".",
-              "command": "java"
+              "command": "{{JsonEscape(Path.Combine(tempDir.Path, JavaHostingExtensions.s_defaultMavenWrapper))}}",
+              "args": [
+                "spring-boot:run"
+              ]
+            }
+            """;
+        Assert.Equal(expected, manifest.ToString());
+    }
+
+    [Fact]
+    public async Task VerifyManifest_AddJavaApp_GradleTask()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish).WithResourceCleanUp(true);
+        using var tempDir = new TempJavaAppDirectory();
+
+        var app = builder.AddJavaApp("api", tempDir.Path).WithGradleTask("bootRun", "--no-daemon");
+
+        var manifest = await ManifestUtils.GetManifest(app.Resource, tempDir.Path);
+
+        var expected = $$"""
+            {
+              "type": "executable.v0",
+              "workingDirectory": ".",
+              "command": "{{JsonEscape(Path.Combine(tempDir.Path, JavaHostingExtensions.s_defaultGradleWrapper))}}",
+              "args": [
+                "bootRun",
+                "--no-daemon"
+              ]
             }
             """;
         Assert.Equal(expected, manifest.ToString());
@@ -134,15 +168,20 @@ public class AddJavaAppTests
     }
 
     [Fact]
-    public async Task AddJavaApp_DefaultArgsAreEmpty()
+    public async Task AddJavaApp_WithoutLaunchMode_ThrowsWhenArgumentsAreGathered()
     {
         using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
 
+        // A bare "java" with no arguments prints the JVM usage text and exits, so the failure is raised
+        // where it can name the resource and the fix.
         var app = builder.AddJavaApp("api", AppContext.BaseDirectory);
 
-        var args = await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await ArgumentEvaluator.GetArgumentListAsync(app.Resource));
 
-        Assert.Empty(args);
+        Assert.Equal(
+            "Java application 'api' has no launch mode configured. Call WithMavenGoal or WithGradleTask to run it through a build tool, or use the AddJavaApp overload that takes a jarPath to run a prebuilt JAR.",
+            exception.Message);
     }
 
     [Fact]
@@ -281,7 +320,7 @@ public class AddJavaAppTests
         var args = await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
 
         // WithCommand sets the wrapper as the command, args contain only the task
-        var expectedWrapper = Path.GetFullPath(Path.Combine(tempDir.Path, JavaHostingExtensions.DefaultGradleWrapper));
+        var expectedWrapper = Path.GetFullPath(Path.Combine(tempDir.Path, JavaHostingExtensions.s_defaultGradleWrapper));
         Assert.Equal(expectedWrapper, app.Resource.Command);
         Assert.Contains("bootRun", args);
     }
@@ -298,7 +337,7 @@ public class AddJavaAppTests
         var args = await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
 
         // WithCommand sets the wrapper as the command, args contain only the goal
-        var expectedWrapper = Path.GetFullPath(Path.Combine(tempDir.Path, JavaHostingExtensions.DefaultMavenWrapper));
+        var expectedWrapper = Path.GetFullPath(Path.Combine(tempDir.Path, JavaHostingExtensions.s_defaultMavenWrapper));
         Assert.Equal(expectedWrapper, app.Resource.Command);
         Assert.Contains("spring-boot:run", args);
     }
@@ -327,22 +366,54 @@ public class AddJavaAppTests
         var action = () => app.WithGradleTask("bootRun");
 
         var exception = Assert.Throws<InvalidOperationException>(action);
-        Assert.Contains(nameof(JavaAppResource.JarPath), exception.Message);
+        Assert.Equal(
+            "WithGradleTask cannot be used when a JAR path has been specified. Use either the AddJavaApp overload that takes a jarPath, or WithGradleTask, not both.",
+            exception.Message);
     }
 
     [Fact]
-    public async Task WithMavenGoal_DoesNotThrowWhenJarPathIsSet()
+    public void WithMavenGoal_ThrowsWhenJarPathIsSet()
     {
         using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
 
-        var app = builder.AddJavaApp("api", AppContext.BaseDirectory, "app.jar")
-            .WithMavenGoal("spring-boot:run");
+        var app = builder.AddJavaApp("api", AppContext.BaseDirectory, "app.jar");
 
-        // When a MavenGoal is set, the WithArgs callback emits the goal args
-        // instead of -jar, which is the expected behavior.
-        var args = await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
-        Assert.Contains("spring-boot:run", args);
-        Assert.DoesNotContain("-jar", args);
+        var action = () => app.WithMavenGoal("spring-boot:run");
+
+        var exception = Assert.Throws<InvalidOperationException>(action);
+        Assert.Equal(
+            "WithMavenGoal cannot be used when a JAR path has been specified. Use either the AddJavaApp overload that takes a jarPath, or WithMavenGoal, not both.",
+            exception.Message);
+    }
+
+    [Fact]
+    public void WithGradleTask_ThrowsWhenMavenGoalIsAlreadyConfigured()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
+
+        var app = builder.AddJavaApp("api", AppContext.BaseDirectory).WithMavenGoal("spring-boot:run");
+
+        var action = () => app.WithGradleTask("bootRun");
+
+        var exception = Assert.Throws<InvalidOperationException>(action);
+        Assert.Equal(
+            "WithGradleTask cannot be used when the application is already configured to launch with Maven. A Java application is launched by a single build tool.",
+            exception.Message);
+    }
+
+    [Fact]
+    public void WithMavenGoal_ThrowsWhenGradleTaskIsAlreadyConfigured()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
+
+        var app = builder.AddJavaApp("api", AppContext.BaseDirectory).WithGradleTask("bootRun");
+
+        var action = () => app.WithMavenGoal("spring-boot:run");
+
+        var exception = Assert.Throws<InvalidOperationException>(action);
+        Assert.Equal(
+            "WithMavenGoal cannot be used when the application is already configured to launch with Gradle. A Java application is launched by a single build tool.",
+            exception.Message);
     }
 
     // ---- WithWrapperPath ----------------------------------------------------
@@ -485,21 +556,31 @@ public class AddJavaAppTests
     {
         IResourceBuilder<JavaAppResource> builder = null!;
 
-        var action = () => builder.WithOtelAgent();
+        var action = () => builder.WithOtelAgent("/opt/otel/agent.jar");
 
         var exception = Assert.Throws<ArgumentNullException>(action);
         Assert.Equal(nameof(builder), exception.ParamName);
     }
 
     [Fact]
-    public async Task WithOtelAgent_WithoutAgentPath_CallsWithOtlpExporter()
+    public void WithOtelAgentShouldThrowWhenAgentPathIsNullOrWhiteSpace()
     {
         using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
 
-        var app = builder.AddJavaApp("api", AppContext.BaseDirectory)
-            .WithOtelAgent();
+        var app = builder.AddJavaApp("api", AppContext.BaseDirectory);
 
-        // WithOtlpExporter is called internally; verify the env vars have OTLP settings.
+        Assert.Throws<ArgumentException>(() => app.WithOtelAgent("  "));
+    }
+
+    [Fact]
+    public async Task AddJavaApp_ConfiguresOtlpExporterWithoutAnAgent()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
+
+        // The OTLP exporter is wired by AddJavaApp itself, so a Java application reports telemetry
+        // through Micrometer/OTel SDK instrumentation even when the Java agent is not used.
+        var app = builder.AddJavaApp("api", AppContext.BaseDirectory);
+
         var envVars = await EnvironmentVariableEvaluator.GetEnvironmentVariablesAsync(
             app.Resource, DistributedApplicationOperation.Run, TestServiceProvider.Instance);
 
@@ -641,26 +722,19 @@ public class AddJavaAppTests
         Assert.Contains(relationships, r => r.Type == "Parent" && r.Resource == app.Resource);
     }
 
-    // ---- JarPath property ---------------------------------------------------
+    // ---- JAR path -----------------------------------------------------------
 
     [Fact]
-    public void AddJavaApp_WithJarPath_SetsJarPathProperty()
+    public async Task AddJavaApp_WithJarPath_LaunchesTheJar()
     {
         using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
 
         var app = builder.AddJavaApp("api", AppContext.BaseDirectory, "target/app.jar");
 
-        Assert.Equal("target/app.jar", app.Resource.JarPath);
-    }
+        var args = await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
 
-    [Fact]
-    public void AddJavaApp_WithoutJarPath_JarPathIsNull()
-    {
-        using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
-
-        var app = builder.AddJavaApp("api", AppContext.BaseDirectory);
-
-        Assert.Null(app.Resource.JarPath);
+        Assert.Equal("java", app.Resource.Command);
+        Assert.Equal(["-jar", "target/app.jar"], args);
     }
 
     // ---- VS Code debugging --------------------------------------------------

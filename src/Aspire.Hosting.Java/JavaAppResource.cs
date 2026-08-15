@@ -10,15 +10,10 @@ namespace Aspire.Hosting.Java;
 /// </summary>
 /// <param name="name">The name of the resource in the application model.</param>
 /// <param name="workingDirectory">The working directory for the Java application.</param>
+/// <remarks>
+/// The command is always <c>java</c>. When the application is launched through a Maven goal or a Gradle
+/// task, the wrapper script replaces that command; see <c>WithMavenGoal</c> and <c>WithGradleTask</c>.
+/// </remarks>
 [AspireExport(ExposeProperties = true)]
 public class JavaAppResource(string name, string workingDirectory)
-    : ExecutableResource(name, "java", workingDirectory), IResourceWithServiceDiscovery, IContainerFilesDestinationResource
-{
-    /// <summary>
-    /// Gets or sets the path to the JAR file to execute.
-    /// </summary>
-    /// <remarks>
-    /// When set, the resource will execute the JAR file using <c>java -jar &lt;jarPath&gt;</c>.
-    /// </remarks>
-    public string? JarPath { get; set; }
-}
+    : ExecutableResource(name, "java", workingDirectory), IResourceWithServiceDiscovery, IContainerFilesDestinationResource;
