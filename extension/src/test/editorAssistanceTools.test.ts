@@ -6,6 +6,7 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 
 import { type AspireOperationKind } from '../dcp/types';
+import { AspireDebugSession } from '../debugger/AspireDebugSession';
 import {
     type AppHostEditorStateLaunchService,
     type AppHostLifecycleDiscoveryService,
@@ -1815,6 +1816,7 @@ suite('Editor assistance AppHost services', () => {
                     [{
                         cliProcessId: 2001,
                         configuration: { dashboardBrowser: 'debugEdge' },
+                        isShuttingDown: false,
                         openDashboard: ownedOpenDashboard,
                     }]);
                 uiRepository.appHosts = [{
@@ -1859,6 +1861,89 @@ suite('Editor assistance AppHost services', () => {
             }
         });
 
+        test('reports an error instead of presenting Dashboard UI for a shutting editor session', async () => {
+            const sandbox = sinon.createSandbox();
+            try {
+                const matchingCliPid = 2001;
+                const parentDebugSession = {
+                    id: 'aspire-session',
+                    type: 'aspire',
+                    name: 'Aspire',
+                    configuration: {
+                        type: 'aspire',
+                        request: 'launch',
+                        name: 'Aspire',
+                        program: appHostProjectPath,
+                        command: 'run',
+                    },
+                } as unknown as vscode.DebugSession;
+                const resourceStop = sandbox.stub().rejects(new Error('Resource stop failed'));
+                sandbox.stub(vscode.debug, 'stopDebugging').resolves();
+                const onDidStartDebugSession = sandbox.stub(vscode.debug, 'onDidStartDebugSession').returns({
+                    dispose: sandbox.stub(),
+                });
+                const startDebugging = sandbox.stub(vscode.debug, 'startDebugging').resolves(true);
+                const executeCommand = sandbox.stub(vscode.commands, 'executeCommand').resolves();
+                const openExternal = sandbox.stub(vscode.env, 'openExternal').resolves(true);
+                const showInformationMessage = sandbox.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+                const aspireDebugSession = new AspireDebugSession(
+                    parentDebugSession,
+                    {} as any,
+                    {} as any,
+                    {} as any,
+                    () => { });
+                (aspireDebugSession as any)._cliProcess = { pid: matchingCliPid };
+                (aspireDebugSession as any)._resourceDebugSessions = [{
+                    id: 'resource-session',
+                    session: { id: 'resource-session', name: 'Resource' } as unknown as vscode.DebugSession,
+                    stopSession: resourceStop,
+                }];
+                dashboardSessionsByIdentity.set(
+                    resolver.getIdentityForAppHostPath(appHostProjectPath),
+                    [aspireDebugSession]);
+                uiRepository.appHosts = [{
+                    ...createRunningAppHost(
+                        appHostProjectPath,
+                        'https://dashboard.example.invalid/login?t=private'),
+                    cliPid: matchingCliPid,
+                }];
+
+                await assert.rejects(() => aspireDebugSession.stopDebugging(), /Resource stop failed/);
+
+                const results = [];
+                for (const browserType of [
+                    'integratedBrowser',
+                    'openExternalBrowser',
+                    'debugEdge',
+                    'notification',
+                ] as const) {
+                    aspireDebugSession.configuration.dashboardBrowser = browserType;
+                    results.push(await service.openDashboard(
+                        { appHostPath: 'AppHost/AppHost.csproj' },
+                        new vscode.CancellationTokenSource().token));
+                }
+
+                assert.deepStrictEqual(results, Array.from({ length: 4 }, () => ({
+                    success: false,
+                    tool: aspireOpenDashboardToolName,
+                    outcome: 'error',
+                })));
+                sinon.assert.notCalled(executeCommand);
+                sinon.assert.notCalled(openExternal);
+                sinon.assert.notCalled(onDidStartDebugSession);
+                sinon.assert.notCalled(startDebugging);
+                sinon.assert.notCalled(showInformationMessage);
+
+                resourceStop.resetBehavior();
+                resourceStop.resolves();
+                await aspireDebugSession.stopDebugging();
+                sinon.assert.calledTwice(resourceStop);
+            }
+            finally {
+                sandbox.restore();
+            }
+        });
+
         test('uses ownerless Dashboard configuration when fresh CLI ownership is unproven', async () => {
             const sandbox = sinon.createSandbox();
             try {
@@ -1872,6 +1957,7 @@ suite('Editor assistance AppHost services', () => {
                     [{
                         cliProcessId: 1001,
                         configuration: { dashboardBrowser: 'debugEdge' },
+                        isShuttingDown: false,
                         openDashboard: ownedOpenDashboard,
                     } as EditorUiHandoffDebugSession]);
 
@@ -1918,10 +2004,12 @@ suite('Editor assistance AppHost services', () => {
                     [{
                         cliProcessId: 1001,
                         configuration: { dashboardBrowser: 'integratedBrowser' },
+                        isShuttingDown: false,
                         openDashboard: staleOpenDashboard,
                     }, {
                         cliProcessId: matchingCliPid,
                         configuration: { dashboardBrowser: 'debugEdge' },
+                        isShuttingDown: false,
                         openDashboard: ownedOpenDashboard,
                     }] as unknown as readonly EditorUiHandoffDebugSession[]);
                 uiRepository.appHosts = [{

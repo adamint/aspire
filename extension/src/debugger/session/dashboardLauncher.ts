@@ -383,7 +383,10 @@ export class DashboardLauncher implements vscode.Disposable {
   async openDashboard(url: string, browserType: DashboardBrowserType): Promise<DashboardPresentation | undefined> {
     extensionLogOutputChannel.info(`Opening dashboard in browser: ${browserType}.`);
 
-    if (this._host.isDisposed || this._host.isStopAttemptInProgress || this._host.isExtensionShutdownRequested) {
+    if (this._host.isDisposed
+      || this._host.isShuttingDown
+      || this._host.isStopAttemptInProgress
+      || this._host.isExtensionShutdownRequested) {
       extensionLogOutputChannel.info('Skipping dashboard browser launch because the Aspire session is shutting down.');
       return undefined;
     }

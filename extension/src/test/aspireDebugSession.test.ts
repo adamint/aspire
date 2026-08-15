@@ -1682,6 +1682,55 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.deepStrictEqual(readLatestLaunchFailures(appHostPath), []);
     });
 
+    test('a rejected shutdown blocks later dashboard browser presentations', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+        } as unknown as vscode.DebugSession;
+        const resourceStop = sinon.stub().rejects(new Error('Resource stop failed'));
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const onDidStartDebugSession = sinon.stub(vscode.debug, 'onDidStartDebugSession').returns({
+            dispose: sinon.stub(),
+        });
+        const startDebugging = sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+        const executeCommand = sinon.stub(vscode.commands, 'executeCommand').resolves();
+        const openExternal = sinon.stub(vscode.env, 'openExternal').resolves(true);
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+        (aspireDebugSession as any)._resourceDebugSessions = [{
+            id: 'resource-session',
+            session: { id: 'resource-session', name: 'Resource' } as unknown as vscode.DebugSession,
+            stopSession: resourceStop,
+        }];
+
+        await assert.rejects(() => aspireDebugSession.stopDebugging(), /Resource stop failed/);
+
+        assert.strictEqual(aspireDebugSession.isShuttingDown, true);
+        assert.strictEqual(aspireDebugSession.isStopAttemptInProgress, false);
+        const presentations = [];
+        for (const browserType of ['integratedBrowser', 'openExternalBrowser', 'debugEdge'] as const) {
+            presentations.push(await aspireDebugSession.openDashboard('https://localhost:1234', browserType));
+        }
+
+        assert.deepStrictEqual(presentations, [undefined, undefined, undefined]);
+        sinon.assert.notCalled(executeCommand);
+        sinon.assert.notCalled(openExternal);
+        sinon.assert.notCalled(onDidStartDebugSession);
+        sinon.assert.notCalled(startDebugging);
+
+        resourceStop.resetBehavior();
+        resourceStop.resolves();
+        await aspireDebugSession.stopDebugging();
+        sinon.assert.calledTwice(resourceStop);
+    });
+
     test('does not record a dashboard failure when external fallback succeeds', async () => {
         const appHostPath = '/workspace/AppHost/AppHost.csproj';
         const parentDebugSession = {

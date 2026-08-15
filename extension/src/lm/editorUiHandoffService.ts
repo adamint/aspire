@@ -68,6 +68,11 @@ export class EditorUiHandoffService implements EditorUiHandoffOperations {
                 ? sessions.filter(session => session.cliProcessId === cliPid)
                 : [];
             const editorSession = matchingSessions.length === 1 ? matchingSessions[0] : undefined;
+            throwIfCanceled(token);
+            if (editorSession?.isShuttingDown) {
+                return { outcome: 'error' };
+            }
+
             const resolvedBehavior = resolveExplicitDashboardLaunchBehavior(
                 vscode.workspace.getConfiguration('aspire'),
                 editorSession?.configuration.dashboardBrowser);
