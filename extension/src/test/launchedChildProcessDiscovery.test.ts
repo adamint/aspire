@@ -66,6 +66,18 @@ function process(
     };
 }
 
+function listedProcess(
+    pid: number,
+    parentPid: number,
+    executable: string,
+    command = executable,
+): LaunchedChildProcess {
+    return {
+        ...process(pid, parentPid, executable, command),
+        hasCompleteIdentity: executable.trim().length > 0 && command.trim().length > 0,
+    };
+}
+
 function createCommandProcess(): childProcess.ChildProcessWithoutNullStreams {
     const child = new EventEmitter() as childProcess.ChildProcessWithoutNullStreams;
     const stdout = Object.assign(new EventEmitter(), { setEncoding: () => { } });
@@ -124,6 +136,68 @@ suite('Launched child process discovery', () => {
         assert.strictEqual(new SystemLaunchedChildProcessQuery('win32').canTrustListedProcessIdentity, true);
         assert.strictEqual(new SystemLaunchedChildProcessQuery('darwin').canTrustListedProcessIdentity, false);
         assert.strictEqual(new SystemLaunchedChildProcessQuery('linux').canTrustListedProcessIdentity, false);
+    });
+
+    test('target-queries Windows processes when bulk CIM identity is incomplete', async () => {
+        const targetedProcessReads: number[] = [];
+        const commandRunner: LaunchedChildProcessCommandRunner = {
+            async run(_command, args): Promise<string> {
+                const command = args.at(-1) ?? '';
+                const processIdMatch = /ProcessId = (\d+)/.exec(command);
+                if (processIdMatch) {
+                    const processId = Number(processIdMatch[1]);
+                    targetedProcessReads.push(processId);
+                    return JSON.stringify(processId === 10
+                        ? {
+                            ProcessId: 10,
+                            ParentProcessId: 1,
+                            Name: 'launcher.exe',
+                            ExecutablePath: 'C:\\tool\\launcher.exe',
+                            CommandLine: '"C:\\tool\\launcher.exe" --run',
+                        }
+                        : {
+                            ProcessId: 42,
+                            ParentProcessId: 10,
+                            Name: 'api.exe',
+                            ExecutablePath: 'C:\\target\\api.exe',
+                            CommandLine: '"C:\\target\\api.exe" --listen',
+                        });
+                }
+
+                return JSON.stringify([
+                    {
+                        ProcessId: 10,
+                        ParentProcessId: 1,
+                        Name: 'launcher.exe',
+                        ExecutablePath: null,
+                        CommandLine: '"C:\\tool\\launcher.exe" --run',
+                    },
+                    {
+                        ProcessId: 42,
+                        ParentProcessId: 10,
+                        Name: 'api.exe',
+                        ExecutablePath: 'C:\\target\\api.exe',
+                        CommandLine: '',
+                    },
+                ]);
+            },
+        };
+        const resolver = new LaunchedChildProcessResolver(
+            new SystemLaunchedChildProcessQuery('win32', commandRunner),
+            new TestClock(),
+            { timeoutMs: 20, retryDelayMs: 10 });
+        const windowsIdentity: LaunchedChildProcessIdentity = {
+            requiresDirectChild: true,
+            isLauncher: candidate =>
+                candidate.executable === 'C:\\tool\\launcher.exe' &&
+                candidate.command === '"C:\\tool\\launcher.exe" --run',
+            isCandidate: candidate =>
+                candidate.executable === 'C:\\target\\api.exe' &&
+                candidate.command === '"C:\\target\\api.exe" --listen',
+        };
+
+        assert.strictEqual(await resolver.resolveProcessId(10, windowsIdentity), 42);
+        assert.deepStrictEqual(targetedProcessReads, [10, 42, 10, 42, 42]);
     });
 
     test('parses UTF-8 BOM-prefixed Windows CIM output with non-ASCII command text', () => {
@@ -572,8 +646,8 @@ suite('Launched child process discovery', () => {
         const query: LaunchedChildProcessQuery = {
             canTrustListedProcessIdentity: true,
             listProcesses: async () => [
-                process(10, 1, '/tool/launcher'),
-                process(42, 10, '/target/api'),
+                listedProcess(10, 1, '/tool/launcher'),
+                listedProcess(42, 10, '/target/api'),
             ],
             getProcess,
         };
@@ -598,15 +672,15 @@ suite('Launched child process discovery', () => {
         const cases = [
             {
                 processes: [
-                    process(10, 1, '/tool/launcher', ''),
-                    process(42, 10, '/target/api'),
+                    listedProcess(10, 1, '/tool/launcher', ''),
+                    listedProcess(42, 10, '/target/api'),
                 ],
                 expectedProcessReads: [10, 10, 42],
             },
             {
                 processes: [
-                    process(10, 1, '/tool/launcher'),
-                    process(42, 10, '', '/target/api'),
+                    listedProcess(10, 1, '/tool/launcher'),
+                    listedProcess(42, 10, '', '/target/api'),
                 ],
                 expectedProcessReads: [42, 42, 42],
             },
@@ -634,14 +708,14 @@ suite('Launched child process discovery', () => {
         }
     });
 
-    test('rejects direct candidates that exit, change PID, or are reparented before return', async () => {
+    test('rejects direct candidates that exit, are reused, or are reparented before return', async () => {
         const directIdentity: LaunchedChildProcessIdentity = {
             requiresDirectChild: true,
             ...identity,
         };
         const finalCandidates = [
             undefined,
-            process(43, 10, '/target/api'),
+            process(42, 10, '/other/api'),
             process(42, 99, '/target/api'),
         ];
 
@@ -649,8 +723,8 @@ suite('Launched child process discovery', () => {
             const query: LaunchedChildProcessQuery = {
                 canTrustListedProcessIdentity: true,
                 listProcesses: async () => [
-                    process(10, 1, '/tool/launcher'),
-                    process(42, 10, '/target/api'),
+                    listedProcess(10, 1, '/tool/launcher'),
+                    listedProcess(42, 10, '/target/api'),
                 ],
                 getProcess: async () => finalCandidate,
             };
@@ -663,6 +737,37 @@ suite('Launched child process discovery', () => {
         }
     });
 
+    test('rejects a direct candidate when its final identity read completes after the deadline', async () => {
+        let now = 0;
+        const clock: LaunchedChildProcessClock = {
+            now: () => now,
+            sleep: async milliseconds => {
+                now += milliseconds;
+            },
+        };
+        const query: LaunchedChildProcessQuery = {
+            canTrustListedProcessIdentity: true,
+            listProcesses: async () => [
+                listedProcess(10, 1, '/tool/launcher'),
+                listedProcess(42, 10, '/target/api'),
+            ],
+            getProcess: async () => {
+                now = 21;
+                return process(42, 10, '/target/api');
+            },
+        };
+        const directIdentity: LaunchedChildProcessIdentity = {
+            requiresDirectChild: true,
+            ...identity,
+        };
+        const resolver = new LaunchedChildProcessResolver(
+            query,
+            clock,
+            { timeoutMs: 20, retryDelayMs: 10 });
+
+        await assert.rejects(resolver.resolveProcessId(10, directIdentity));
+    });
+
     test('freshly re-reads the full transitive candidate ancestry', async () => {
         const getProcess = sinon.stub().callsFake(async (processId: number) => new Map([
             [10, process(10, 1, '/tool/launcher')],
@@ -672,9 +777,9 @@ suite('Launched child process discovery', () => {
         const query: LaunchedChildProcessQuery = {
             canTrustListedProcessIdentity: true,
             listProcesses: async () => [
-                process(10, 1, '/tool/launcher'),
-                process(22, 10, '/tool/intermediate'),
-                process(42, 22, '/target/api'),
+                listedProcess(10, 1, '/tool/launcher'),
+                listedProcess(22, 10, '/tool/intermediate'),
+                listedProcess(42, 22, '/target/api'),
             ],
             getProcess,
         };
@@ -685,6 +790,50 @@ suite('Launched child process discovery', () => {
 
         assert.strictEqual(await resolver.resolveProcessId(10, identity), 42);
         assert.deepStrictEqual(getProcess.getCalls().map(call => call.args[0]), [42, 22, 10]);
+    });
+
+    test('rejects a transitive candidate when the freshly queried launcher identity changes', async () => {
+        const query: LaunchedChildProcessQuery = {
+            canTrustListedProcessIdentity: true,
+            listProcesses: async () => [
+                listedProcess(10, 1, '/tool/launcher'),
+                listedProcess(22, 10, '/tool/intermediate'),
+                listedProcess(42, 22, '/target/api'),
+            ],
+            getProcess: async processId => new Map([
+                [10, process(10, 1, '/tool/other')],
+                [22, process(22, 10, '/tool/intermediate')],
+                [42, process(42, 22, '/target/api')],
+            ]).get(processId),
+        };
+        const resolver = new LaunchedChildProcessResolver(
+            query,
+            new TestClock(),
+            { timeoutMs: 20, retryDelayMs: 10 });
+
+        await assert.rejects(resolver.resolveProcessId(10, identity));
+    });
+
+    test('rejects a transitive candidate when a freshly queried intermediate is reparented', async () => {
+        const query: LaunchedChildProcessQuery = {
+            canTrustListedProcessIdentity: true,
+            listProcesses: async () => [
+                listedProcess(10, 1, '/tool/launcher'),
+                listedProcess(22, 10, '/tool/intermediate'),
+                listedProcess(42, 22, '/target/api'),
+            ],
+            getProcess: async processId => new Map([
+                [10, process(10, 1, '/tool/launcher')],
+                [22, process(22, 99, '/tool/intermediate')],
+                [42, process(42, 22, '/target/api')],
+            ]).get(processId),
+        };
+        const resolver = new LaunchedChildProcessResolver(
+            query,
+            new TestClock(),
+            { timeoutMs: 20, retryDelayMs: 10 });
+
+        await assert.rejects(resolver.resolveProcessId(10, identity));
     });
 
     test('re-verifies selected PID ancestry before accepting a process-list candidate', async () => {

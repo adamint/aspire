@@ -8,6 +8,7 @@ export interface LaunchedChildProcess {
     readonly executable: string;
     readonly command: string;
     readonly commandLineArguments?: readonly string[];
+    readonly hasCompleteIdentity?: boolean;
 }
 
 export interface LaunchedChildProcessQuery {
@@ -86,13 +87,15 @@ export function parseWindowsProcessList(output: string): readonly LaunchedChildP
         }
 
         const values = row as Record<string, unknown>;
+        const executablePath = getNonEmptyString(values.ExecutablePath);
+        const commandLine = getNonEmptyString(values.CommandLine);
         const process = createProcessInfo(
             values.ProcessId,
             values.ParentProcessId,
-            typeof values.ExecutablePath === 'string' && values.ExecutablePath.length > 0
-                ? values.ExecutablePath
-                : values.Name,
-            values.CommandLine);
+            executablePath ?? values.Name,
+            commandLine,
+            undefined,
+            executablePath !== undefined && commandLine !== undefined);
         if (process) {
             processes.push(process);
         }
@@ -257,12 +260,22 @@ export class LaunchedChildProcessResolver {
         }
 
         if (identity.requiresDirectChild === true) {
+            throwIfCancelled(cancellationToken);
+            if (this._clock.now() > deadline) {
+                return false;
+            }
+
             const candidate = await this._getProcess(
                 candidatePid,
                 undefined,
                 cancellationToken,
                 deadline,
                 true);
+            throwIfCancelled(cancellationToken);
+            if (this._clock.now() > deadline) {
+                return false;
+            }
+
             return candidate !== undefined &&
                 candidate.parentPid === launcherPid &&
                 identity.isCandidate(candidate);
@@ -313,8 +326,7 @@ export class LaunchedChildProcessResolver {
             (!requireFresh &&
                 this._processQuery.canTrustListedProcessIdentity === true &&
                 topologyProcess !== undefined &&
-                topologyProcess.executable.length > 0 &&
-                topologyProcess.command.length > 0)) {
+                topologyProcess.hasCompleteIdentity === true)) {
             return topologyProcess;
         }
 
@@ -525,12 +537,22 @@ const systemLaunchedChildProcessFileSystem: LaunchedChildProcessFileSystem = {
 export const launchedChildProcessResolver = new LaunchedChildProcessResolver(
     new SystemLaunchedChildProcessQuery());
 
+function getNonEmptyString(value: unknown): string | undefined {
+    if (typeof value !== 'string') {
+        return undefined;
+    }
+
+    const trimmedValue = value.trim();
+    return trimmedValue.length > 0 ? trimmedValue : undefined;
+}
+
 function createProcessInfo(
     pidValue: unknown,
     parentPidValue: unknown,
     executableValue: unknown,
     commandValue: unknown,
     commandLineArguments?: readonly string[],
+    hasCompleteIdentity?: boolean,
 ): LaunchedChildProcess | undefined {
     const pid = parsePid(pidValue);
     const parentPid = parseParentPid(parentPidValue);
@@ -540,13 +562,22 @@ function createProcessInfo(
         return undefined;
     }
 
-    return {
+    const process: LaunchedChildProcess = {
         pid,
         parentPid,
         executable,
         command: command.length > 0 ? command : executable,
         ...(commandLineArguments ? { commandLineArguments } : {}),
     };
+    if (hasCompleteIdentity !== undefined) {
+        // This is resolver bookkeeping rather than process identity exposed to callers. Keep it
+        // non-enumerable so adding the marker does not change the parsed process value shape.
+        Object.defineProperty(process, 'hasCompleteIdentity', {
+            value: hasCompleteIdentity,
+        });
+    }
+
+    return process;
 }
 
 function parseLinuxCommandLine(commandLine: Buffer): readonly string[] {
