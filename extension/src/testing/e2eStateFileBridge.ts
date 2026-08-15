@@ -349,10 +349,12 @@ async function processE2eControlFile(
 }
 
 function getE2eErrorMessage(error: unknown): string {
-  // State files are copied to E2E diagnostics. Preserve only whether the bridge command was
-  // cancelled or failed; error messages can include paths, process data, and command arguments.
-  return isCommandCancellation(error)
-    ? 'E2E control command cancelled.'
+  if (isCommandCancellation(error)) {
+    return 'E2E control command cancelled.';
+  }
+
+  return error instanceof Error
+    ? error.message
     : 'E2E control command failed.';
 }
 
