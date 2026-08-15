@@ -307,7 +307,7 @@
         "comment": "The numeric process exit code for the resource debug session."
       }
     },
-    "aspire/vscode/resourceDebug/start": {
+    "aspire/vscode/resourcedebug/start": {
       "source": {
         "classification": "SystemMetaData",
         "purpose": "FeatureInsight",
@@ -324,7 +324,7 @@
         "comment": "The bounded controller responsible for resource debugging: editor."
       }
     },
-    "aspire/vscode/resourceDebug/result": {
+    "aspire/vscode/resourcedebug/result": {
       "source": {
         "classification": "SystemMetaData",
         "purpose": "FeatureInsight",
@@ -391,7 +391,7 @@
         "comment": "The non-negative total resource debug operation duration in milliseconds."
       }
     },
-    "aspire/vscode/resourceDebug/session/end": {
+    "aspire/vscode/resourcedebug/session/end": {
       "source": {
         "classification": "SystemMetaData",
         "purpose": "FeatureInsight",

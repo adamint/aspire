@@ -29,9 +29,9 @@ export interface ResourceDebugResultTelemetryProperties {
 }
 
 export interface ResourceDebugResultTelemetryMeasurements {
-    readonly resolution_duration_ms: number;
-    readonly debug_start_duration_ms: number;
-    readonly total_duration_ms: number;
+    readonly resolution_duration_ms?: number;
+    readonly debug_start_duration_ms?: number;
+    readonly total_duration_ms?: number;
 }
 
 export interface ResourceDebugAttachSessionMetadata {
@@ -48,11 +48,10 @@ export interface ResourceDebugSessionEndTelemetryProperties extends ResourceDebu
 }
 
 export interface ResourceDebugSessionEndTelemetryMeasurements {
-    readonly session_duration_ms: number;
+    readonly session_duration_ms?: number;
 }
 
 export interface ResourceDebugTelemetry {
-    now(): number;
     recordStart(properties: ResourceDebugStartTelemetryProperties): void;
     recordResult(
         properties: ResourceDebugResultTelemetryProperties,
@@ -64,8 +63,8 @@ export interface ResourceDebugTelemetry {
     ): void;
 }
 
-const systemClock: ResourceDebugClock = {
-    now: () => Date.now(),
+export const monotonicResourceDebugClock: ResourceDebugClock = {
+    now: () => performance.now(),
 };
 
 /**
@@ -73,29 +72,22 @@ const systemClock: ResourceDebugClock = {
  * service and session registry cannot accidentally forward debug configurations or errors.
  */
 export class ExtensionResourceDebugTelemetry implements ResourceDebugTelemetry {
-    constructor(private readonly _clock: ResourceDebugClock = systemClock) {
-    }
-
-    now(): number {
-        return this._clock.now();
-    }
-
     recordStart(properties: ResourceDebugStartTelemetryProperties): void {
-        this._send(() => sendTelemetryEvent('aspire/vscode/resourceDebug/start', properties));
+        this._send(() => sendTelemetryEvent('aspire/vscode/resourcedebug/start', properties));
     }
 
     recordResult(
         properties: ResourceDebugResultTelemetryProperties,
         measurements: ResourceDebugResultTelemetryMeasurements,
     ): void {
-        this._send(() => sendTelemetryEvent('aspire/vscode/resourceDebug/result', properties, measurements));
+        this._send(() => sendTelemetryEvent('aspire/vscode/resourcedebug/result', properties, measurements));
     }
 
     recordSessionEnd(
         properties: ResourceDebugSessionEndTelemetryProperties,
         measurements: ResourceDebugSessionEndTelemetryMeasurements,
     ): void {
-        this._send(() => sendTelemetryEvent('aspire/vscode/resourceDebug/session/end', properties, measurements));
+        this._send(() => sendTelemetryEvent('aspire/vscode/resourcedebug/session/end', properties, measurements));
     }
 
     private _send(send: () => void): void {

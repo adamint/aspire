@@ -17,10 +17,13 @@ import { ResourceDebugSessionRegistry } from './resourceDebugSessionRegistry';
 import {
     ExtensionResourceDebugTelemetry,
     type ResourceDebugAttachSessionMetadata,
+    type ResourceDebugClock,
     type ResourceDebugDebuggerRequirement,
     type ResourceDebugResourceState,
     type ResourceDebugResourceType,
+    type ResourceDebugResultTelemetryMeasurements,
     type ResourceDebugTelemetry,
+    monotonicResourceDebugClock,
 } from './resourceDebugTelemetry';
 
 export interface ResourceDebugAppHostRepository {
@@ -41,6 +44,7 @@ export interface ResourceDebugServiceDependencies {
     readonly startDebugging: ResourceDebugStartDebugging;
     readonly compareAppHostIdentity?: ResourceDebugAppHostIdentityComparer;
     readonly telemetry?: ResourceDebugTelemetry;
+    readonly clock?: ResourceDebugClock;
 }
 
 /**
@@ -50,10 +54,12 @@ export interface ResourceDebugServiceDependencies {
 export class ResourceDebugService implements vscode.Disposable, ResourceDebugger {
     private readonly _compareAppHostIdentity: ResourceDebugAppHostIdentityComparer;
     private readonly _telemetry: ResourceDebugTelemetry;
+    private readonly _clock: ResourceDebugClock;
 
     constructor(private readonly _dependencies: ResourceDebugServiceDependencies) {
         this._compareAppHostIdentity = _dependencies.compareAppHostIdentity ?? compareAppHostIdentity;
         this._telemetry = _dependencies.telemetry ?? new ExtensionResourceDebugTelemetry();
+        this._clock = _dependencies.clock ?? monotonicResourceDebugClock;
     }
 
     dispose(): void {
@@ -73,7 +79,7 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
     }
 
     async debug(request: ResourceDebugRequest): Promise<ResourceDebugResult> {
-        const telemetry = new ResourceDebugOperationTelemetry(this._telemetry, request.source);
+        const telemetry = new ResourceDebugOperationTelemetry(this._telemetry, this._clock, request.source);
         telemetry.recordStart();
         let result: ResourceDebugResult = { outcome: 'error', errorKind: 'unexpected' };
 
@@ -309,15 +315,17 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
 }
 
 class ResourceDebugOperationTelemetry {
-    private readonly _startedAt: number;
+    private readonly _startedAt: number | undefined;
     private _resourceType: ResourceDebugResourceType | undefined;
     private _provider: ResourceAttachProvider['id'] | 'none' = 'none';
     private _state: ResourceDebugResourceState = 'unknown';
     private _debuggerRequirement: ResourceDebugDebuggerRequirement = 'none';
     private _debugStartAt: number | undefined;
+    private _debugStartAttempted = false;
 
     constructor(
         private readonly _telemetry: ResourceDebugTelemetry,
+        private readonly _clock: ResourceDebugClock,
         private readonly _source: ResourceDebugRequest['source'],
     ) {
         this._startedAt = this._getTimestamp();
@@ -332,24 +340,33 @@ class ResourceDebugOperationTelemetry {
     }
 
     recordResource(resource: ResourceJson): void {
-        this._resourceType = getResourceTypeBucket(resource.resourceType);
-        this._state = resource.state === 'Running'
-            ? 'running'
-            : resource.state === null
-                ? 'unknown'
-                : 'notRunning';
+        this._record(() => {
+            this._resourceType = getResourceTypeBucket(resource.resourceType);
+            this._state = resource.state === 'Running'
+                ? 'running'
+                : resource.state === null
+                    ? 'unknown'
+                    : 'notRunning';
+        });
     }
 
     recordProvider(provider: ResourceAttachProvider): void {
-        this._provider = provider.id;
+        this._record(() => {
+            this._provider = provider.id;
+        });
     }
 
     recordDebuggerRequirement(requirement: ResourceDebugDebuggerRequirement): void {
-        this._debuggerRequirement = requirement;
+        this._record(() => {
+            this._debuggerRequirement = requirement;
+        });
     }
 
     recordDebugStart(): void {
-        this._debugStartAt = this._getTimestamp();
+        this._record(() => {
+            this._debugStartAttempted = true;
+            this._debugStartAt = this._getTimestamp();
+        });
     }
 
     createSessionMetadata(provider: ResourceAttachProvider['id']): ResourceDebugAttachSessionMetadata {
@@ -361,8 +378,6 @@ class ResourceDebugOperationTelemetry {
     }
 
     recordResult(result: ResourceDebugResult): void {
-        const endedAt = this._getTimestamp();
-        const resolutionEndedAt = this._debugStartAt ?? endedAt;
         this._record(() => this._telemetry.recordResult({
             source: this._source,
             provider: this._provider,
@@ -376,28 +391,43 @@ class ResourceDebugOperationTelemetry {
             state: this._state,
             debugger_requirement: this._debuggerRequirement,
             error_kind: result.outcome === 'error' ? result.errorKind : 'none',
-        }, {
-            resolution_duration_ms: this._getDuration(this._startedAt, resolutionEndedAt),
-            debug_start_duration_ms: this._debugStartAt === undefined
-                ? 0
-                : this._getDuration(this._debugStartAt, endedAt),
-            total_duration_ms: this._getDuration(this._startedAt, endedAt),
-        }));
+        }, this._getMeasurements()));
     }
 
-    private _getTimestamp(): number {
+    private _getMeasurements(): ResourceDebugResultTelemetryMeasurements {
+        const endedAt = this._getTimestamp();
+        const resolutionDuration = this._getDuration(
+            this._startedAt,
+            this._debugStartAttempted ? this._debugStartAt : endedAt);
+        const debugStartDuration = this._debugStartAttempted
+            ? this._getDuration(this._debugStartAt, endedAt)
+            : undefined;
+        const totalDuration = this._getDuration(this._startedAt, endedAt);
+
+        return {
+            ...(resolutionDuration === undefined ? {} : { resolution_duration_ms: resolutionDuration }),
+            ...(debugStartDuration === undefined ? {} : { debug_start_duration_ms: debugStartDuration }),
+            ...(totalDuration === undefined ? {} : { total_duration_ms: totalDuration }),
+        };
+    }
+
+    private _getTimestamp(): number | undefined {
         try {
-            const timestamp = this._telemetry.now();
-            return Number.isFinite(timestamp) ? timestamp : 0;
+            const timestamp = this._clock.now();
+            return Number.isFinite(timestamp) ? timestamp : undefined;
         }
         catch {
-            return 0;
+            return undefined;
         }
     }
 
-    private _getDuration(start: number, end: number): number {
+    private _getDuration(start: number | undefined, end: number | undefined): number | undefined {
+        if (start === undefined || end === undefined) {
+            return undefined;
+        }
+
         const duration = end - start;
-        return Number.isFinite(duration) && duration >= 0 ? duration : 0;
+        return Number.isFinite(duration) && duration >= 0 ? duration : undefined;
     }
 
     private _record(record: () => void): void {
@@ -410,8 +440,8 @@ class ResourceDebugOperationTelemetry {
     }
 }
 
-function getResourceTypeBucket(resourceType: string): ResourceDebugResourceType {
-    switch (resourceType.toLowerCase()) {
+function getResourceTypeBucket(resourceType: unknown): ResourceDebugResourceType {
+    switch (typeof resourceType === 'string' ? resourceType.toLowerCase() : '') {
         case 'project':
             return 'project';
         case 'executable':

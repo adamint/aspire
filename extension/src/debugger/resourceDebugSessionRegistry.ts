@@ -5,7 +5,9 @@ import type { ResourceDebugAppHostTarget } from './resourceDebugContracts';
 import {
     ExtensionResourceDebugTelemetry,
     type ResourceDebugAttachSessionMetadata,
+    type ResourceDebugClock,
     type ResourceDebugTelemetry,
+    monotonicResourceDebugClock,
 } from './resourceDebugTelemetry';
 
 const resourceDebugSessionMarkerConfigKey = '__aspireResourceDebugSessionMarker';
@@ -24,6 +26,7 @@ export interface ResourceDebugSessionAttempt {
 export interface ResourceDebugSessionRegistryOptions {
     readonly pendingStartTimeoutMs?: number;
     readonly telemetry?: ResourceDebugTelemetry;
+    readonly clock?: ResourceDebugClock;
 }
 
 interface TrackedAttachAttempt {
@@ -33,6 +36,7 @@ interface TrackedAttachAttempt {
     pendingStartTimeout: ReturnType<typeof setTimeout> | undefined;
     startAccepted: boolean;
     terminated: boolean;
+    sessionStarted: boolean;
     sessionStartedAt: number | undefined;
     readonly telemetry: ResourceDebugAttachSessionMetadata;
 }
@@ -51,11 +55,13 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
     private readonly _subscriptions: vscode.Disposable;
     private readonly _pendingStartTimeoutMs: number;
     private readonly _telemetry: ResourceDebugTelemetry;
+    private readonly _clock: ResourceDebugClock;
     private _nextMarker = 0;
 
     constructor(events: ResourceDebugSessionEvents = vscode.debug, options: ResourceDebugSessionRegistryOptions = {}) {
         this._pendingStartTimeoutMs = options.pendingStartTimeoutMs ?? ResourceDebugSessionRegistry._defaultPendingStartTimeoutMs;
         this._telemetry = options.telemetry ?? new ExtensionResourceDebugTelemetry();
+        this._clock = options.clock ?? monotonicResourceDebugClock;
         this._subscriptions = vscode.Disposable.from(
             events.onDidStartDebugSession(session => this._onDidStartDebugSession(session)),
             events.onDidTerminateDebugSession(session => this._onDidTerminateDebugSession(session)));
@@ -137,6 +143,7 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
             pendingStartTimeout: undefined,
             startAccepted: false,
             terminated: false,
+            sessionStarted: false,
             sessionStartedAt: undefined,
             telemetry,
         };
@@ -171,6 +178,7 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
         }
 
         attempt.sessionIds.add(session.id);
+        attempt.sessionStarted = true;
         attempt.sessionStartedAt ??= this._getTimestamp();
         this._clearPendingStartExpiry(attempt);
     }
@@ -187,17 +195,14 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
         }
 
         attempt.terminated = true;
-        const sessionStartedAt = attempt.sessionStartedAt;
-        if (sessionStartedAt !== undefined) {
+        if (attempt.sessionStarted) {
             this._recordTelemetry(() => this._telemetry.recordSessionEnd({
                 ...attempt.telemetry,
                 requested_strategy: 'attach',
                 effective_strategy: 'attach',
                 controller: 'editor',
                 session_end_reason: 'terminated',
-            }, {
-                session_duration_ms: this._getDuration(sessionStartedAt, this._getTimestamp()),
-            }));
+            }, this._getMeasurements(attempt.sessionStartedAt)));
         }
         this._removeAttempt(attempt);
     }
@@ -239,19 +244,28 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
         }
     }
 
-    private _getTimestamp(): number {
+    private _getMeasurements(startedAt: number | undefined): { readonly session_duration_ms?: number } {
+        const duration = this._getDuration(startedAt, this._getTimestamp());
+        return duration === undefined ? {} : { session_duration_ms: duration };
+    }
+
+    private _getTimestamp(): number | undefined {
         try {
-            const timestamp = this._telemetry.now();
-            return Number.isFinite(timestamp) ? timestamp : 0;
+            const timestamp = this._clock.now();
+            return Number.isFinite(timestamp) ? timestamp : undefined;
         }
         catch {
-            return 0;
+            return undefined;
         }
     }
 
-    private _getDuration(start: number, end: number): number {
+    private _getDuration(start: number | undefined, end: number | undefined): number | undefined {
+        if (start === undefined || end === undefined) {
+            return undefined;
+        }
+
         const duration = end - start;
-        return Number.isFinite(duration) && duration >= 0 ? duration : 0;
+        return Number.isFinite(duration) && duration >= 0 ? duration : undefined;
     }
 
     private _recordTelemetry(record: () => void): void {

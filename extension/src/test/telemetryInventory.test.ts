@@ -19,11 +19,6 @@ type TelemetryRegistryEvent = {
 // Code's automatic `<extensionId>/` prefix after the TelemetryLogger has
 // applied its platform guarantees.
 const telemetryEntityPrefix = '';
-const caseSensitiveWireEventNames = [
-    'aspire/vscode/resourceDebug/start',
-    'aspire/vscode/resourceDebug/result',
-    'aspire/vscode/resourceDebug/session/end',
-] as const;
 const freeformPropertyNamePattern = /(?:^|_)(?:path|message|description|args?)(?:_|$)/i;
 const platformCommonTelemetryProperties = [
     'common.devDeviceId',
@@ -134,10 +129,10 @@ function getStringLiteralUnion(typeNode: ts.TypeNode): string[] {
 }
 
 suite('extension/telemetry.json', () => {
-    test('event entity names are lowercase except approved case-sensitive wire names', () => {
+    test('event entity names are lowercase', () => {
         const inventory = readTelemetryInventory();
         const mixedCaseEntityNames = Object.keys(inventory.events)
-            .filter(name => name !== name.toLowerCase() && !caseSensitiveWireEventNames.includes(name as typeof caseSensitiveWireEventNames[number]));
+            .filter(name => name !== name.toLowerCase());
 
         assert.deepStrictEqual(mixedCaseEntityNames, []);
     });

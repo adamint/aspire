@@ -83,19 +83,36 @@ class TestResourceDebugTelemetry {
     }
 
     recordStart(properties: Record<string, string>): void {
-        this._record('aspire/vscode/resourceDebug/start', properties);
+        this._record('aspire/vscode/resourcedebug/start', properties);
     }
 
     recordResult(properties: Record<string, string>, measurements: Record<string, number>): void {
-        this._record('aspire/vscode/resourceDebug/result', properties, measurements);
+        this._record('aspire/vscode/resourcedebug/result', properties, measurements);
     }
 
     recordSessionEnd(properties: Record<string, string>, measurements: Record<string, number>): void {
-        this._record('aspire/vscode/resourceDebug/session/end', properties, measurements);
+        this._record('aspire/vscode/resourcedebug/session/end', properties, measurements);
     }
 
     private _record(name: string, properties: Record<string, string>, measurements?: Record<string, number>): void {
         this.events.push({ name, properties, measurements });
+    }
+}
+
+class TestResourceDebugClock {
+    private readonly _timestamps: (number | Error)[];
+
+    constructor(...timestamps: (number | Error)[]) {
+        this._timestamps = timestamps;
+    }
+
+    now(): number {
+        const timestamp = this._timestamps.shift();
+        if (timestamp instanceof Error) {
+            throw timestamp;
+        }
+
+        return timestamp ?? 0;
     }
 }
 
@@ -160,6 +177,7 @@ function createService(options: {
     startDebugging?: (folder: vscode.WorkspaceFolder | undefined, configuration: vscode.DebugConfiguration) => Thenable<boolean>;
     compareAppHostIdentity?: ResourceDebugAppHostIdentityComparer;
     telemetry?: TestResourceDebugTelemetry;
+    clock?: { now(): number };
     pendingStartTimeoutMs?: number;
 } = {}): {
     service: ResourceDebugService;
@@ -175,9 +193,11 @@ function createService(options: {
     };
     const events = new TestDebugSessionEvents();
     const telemetry = options.telemetry ?? new TestResourceDebugTelemetry();
+    const clock = options.clock ?? telemetry;
     const sessions = new ResourceDebugSessionRegistry(events, {
         pendingStartTimeoutMs: options.pendingStartTimeoutMs,
         telemetry,
+        clock,
     } as unknown as ResourceDebugSessionRegistryOptions);
     const providers = new ResourceAttachProviderRegistry(
         options.providers ?? [options.provider ?? createProvider()],
@@ -189,6 +209,7 @@ function createService(options: {
         startDebugging: options.startDebugging ?? (async () => true),
         compareAppHostIdentity: options.compareAppHostIdentity,
         telemetry,
+        clock,
     } as unknown as ResourceDebugServiceDependencies);
 
     return { service, repository, sessions, events, telemetry };
@@ -950,6 +971,27 @@ suite('Resource debug service', () => {
         sessions.dispose();
     });
 
+    test('normalizes unexpected service errors while logging their raw details internally', async () => {
+        const rawError = 'process 1234 at /repo/private/AppHost.csproj';
+        const logError = sinon.stub(extensionLogOutputChannel, 'error');
+        const { service, sessions } = createService({
+            compareAppHostIdentity: () => {
+                throw new Error(rawError);
+            },
+        });
+
+        try {
+            const result = await service.debug(createRequest());
+
+            assert.deepStrictEqual(result, { outcome: 'error', errorKind: 'unexpected' });
+            assert.doesNotMatch(JSON.stringify(result), /1234|\/repo|AppHost\.csproj/);
+            assert.ok(logError.calledWithMatch(rawError));
+        }
+        finally {
+            sessions.dispose();
+        }
+    });
+
     test('returns cancelled when the request cancellation token is already cancelled', async () => {
         const cancellation = new vscode.CancellationTokenSource();
         cancellation.cancel();
@@ -1038,7 +1080,7 @@ suite('Resource debug service', () => {
             assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
             assert.deepStrictEqual(telemetry.events, [
                 {
-                    name: 'aspire/vscode/resourceDebug/start',
+                    name: 'aspire/vscode/resourcedebug/start',
                     properties: {
                         source: 'tree',
                         requested_strategy: 'attach',
@@ -1047,7 +1089,7 @@ suite('Resource debug service', () => {
                     measurements: undefined,
                 },
                 {
-                    name: 'aspire/vscode/resourceDebug/result',
+                    name: 'aspire/vscode/resourcedebug/result',
                     properties: {
                         source: 'tree',
                         provider: 'dotnet',
@@ -1088,8 +1130,8 @@ suite('Resource debug service', () => {
                 const result = await service.debug(createRequest());
                 assert.strictEqual(result.outcome, expectedOutcome);
 
-                const startEvents = telemetry.events.filter(event => event.name === 'aspire/vscode/resourceDebug/start');
-                const resultEvents = telemetry.events.filter(event => event.name === 'aspire/vscode/resourceDebug/result');
+                const startEvents = telemetry.events.filter(event => event.name === 'aspire/vscode/resourcedebug/start');
+                const resultEvents = telemetry.events.filter(event => event.name === 'aspire/vscode/resourcedebug/result');
                 assert.strictEqual(startEvents.length, 1);
                 assert.strictEqual(resultEvents.length, 1);
                 assert.strictEqual(resultEvents[0].properties.outcome, expectedOutcome);
@@ -1187,10 +1229,10 @@ suite('Resource debug service', () => {
         try {
             const result = await cancelledFixture.service.debug(createRequest({ cancellationToken: cancelled.token }));
             assert.deepStrictEqual(result, { outcome: 'cancelled' });
-            assert.strictEqual(cancelledFixture.telemetry.events.filter(event => event.name === 'aspire/vscode/resourceDebug/start').length, 1);
-            assert.strictEqual(cancelledFixture.telemetry.events.filter(event => event.name === 'aspire/vscode/resourceDebug/result').length, 1);
+            assert.strictEqual(cancelledFixture.telemetry.events.filter(event => event.name === 'aspire/vscode/resourcedebug/start').length, 1);
+            assert.strictEqual(cancelledFixture.telemetry.events.filter(event => event.name === 'aspire/vscode/resourcedebug/result').length, 1);
             assert.strictEqual(
-                cancelledFixture.telemetry.events.find(event => event.name === 'aspire/vscode/resourceDebug/result')?.properties.error_kind,
+                cancelledFixture.telemetry.events.find(event => event.name === 'aspire/vscode/resourcedebug/result')?.properties.error_kind,
                 'none');
         }
         finally {
@@ -1202,7 +1244,7 @@ suite('Resource debug service', () => {
         try {
             assert.deepStrictEqual(await duplicate.service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
             assert.deepStrictEqual(await duplicate.service.debug(createRequest()), { outcome: 'alreadyDebugging' });
-            const resultEvents = duplicate.telemetry.events.filter(event => event.name === 'aspire/vscode/resourceDebug/result');
+            const resultEvents = duplicate.telemetry.events.filter(event => event.name === 'aspire/vscode/resourcedebug/result');
             assert.strictEqual(resultEvents.length, 2);
             assert.deepStrictEqual(resultEvents.map(event => event.properties.outcome), ['started', 'alreadyDebugging']);
         }
@@ -1211,7 +1253,7 @@ suite('Resource debug service', () => {
         }
     });
 
-    test('emits an exact private-data-free result payload', async () => {
+    test('emits an exact private-data-free payload without correlation identifiers', async () => {
         const telemetry = new TestResourceDebugTelemetry();
         telemetry.currentTime = 50;
         const secrets = [
@@ -1276,7 +1318,7 @@ suite('Resource debug service', () => {
             const serializedEvents = JSON.stringify(telemetry.events);
             assert.deepStrictEqual(telemetry.events, [
                 {
-                    name: 'aspire/vscode/resourceDebug/start',
+                    name: 'aspire/vscode/resourcedebug/start',
                     properties: {
                         source: 'languageModelTool',
                         requested_strategy: 'attach',
@@ -1285,7 +1327,7 @@ suite('Resource debug service', () => {
                     measurements: undefined,
                 },
                 {
-                    name: 'aspire/vscode/resourceDebug/result',
+                    name: 'aspire/vscode/resourcedebug/result',
                     properties: {
                         source: 'languageModelTool',
                         provider: 'dotnet',
@@ -1300,7 +1342,6 @@ suite('Resource debug service', () => {
                     },
                     measurements: {
                         resolution_duration_ms: 20,
-                        debug_start_duration_ms: 0,
                         total_duration_ms: 20,
                     },
                 },
@@ -1339,7 +1380,7 @@ suite('Resource debug service', () => {
             events.terminate(events.startedConfiguration);
 
             assert.deepStrictEqual(telemetry.events.at(-1), {
-                name: 'aspire/vscode/resourceDebug/session/end',
+                name: 'aspire/vscode/resourcedebug/session/end',
                 properties: {
                     source: 'tree',
                     provider: 'dotnet',
@@ -1353,7 +1394,7 @@ suite('Resource debug service', () => {
                     session_duration_ms: 30,
                 },
             });
-            assert.strictEqual(telemetry.events.filter(event => event.name === 'aspire/vscode/resourceDebug/session/end').length, 1);
+            assert.strictEqual(telemetry.events.filter(event => event.name === 'aspire/vscode/resourcedebug/session/end').length, 1);
         }
         finally {
             fixture.sessions.dispose();
@@ -1372,9 +1413,9 @@ suite('Resource debug service', () => {
             assert.deepStrictEqual(await fixture.service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
             await clock.tickAsync(10);
 
-            assert.strictEqual(telemetry.events.filter(event => event.name === 'aspire/vscode/resourceDebug/start').length, 1);
-            assert.strictEqual(telemetry.events.filter(event => event.name === 'aspire/vscode/resourceDebug/result').length, 1);
-            assert.strictEqual(telemetry.events.filter(event => event.name === 'aspire/vscode/resourceDebug/session/end').length, 0);
+            assert.strictEqual(telemetry.events.filter(event => event.name === 'aspire/vscode/resourcedebug/start').length, 1);
+            assert.strictEqual(telemetry.events.filter(event => event.name === 'aspire/vscode/resourcedebug/result').length, 1);
+            assert.strictEqual(telemetry.events.filter(event => event.name === 'aspire/vscode/resourcedebug/session/end').length, 0);
         }
         finally {
             fixture.sessions.dispose();
@@ -1385,16 +1426,158 @@ suite('Resource debug service', () => {
     test('ignores telemetry sink failures when debugging a resource', async () => {
         const telemetry = new TestResourceDebugTelemetry();
         sinon.stub(telemetry, 'recordStart').throws(new Error('raw telemetry start failure'));
-        sinon.stub(telemetry, 'recordResult').throws(new Error('raw telemetry result failure'));
         const { service, sessions } = createService({ telemetry });
 
         try {
             assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
             assert.strictEqual((telemetry.recordStart as sinon.SinonStub).callCount, 1);
+        }
+        finally {
+            sessions.dispose();
+        }
+    });
+
+    test('ignores a throwing result telemetry sink when debugging a resource', async () => {
+        const telemetry = new TestResourceDebugTelemetry();
+        sinon.stub(telemetry, 'recordResult').throws(new Error('raw telemetry result failure'));
+        const { service, sessions } = createService({ telemetry });
+
+        try {
+            assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
             assert.strictEqual((telemetry.recordResult as sinon.SinonStub).callCount, 1);
         }
         finally {
             sessions.dispose();
+        }
+    });
+
+    test('treats non-string and missing resource types as other without changing the debug result', async () => {
+        for (const resourceType of [undefined, 42] as const) {
+            const telemetry = new TestResourceDebugTelemetry();
+            const { service, sessions } = createService({
+                telemetry,
+                appHosts: [createAppHost({
+                    resources: [createResource({ resourceType: resourceType as unknown as string })],
+                })],
+            });
+
+            try {
+                assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
+                assert.strictEqual(
+                    telemetry.events.find(event => event.name === 'aspire/vscode/resourcedebug/result')?.properties.resource_type,
+                    'other');
+            }
+            finally {
+                sessions.dispose();
+            }
+        }
+    });
+
+    test('omits invalid result durations from a separate monotonic clock', async () => {
+        const testCases: readonly {
+            readonly name: string;
+            readonly clock: TestResourceDebugClock;
+            readonly measurements: Record<string, number>;
+        }[] = [
+            {
+                name: 'throws',
+                clock: new TestResourceDebugClock(
+                    new Error('clock failure'),
+                    new Error('clock failure'),
+                    new Error('clock failure')),
+                measurements: {},
+            },
+            {
+                name: 'moves backwards',
+                clock: new TestResourceDebugClock(100, 150, 50),
+                measurements: { resolution_duration_ms: 50 },
+            },
+            {
+                name: 'returns NaN',
+                clock: new TestResourceDebugClock(Number.NaN, Number.NaN, Number.NaN),
+                measurements: {},
+            },
+            {
+                name: 'returns infinity',
+                clock: new TestResourceDebugClock(
+                    Number.POSITIVE_INFINITY,
+                    Number.POSITIVE_INFINITY,
+                    Number.POSITIVE_INFINITY),
+                measurements: {},
+            },
+        ];
+
+        for (const testCase of testCases) {
+            const telemetry = new TestResourceDebugTelemetry();
+            const { service, sessions } = createService({ telemetry, clock: testCase.clock });
+
+            try {
+                assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' }, testCase.name);
+                assert.deepStrictEqual(
+                    telemetry.events.find(event => event.name === 'aspire/vscode/resourcedebug/result')?.measurements,
+                    testCase.measurements,
+                    testCase.name);
+            }
+            finally {
+                sessions.dispose();
+            }
+        }
+    });
+
+    test('swallows a throwing session-end sink and cleans up the session exactly once', async () => {
+        const telemetry = new TestResourceDebugTelemetry();
+        const recordSessionEnd = sinon.stub(telemetry, 'recordSessionEnd').throws(new Error('raw session-end telemetry failure'));
+        let events: TestDebugSessionEvents | undefined;
+        const fixture = createService({
+            telemetry,
+            startDebugging: async (_folder, configuration) => {
+                events!.start(configuration);
+                return true;
+            },
+        });
+        events = fixture.events;
+
+        try {
+            assert.deepStrictEqual(await fixture.service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
+            assert.ok(events.startedConfiguration);
+
+            events.terminate(events.startedConfiguration);
+            events.terminate(events.startedConfiguration);
+
+            assert.strictEqual(recordSessionEnd.callCount, 1);
+            assert.strictEqual(fixture.sessions.hasActiveSession(target, 'api'), false);
+        }
+        finally {
+            fixture.sessions.dispose();
+        }
+    });
+
+    test('omits the session duration when the injected monotonic clock moves backwards', async () => {
+        const telemetry = new TestResourceDebugTelemetry();
+        const clock = new TestResourceDebugClock(100, 110, 120, 130, 90);
+        let events: TestDebugSessionEvents | undefined;
+        const fixture = createService({
+            telemetry,
+            clock,
+            startDebugging: async (_folder, configuration) => {
+                events!.start(configuration);
+                return true;
+            },
+        });
+        events = fixture.events;
+
+        try {
+            assert.deepStrictEqual(await fixture.service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
+            assert.ok(events.startedConfiguration);
+
+            events.terminate(events.startedConfiguration);
+
+            assert.deepStrictEqual(
+                telemetry.events.find(event => event.name === 'aspire/vscode/resourcedebug/session/end')?.measurements,
+                {});
+        }
+        finally {
+            fixture.sessions.dispose();
         }
     });
 });

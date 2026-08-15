@@ -38,6 +38,7 @@ import { registerCodeLensCommands } from './activation/registerCodeLensCommands'
 import { extensionResourceAttachProviders, ResourceAttachProviderRegistry } from './debugger/resourceAttachProviders';
 import { ResourceDebugService } from './debugger/resourceDebugService';
 import { ResourceDebugSessionRegistry } from './debugger/resourceDebugSessionRegistry';
+import { ExtensionResourceDebugTelemetry, monotonicResourceDebugClock } from './debugger/resourceDebugTelemetry';
 
 let aspireExtensionContext = new AspireExtensionContext();
 
@@ -111,12 +112,20 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Aspire panel - running app hosts tree view
   const dataRepository = new AppHostDataRepository(terminalProvider, appHostDiscoveryService, configInfoProvider);
+  const resourceDebugTelemetry = new ExtensionResourceDebugTelemetry();
+  const resourceDebugClock = monotonicResourceDebugClock;
+  const resourceDebugSessionRegistry = new ResourceDebugSessionRegistry(vscode.debug, {
+    telemetry: resourceDebugTelemetry,
+    clock: resourceDebugClock,
+  });
   const resourceDebugService = new ResourceDebugService({
     appHostRepository: dataRepository,
     attachProviders: new ResourceAttachProviderRegistry(extensionResourceAttachProviders),
-    sessionRegistry: new ResourceDebugSessionRegistry(),
+    sessionRegistry: resourceDebugSessionRegistry,
     startDebugging: (workspaceFolder, configuration) =>
       vscode.debug.startDebugging(workspaceFolder, configuration),
+    telemetry: resourceDebugTelemetry,
+    clock: resourceDebugClock,
   });
   context.subscriptions.push(resourceDebugService);
   appHostLaunchService.setEditorSessionProvider(() => aspireExtensionContext.aspireDebugSessions);
