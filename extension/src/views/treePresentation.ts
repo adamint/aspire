@@ -112,7 +112,7 @@ export function getResourceContextValue(resource: ResourceJson, canAttachDebugge
     if (isTerminalEnabled(resource)) {
         parts.push('canOpenTerminal');
     }
-    if (canAttachDebugger && resource.state === ResourceState.Running) {
+    if (canAttachDebugger) {
         parts.push('canAttachDebugger');
     }
     return parts.join(':');

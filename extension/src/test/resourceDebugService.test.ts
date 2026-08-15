@@ -109,6 +109,7 @@ class TestDebugSessionEvents implements ResourceDebugSessionEvents {
 function createService(options: {
     appHosts?: readonly AppHostDisplayInfo[];
     provider?: ResourceAttachProvider;
+    providers?: readonly ResourceAttachProvider[];
     isExtensionInstalled?: (extensionId: string) => boolean;
     startDebugging?: (folder: vscode.WorkspaceFolder | undefined, configuration: vscode.DebugConfiguration) => Thenable<boolean>;
     compareAppHostIdentity?: ResourceDebugAppHostIdentityComparer;
@@ -126,7 +127,7 @@ function createService(options: {
     const events = new TestDebugSessionEvents();
     const sessions = new ResourceDebugSessionRegistry(events);
     const providers = new ResourceAttachProviderRegistry(
-        [options.provider ?? createProvider()],
+        options.providers ?? [options.provider ?? createProvider()],
         options.isExtensionInstalled ?? (() => true));
     const service = new ResourceDebugService({
         appHostRepository: repository,
@@ -166,6 +167,39 @@ suite('Resource debug service', () => {
                 'executable.pid': '42',
             },
         }))?.id, 'dotnet');
+    });
+
+    test('uses the first recognized provider for readiness and configuration', async () => {
+        const firstProvider = createProvider({
+            canAttachToResource: sinon.stub().returns(false),
+            createDebugConfiguration: sinon.stub().rejects(new Error('first provider should not configure')),
+        });
+        const secondProvider = createProvider({
+            canAttachToResource: sinon.stub().returns(true),
+            createDebugConfiguration: sinon.stub().resolves({
+                type: 'coreclr',
+                request: 'attach',
+                name: 'Attach debugger: second provider',
+            }),
+        });
+        const startDebugging = sinon.stub().resolves(true);
+        const { service, sessions } = createService({
+            providers: [firstProvider, secondProvider],
+            startDebugging,
+        });
+
+        try {
+            assert.strictEqual(service.canAttachToResource(createResource()), false);
+            assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'unsupportedResource' });
+            assert.strictEqual((firstProvider.canAttachToResource as sinon.SinonStub).callCount, 2);
+            assert.strictEqual((firstProvider.createDebugConfiguration as sinon.SinonStub).callCount, 0);
+            assert.strictEqual((secondProvider.canAttachToResource as sinon.SinonStub).callCount, 0);
+            assert.strictEqual((secondProvider.createDebugConfiguration as sinon.SinonStub).callCount, 0);
+            assert.strictEqual(startDebugging.callCount, 0);
+        }
+        finally {
+            sessions.dispose();
+        }
     });
 
     test('uses a fresh AppHost snapshot instead of a tree resource', async () => {
@@ -510,7 +544,7 @@ suite('Resource debug service', () => {
         }
     });
 
-    test('keeps a later request blocked when a canceled waiter is between it and the active request', async () => {
+    test('keeps a later request blocked when a canceled waiter has already completed', async () => {
         const sessions = new ResourceDebugSessionRegistry();
         let releaseFirst: (() => void) | undefined;
         let firstEntered: (() => void) | undefined;
@@ -544,6 +578,12 @@ suite('Resource debug service', () => {
                 cancellation.token,
                 async () => 'second',
                 () => 'cancelled');
+
+            cancellation.cancel();
+
+            assert.strictEqual(await canceledWaiter, 'cancelled');
+            assert.strictEqual(firstCompleted, false);
+
             const laterWaiter = sessions.runSerialized(
                 target,
                 'api',
@@ -553,11 +593,6 @@ suite('Resource debug service', () => {
                     return 'third';
                 },
                 () => 'cancelled');
-
-            cancellation.cancel();
-
-            assert.strictEqual(await canceledWaiter, 'cancelled');
-            assert.strictEqual(firstCompleted, false);
             await new Promise<void>(resolve => setImmediate(resolve));
             assert.strictEqual(laterWaiterStarted, false);
 

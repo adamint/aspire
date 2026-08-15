@@ -11,6 +11,7 @@ import { createDebugSessionConfiguration, ResourceDebuggerExtension } from '../d
 import type { ResourceAttachProvider } from '../debugger/resourceDebugContracts';
 import { AppHostParentOutputFilter, AspireDebugSession } from '../debugger/AspireDebugSession';
 import * as hotReload from '../debugger/hotReload';
+import * as cliProcess from '../utils/process/cliProcess';
 
 class TestDotNetService {
     private _hasDevKit: boolean;
@@ -68,10 +69,14 @@ class TestDotNetService {
 function createMsbuildProcess(): {
     process: childProcess.ChildProcessWithoutNullStreams;
     stdout: EventEmitter & { setEncoding(encoding: string): void };
+    stderr: EventEmitter & { setEncoding(encoding: string): void };
     kill: sinon.SinonStub;
 } {
     const process = new EventEmitter() as unknown as childProcess.ChildProcessWithoutNullStreams;
     const stdout = Object.assign(new EventEmitter(), {
+        setEncoding: (_encoding: string) => { },
+    });
+    const stderr = Object.assign(new EventEmitter(), {
         setEncoding: (_encoding: string) => { },
     });
     const kill = sinon.stub().callsFake((signal?: NodeJS.Signals | number) => {
@@ -86,10 +91,10 @@ function createMsbuildProcess(): {
         pid: 1234,
         kill,
         stdout,
-        stderr: new EventEmitter(),
+        stderr,
     });
 
-    return { process, stdout, kill };
+    return { process, stdout, stderr, kill };
 }
 
 suite('Dotnet Debugger Extension Tests', () => {
@@ -197,6 +202,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         const dotNetService = new DotNetService(undefined);
         const msbuildProcess = createMsbuildProcess();
         sinon.stub(childProcess, 'spawn').returns(msbuildProcess.process);
+        const terminate = sinon.stub(cliProcess, 'terminateCliProcess').resolves();
         const cancellation = new vscode.CancellationTokenSource();
 
         try {
@@ -210,11 +216,90 @@ suite('Dotnet Debugger Extension Tests', () => {
             ]);
 
             assert.strictEqual(outcome, 'cancelled');
-            assert.ok(msbuildProcess.kill.calledOnce);
-            assert.deepStrictEqual(msbuildProcess.kill.firstCall.args, ['SIGKILL']);
+            assert.ok(terminate.calledOnceWithExactly(
+                msbuildProcess.process,
+                'dotnet msbuild target discovery',
+                { force: true, suppressTimeoutWarning: true }));
         }
         finally {
             cancellation.dispose();
+        }
+    });
+
+    test('target discovery drains bounded stderr and includes probe output on failure', async () => {
+        const dotNetService = new DotNetService(undefined);
+        const msbuildProcess = createMsbuildProcess();
+        sinon.stub(childProcess, 'spawn').callsFake(() => {
+            queueMicrotask(() => {
+                msbuildProcess.stdout.emit('data', 'stdout-marker');
+                msbuildProcess.stderr.emit('data', 'x'.repeat(128 * 1024));
+                msbuildProcess.stderr.emit('data', 'stderr-marker');
+                msbuildProcess.process.emit('close', 1);
+            });
+            return msbuildProcess.process;
+        });
+
+        await assert.rejects(
+            dotNetService.getDotNetAttachTargetInfo('/repo/api/Api.csproj'),
+            (error: unknown) => error instanceof Error
+                && error.message.includes('stdout-marker')
+                && error.message.includes('stderr-marker')
+                && error.message.length < 132 * 1024);
+    });
+
+    test('target discovery terminates its specific msbuild probe when it times out', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const dotNetService = new DotNetService(undefined);
+        const msbuildProcess = createMsbuildProcess();
+        sinon.stub(childProcess, 'spawn').returns(msbuildProcess.process);
+        const terminate = sinon.stub(cliProcess, 'terminateCliProcess').resolves();
+
+        try {
+            const targetDiscovery = dotNetService.getDotNetAttachTargetInfo('/repo/api/Api.csproj');
+            const completion = targetDiscovery.then(
+                () => 'completed',
+                error => error instanceof Error && /timed out/.test(error.message) ? 'timedOut' : 'failed');
+
+            await clock.tickAsync(10_000);
+
+            assert.strictEqual(await Promise.race([completion, Promise.resolve('pending')]), 'timedOut');
+            assert.ok(terminate.calledOnceWithExactly(
+                msbuildProcess.process,
+                'dotnet msbuild target discovery',
+                { force: true, suppressTimeoutWarning: true }));
+        }
+        finally {
+            clock.restore();
+        }
+    });
+
+    test('target discovery does not arm a timeout after it has been cancelled', async () => {
+        const clock = sinon.useFakeTimers();
+        const dotNetService = new DotNetService(undefined);
+        const msbuildProcess = createMsbuildProcess();
+        sinon.stub(childProcess, 'spawn').returns(msbuildProcess.process);
+        const terminate = sinon.stub(cliProcess, 'terminateCliProcess').resolves();
+        const cancellationToken: vscode.CancellationToken = {
+            isCancellationRequested: true,
+            onCancellationRequested: listener => {
+                listener(undefined);
+                return new vscode.Disposable(() => { });
+            },
+        };
+
+        try {
+            const targetDiscovery = dotNetService.getDotNetAttachTargetInfo('/repo/api/Api.csproj', undefined, cancellationToken);
+
+            await assert.rejects(targetDiscovery, error => error instanceof vscode.CancellationError);
+            await clock.tickAsync(10_000);
+
+            assert.ok(terminate.calledOnceWithExactly(
+                msbuildProcess.process,
+                'dotnet msbuild target discovery',
+                { force: true, suppressTimeoutWarning: true }));
+        }
+        finally {
+            clock.restore();
         }
     });
 

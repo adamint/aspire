@@ -8,6 +8,7 @@ import * as path from 'path';
 import * as readline from 'readline';
 import * as os from 'os';
 import * as fs from 'fs';
+import { LimitedOutputBuffer, oneShotOutputBufferLimit } from '../../data/appHostCliRunner';
 import { doesFileExist } from '../../utils/io';
 import { AspireResourceExtendedDebugConfiguration, EnvVar, ExecutableLaunchConfiguration, isProjectLaunchConfiguration, ProjectLaunchConfiguration } from '../../dcp/types';
 import { ResourceDebuggerExtension } from '../debuggerExtensions';
@@ -57,6 +58,8 @@ const resourceLaunchConfigurationTypePropertyName = 'resource.launchConfiguratio
 const dotNetProjectFileExtensions = new Set(['.csproj', '.fsproj', '.vbproj']);
 
 export class DotNetService implements IDotNetService {
+    private static readonly _msbuildProbeTimeoutMs = 10_000;
+
     private _debugSession: AspireDebugSession | undefined;
 
     constructor(debugSession: AspireDebugSession | undefined) {
@@ -252,6 +255,7 @@ export class DotNetService implements IDotNetService {
     private _runDotNetMsbuild(args: string[], workingDirectory: string, cancellationToken: vscode.CancellationToken | undefined): Promise<string> {
         return new Promise((resolve, reject) => {
             let completed = false;
+            let timeout: ReturnType<typeof setTimeout> | undefined;
             let cancellationRegistration: vscode.Disposable | undefined;
             const complete = (action: () => void) => {
                 if (completed) {
@@ -259,6 +263,10 @@ export class DotNetService implements IDotNetService {
                 }
 
                 completed = true;
+                if (timeout) {
+                    clearTimeout(timeout);
+                    timeout = undefined;
+                }
                 cancellationRegistration?.dispose();
                 action();
             };
@@ -267,36 +275,64 @@ export class DotNetService implements IDotNetService {
                 env: createAspireCliPathProcessEnvironment(),
                 stdio: 'pipe',
             });
-            let stdout = '';
+            const stdout = new LimitedOutputBuffer(oneShotOutputBufferLimit);
+            const stderr = new LimitedOutputBuffer(oneShotOutputBufferLimit);
 
             msbuildProcess.stdout.setEncoding('utf8');
             msbuildProcess.stdout.on('data', (data: string) => {
-                stdout += data;
+                stdout.append(data);
+            });
+            // The probe normally produces JSON only on stdout, but MSBuild can write enough failure
+            // detail to stderr to fill the pipe. Read both streams so a failed probe can always exit.
+            msbuildProcess.stderr.setEncoding('utf8');
+            msbuildProcess.stderr.on('data', (data: string) => {
+                stderr.append(data);
             });
 
             msbuildProcess.on('error', error => {
-                complete(() => reject(error));
+                complete(() => reject(createMsbuildProbeError(error.message, stdout.value, stderr.value)));
             });
             msbuildProcess.on('close', code => {
                 if (cancellationToken?.isCancellationRequested) {
                     complete(() => reject(new vscode.CancellationError()));
                 } else if (code === 0) {
-                    complete(() => resolve(stdout));
+                    complete(() => resolve(stdout.value));
                 } else {
-                    complete(() => reject(new Error(`dotnet msbuild exited with code ${code ?? 'unknown'}`)));
+                    complete(() => reject(createMsbuildProbeError(
+                        `dotnet msbuild exited with code ${code ?? 'unknown'}`,
+                        stdout.value,
+                        stderr.value)));
                 }
             });
 
-            const cancel = () => {
+            const stopProbe = (error: Error) => {
+                if (completed) {
+                    return;
+                }
+
                 // This child is a short-lived metadata probe, not the resource or AppHost. Stop only
-                // its known process handle so cancellation cannot affect the workload being attached.
+                // its known process handle so cancellation or timeout cannot affect the workload being attached.
                 void terminateCliProcess(msbuildProcess, 'dotnet msbuild target discovery', {
                     force: true,
                     suppressTimeoutWarning: true,
                 });
-                complete(() => reject(new vscode.CancellationError()));
+                complete(() => reject(error));
+            };
+            const cancel = () => {
+                stopProbe(new vscode.CancellationError());
             };
             cancellationRegistration = cancellationToken?.onCancellationRequested(cancel);
+            if (completed) {
+                cancellationRegistration?.dispose();
+                return;
+            }
+
+            timeout = setTimeout(() => {
+                stopProbe(createMsbuildProbeError(
+                    `dotnet msbuild target discovery timed out after ${DotNetService._msbuildProbeTimeoutMs}ms`,
+                    stdout.value,
+                    stderr.value));
+            }, DotNetService._msbuildProbeTimeoutMs);
             if (cancellationToken?.isCancellationRequested) {
                 cancel();
             }
@@ -405,6 +441,10 @@ function createErrorWithStreamedDebugConsoleOutput(message: string): Error {
     error.debugConsoleOutputAlreadyWritten = true;
 
     return error;
+}
+
+function createMsbuildProbeError(reason: string, stdout: string, stderr: string): Error {
+    return new Error(`${reason}\nstdout:\n${stdout}\nstderr:\n${stderr}`);
 }
 
 async function shouldLaunchProjectWithDotNetRun(outputPath: string): Promise<boolean> {

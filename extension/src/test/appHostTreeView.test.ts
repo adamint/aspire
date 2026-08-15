@@ -1831,13 +1831,13 @@ suite('getResourceContextValue', () => {
         assert.strictEqual(result, 'resource');
     });
 
-    test('stopped project does not include attach debugger context', () => {
+    test('uses provider attachment approval without checking resource state', () => {
         const result = getResourceContextValue(makeResource({
             resourceType: 'Project',
             state: ResourceState.Finished,
             properties: makeAttachableProjectProperties(),
         }), true);
-        assert.strictEqual(result, 'resource');
+        assert.strictEqual(result, 'resource:canAttachDebugger');
     });
 
     test('running .NET project excludes attach debugger context without C# support', () => {

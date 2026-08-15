@@ -51,7 +51,10 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
 
     canAttachToResource(resource: ResourceJson): boolean {
         try {
-            return this._dependencies.attachProviders.getInstalledProviderForResource(resource) !== undefined;
+            const provider = this._dependencies.attachProviders.getRecognizedProviderForResource(resource);
+            return provider !== undefined
+                && provider.canAttachToResource(resource)
+                && this._dependencies.attachProviders.getMissingDebuggerExtensions(provider).length === 0;
         }
         catch (error) {
             this._logFailure('checking whether a resource can be attached', error);
@@ -171,13 +174,14 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
             return { outcome: 'resourceNotRunning' };
         }
 
-        return await this._attach(request, resolvedTarget, resource);
+        return await this._attach(request, resolvedTarget, resource, provider);
     }
 
     private async _attach(
         request: ResourceDebugRequest,
         appHost: ResourceDebugAppHostTarget,
         resource: ResourceJson,
+        provider: ResourceAttachProvider,
     ): Promise<ResourceDebugResult> {
         if (request.cancellationToken?.isCancellationRequested) {
             return { outcome: 'cancelled' };
@@ -187,13 +191,13 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
             return { outcome: 'alreadyDebugging' };
         }
 
-        let provider: ResourceAttachProvider | undefined;
         let missingDebuggerExtensions: readonly ResourceDebugExtensionRequirement[];
         try {
-            provider = this._dependencies.attachProviders.getAttachableProviderForResource(resource);
-            missingDebuggerExtensions = provider
-                ? this._dependencies.attachProviders.getMissingDebuggerExtensions(provider)
-                : [];
+            if (!provider.canAttachToResource(resource)) {
+                return { outcome: 'unsupportedResource' };
+            }
+
+            missingDebuggerExtensions = this._dependencies.attachProviders.getMissingDebuggerExtensions(provider);
         }
         catch (error) {
             if (isCommandCancellation(error) || request.cancellationToken?.isCancellationRequested) {
@@ -202,10 +206,6 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
 
             this._logFailure('resolving the installed resource attach provider', error);
             return { outcome: 'error', errorKind: 'providerResolutionFailed' };
-        }
-
-        if (!provider) {
-            return { outcome: 'unsupportedResource' };
         }
 
         if (missingDebuggerExtensions.length > 0) {

@@ -102,9 +102,13 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
         }
         finally {
             releaseCurrentOperation!();
-            if (this._resourceLocks.get(resourceKey) === currentOperation) {
-                this._resourceLocks.delete(resourceKey);
-            }
+            // A canceled waiter returns before its tail settles behind the active operation.
+            // Defer deletion until that canonical tail settles so a later request cannot overtake it.
+            void currentOperation.then(() => {
+                if (this._resourceLocks.get(resourceKey) === currentOperation) {
+                    this._resourceLocks.delete(resourceKey);
+                }
+            });
         }
     }
 
