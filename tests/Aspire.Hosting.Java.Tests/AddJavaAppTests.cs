@@ -105,7 +105,7 @@ public class AddJavaAppTests
     public void AddJavaApp_ResolvesWorkingDirectoryFullPath()
     {
         using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
-        using var tempDir = new TestTempDirectory();
+        using var tempDir = new TempJavaAppDirectory();
 
         var app = builder.AddJavaApp("api", tempDir.Path);
 
@@ -202,7 +202,7 @@ public class AddJavaAppTests
     public async Task WithMavenGoal_PassesGoalAsArgument()
     {
         using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
-        using var tempDir = new TestTempDirectory();
+        using var tempDir = new TempJavaAppDirectory();
 
         var app = builder.AddJavaApp("api", tempDir.Path)
             .WithMavenGoal("spring-boot:run");
@@ -259,7 +259,7 @@ public class AddJavaAppTests
     public async Task WithGradleTask_PassesTaskAsArgument()
     {
         using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
-        using var tempDir = new TestTempDirectory();
+        using var tempDir = new TempJavaAppDirectory();
 
         var app = builder.AddJavaApp("api", tempDir.Path)
             .WithGradleTask("bootRun");
@@ -273,7 +273,7 @@ public class AddJavaAppTests
     public async Task WithGradleTask_WrapperPathIsResolved()
     {
         using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
-        using var tempDir = new TestTempDirectory();
+        using var tempDir = new TempJavaAppDirectory();
 
         var app = builder.AddJavaApp("api", tempDir.Path)
             .WithGradleTask("bootRun");
@@ -290,7 +290,7 @@ public class AddJavaAppTests
     public async Task WithMavenGoal_WrapperPathIsResolved()
     {
         using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
-        using var tempDir = new TestTempDirectory();
+        using var tempDir = new TempJavaAppDirectory();
 
         var app = builder.AddJavaApp("api", tempDir.Path)
             .WithMavenGoal("spring-boot:run");
@@ -378,7 +378,7 @@ public class AddJavaAppTests
     public async Task WithWrapperPath_OverridesMavenDefaultWrapper()
     {
         using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
-        using var tempDir = new TestTempDirectory();
+        using var tempDir = new TempJavaAppDirectory();
 
         var app = builder.AddJavaApp("api", tempDir.Path)
             .WithWrapperPath("scripts/custom-mvnw")
@@ -396,7 +396,7 @@ public class AddJavaAppTests
     public async Task WithWrapperPath_OverridesGradleDefaultWrapper()
     {
         using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
-        using var tempDir = new TestTempDirectory();
+        using var tempDir = new TempJavaAppDirectory();
 
         var app = builder.AddJavaApp("api", tempDir.Path)
             .WithWrapperPath("scripts/custom-gradlew")
@@ -541,7 +541,7 @@ public class AddJavaAppTests
     public void WithMavenBuild_CreatesMavenBuildResourceInRunMode()
     {
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run).WithResourceCleanUp(true);
-        using var tempDir = new TestTempDirectory();
+        using var tempDir = new TempJavaAppDirectory();
 
         builder.AddJavaApp("api", tempDir.Path)
             .WithMavenBuild();
@@ -554,7 +554,7 @@ public class AddJavaAppTests
     public void WithMavenBuild_CustomArgs_CreatesBuildResource()
     {
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run).WithResourceCleanUp(true);
-        using var tempDir = new TestTempDirectory();
+        using var tempDir = new TempJavaAppDirectory();
 
         builder.AddJavaApp("api", tempDir.Path)
             .WithMavenBuild("clean", "install", "-DskipTests");
@@ -567,7 +567,7 @@ public class AddJavaAppTests
     public void WithGradleBuild_CreatesGradleBuildResourceInRunMode()
     {
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run).WithResourceCleanUp(true);
-        using var tempDir = new TestTempDirectory();
+        using var tempDir = new TempJavaAppDirectory();
 
         builder.AddJavaApp("api", tempDir.Path)
             .WithGradleBuild();
@@ -580,7 +580,7 @@ public class AddJavaAppTests
     public void WithGradleBuild_CustomArgs_CreatesBuildResource()
     {
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run).WithResourceCleanUp(true);
-        using var tempDir = new TestTempDirectory();
+        using var tempDir = new TempJavaAppDirectory();
 
         builder.AddJavaApp("api", tempDir.Path)
             .WithGradleBuild("clean", "assemble", "--info");
@@ -593,7 +593,7 @@ public class AddJavaAppTests
     public void WithMavenBuild_DoesNotCreateBuildResourceInPublishMode()
     {
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish).WithResourceCleanUp(true);
-        using var tempDir = new TestTempDirectory();
+        using var tempDir = new TempJavaAppDirectory();
 
         builder.AddJavaApp("api", tempDir.Path)
             .WithMavenBuild();
@@ -605,7 +605,7 @@ public class AddJavaAppTests
     public void WithGradleBuild_DoesNotCreateBuildResourceInPublishMode()
     {
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish).WithResourceCleanUp(true);
-        using var tempDir = new TestTempDirectory();
+        using var tempDir = new TempJavaAppDirectory();
 
         builder.AddJavaApp("api", tempDir.Path)
             .WithGradleBuild();
@@ -617,7 +617,7 @@ public class AddJavaAppTests
     public void WithMavenBuild_BuildResourceHasParentRelationship()
     {
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run).WithResourceCleanUp(true);
-        using var tempDir = new TestTempDirectory();
+        using var tempDir = new TempJavaAppDirectory();
 
         var app = builder.AddJavaApp("api", tempDir.Path)
             .WithMavenBuild();
@@ -631,7 +631,7 @@ public class AddJavaAppTests
     public void WithGradleBuild_BuildResourceHasParentRelationship()
     {
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run).WithResourceCleanUp(true);
-        using var tempDir = new TestTempDirectory();
+        using var tempDir = new TempJavaAppDirectory();
 
         var app = builder.AddJavaApp("api", tempDir.Path)
             .WithGradleBuild();
@@ -728,7 +728,7 @@ public class AddJavaAppTests
     public async Task WithWrapperPath_ThenWithMavenGoal_UsesCustomWrapper()
     {
         using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
-        using var tempDir = new TestTempDirectory();
+        using var tempDir = new TempJavaAppDirectory();
 
         var app = builder.AddJavaApp("api", tempDir.Path)
             .WithWrapperPath("tools/mvn")
@@ -748,7 +748,7 @@ public class AddJavaAppTests
     public async Task VerifyManifest_WithMavenGoal()
     {
         using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
-        using var tempDir = new TestTempDirectory();
+        using var tempDir = new TempJavaAppDirectory();
 
         var app = builder.AddJavaApp("api", tempDir.Path)
             .WithMavenGoal("spring-boot:run");
@@ -765,7 +765,7 @@ public class AddJavaAppTests
     public async Task VerifyManifest_WithGradleTask()
     {
         using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
-        using var tempDir = new TestTempDirectory();
+        using var tempDir = new TempJavaAppDirectory();
 
         var app = builder.AddJavaApp("api", tempDir.Path)
             .WithGradleTask("bootRun");
