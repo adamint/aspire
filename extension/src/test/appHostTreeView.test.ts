@@ -15,6 +15,7 @@ import * as configInfoProvider from '../utils/configInfoProvider';
 import { AppHostDataRepository, shortenPath, shortenPaths } from '../data/AppHostDataRepository';
 import { AspireAppHostTreeProvider } from '../views/AspireAppHostTreeProvider';
 import { getResourceContextValue, getResourceIcon, getResourceCommandIcon, resolveAppHostSourcePath, buildResourceDescription } from '../views/treePresentation';
+import { ResourceItem } from '../views/treeItems/resourceItems';
 import type { Clipboard } from '../views/AspireAppHostTreeProvider';
 import type { AppHostDisplayInfo, ResourceJson, ViewMode } from '../data/AppHostDataRepository';
 import { ResourceCommandInputType } from '../data/AppHostDataRepository';
@@ -2853,6 +2854,72 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         const debugRequest = request as ResourceDebugRequest;
         assert.strictEqual(debugRequest.appHost.absolutePath, '/repo/second/AppHost.csproj');
         assert.strictEqual(debugRequest.resourceName, 'api');
+        provider.dispose();
+    });
+
+    test('global AppHost snapshots with the same path have stable process-specific tree IDs', async () => {
+        let request: unknown;
+        const resourceDebugger: ResourceDebugger = {
+            debug: async value => {
+                request = value;
+                return { outcome: 'started', providerId: 'dotnet' };
+            },
+            canAttachToResource: () => true,
+        };
+        const appHostPath = '/repo/AppHost.csproj';
+        const provider = makeTreeProvider([
+            makeAppHost({
+                appHostPath,
+                appHostPid: 1111,
+                resources: [
+                    makeResource({
+                        name: 'api',
+                        displayName: 'Previous API',
+                        properties: makeAttachableProjectProperties({ 'executable.pid': '111' }),
+                    }),
+                ],
+            }),
+            makeAppHost({
+                appHostPath,
+                appHostPid: 2222,
+                resources: [
+                    makeResource({
+                        name: 'api',
+                        displayName: 'Current API',
+                        properties: makeAttachableProjectProperties({ 'executable.pid': '222' }),
+                    }),
+                ],
+            }),
+        ], 'global', undefined, resourceDebugger);
+
+        const [firstAppHostItem, secondAppHostItem] = provider.getChildren();
+        const firstResourcesGroup = provider.getChildren(firstAppHostItem).find(item => item.contextValue === 'resourcesGroup');
+        const secondResourcesGroup = provider.getChildren(secondAppHostItem).find(item => item.contextValue === 'resourcesGroup');
+        assert.ok(firstResourcesGroup);
+        assert.ok(secondResourcesGroup);
+        const [firstResourceItem] = provider.getChildren(firstResourcesGroup);
+        const [secondResourceItem] = provider.getChildren(secondResourcesGroup);
+
+        assert.notStrictEqual(firstResourcesGroup.id, secondResourcesGroup.id);
+        assert.notStrictEqual(firstResourceItem.id, secondResourceItem.id);
+
+        const refreshedGroups = provider.getChildren()
+            .map(appHostItem => provider.getChildren(appHostItem).find(item => item.contextValue === 'resourcesGroup'));
+        const refreshedResourceIds = refreshedGroups.map(resourcesGroup => {
+            assert.ok(resourcesGroup);
+            return provider.getChildren(resourcesGroup)[0].id;
+        });
+        assert.deepStrictEqual(refreshedGroups.map(resourcesGroup => resourcesGroup?.id), [firstResourcesGroup.id, secondResourcesGroup.id]);
+        assert.deepStrictEqual(refreshedResourceIds, [firstResourceItem.id, secondResourceItem.id]);
+
+        await (provider as any).attachDebuggerToResource(secondResourceItem);
+
+        const debugRequest = request as ResourceDebugRequest;
+        assert.strictEqual(debugRequest.appHost.absolutePath, appHostPath);
+        assert.strictEqual(debugRequest.resourceName, 'api');
+
+        const workspaceResourceItem = new ResourceItem(makeResource({ name: 'workspace-api' }), null, false, undefined, appHostPath);
+        assert.ok(workspaceResourceItem.id?.includes(':workspace:'));
         provider.dispose();
     });
 

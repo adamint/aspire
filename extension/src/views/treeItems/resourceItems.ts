@@ -49,7 +49,7 @@ export class ResourcesGroupItem extends vscode.TreeItem {
         public readonly appHostPath: string,
     ) {
         super(resourcesGroupLabel, vscode.TreeItemCollapsibleState.Expanded);
-        this.id = `resources:${getComparisonKey(path.resolve(appHostPath))}`;
+        this.id = `resources:${getTreeItemOwnerId(appHostPath, appHostPid)}`;
         this.iconPath = new vscode.ThemeIcon('layers', new vscode.ThemeColor('aspire.brandPurple'));
         this.contextValue = 'resourcesGroup';
         this.description = `(${resources.length})`;
@@ -141,13 +141,16 @@ export class ResourceItem extends vscode.TreeItem {
             ? vscode.TreeItemCollapsibleState.Expanded
             : hasExpandableContent ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None;
         super(label, collapsible);
-        const ownerId = appHostPath
-            ? getComparisonKey(path.resolve(appHostPath))
-            : appHostPid !== null ? appHostPid.toString() : 'workspace';
-        this.id = `resource:${ownerId}:${resource.name}`;
+        this.id = `resource:${getTreeItemOwnerId(appHostPath, appHostPid)}:${resource.name}`;
         this.iconPath = getResourceIcon(resource);
         this.description = buildResourceDescription(resource);
         this.tooltip = buildResourceTooltip(resource);
         this.contextValue = getResourceContextValue(resource, canAttachDebugger);
     }
+}
+
+function getTreeItemOwnerId(appHostPath: string | undefined, appHostPid: number | null): string {
+    const pathId = appHostPath ? getComparisonKey(path.resolve(appHostPath)) : 'workspace';
+    const processId = appHostPid ?? 'workspace';
+    return `${pathId}:pid:${processId}`;
 }
