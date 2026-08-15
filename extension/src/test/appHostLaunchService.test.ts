@@ -5,17 +5,18 @@ import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { AspireExtendedDebugConfiguration, type AspireResourceDebugSession } from '../dcp/types';
-import { appHostLaunchReservationIdConfigKey, appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
+import { appHostLaunchReservationIdConfigKey, appHostLaunchTokenConfigKey, appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
+import { AspireDebugConfigurationProvider } from '../debugger/AspireDebugConfigurationProvider';
 import { isAspireDebugConfigurationExtensionOwned } from '../debugger/AspireDebugConfigurationProviderInternal';
 import {
     __resetLaunchFailureJournalForTests,
     readLatestLaunchFailures,
-    recordLaunchFailureForAppHostPath,
     type LaunchFailureRecord,
 } from '../services/launchFailureJournal';
 import { appHostLifecycleBusy } from '../loc/strings';
 import { AppHostLaunchService, AppHostLifecycleLockTimeoutError, AppHostStopCancellationError, appHostLifecycleLockMaxHoldMs, appHostLifecycleLockWaitTimeoutMs, externalLaunchReservationTimeoutMs, type AppHostLaunchSession } from '../services/AppHostLaunchService';
 import { __resetAppHostIdentityRegistryForTests, getAppHostIdentityKey } from '../utils/appHostIdentity';
+import { AppHostDiscoveryService } from '../utils/appHostDiscovery';
 import * as cliPathModule from '../utils/cliPath';
 import { __resetCommonPropertiesForTests, __setReporterForTests } from '../utils/telemetry';
 
@@ -1429,29 +1430,97 @@ suite('AppHostLaunchService', () => {
     });
 
     test('launch preserves provider discovery failure when startDebugging returns false', async () => {
-        startDebuggingStub.callsFake(async () => {
-            recordLaunchFailureForAppHostPath('/repo/AppHost.csproj', {
-                stage: 'discovery',
-                category: 'missingDependency',
-                controller: 'editor',
-                mode: 'run',
-                providerKind: 'dotnet',
-            });
+        const appHostPath = '/repo/AppHost.csproj';
+        const provider = createTerminalDiscoveryFailureProvider(service);
+        startDebuggingStub.callsFake(async (_folder, config) => {
+            const resolved = await provider.resolveDebugConfigurationWithSubstitutedVariables(
+                undefined,
+                { ...config });
+            assert.strictEqual(resolved, undefined);
             return false;
         });
 
-        await assert.rejects(service.launch('/repo/AppHost.csproj', 'run', true), /did not start the Aspire run session/);
+        await assert.rejects(service.launch(appHostPath, 'run', true), /did not start the Aspire run session/);
 
-        const failures = readLatestLaunchFailures('/repo/AppHost.csproj');
+        const failures = readLatestLaunchFailures(appHostPath);
         assert.strictEqual(failures.length, 1);
         assert.deepStrictEqual(getFailureDetails(failures[0]), {
             stage: 'discovery',
-            category: 'missingDependency',
+            category: 'unknown',
             controller: 'editor',
             mode: 'run',
             providerKind: 'dotnet',
             exitCodeBucket: 'none',
         });
+    });
+
+    test('concurrent external F5 validation failure does not suppress the extension launch failure', async () => {
+        const appHostPath = '/repo/AppHost.csproj';
+        const provider = createResolvedDebugConfigurationProvider(service);
+        const showInformationMessageStub = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+        try {
+            startDebuggingStub.callsFake(async () => {
+                const resolved = await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined, {
+                    type: 'aspire',
+                    request: 'launch',
+                    name: 'External F5',
+                    program: appHostPath,
+                    command: 'run',
+                });
+                assert.strictEqual(resolved, undefined);
+                return false;
+            });
+
+            await assert.rejects(service.launch(appHostPath, 'run', true), /did not start the Aspire run session/);
+
+            const failures = readLatestLaunchFailures(appHostPath);
+            assert.strictEqual(failures.length, 2);
+            assert.deepStrictEqual(getFailureDetails(failures[0]), {
+                stage: 'cliLaunch',
+                category: 'unknown',
+                controller: 'editor',
+                mode: 'run',
+                providerKind: 'dotnet',
+                exitCodeBucket: 'none',
+            });
+            assert.deepStrictEqual(getFailureDetails(failures[1]), {
+                stage: 'validation',
+                category: 'invalidConfiguration',
+                controller: 'editor',
+                mode: 'debug',
+                providerKind: 'dotnet',
+                exitCodeBucket: 'none',
+            });
+        }
+        finally {
+            showInformationMessageStub.restore();
+        }
+    });
+
+    test('provider failure without a launch token does not suppress the extension launch failure', async () => {
+        const failures = await launchWithUncorrelatedProviderFailure(config => {
+            delete config[appHostLaunchTokenConfigKey];
+        });
+
+        assertUncorrelatedProviderFailure(failures);
+    });
+
+    test('provider failure with an invalid launch token does not suppress the extension launch failure', async () => {
+        const failures = await launchWithUncorrelatedProviderFailure(config => {
+            config[appHostLaunchTokenConfigKey] = 'invalid';
+        });
+
+        assertUncorrelatedProviderFailure(failures);
+    });
+
+    test('provider failure with an unrelated launch token does not suppress the extension launch failure', async () => {
+        const failures = await launchWithUncorrelatedProviderFailure(config => {
+            const launchToken = config[appHostLaunchTokenConfigKey];
+            assert.ok(typeof launchToken === 'number');
+            config[appHostLaunchTokenConfigKey] = launchToken + 1;
+        });
+
+        assertUncorrelatedProviderFailure(failures);
     });
 
     test('launch reports error telemetry when startDebugging returns false', async () => {
@@ -1518,25 +1587,85 @@ suite('AppHostLaunchService', () => {
         });
     });
 
-    test('launch preserves provider validation failure when startDebugging throws', async () => {
-        startDebuggingStub.callsFake(async () => {
-            recordLaunchFailureForAppHostPath('/repo/AppHost.csproj', {
-                stage: 'validation',
-                category: 'invalidConfiguration',
-                controller: 'editor',
-                mode: 'run',
-                providerKind: 'dotnet',
-            });
+    test('launch preserves provider discovery failure when startDebugging throws', async () => {
+        const appHostPath = '/repo/AppHost.csproj';
+        const provider = createTerminalDiscoveryFailureProvider(service);
+        startDebuggingStub.callsFake(async (_folder, config) => {
+            const resolved = await provider.resolveDebugConfigurationWithSubstitutedVariables(
+                undefined,
+                { ...config });
+            assert.strictEqual(resolved, undefined);
             throw new Error('provider rejected launch');
         });
 
-        await assert.rejects(service.launch('/repo/AppHost.csproj', 'run', true), /provider rejected launch/);
+        await assert.rejects(service.launch(appHostPath, 'run', true), /provider rejected launch/);
 
-        const failures = readLatestLaunchFailures('/repo/AppHost.csproj');
+        const failures = readLatestLaunchFailures(appHostPath);
         assert.strictEqual(failures.length, 1);
         assert.deepStrictEqual(getFailureDetails(failures[0]), {
-            stage: 'validation',
-            category: 'invalidConfiguration',
+            stage: 'discovery',
+            category: 'unknown',
+            controller: 'editor',
+            mode: 'run',
+            providerKind: 'dotnet',
+            exitCodeBucket: 'none',
+        });
+    });
+
+    test('successful startDebugging clears the attempt failure mark before token reuse', async () => {
+        const appHostPath = '/repo/AppHost.csproj';
+        const provider = createTerminalDiscoveryFailureProvider(service);
+        let firstLaunchToken: number | undefined;
+        startDebuggingStub.onFirstCall().callsFake(async (_folder, config) => {
+            firstLaunchToken = config[appHostLaunchTokenConfigKey];
+            const resolved = await provider.resolveDebugConfigurationWithSubstitutedVariables(
+                undefined,
+                { ...config });
+            assert.strictEqual(resolved, undefined);
+            return true;
+        });
+        startDebuggingStub.onSecondCall().resolves(false);
+
+        await service.launch(appHostPath, 'deploy', true);
+        service.clearLaunching(appHostPath);
+        assert.ok(firstLaunchToken !== undefined);
+        reuseLaunchToken(firstLaunchToken);
+
+        await assert.rejects(service.launch(appHostPath, 'deploy', true), /did not start the Aspire deploy session/);
+
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+            stage: 'cliLaunch',
+            category: 'unknown',
+            controller: 'editor',
+            mode: 'deploy',
+            providerKind: 'dotnet',
+            exitCodeBucket: 'none',
+        });
+    });
+
+    test('canceled startDebugging clears the attempt failure mark before token reuse', async () => {
+        const appHostPath = '/repo/AppHost.csproj';
+        const provider = createTerminalDiscoveryFailureProvider(service);
+        let firstLaunchToken: number | undefined;
+        startDebuggingStub.onFirstCall().callsFake(async (_folder, config) => {
+            firstLaunchToken = config[appHostLaunchTokenConfigKey];
+            const resolved = await provider.resolveDebugConfigurationWithSubstitutedVariables(
+                undefined,
+                { ...config });
+            assert.strictEqual(resolved, undefined);
+            throw new vscode.CancellationError();
+        });
+        startDebuggingStub.onSecondCall().resolves(false);
+
+        await assert.rejects(service.launch(appHostPath, 'run', true), vscode.CancellationError);
+        assert.ok(firstLaunchToken !== undefined);
+        reuseLaunchToken(firstLaunchToken);
+
+        await assert.rejects(service.launch(appHostPath, 'run', true), /did not start the Aspire run session/);
+
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+            stage: 'cliLaunch',
+            category: 'unknown',
             controller: 'editor',
             mode: 'run',
             providerKind: 'dotnet',
@@ -1592,6 +1721,66 @@ suite('AppHostLaunchService', () => {
             providerKind: record.providerKind,
             exitCodeBucket: record.exitCodeBucket,
         };
+    }
+
+    function createTerminalDiscoveryFailureProvider(launchService: AppHostLaunchService): AspireDebugConfigurationProvider {
+        return new AspireDebugConfigurationProvider({
+            resolveDebugTarget: async () => {
+                throw new Error('discovery failed');
+            },
+        } as unknown as AppHostDiscoveryService, launchService);
+    }
+
+    function createResolvedDebugConfigurationProvider(launchService: AppHostLaunchService): AspireDebugConfigurationProvider {
+        return new AspireDebugConfigurationProvider({
+            resolveDebugTarget: async (filePath: string) => filePath,
+            tryFindWorkspaceDefaultCandidate: async () => undefined,
+        } as unknown as AppHostDiscoveryService, launchService);
+    }
+
+    async function launchWithUncorrelatedProviderFailure(
+        mutateConfiguration: (configuration: Record<string, unknown>) => void): Promise<readonly LaunchFailureRecord[]> {
+        const appHostPath = '/repo/AppHost.csproj';
+        const provider = createTerminalDiscoveryFailureProvider(service);
+        startDebuggingStub.callsFake(async (_folder, config) => {
+            const providerConfiguration = { ...config } as Record<string, unknown>;
+            mutateConfiguration(providerConfiguration);
+            const resolved = await provider.resolveDebugConfigurationWithSubstitutedVariables(
+                undefined,
+                providerConfiguration as vscode.DebugConfiguration);
+            assert.strictEqual(resolved, undefined);
+            return false;
+        });
+
+        await assert.rejects(service.launch(appHostPath, 'run', true), /did not start the Aspire run session/);
+
+        return readLatestLaunchFailures(appHostPath);
+    }
+
+    function assertUncorrelatedProviderFailure(failures: readonly LaunchFailureRecord[]): void {
+        assert.strictEqual(failures.length, 2);
+        assert.deepStrictEqual(getFailureDetails(failures[0]), {
+            stage: 'cliLaunch',
+            category: 'unknown',
+            controller: 'editor',
+            mode: 'run',
+            providerKind: 'dotnet',
+            exitCodeBucket: 'none',
+        });
+        assert.deepStrictEqual(getFailureDetails(failures[1]), {
+            stage: 'discovery',
+            category: 'unknown',
+            controller: 'editor',
+            mode: 'run',
+            providerKind: 'dotnet',
+            exitCodeBucket: 'none',
+        });
+    }
+
+    function reuseLaunchToken(launchToken: number): void {
+        // Production tokens are monotonic. Reusing one here only makes stale attempt
+        // correlation observable to the test.
+        (service as unknown as { _nextLaunchToken: number })._nextLaunchToken = launchToken - 1;
     }
 
     test('terminated run sessions include appHostPath and stop refresh semantics', () => {

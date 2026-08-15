@@ -1,14 +1,14 @@
 import * as vscode from 'vscode';
 import { AspireCommandType, AspireExtendedDebugConfiguration, type AspireResourceDebugSession } from '../dcp/types';
 import { startDebuggingDeclined } from '../loc/strings';
-import { getLatestLaunchFailureSequenceForAppHostPath, recordLaunchFailureForAppHostPath, type LaunchFailureCategory, type LaunchFailureMode, type LaunchFailureProviderKind } from './launchFailureJournal';
+import { recordLaunchFailureForAppHostPath, type LaunchFailureCategory, type LaunchFailureMode, type LaunchFailureProviderKind } from './launchFailureJournal';
 import { compareAppHostIdentity, getAppHostIdentityKeyInfo, isAppHostPathWithinDirectory, type AppHostIdentityKeyInfo, type AppHostIdentityRelation } from '../utils/appHostIdentity';
 import { classifyAppHostPath } from '../utils/appHostLanguage';
 import { classifyError, isCommandCancellation, sendTelemetryEvent, type EventProperties } from '../utils/telemetry';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
 import { appHostLaunchReservationIdConfigKey, appHostLaunchTokenConfigKey, appHostRestartSourceSessionIdConfigKey, appHostSelectionOriginConfigKey, appHostTelemetryTargetPathConfigKey, type AppHostSelectionOrigin } from '../debugger/AspireDebugConfigurationMetadata';
-import { markAspireDebugConfigurationAsExtensionOwned } from '../debugger/AspireDebugConfigurationProviderInternal';
+import { isAspireDebugConfigurationExtensionOwned, markAspireDebugConfigurationAsExtensionOwned } from '../debugger/AspireDebugConfigurationProviderInternal';
 import { AppHostLifecycleLockTimeoutError, AppHostStopCancellationError, AppHostStopError, appHostLifecycleLockMaxHoldMs, appHostLifecycleLockWaitTimeoutMs, type AppHostDebugSessionTerminatedEvent, type AppHostEditorSessionSnapshot, type AppHostEditorSessions, type AppHostLaunchRequestedEvent, type AppHostLaunchSession, type AppHostStopResult, type RunningAppHost } from './appHostLaunchContracts';
 import { AppHostLaunchReservations } from './appHostLaunchReservations';
 import { getLaunchTelemetryProperties, isE2eDebugLaunchSuppressed } from './appHostLaunchTelemetry';
@@ -78,6 +78,10 @@ export class AppHostLaunchService implements vscode.Disposable {
     private _disposed = false;
     private readonly _activeRunDebugSessionPaths = new Map<string, string>();
     private readonly _pendingRunPathByToken = new Map<number, string>();
+    // Attempt correlation stays process-local. These tokens must never be projected into
+    // the launch failure journal, telemetry, logs, tool results, or E2E state.
+    private readonly _appHostPathAwaitingDebugStartByToken = new Map<number, string>();
+    private readonly _launchTokensWithSpecificFailure = new Set<number>();
     private _nextLaunchToken = 0;
 
     readonly onDidChangeLaunchingState = this._reservations.onDidChangeLaunchingState;
@@ -156,6 +160,8 @@ export class AppHostLaunchService implements vscode.Disposable {
         this._reservations.dispose();
         this._activeRunDebugSessionPaths.clear();
         this._pendingRunPathByToken.clear();
+        this._appHostPathAwaitingDebugStartByToken.clear();
+        this._launchTokensWithSpecificFailure.clear();
         this._onDidTerminateAppHostDebugSession.dispose();
         this._onDidRequestLaunch.dispose();
     }
@@ -178,6 +184,26 @@ export class AppHostLaunchService implements vscode.Disposable {
 
     setExternalAppHostStopper(stopper: (appHostPath: string, token: vscode.CancellationToken) => Promise<void>): void {
         this._stopExternalAppHost = stopper;
+    }
+
+    markLaunchAttemptFailureRecorded(configuration: vscode.DebugConfiguration): void {
+        const launchToken = configuration[appHostLaunchTokenConfigKey];
+        if (!isAspireDebugConfigurationExtensionOwned(configuration) ||
+            typeof launchToken !== 'number' ||
+            !Number.isSafeInteger(launchToken) ||
+            launchToken <= 0) {
+            return;
+        }
+
+        const appHostPath = this._appHostPathAwaitingDebugStartByToken.get(launchToken);
+        const configurationAppHostPath = getDebugConfigurationAppHostPath(configuration);
+        if (!appHostPath ||
+            !configurationAppHostPath ||
+            compareAppHostIdentity(appHostPath, configurationAppHostPath) !== 'same') {
+            return;
+        }
+
+        this._launchTokensWithSpecificFailure.add(launchToken);
     }
 
     trackAppHostDebugSession(owner: AppHostLaunchSession, appHostPath: string, debugSession: AspireResourceDebugSession): void {
@@ -605,6 +631,9 @@ export class AppHostLaunchService implements vscode.Disposable {
             this._pendingRunPathByToken.delete(launchToken);
             throw error;
         }
+        finally {
+            this.clearLaunchAttemptFailureCorrelation(launchToken);
+        }
     }
 
     async launchFromLifecycleOwner(appHostPath: string, command: 'run', noDebug: boolean, token: vscode.CancellationToken): Promise<void> {
@@ -621,6 +650,9 @@ export class AppHostLaunchService implements vscode.Disposable {
         catch (error) {
             this._pendingRunPathByToken.delete(launchToken);
             throw error;
+        }
+        finally {
+            this.clearLaunchAttemptFailureCorrelation(launchToken);
         }
     }
 
@@ -716,7 +748,6 @@ export class AppHostLaunchService implements vscode.Disposable {
         }
 
         let failureCategory: LaunchFailureCategory | undefined;
-        let launchFailureSequenceBeforeStartDebugging: number | undefined;
         try {
             const cliAvailability = await checkCliAvailableOrRedirect('debug_gate');
             if (!cliAvailability.available) {
@@ -726,7 +757,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             throwIfCancelled(token);
             config.skipCliAvailabilityCheck = true;
 
-            launchFailureSequenceBeforeStartDebugging = getLatestLaunchFailureSequenceForAppHostPath(appHostPath);
+            this._appHostPathAwaitingDebugStartByToken.set(launchToken, appHostPath);
             const started = await vscode.debug.startDebugging(undefined, config);
             if (!started) {
                 // A false result means VS Code declined the launch before the
@@ -747,12 +778,8 @@ export class AppHostLaunchService implements vscode.Disposable {
         } catch (err) {
             this._pendingRunPathByToken.delete(launchToken);
             this.clearMatchingLaunching(appHostPath, reservationId);
-            // The per-AppHost reservation serializes this launch interval, so a newer
-            // sequence for the exact identity was recorded by a provider boundary during
-            // this attempt. Preserve that specific failure instead of appending cliLaunch.
-            const hasNewerBoundaryFailure = launchFailureSequenceBeforeStartDebugging !== undefined &&
-                getLatestLaunchFailureSequenceForAppHostPath(appHostPath) > launchFailureSequenceBeforeStartDebugging;
-            if (!hasNewerBoundaryFailure) {
+            const hasSpecificFailureForAttempt = this._launchTokensWithSpecificFailure.delete(launchToken);
+            if (!hasSpecificFailureForAttempt) {
                 recordLaunchFailureForAppHostPath(appHostPath, {
                     stage: 'cliLaunch',
                     category: failureCategory,
@@ -775,6 +802,11 @@ export class AppHostLaunchService implements vscode.Disposable {
             });
             throw err;
         }
+    }
+
+    private clearLaunchAttemptFailureCorrelation(launchToken: number): void {
+        this._appHostPathAwaitingDebugStartByToken.delete(launchToken);
+        this._launchTokensWithSpecificFailure.delete(launchToken);
     }
 
     private hasPendingOrActiveRunDebugSession(appHostPath: string): boolean {

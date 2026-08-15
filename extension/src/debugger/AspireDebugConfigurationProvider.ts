@@ -27,6 +27,8 @@ export interface ExternalLaunchReservation {
     tryReserveExternalLaunch(appHostPath: string, isDirectoryScope?: boolean): string | false;
     /** Replaces this resolver's previous reservation, or returns `false` when the new AppHost is already owned. */
     replaceExternalLaunchReservation(previousAppHostPath: string, previousReservationId: string, appHostPath: string, isDirectoryScope?: boolean): string | false;
+    /** Marks a provider-recorded failure only when this configuration belongs to an active service-owned launch. */
+    markLaunchAttemptFailureRecorded(configuration: vscode.DebugConfiguration): void;
 }
 
 export class AspireDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
@@ -239,6 +241,7 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
                     providerKind: getAppHostProviderKind(filePath),
                     error,
                 });
+                this._launchReservation.markLaunchAttemptFailureRecorded(config);
             }
             extensionLogOutputChannel.warn(`Failed to resolve AppHost debug target ${filePath}: ${error}`);
             return terminalFailure ? undefined : filePath;

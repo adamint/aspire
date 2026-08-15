@@ -24,6 +24,7 @@ class RecordingLaunchReservation implements ExternalLaunchReservation {
     readonly reserved: string[] = [];
     readonly directoryScoped: string[] = [];
     readonly replacements: { previousAppHostPath: string; previousReservationId: string; appHostPath: string }[] = [];
+    readonly configurationsWithRecordedLaunchFailures: vscode.DebugConfiguration[] = [];
     /** When set, the claim is refused as if a lifecycle-owned launch already held it. */
     claimedByLifecycle = false;
 
@@ -38,6 +39,10 @@ class RecordingLaunchReservation implements ExternalLaunchReservation {
     replaceExternalLaunchReservation(previousAppHostPath: string, previousReservationId: string, appHostPath: string, isDirectoryScope = false): string | false {
         this.replacements.push({ previousAppHostPath, previousReservationId, appHostPath });
         return this.tryReserveExternalLaunch(appHostPath, isDirectoryScope);
+    }
+
+    markLaunchAttemptFailureRecorded(configuration: vscode.DebugConfiguration): void {
+        this.configurationsWithRecordedLaunchFailures.push(configuration);
     }
 }
 
@@ -779,6 +784,27 @@ suite('AspireDebugConfigurationProvider', () => {
             providerKind: 'dotnet',
             exitCodeBucket: 'none',
         });
+    });
+
+    test('marks the exact extension-owned launch attempt when terminal discovery fails', async () => {
+        const programPath = path.join(tempDir, 'Missing', 'AppHost.csproj');
+        const provider = new AspireDebugConfigurationProvider(createFailingAppHostDiscoveryService(), launchReservation);
+        const debugConfiguration: vscode.DebugConfiguration = {
+            name: 'Debug AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: programPath,
+            [appHostLaunchTokenConfigKey]: 42,
+        };
+        markAspireDebugConfigurationAsExtensionOwned(debugConfiguration);
+
+        const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined, debugConfiguration);
+
+        assert.strictEqual(config, undefined);
+        assert.strictEqual(launchReservation.configurationsWithRecordedLaunchFailures.length, 1);
+        assert.strictEqual(
+            launchReservation.configurationsWithRecordedLaunchFailures[0][appHostLaunchTokenConfigKey],
+            42);
     });
 
     test('records terminal F# AppHost discovery failures as dotnet failures', async () => {
