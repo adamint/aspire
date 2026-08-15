@@ -12,6 +12,7 @@ import { nonInteractiveCliEnvironment } from '../utils/environment';
 import { getComparisonKey, isAppHostPathUnderFolder, isSameAppHostPath } from '../utils/paths/comparison';
 import { FileSystemEntryDescriptor, FileSystemEntryDescriptorIndex, getFileSystemEntryDescriptor } from '../utils/paths/fileSystemIdentity';
 import { shortenPath, shortenPaths } from '../utils/paths/shortening';
+import { compareAppHostIdentity } from '../utils/appHostIdentity';
 import { AppHostDisplayInfo, AspireCliFailedError, AspireCliParseError, DescribeSnapshotJson, isResourceNameMatch, ResourceCommandExecutionOutput, ResourceJson, ViewMode } from './appHostCliContracts';
 import { AppHostCliRunner, isDescribeUnsupportedOutput, isIncludeDisabledCommandsUnsupportedOutput, oneShotOutputBufferLimit, parseCliJsonOutput, RunCliCommandOptions } from './appHostCliRunner';
 import { isMatchingAppHostInstance, isMatchingAppHostPath, isPathInWorkspace } from './appHostPathMatching';
@@ -620,9 +621,11 @@ export class AppHostDataRepository {
     }
 
     private _getAppHostResources(appHostPath: string): ResourceJson[] {
-        const stream = Array.from(this._describeStreams.entries())
-            .find(([currentAppHostPath]) => isMatchingAppHostPath(currentAppHostPath, appHostPath))?.[1];
-        return stream ? Array.from(stream.resources.values()) : [];
+        const matchingStreams = Array.from(this._describeStreams.entries())
+            .filter(([currentAppHostPath]) => compareAppHostIdentity(currentAppHostPath, appHostPath) === 'same');
+        return matchingStreams.length === 1
+            ? Array.from(matchingStreams[0][1].resources.values())
+            : [];
     }
 
     private _waitForAppHostResources(

@@ -238,6 +238,42 @@ suite('AppHostDataRepository', () => {
         }
     });
 
+    test('editor assistance does not adopt an ambiguous project-source describe stream', async () => {
+        const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-editor-assistance-'));
+        const firstProject = path.join(workspaceRoot, 'First.AppHost.csproj');
+        const secondProject = path.join(workspaceRoot, 'Second.AppHost.csproj');
+        const sourcePath = path.join(workspaceRoot, 'Program.cs');
+        fs.writeFileSync(firstProject, '<Project />');
+        fs.writeFileSync(secondProject, '<Project />');
+        fs.writeFileSync(sourcePath, '');
+        const repository = new AppHostDataRepository(terminalProvider);
+        const cancellationSource = new vscode.CancellationTokenSource();
+
+        try {
+            const describeStreams = (repository as any)._describeStreams as Map<string, any>;
+            describeStreams.set(sourcePath, {
+                resources: new Map([['api', {
+                    name: 'api',
+                    resourceType: 'Project',
+                    state: 'Running',
+                }]]),
+            });
+
+            assert.deepStrictEqual(
+                await repository.getAppHostResources(
+                    firstProject,
+                    'api',
+                    false,
+                    cancellationSource.token),
+                []);
+        }
+        finally {
+            cancellationSource.dispose();
+            repository.dispose();
+            fs.rmSync(workspaceRoot, { recursive: true, force: true });
+        }
+    });
+
     test('editor assistance falls back to one-shot describe when follow has no initial resource', async () => {
         const clock = sinon.useFakeTimers();
         const repository = new AppHostDataRepository(terminalProvider);
@@ -6482,6 +6518,69 @@ suite('AppHostDataRepository global polling', () => {
             assert.strictEqual(repository.appHosts[0].appHostPath, '/workspace/AppHost.csproj');
             assert.strictEqual(spawned.filter(call => JSON.stringify(call.args) === followArgs).length, 1);
         } finally {
+            repository.dispose();
+            getConfigurationStub.restore();
+            clock.restore();
+        }
+    });
+
+    test('ps follow delta wins over an older in-flight authoritative snapshot', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const inspect = sinon.stub();
+        inspect.withArgs('appHostsPollingInterval').returns({ globalValue: 1000 });
+        inspect.withArgs('globalAppHostsPollingInterval').returns({ globalValue: 9000 });
+        const getConfigurationStub = sinon.stub(vscode.workspace, 'getConfiguration');
+        getConfigurationStub.withArgs('aspire').returns({
+            inspect,
+            get: sinon.stub().withArgs('appHostsPollingInterval', 30000).returns(30000),
+        } as unknown as vscode.WorkspaceConfiguration);
+        const spawned: { args: string[]; options: any }[] = [];
+        spawnStub.callsFake((_terminalProvider, _command, args, options) => {
+            spawned.push({ args, options });
+            return new TestChildProcess();
+        });
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        try {
+            repository.activate();
+            repository.setViewMode('global');
+            repository.setPanelVisible(true);
+            await waitForMicrotasks();
+
+            const followCall = spawned.find(call =>
+                call.args[0] === 'ps' && call.args.includes('--follow'));
+            assert.ok(followCall);
+            followCall.options.lineCallback(JSON.stringify({
+                appHostPath: '/workspace/AppHost.csproj',
+                appHostPid: 1234,
+                status: 'running',
+            }));
+            await waitForMicrotasks();
+            assert.strictEqual(repository.appHosts.length, 1);
+
+            await clock.tickAsync(1000);
+            const snapshotCall = spawned.find(call =>
+                call.args[0] === 'ps' && !call.args.includes('--follow'));
+            assert.ok(snapshotCall);
+            snapshotCall.options.stdoutCallback(JSON.stringify([{
+                appHostPath: '/workspace/AppHost.csproj',
+                appHostPid: 1234,
+                status: 'running',
+            }]));
+
+            followCall.options.lineCallback(JSON.stringify({
+                appHostPath: '/workspace/AppHost.csproj',
+                appHostPid: 1234,
+                status: 'stopped',
+            }));
+            await waitForMicrotasks();
+            assert.deepStrictEqual(repository.appHosts, []);
+
+            snapshotCall.options.exitCallback(0);
+            await waitForMicrotasks();
+            assert.deepStrictEqual(repository.appHosts, []);
+        }
+        finally {
             repository.dispose();
             getConfigurationStub.restore();
             clock.restore();

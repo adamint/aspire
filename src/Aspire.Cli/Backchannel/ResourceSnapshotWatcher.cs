@@ -15,8 +15,7 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
 {
     private readonly IAppHostAuxiliaryBackchannel _connection;
     private readonly ConcurrentDictionary<string, ResourceSnapshot> _resources = new(StringComparers.ResourceName);
-    private readonly Channel<ResourceSnapshotUpdate> _updates = Channel.CreateUnbounded<ResourceSnapshotUpdate>(
-        new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
+    private readonly Channel<ResourceSnapshotUpdate>? _updates;
     private readonly object _resourcesLock = new();
     private readonly CancellationTokenSource _cts = new();
     private readonly TaskCompletionSource _initialLoadTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -24,10 +23,18 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
     private long _updateSequence;
     private volatile Exception? _watchException;
 
-    public ResourceSnapshotWatcher(IAppHostAuxiliaryBackchannel connection, bool includeHidden = false)
+    public ResourceSnapshotWatcher(
+        IAppHostAuxiliaryBackchannel connection,
+        bool includeHidden = false,
+        bool bufferUpdates = false)
     {
         _connection = connection;
         IncludeHidden = includeHidden;
+        if (bufferUpdates)
+        {
+            _updates = Channel.CreateUnbounded<ResourceSnapshotUpdate>(
+                new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
+        }
         _watchTask = WatchAsync(_cts.Token);
     }
 
@@ -64,12 +71,12 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
 
             _initialLoadTcs.TrySetResult();
             await watchTask.ConfigureAwait(false);
-            _updates.Writer.TryComplete();
+            _updates?.Writer.TryComplete();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             _initialLoadTcs.TrySetCanceled(cancellationToken);
-            _updates.Writer.TryComplete();
+            _updates?.Writer.TryComplete();
         }
         catch (Exception ex)
         {
@@ -78,7 +85,7 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
                 // Initial load already completed; store for callers to detect.
                 _watchException = ex;
             }
-            _updates.Writer.TryComplete(ex);
+            _updates?.Writer.TryComplete(ex);
         }
     }
 
@@ -92,7 +99,7 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
                 _resources[snapshot.Name] = snapshot;
                 update = new(++_updateSequence, snapshot);
             }
-            _updates.Writer.TryWrite(update);
+            _updates?.Writer.TryWrite(update);
         }
     }
 
@@ -105,7 +112,8 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         EnsureInitialLoadComplete();
-        await foreach (var update in _updates.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        var updates = _updates ?? throw new InvalidOperationException("Resource update buffering was not enabled for this watcher.");
+        await foreach (var update in updates.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
             if (update.Sequence > afterSequence)
             {

@@ -917,7 +917,7 @@ suite('Editor assistance AppHost services', () => {
 
             assert.deepStrictEqual(
                 await service.getDebugSessionStatus(
-                    { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api' },
+                    { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'API' },
                     token),
                 {
                     success: false,
@@ -926,7 +926,28 @@ suite('Editor assistance AppHost services', () => {
                     scope: 'resource',
                     controller: 'editor',
                     appHost: 'AppHost/AppHost.csproj',
-                    resourceName: 'api',
+                    resourceName: 'API',
+                });
+
+            resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [
+                createResource('api', path.join(workspaceRoot, 'ExactApi', 'Api.csproj')),
+                {
+                    ...createResource('api-replica', path.join(workspaceRoot, 'ReplicaApi', 'Api.csproj')),
+                    displayName: 'api',
+                },
+            ]);
+            assert.deepStrictEqual(
+                await service.getDebugSessionStatus(
+                    { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'API' },
+                    token),
+                {
+                    success: true,
+                    tool: aspireDebugSessionStatusToolName,
+                    outcome: 'notDebugging',
+                    scope: 'resource',
+                    controller: 'editor',
+                    appHost: 'AppHost/AppHost.csproj',
+                    resourceName: 'API',
                 });
 
             resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [

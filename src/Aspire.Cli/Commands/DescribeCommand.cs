@@ -147,7 +147,7 @@ internal sealed class DescribeCommand : BaseCommand
         // so the user can describe any resource by name.
         var effectiveIncludeHidden = includeHidden || resourceName is not null;
         var dashboardUrlsTask = connection.GetDashboardUrlsAsync(cancellationToken);
-        using var resourceWatcher = new ResourceSnapshotWatcher(connection, effectiveIncludeHidden);
+        using var resourceWatcher = new ResourceSnapshotWatcher(connection, effectiveIncludeHidden, bufferUpdates: follow);
         await resourceWatcher.WaitForInitialLoadAsync(cancellationToken).ConfigureAwait(false);
 
         var dashboardBaseUrl = TelemetryCommandHelpers.ExtractDashboardBaseUrl((await dashboardUrlsTask.ConfigureAwait(false))?.BaseUrlWithLoginToken);

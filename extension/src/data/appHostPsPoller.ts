@@ -45,6 +45,7 @@ export class AppHostPsPoller implements vscode.Disposable {
     private _authoritativeSnapshotPendingForce = false;
     private _authoritativeSnapshotRequestId = 0;
     private _activeAuthoritativeSnapshotRequestId: number | undefined;
+    private _psFollowOutputVersion = 0;
 
     // Disposal, data-activity, and post-stop refresh scheduling stay owned by the repository; the
     // poller reads them through these accessors so it never holds a reference back to the repository.
@@ -200,6 +201,7 @@ export class AppHostPsPoller implements vscode.Disposable {
                     return;
                 }
 
+                this._psFollowOutputVersion++;
                 this._onDidChangePsError.fire(undefined);
                 this._onDidReceivePsOutput.fire({ stdout: line, canCompleteGlobalLoading: false });
             },
@@ -291,6 +293,7 @@ export class AppHostPsPoller implements vscode.Disposable {
             && !this._isDisposed()
             && (force || this._isDataActive());
         const pollingGeneration = this._psPollingGeneration;
+        const followOutputVersion = this._psFollowOutputVersion;
         const args = this._cliRunner.withNoLogo(['ps', '--format', 'json']);
         this._runPsCommand(args, (code, stdout, stderr) => {
             if (this._activeAuthoritativeSnapshotRequestId !== snapshotRequestId) {
@@ -306,7 +309,14 @@ export class AppHostPsPoller implements vscode.Disposable {
             if (!this._isDisposed() && (force || this._isDataActive())) {
                 if (code === 0) {
                     this._onDidChangePsError.fire(undefined);
-                    this._onDidReceivePsOutput.fire({ stdout, canCompleteGlobalLoading: true });
+                    if (followOutputVersion === this._psFollowOutputVersion) {
+                        this._onDidReceivePsOutput.fire({ stdout, canCompleteGlobalLoading: true });
+                    }
+                    else {
+                        // A newer follow delta is already applied, so the snapshot must not
+                        // replace it. The request still completed the explicit refresh.
+                        this._onDidRequestClearLoading.fire();
+                    }
                 } else {
                     this._onDidRequestClearLoading.fire();
                     this._onDidChangePsError.fire(errorFetchingAppHosts(stderr || `exit code ${code}`));

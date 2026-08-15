@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 
-import { isResourceNameMatch, type ResourceJson } from '../data/appHostCliContracts';
+import { resolveResourceNameMatches, type ResourceJson } from '../data/appHostCliContracts';
 import { appHostLifecycleUnresolvedPath } from '../loc/strings';
 import { type EditorResourceSessionSnapshot } from '../services/appHostLaunchContracts';
 import { extensionLogOutputChannel } from '../utils/logging';
@@ -175,7 +175,7 @@ export class EditorAssistanceToolService {
                 token);
             throwIfCanceled(token);
 
-            const matches = resources.filter(resource => isResourceNameMatch(resource, resourceName));
+            const matches = resolveResourceNameMatches(resources, resourceName);
             if (matches.length === 0) {
                 return createResourceFailure(
                     'resourceNotFound',

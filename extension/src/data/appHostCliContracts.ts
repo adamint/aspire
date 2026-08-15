@@ -77,7 +77,21 @@ export function isResourceNameMatch(
     resource: ResourceJson,
     resourceName: string,
     includeDisplayName = true): boolean {
-    return resource.name === resourceName || (includeDisplayName && resource.displayName === resourceName);
+    return equalsIgnoreCase(resource.name, resourceName) ||
+        (includeDisplayName && typeof resource.displayName === 'string' && equalsIgnoreCase(resource.displayName, resourceName));
+}
+
+export function resolveResourceNameMatches(
+    resources: readonly ResourceJson[],
+    resourceName: string): readonly ResourceJson[] {
+    const exactMatches = resources.filter(resource => isResourceNameMatch(resource, resourceName, false));
+    return exactMatches.length > 0
+        ? exactMatches
+        : resources.filter(resource => isResourceNameMatch(resource, resourceName));
+}
+
+function equalsIgnoreCase(left: string, right: string): boolean {
+    return left.toUpperCase() === right.toUpperCase();
 }
 
 export interface AppHostDisplayInfo {
