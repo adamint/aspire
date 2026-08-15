@@ -6,7 +6,7 @@ import { findRunningAppHost, getDebugLaunchCount, isSamePath, readStateFile, wai
 import { executeE2eControlCommand, runE2eTeardown, stopAppHostIfRunning, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
 import { runProcess, terminateProcessTree } from './helpers/process';
 import { ensureDiagnosticsDir, getCliPath, getPrimaryAppHostProjectPath, getWorkspaceRoot } from './helpers/paths';
-import { acceptModalDialog, openAspireView, type AcceptedModalDialog } from './helpers/vscode';
+import { closeAllEditors, getOpenEditorTitles, interactWithModalDialog, openAspireView, setPanelVisible, waitForOpenEditorCount, waitForPanelVisibility, type ModalDialogInteraction } from './helpers/vscode';
 
 interface LifecycleToolResult {
     tool: string;
@@ -31,6 +31,12 @@ interface RegisteredTool {
     description: string;
     registered: boolean;
     supportsPreparation: boolean;
+}
+
+interface LanguageModelToolInvocationResponse {
+    results: string[];
+    cancellations: number;
+    unexpectedFailures: number;
 }
 
 interface ExternalAppHostRun {
@@ -62,6 +68,7 @@ suite('Aspire AppHost lifecycle language model tools E2E', function () {
 
     teardown(async () => {
         await runE2eTeardown([
+            () => executeE2eControlCommand({ name: 'setDashboardBrowserForE2E', value: null }),
             () => executeE2eControlCommand({ name: 'stopDebugging' }),
             () => stopPrimaryAppHostIfRunning(),
             () => waitForNoDebugSessions().catch(() => undefined),
@@ -144,6 +151,88 @@ suite('Aspire AppHost lifecycle language model tools E2E', function () {
             confirmationMessage: 'The Aspire Output view will be shown.',
         });
 
+        const beforeLaunchStatus = await invokeToolWithoutConfirmation<Record<string, unknown>>({
+            name: 'invokeLanguageModelTool',
+            toolName: statusToolName,
+            input: { appHostPath: relativeAppHostPath },
+        });
+        assert.deepStrictEqual(beforeLaunchStatus, {
+            success: true,
+            tool: statusToolName,
+            outcome: 'notDebugging',
+            scope: 'appHost',
+            controller: 'editor',
+            appHost: relativeAppHostPath,
+        });
+        assertSafeEditorAssistanceResult(beforeLaunchStatus);
+
+        const beforeLaunchSessions = await invokeToolWithoutConfirmation<Record<string, unknown>>({
+            name: 'invokeLanguageModelTool',
+            toolName: listToolName,
+            input: {},
+        });
+        assert.deepStrictEqual(beforeLaunchSessions, {
+            success: true,
+            tool: listToolName,
+            outcome: 'noSessions',
+            sessions: [],
+        });
+        assertSafeEditorAssistanceResult(beforeLaunchSessions);
+
+        const beforeLaunchExplanation = await invokeToolWithoutConfirmation<Record<string, unknown>>({
+            name: 'invokeLanguageModelTool',
+            toolName: explainToolName,
+            input: { appHostPath: relativeAppHostPath },
+        });
+        assert.deepStrictEqual(beforeLaunchExplanation, {
+            success: true,
+            tool: explainToolName,
+            outcome: 'noRecordedFailure',
+            appHost: relativeAppHostPath,
+        });
+        assertSafeEditorAssistanceResult(beforeLaunchExplanation);
+
+        const beforeLaunchDashboard = await invokeLanguageModelToolWithConfirmations<Record<string, unknown>>({
+            name: 'invokeLanguageModelTool',
+            toolName: dashboardToolName,
+            input: { appHostPath: relativeAppHostPath },
+        }, 120000, 1, 'editor-assistance-dashboard-not-running-confirmation');
+        assert.deepStrictEqual(beforeLaunchDashboard.results, [{
+            success: false,
+            tool: dashboardToolName,
+            outcome: 'appHostNotRunning',
+        }]);
+        assertInvocationCompleted(beforeLaunchDashboard);
+        assertSafeEditorAssistanceResult(beforeLaunchDashboard.results[0]);
+
+        const missingAppHost = await invokeToolWithoutConfirmation<Record<string, unknown>>({
+            name: 'invokeLanguageModelTool',
+            toolName: statusToolName,
+            input: { appHostPath: 'Missing/AppHost.csproj' },
+        });
+        assert.deepStrictEqual(missingAppHost, {
+            success: false,
+            tool: statusToolName,
+            outcome: 'appHostNotFound',
+        });
+        assertSafeEditorAssistanceResult(missingAppHost);
+
+        const additionalPropertyValidation = await invokeLanguageModelTool({
+            name: 'invokeLanguageModelTool',
+            toolName: statusToolName,
+            input: { appHostPath: relativeAppHostPath, unexpected: true },
+            invokeRegisteredToolDirectly: true,
+        });
+        assertInvocationCompleted(additionalPropertyValidation);
+        const [additionalPropertyValidationEvidence] = additionalPropertyValidation.results
+            .map(result => JSON.parse(result) as Record<string, unknown>);
+        assert.deepStrictEqual([additionalPropertyValidationEvidence], [{
+            success: false,
+            tool: statusToolName,
+            outcome: 'invalidInput',
+        }]);
+        assertSafeEditorAssistanceResult(additionalPropertyValidationEvidence);
+
         const debugLaunchesBeforeStart = getDebugLaunchCount();
         // Both calls are fired concurrently inside the extension host: the tool must
         // serialize them per AppHost path so only one of them launches a process.
@@ -190,6 +279,43 @@ suite('Aspire AppHost lifecycle language model tools E2E', function () {
             appHost: relativeAppHostPath,
             mode: 'debug',
         });
+        assertSafeEditorAssistanceResult(status);
+
+        // The packaged fixture does not install the C# debugger, so the worker runs under
+        // the editor-owned AppHost without creating an editor-owned child debug session.
+        // This still exercises real CLI resource discovery, including the generated
+        // instance name whose logical display name remains "e2e-worker".
+        const resourceStatus = await invokeToolWithoutConfirmation<Record<string, unknown>>({
+            name: 'invokeLanguageModelTool',
+            toolName: statusToolName,
+            input: { appHostPath: relativeAppHostPath, resourceName: 'e2e-worker' },
+        });
+        assert.deepStrictEqual(resourceStatus, {
+            success: true,
+            tool: statusToolName,
+            outcome: 'notDebugging',
+            scope: 'resource',
+            controller: 'editor',
+            appHost: relativeAppHostPath,
+            resourceName: 'e2e-worker',
+        });
+        assertSafeEditorAssistanceResult(resourceStatus);
+
+        const missingResourceStatus = await invokeToolWithoutConfirmation<Record<string, unknown>>({
+            name: 'invokeLanguageModelTool',
+            toolName: statusToolName,
+            input: { appHostPath: relativeAppHostPath, resourceName: 'missing-resource' },
+        });
+        assert.deepStrictEqual(missingResourceStatus, {
+            success: false,
+            tool: statusToolName,
+            outcome: 'resourceNotFound',
+            scope: 'resource',
+            controller: 'editor',
+            appHost: relativeAppHostPath,
+            resourceName: 'missing-resource',
+        });
+        assertSafeEditorAssistanceResult(missingResourceStatus);
 
         const explanation = await invokeToolWithoutConfirmation<Record<string, unknown>>({
             name: 'invokeLanguageModelTool',
@@ -202,6 +328,7 @@ suite('Aspire AppHost lifecycle language model tools E2E', function () {
             outcome: 'noRecordedFailure',
             appHost: relativeAppHostPath,
         });
+        assertSafeEditorAssistanceResult(explanation);
 
         const sessions = await invokeToolWithoutConfirmation<{
             success: boolean;
@@ -234,6 +361,21 @@ suite('Aspire AppHost lifecycle language model tools E2E', function () {
             tool: statusToolName,
             outcome: 'canceled',
         });
+        assertSafeEditorAssistanceResult(canceledStatus);
+
+        await executeE2eControlCommand({ name: 'setDashboardBrowserForE2E', value: 'integratedBrowser' });
+        await closeAllEditors();
+        const dashboardEditorsBeforeDenial = await getOpenEditorTitles();
+        const dashboardBrowserSessionsBeforeDenial = readStateFile().browserDebugSessions;
+        const deniedDashboardInvocation = await invokeLanguageModelToolWithConfirmations<Record<string, unknown>>({
+            name: 'invokeLanguageModelTool',
+            toolName: dashboardToolName,
+            input: { appHostPath: relativeAppHostPath },
+        }, 120000, 1, 'editor-assistance-dashboard-confirmation-denied', 'Cancel');
+        assertDeniedToolInvocation(deniedDashboardInvocation, dashboardToolName);
+        assert.deepStrictEqual(await getOpenEditorTitles(), dashboardEditorsBeforeDenial);
+        assert.deepStrictEqual(readStateFile().browserDebugSessions, dashboardBrowserSessionsBeforeDenial);
+        assertSafeEditorAssistanceResult(deniedDashboardInvocation);
 
         const dashboardInvocation = await invokeLanguageModelToolWithConfirmations<Record<string, unknown>>({
             name: 'invokeLanguageModelTool',
@@ -245,12 +387,22 @@ suite('Aspire AppHost lifecycle language model tools E2E', function () {
         assert.strictEqual(dashboardInvocation.results[0].success, true);
         assert.strictEqual(dashboardInvocation.results[0].tool, dashboardToolName);
         assert.strictEqual(dashboardInvocation.results[0].outcome, 'opened');
-        assert.ok(['integratedBrowser', 'externalBrowser', 'debugBrowser', 'notification'].includes(
-            dashboardInvocation.results[0].presentation as string));
-        assert.deepStrictEqual(
-            Object.keys(dashboardInvocation.results[0]).sort(),
-            ['outcome', 'presentation', 'success', 'tool']);
+        assertInvocationCompleted(dashboardInvocation);
+        assert.strictEqual(dashboardInvocation.results[0].presentation, 'integratedBrowser');
+        assert.ok((await waitForOpenEditorCount(dashboardEditorsBeforeDenial.length + 1)).length >
+            dashboardEditorsBeforeDenial.length);
+        assert.deepStrictEqual(Object.keys(dashboardInvocation.results[0]).sort(), ['outcome', 'presentation', 'success', 'tool']);
         assertSafeEditorAssistanceResult(dashboardInvocation.results[0]);
+
+        await setPanelVisible(false);
+        const deniedOutputInvocation = await invokeLanguageModelToolWithConfirmations<Record<string, unknown>>({
+            name: 'invokeLanguageModelTool',
+            toolName: outputToolName,
+            input: {},
+        }, 120000, 1, 'editor-assistance-output-confirmation-denied', 'Cancel');
+        assertDeniedToolInvocation(deniedOutputInvocation, outputToolName);
+        await waitForPanelVisibility(false);
+        assertSafeEditorAssistanceResult(deniedOutputInvocation);
 
         const outputInvocation = await invokeLanguageModelToolWithConfirmations<Record<string, unknown>>({
             name: 'invokeLanguageModelTool',
@@ -264,6 +416,8 @@ suite('Aspire AppHost lifecycle language model tools E2E', function () {
             tool: outputToolName,
             outcome: 'opened',
         }]);
+        assertInvocationCompleted(outputInvocation);
+        await waitForPanelVisibility(true);
         assertSafeEditorAssistanceResult(outputInvocation.results[0]);
 
         const repeatedStartInvocation = await invokeLifecycleTool({
@@ -300,9 +454,50 @@ suite('Aspire AppHost lifecycle language model tools E2E', function () {
         assert.strictEqual(stopResults[0].appHostPath, relativeAppHostPath);
 
         await waitForNoDebugSessions(180000);
-        await waitForNoRunningAppHost(180000, appHostPath);
+        await waitForProcessExit(appHostPid, 180000);
         assert.strictEqual(readStateFile().state.debugSessions.length, 0, 'Expected no debug sessions after the stop tool call.');
         assert.deepStrictEqual(await waitForAppHostProcessCount(appHostPath, 0, 180000), [], 'Expected no AppHost processes after the stop tool call.');
+
+        const afterStopStatus = await invokeToolWithoutConfirmation<Record<string, unknown>>({
+            name: 'invokeLanguageModelTool',
+            toolName: statusToolName,
+            input: { appHostPath: relativeAppHostPath },
+        });
+        assert.deepStrictEqual(afterStopStatus, {
+            success: true,
+            tool: statusToolName,
+            outcome: 'notDebugging',
+            scope: 'appHost',
+            controller: 'editor',
+            appHost: relativeAppHostPath,
+        });
+        assertSafeEditorAssistanceResult(afterStopStatus);
+
+        const afterStopSessions = await invokeToolWithoutConfirmation<Record<string, unknown>>({
+            name: 'invokeLanguageModelTool',
+            toolName: listToolName,
+            input: {},
+        });
+        assert.deepStrictEqual(afterStopSessions, {
+            success: true,
+            tool: listToolName,
+            outcome: 'noSessions',
+            sessions: [],
+        });
+        assertSafeEditorAssistanceResult(afterStopSessions);
+
+        const afterStopDashboard = await invokeLanguageModelToolWithConfirmations<Record<string, unknown>>({
+            name: 'invokeLanguageModelTool',
+            toolName: dashboardToolName,
+            input: { appHostPath: relativeAppHostPath },
+        }, 120000, 1, 'editor-assistance-dashboard-stopped-confirmation');
+        assert.deepStrictEqual(afterStopDashboard.results, [{
+            success: false,
+            tool: dashboardToolName,
+            outcome: 'appHostNotRunning',
+        }]);
+        assertInvocationCompleted(afterStopDashboard);
+        assertSafeEditorAssistanceResult(afterStopDashboard.results[0]);
 
         const stopAgainResults = (await invokeLifecycleTool({
             name: 'invokeLanguageModelTool',
@@ -314,8 +509,7 @@ suite('Aspire AppHost lifecycle language model tools E2E', function () {
 
         writeLifecycleToolArtifact({
             relativeAppHostPath,
-            appHostPid,
-            registeredTools,
+            registeredToolNames: registeredTools.map(tool => tool.name),
             preparedStart,
             preparedStop,
             preparedStatus,
@@ -323,22 +517,39 @@ suite('Aspire AppHost lifecycle language model tools E2E', function () {
             preparedList,
             preparedDashboard,
             preparedOutput,
+            beforeLaunchStatus,
+            beforeLaunchSessions,
+            beforeLaunchExplanation,
+            beforeLaunchDashboard: beforeLaunchDashboard.results[0],
+            missingAppHost,
+            additionalPropertyValidation: additionalPropertyValidationEvidence,
             status,
+            resourceStatus,
+            missingResourceStatus,
             explanation,
             sessions,
             canceledStatus,
+            deniedDashboard: deniedDashboardInvocation,
             dashboard: dashboardInvocation.results[0],
+            deniedOutput: deniedOutputInvocation,
             output: outputInvocation.results[0],
             confirmationDialogs: [
+                beforeLaunchDashboard.dialogs[0],
                 ...concurrentStartInvocation.dialogs,
+                ...deniedDashboardInvocation.dialogs,
                 ...dashboardInvocation.dialogs,
+                ...deniedOutputInvocation.dialogs,
                 ...outputInvocation.dialogs,
                 repeatedStartInvocation.dialogs[0],
                 stopInvocation.dialogs[0],
+                afterStopDashboard.dialogs[0],
             ],
             concurrentStarts,
             repeatedStart: repeatedStart[0],
             stop: stopResults[0],
+            afterStopStatus,
+            afterStopSessions,
+            afterStopDashboard: afterStopDashboard.results[0],
             stopAgain: stopAgainResults[0],
         });
     });
@@ -364,16 +575,27 @@ suite('Aspire AppHost lifecycle language model tools E2E', function () {
 
             assert.strictEqual(stopInvocation.dialogs[0].message, 'Stop Aspire AppHost');
             assert.strictEqual(stopInvocation.dialogs[0].details, `Stop the Aspire AppHost ${relativeAppHostPath}?`);
-            assert.deepStrictEqual(stopInvocation.results, [{
-                tool: stopToolName,
-                outcome: 'stopped',
-                appHostPath: relativeAppHostPath,
-                controller: 'external',
-            }]);
+            const [stopResult] = stopInvocation.results;
+            assert.deepStrictEqual(
+                { outcome: stopResult.outcome, controller: stopResult.controller },
+                stopResult.outcome === 'stopped'
+                    ? { outcome: 'stopped', controller: 'external' }
+                    // The external process can exit after discovery but before the
+                    // post-confirmation recheck. Failing closed as notRunning is the
+                    // correct race-safe result; the process-exit assertions below still
+                    // prove that no external AppHost survives the invocation.
+                    : { outcome: 'notRunning', controller: 'none' });
+            assert.strictEqual(stopResult.tool, stopToolName);
+            assert.strictEqual(stopResult.appHostPath, relativeAppHostPath);
 
             await waitForNoRunningAppHost(180000, appHostPath);
-            await waitForChildProcessExit(externalRun, 180000);
             await waitForProcessExit(externalAppHostPid, 180000);
+            if (stopResult.outcome === 'notRunning' &&
+                externalRun.child.exitCode === null &&
+                externalRun.child.signalCode === null) {
+                terminateProcessTree(externalRun.child.pid, 'SIGTERM');
+            }
+            await waitForChildProcessExit(externalRun, 180000);
             assert.strictEqual(readStateFile().state.debugSessions.length, 0, 'Expected external stop to leave editor debug sessions untouched.');
         }
         finally {
@@ -543,71 +765,152 @@ async function invokeLifecycleTool(
     timeoutMs: number,
     expectedConfirmations: number,
     screenshotName?: string
-): Promise<{ results: LifecycleToolResult[]; dialogs: AcceptedModalDialog[] }> {
-    const invocation = invokeControlCommand<{ results: string[] }>(command, timeoutMs);
+): Promise<{ results: LifecycleToolResult[]; dialogs: ModalDialogInteraction[] }> {
+    const invocation = invokeControlCommand<LanguageModelToolInvocationResponse>(command, timeoutMs);
     // Keep the rejection observed while the dialogs are being answered; the real failure
     // is reported when the invocation is awaited below.
     invocation.catch(() => undefined);
 
-    const dialogs: AcceptedModalDialog[] = [];
+    const dialogs: ModalDialogInteraction[] = [];
     for (let index = 0; index < expectedConfirmations; index++) {
-        dialogs.push(await acceptModalDialog('Yes', 180000, index === 0 ? screenshotName : undefined));
+        dialogs.push(await interactWithModalDialog('Yes', 180000, index === 0 ? screenshotName : undefined));
     }
 
     const result = await invocation;
+    assertInvocationCompleted(result);
     return { results: result.results.map(item => JSON.parse(item) as LifecycleToolResult), dialogs };
 }
 
 async function invokeToolWithoutConfirmation<T>(
     command: Parameters<typeof executeE2eControlCommand>[0],
     timeoutMs = 120000): Promise<T> {
-    const response = await invokeControlCommand<{ results: string[] }>(command, timeoutMs);
+    const response = await invokeLanguageModelTool(command, timeoutMs);
+    assertInvocationCompleted(response);
     assert.strictEqual(response.results.length, 1);
     return JSON.parse(response.results[0]) as T;
+}
+
+async function invokeLanguageModelTool(
+    command: Parameters<typeof executeE2eControlCommand>[0],
+    timeoutMs = 120000): Promise<LanguageModelToolInvocationResponse> {
+    const response = await invokeControlCommand<LanguageModelToolInvocationResponse>(command, timeoutMs);
+    return {
+        results: response.results,
+        cancellations: response.cancellations,
+        unexpectedFailures: response.unexpectedFailures,
+    };
 }
 
 async function invokeLanguageModelToolWithConfirmations<T>(
     command: Parameters<typeof executeE2eControlCommand>[0],
     timeoutMs: number,
     expectedConfirmations: number,
-    screenshotName?: string
-): Promise<{ results: T[]; dialogs: AcceptedModalDialog[] }> {
-    const invocation = invokeControlCommand<{ results: string[] }>(command, timeoutMs);
+    screenshotName?: string,
+    buttonTitle = 'Yes'
+): Promise<{ results: T[]; cancellations: number; unexpectedFailures: number; dialogs: ModalDialogInteraction[] }> {
+    const invocation = invokeLanguageModelTool(command, timeoutMs);
     invocation.catch(() => undefined);
 
-    const dialogs: AcceptedModalDialog[] = [];
+    const dialogs: ModalDialogInteraction[] = [];
     for (let index = 0; index < expectedConfirmations; index++) {
-        dialogs.push(await acceptModalDialog('Yes', 180000, index === 0 ? screenshotName : undefined));
+        dialogs.push(await interactWithModalDialog(buttonTitle, 180000, index === 0 ? screenshotName : undefined));
     }
 
     const response = await invocation;
     return {
         results: response.results.map(result => JSON.parse(result) as T),
+        cancellations: response.cancellations,
+        unexpectedFailures: response.unexpectedFailures,
         dialogs,
     };
 }
 
 function assertSafeEditorAssistanceResult(result: unknown): void {
-    const serialized = JSON.stringify(result);
-    for (const forbidden of [
-        'dashboardUrl',
-        'outputContent',
-        'logContent',
-        'logs',
-        'content',
-        'processId',
-        'pid',
-        'sessionId',
-        'debugConfiguration',
-        'environment',
+    const forbiddenKeys = new Set([
         'args',
-        'https://',
-        'http://',
-    ]) {
+        'arguments',
+        'content',
+        'dashboardurl',
+        'debugconfig',
+        'debugconfiguration',
+        'env',
+        'environment',
+        'error',
+        'errormessage',
+        'logcontent',
+        'logs',
+        'outputcontent',
+        'pid',
+        'processid',
+        'rawerror',
+        'sessionid',
+        'url',
+        'urls',
+    ]);
+    const workspaceRoot = getWorkspaceRoot();
+
+    const visit = (value: unknown, location: string): void => {
+        if (typeof value === 'string') {
+            assert.strictEqual(value.includes(workspaceRoot), false, `${location} contained the absolute workspace path.`);
+            assert.doesNotMatch(value, /https?:\/\//i, `${location} contained a URL.`);
+            return;
+        }
+
+        if (Array.isArray(value)) {
+            value.forEach((item, index) => visit(item, `${location}[${index}]`));
+            return;
+        }
+
+        if (value && typeof value === 'object') {
+            for (const [key, child] of Object.entries(value)) {
+                const normalizedKey = key.replaceAll('_', '').replaceAll('-', '').toLowerCase();
+                assert.strictEqual(
+                    forbiddenKeys.has(normalizedKey) ||
+                    normalizedKey.endsWith('pid') ||
+                    normalizedKey.endsWith('processid') ||
+                    normalizedKey.endsWith('sessionid') ||
+                    normalizedKey.includes('debugconfig'),
+                    false,
+                    `${location} contained forbidden '${key}' data.`);
+                visit(child, `${location}.${key}`);
+            }
+        }
+    };
+
+    visit(result, 'editorAssistance');
+}
+
+function assertDeniedToolInvocation(
+    invocation: { results: Array<Record<string, unknown>>; cancellations: number; unexpectedFailures: number },
+    toolName: string
+): void {
+    assert.strictEqual(invocation.unexpectedFailures, 0);
+    if (invocation.cancellations > 0) {
+        assert.deepStrictEqual(invocation.results, []);
+        assert.strictEqual(invocation.cancellations, 1);
+        return;
+    }
+
+    assert.deepStrictEqual(invocation.results, [{
+        success: false,
+        tool: toolName,
+        outcome: 'canceled',
+    }]);
+}
+
+function assertInvocationCompleted(invocation: { cancellations: number; unexpectedFailures: number }): void {
+    assert.strictEqual(invocation.cancellations, 0);
+    assert.strictEqual(invocation.unexpectedFailures, 0);
+}
+
+function assertSafeLifecycleArtifact(artifact: Record<string, unknown>): void {
+    assertSafeEditorAssistanceResult(artifact);
+    const serialized = JSON.stringify(artifact);
+    for (const forbidden of ['--start-debug-session', 'stdout', 'stderr']) {
         assert.strictEqual(
             serialized.includes(forbidden),
             false,
-            `Editor-assistance result contained forbidden '${forbidden}' data: ${serialized}`);
+            `Editor-assistance artifact contained forbidden '${forbidden}' data.`);
     }
 }
 
@@ -675,6 +978,7 @@ async function listWindowsProcesses(): Promise<{ pid: number; commandLine: strin
 }
 
 function writeLifecycleToolArtifact(artifact: Record<string, unknown>): void {
+    assertSafeLifecycleArtifact(artifact);
     const artifactPath = path.join(ensureDiagnosticsDir(), 'apphost-lifecycle-language-model-tools.json');
     fs.writeFileSync(artifactPath, JSON.stringify(artifact, undefined, 2));
 }

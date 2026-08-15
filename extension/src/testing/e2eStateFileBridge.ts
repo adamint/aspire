@@ -15,7 +15,7 @@ import { AspireTerminalCommandEvent, AspireTerminalProvider } from '../utils/Asp
 import { delay } from '../utils/async';
 import { dashboardDefaultChangedNotificationKey } from '../utils/dashboardNotificationState';
 import { extensionLogOutputChannel } from '../utils/logging';
-import { onDidInvokeCommand } from '../utils/telemetry';
+import { isCommandCancellation, onDidInvokeCommand } from '../utils/telemetry';
 import { AspireAppHostTreeProvider } from '../views/AspireAppHostTreeProvider';
 import { AppHostDataRepository } from '../data/AppHostDataRepository';
 
@@ -622,12 +622,43 @@ async function executeE2eControlCommand(
     case 'invokeLanguageModelTool': {
       markStarted();
       const invocationCount = Math.max(1, command.times ?? 1);
-      const invocationResults = command.cancelBeforeInvocation
-        ? await invokeCanceledLanguageModelTools(languageModelTools, command.toolName, command.input, invocationCount)
-        : await Promise.all(Array.from({ length: invocationCount }, () => vscode.lm.invokeTool(command.toolName, {
-          input: command.input,
-          toolInvocationToken: undefined,
-        })));
+      const invocationResults: vscode.LanguageModelToolResult[] = [];
+      let cancellations = 0;
+      let unexpectedFailures = 0;
+      if (command.cancelBeforeInvocation) {
+        invocationResults.push(...await invokeCanceledLanguageModelTools(
+          languageModelTools,
+          command.toolName,
+          command.input,
+          invocationCount));
+      }
+      else {
+        const registration = languageModelTools.get(command.toolName);
+        if (!registration) {
+          throw new Error(`Language model tool '${command.toolName}' is not registered.`);
+        }
+        const settledInvocations = await Promise.allSettled(
+          Array.from({ length: invocationCount }, () => command.invokeRegisteredToolDirectly
+            ? invokeRegisteredLanguageModelTool(registration, command.toolName, command.input)
+            : vscode.lm.invokeTool(command.toolName, {
+              input: command.input,
+              toolInvocationToken: undefined,
+            })));
+        for (const settledInvocation of settledInvocations) {
+          if (settledInvocation.status === 'fulfilled') {
+            invocationResults.push(settledInvocation.value);
+          }
+          else if (isCommandCancellation(settledInvocation.reason)) {
+            cancellations++;
+          }
+          else {
+            // Do not persist the raw rejection: uploaded E2E state is public diagnostics.
+            // Keep unexpected failures distinct so validation/confirmation tests cannot
+            // accidentally accept a runtime exception as an expected cancellation.
+            unexpectedFailures++;
+          }
+        }
+      }
 
       return {
         registered: languageModelTools.get(command.toolName)?.registered === true,
@@ -636,7 +667,17 @@ async function executeE2eControlCommand(
           .filter((part): part is vscode.LanguageModelTextPart => part instanceof vscode.LanguageModelTextPart)
           .map(part => part.value)
           .join('')),
+        cancellations,
+        unexpectedFailures,
       };
+    }
+    case 'setDashboardBrowserForE2E': {
+      markStarted();
+      await vscode.workspace.getConfiguration('aspire').update(
+        'dashboardBrowser',
+        command.value ?? undefined,
+        vscode.ConfigurationTarget.Workspace);
+      return undefined;
     }
 
     case 'getDebugSessionProcessInfo': {
@@ -799,6 +840,26 @@ async function executeE2eControlCommand(
 interface E2eLanguageModelToolRegistration {
   readonly tool: vscode.LanguageModelTool<unknown>;
   readonly registered: boolean;
+}
+
+async function invokeRegisteredLanguageModelTool(
+  registration: E2eLanguageModelToolRegistration,
+  toolName: string,
+  input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
+  const cancellation = new vscode.CancellationTokenSource();
+  try {
+    const result = await registration.tool.invoke(
+      { input, toolInvocationToken: undefined },
+      cancellation.token);
+    if (!result) {
+      throw new Error(`Language model tool '${toolName}' returned no result.`);
+    }
+
+    return result;
+  }
+  finally {
+    cancellation.dispose();
+  }
 }
 
 async function invokeCanceledLanguageModelTools(

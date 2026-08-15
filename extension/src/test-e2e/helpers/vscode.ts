@@ -288,14 +288,14 @@ export async function waitForNotificationMessage(expectedText: string, timeoutMs
     }, timeoutMs, `Timed out waiting for notification containing '${expectedText}'.`);
 }
 
-export interface AcceptedModalDialog {
+export interface ModalDialogInteraction {
     message: string;
     details: string;
 }
 
-export async function acceptModalDialog(buttonTitle: string, timeoutMs = 120000, screenshotName?: string): Promise<AcceptedModalDialog> {
+export async function interactWithModalDialog(buttonTitle: string, timeoutMs = 120000, screenshotName?: string): Promise<ModalDialogInteraction> {
     let lastError: unknown;
-    const accepted = await VSBrowser.instance.driver.wait(async () => {
+    const interaction = await VSBrowser.instance.driver.wait(async () => {
         try {
             const dialog = new ModalDialog();
             const message = await dialog.getMessage();
@@ -317,7 +317,34 @@ export async function acceptModalDialog(buttonTitle: string, timeoutMs = 120000,
         }
     }, timeoutMs, `Timed out waiting for a modal dialog with a '${buttonTitle}' button. Last error: ${lastError}`);
 
-    return accepted as AcceptedModalDialog;
+    return interaction as ModalDialogInteraction;
+}
+
+export async function getOpenEditorTitles(): Promise<string[]> {
+    return await new EditorView().getOpenEditorTitles();
+}
+
+export async function waitForOpenEditorCount(minimum: number, timeoutMs = 120000): Promise<string[]> {
+    return await VSBrowser.instance.driver.wait(async () => {
+        const titles = await getOpenEditorTitles();
+        return titles.length >= minimum ? titles : false;
+    }, timeoutMs, `Timed out waiting for at least ${minimum} open editor(s).`);
+}
+
+export async function isPanelVisible(): Promise<boolean> {
+    return (await new BottomBarPanel().getRect()).height > 0;
+}
+
+export async function setPanelVisible(visible: boolean, timeoutMs = 30000): Promise<void> {
+    await new BottomBarPanel().toggle(visible);
+    await waitForPanelVisibility(visible, timeoutMs);
+}
+
+export async function waitForPanelVisibility(visible: boolean, timeoutMs = 30000): Promise<void> {
+    await VSBrowser.instance.driver.wait(
+        async () => await isPanelVisible() === visible,
+        timeoutMs,
+        `Timed out waiting for the panel to become ${visible ? 'visible' : 'hidden'}.`);
 }
 
 export async function getNotificationCount(): Promise<number> {
