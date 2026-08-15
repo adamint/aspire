@@ -10,6 +10,7 @@ import { sendTelemetryEvent } from '../utils/telemetry';
 export type ResourceDebugResourceType = 'project' | 'executable' | 'container' | 'other';
 export type ResourceDebugResourceState = 'running' | 'notRunning' | 'unknown';
 export type ResourceDebugDebuggerRequirement = 'installed' | 'missing' | 'none';
+export type ResourceDebugRequestedStrategyTelemetryBucket = ResourceDebugStrategy | 'invalid';
 
 export interface ResourceDebugClock {
     now(): number;
@@ -17,7 +18,7 @@ export interface ResourceDebugClock {
 
 export interface ResourceDebugStartTelemetryProperties {
     readonly source: ResourceDebugSource;
-    readonly requested_strategy: ResourceDebugStrategy;
+    readonly requested_strategy: ResourceDebugRequestedStrategyTelemetryBucket;
     readonly controller: 'editor';
 }
 
@@ -25,7 +26,7 @@ export interface ResourceDebugResultTelemetryProperties {
     readonly source: ResourceDebugSource;
     readonly provider: ResourceAttachProviderId | 'none';
     readonly resource_type?: ResourceDebugResourceType;
-    readonly requested_strategy: ResourceDebugStrategy;
+    readonly requested_strategy: ResourceDebugRequestedStrategyTelemetryBucket;
     readonly effective_strategy: 'attach' | 'none';
     readonly outcome: ResourceDebugResult['outcome'];
     readonly controller: 'editor';
@@ -44,11 +45,11 @@ export interface ResourceDebugAttachSessionMetadata {
     readonly source: ResourceDebugSource;
     readonly provider: ResourceAttachProviderId;
     readonly resource_type: ResourceDebugResourceType;
+    readonly requested_strategy: ResourceDebugStrategy;
+    readonly effective_strategy: 'attach';
 }
 
 export interface ResourceDebugSessionEndTelemetryProperties extends ResourceDebugAttachSessionMetadata {
-    readonly requested_strategy: 'attach';
-    readonly effective_strategy: 'attach';
     readonly controller: 'editor';
     readonly session_end_reason: 'terminated';
 }

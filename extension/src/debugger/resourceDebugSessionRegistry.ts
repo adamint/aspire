@@ -202,8 +202,6 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
         if (attempt.sessionStarted) {
             this._recordTelemetry(() => this._telemetry.recordSessionEnd({
                 ...attempt.telemetry,
-                requested_strategy: 'attach',
-                effective_strategy: 'attach',
                 controller: 'editor',
                 session_end_reason: 'terminated',
             }, this._getMeasurements(attempt.sessionStartedAt)));

@@ -22,6 +22,7 @@ import {
     type ResourceDebugDebuggerRequirement,
     type ResourceDebugResourceState,
     type ResourceDebugResourceType,
+    type ResourceDebugRequestedStrategyTelemetryBucket,
     type ResourceDebugResultTelemetryMeasurements,
     type ResourceDebugTelemetry,
     monotonicResourceDebugClock,
@@ -88,12 +89,12 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
             this._telemetry,
             this._clock,
             request.source,
-            requestedStrategy ?? 'auto');
+            requestedStrategy ?? 'invalid');
         telemetry.recordStart();
         let result: ResourceDebugResult = { outcome: 'error', errorKind: 'unexpected' };
 
         try {
-            if (effectiveStrategy === undefined) {
+            if (requestedStrategy === undefined || effectiveStrategy === undefined) {
                 result = { outcome: 'error', errorKind: 'unexpected' };
                 return result;
             }
@@ -117,7 +118,7 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
                 resolvedTarget,
                 request.resourceName,
                 request.cancellationToken,
-                async () => await this._debugSerialized(request, resolvedTarget, telemetry),
+                async () => await this._debugSerialized(request, resolvedTarget, telemetry, requestedStrategy, effectiveStrategy),
                 () => ({ outcome: 'cancelled' }));
             return result;
         }
@@ -176,6 +177,8 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
         request: ResourceDebugRequest,
         resolvedTarget: ResourceDebugAppHostTarget,
         telemetry: ResourceDebugOperationTelemetry,
+        requestedStrategy: ResourceDebugStrategy,
+        effectiveStrategy: 'attach',
     ): Promise<ResourceDebugResult> {
         if (request.cancellationToken?.isCancellationRequested) {
             return { outcome: 'cancelled' };
@@ -229,7 +232,7 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
             return { outcome: 'resourceNotRunning' };
         }
 
-        return await this._attach(request, resolvedTarget, resource, provider, telemetry);
+        return await this._attach(request, resolvedTarget, resource, provider, telemetry, requestedStrategy, effectiveStrategy);
     }
 
     private async _attach(
@@ -238,6 +241,8 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
         resource: ResourceJson,
         provider: ResourceAttachProvider,
         telemetry: ResourceDebugOperationTelemetry,
+        requestedStrategy: ResourceDebugStrategy,
+        effectiveStrategy: 'attach',
     ): Promise<ResourceDebugResult> {
         if (request.cancellationToken?.isCancellationRequested) {
             return { outcome: 'cancelled' };
@@ -300,7 +305,7 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
             appHost,
             resource.name,
             configuration,
-            telemetry.createSessionMetadata(provider.id));
+            telemetry.createSessionMetadata(provider.id, requestedStrategy, effectiveStrategy));
         try {
             telemetry.recordDebugStart();
             const started = await this._dependencies.startDebugging(undefined, attempt.configuration);
@@ -341,7 +346,7 @@ class ResourceDebugOperationTelemetry {
         private readonly _telemetry: ResourceDebugTelemetry,
         private readonly _clock: ResourceDebugClock,
         private readonly _source: ResourceDebugRequest['source'],
-        private readonly _requestedStrategy: ResourceDebugStrategy,
+        private readonly _requestedStrategy: ResourceDebugRequestedStrategyTelemetryBucket,
     ) {
         this._startedAt = this._getTimestamp();
     }
@@ -384,11 +389,17 @@ class ResourceDebugOperationTelemetry {
         });
     }
 
-    createSessionMetadata(provider: ResourceAttachProvider['id']): ResourceDebugAttachSessionMetadata {
+    createSessionMetadata(
+        provider: ResourceAttachProvider['id'],
+        requestedStrategy: ResourceDebugStrategy,
+        effectiveStrategy: 'attach',
+    ): ResourceDebugAttachSessionMetadata {
         return {
             source: this._source,
             provider,
             resource_type: this._resourceType ?? 'other',
+            requested_strategy: requestedStrategy,
+            effective_strategy: effectiveStrategy,
         };
     }
 

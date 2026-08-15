@@ -896,6 +896,8 @@ suite('Resource debug service', () => {
             source: 'tree',
             provider: 'dotnet',
             resource_type: 'project',
+            requested_strategy: 'attach',
+            effective_strategy: 'attach',
         });
 
         try {
@@ -1040,6 +1042,64 @@ suite('Resource debug service', () => {
         sessions.dispose();
     });
 
+    test('does not start debugging when cancellation occurs during the fresh resource snapshot', async () => {
+        let finishSnapshot: (() => void) | undefined;
+        let markSnapshotStarted: (() => void) | undefined;
+        const snapshot = new Promise<void>(resolve => {
+            finishSnapshot = resolve;
+        });
+        const snapshotStarted = new Promise<void>(resolve => {
+            markSnapshotStarted = resolve;
+        });
+        const cancellation = new vscode.CancellationTokenSource();
+        const startDebugging = sinon.stub().resolves(true);
+        const { service, repository, sessions } = createService({ startDebugging });
+        repository.fetchAppHostResourcesOnce = async () => {
+            markSnapshotStarted!();
+            await snapshot;
+            return [createResource()];
+        };
+
+        try {
+            const operation = service.debug(createRequest({ cancellationToken: cancellation.token }));
+            await snapshotStarted;
+            cancellation.cancel();
+            finishSnapshot!();
+
+            assert.deepStrictEqual(await operation, { outcome: 'cancelled' });
+            assert.strictEqual(startDebugging.callCount, 0);
+        }
+        finally {
+            cancellation.dispose();
+            sessions.dispose();
+        }
+    });
+
+    test('keeps an accepted attach session when cancellation arrives after debugging starts', async () => {
+        const cancellation = new vscode.CancellationTokenSource();
+        let startedConfiguration: vscode.DebugConfiguration | undefined;
+        const { service, sessions, events } = createService({
+            startDebugging: async (_folder, configuration) => {
+                startedConfiguration = configuration;
+                events.start(configuration);
+                cancellation.cancel();
+                return true;
+            },
+        });
+
+        try {
+            assert.deepStrictEqual(
+                await service.debug(createRequest({ cancellationToken: cancellation.token })),
+                { outcome: 'started', providerId: 'dotnet' });
+            assert.ok(startedConfiguration);
+            assert.strictEqual(sessions.hasActiveSession(target, 'api'), true);
+        }
+        finally {
+            cancellation.dispose();
+            sessions.dispose();
+        }
+    });
+
     test('removes a terminated independent attach session without stopping its resource', async () => {
         let startedConfiguration: vscode.DebugConfiguration | undefined;
         const { service, sessions, events } = createService({
@@ -1176,13 +1236,32 @@ suite('Resource debug service', () => {
 
     test('fails closed when a caller bypasses the bounded debug strategy contract', async () => {
         const startDebugging = sinon.stub().resolves(true);
-        const { service, sessions } = createService({ startDebugging });
+        const telemetry = new TestResourceDebugTelemetry();
+        const { service, sessions } = createService({ startDebugging, telemetry });
 
         try {
             assert.deepStrictEqual(
                 await service.debug(createRequest({ strategy: 'restart' as never })),
                 { outcome: 'error', errorKind: 'unexpected' });
             assert.strictEqual(startDebugging.callCount, 0);
+            assert.deepStrictEqual(
+                telemetry.events.map(event => ({
+                    name: event.name,
+                    requestedStrategy: event.properties.requested_strategy,
+                    effectiveStrategy: event.properties.effective_strategy,
+                })),
+                [
+                    {
+                        name: 'aspire/vscode/resourcedebug/start',
+                        requestedStrategy: 'invalid',
+                        effectiveStrategy: undefined,
+                    },
+                    {
+                        name: 'aspire/vscode/resourcedebug/result',
+                        requestedStrategy: 'invalid',
+                        effectiveStrategy: 'none',
+                    },
+                ]);
         }
         finally {
             sessions.dispose();
@@ -1448,7 +1527,9 @@ suite('Resource debug service', () => {
         events = fixture.events;
 
         try {
-            assert.deepStrictEqual(await fixture.service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
+            assert.deepStrictEqual(
+                await fixture.service.debug(createRequest({ source: 'languageModelTool', strategy: 'auto' })),
+                { outcome: 'started', providerId: 'dotnet' });
             telemetry.currentTime = 140;
             assert.ok(events.startedConfiguration);
             events.terminate(events.startedConfiguration);
@@ -1456,10 +1537,10 @@ suite('Resource debug service', () => {
             assert.deepStrictEqual(telemetry.events.at(-1), {
                 name: 'aspire/vscode/resourcedebug/session/end',
                 properties: {
-                    source: 'tree',
+                    source: 'languageModelTool',
                     provider: 'dotnet',
                     resource_type: 'project',
-                    requested_strategy: 'attach',
+                    requested_strategy: 'auto',
                     effective_strategy: 'attach',
                     controller: 'editor',
                     session_end_reason: 'terminated',

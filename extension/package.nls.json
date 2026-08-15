@@ -325,7 +325,7 @@
   "aspire-vscode.strings.resourceDebugToolConfirmationMessage": "Attach the debugger to resource {0} from Aspire AppHost {1}?",
   "aspire-vscode.strings.resourceDebugToolUnresolvedConfirmationMessage": "Attach the debugger to the requested Aspire resource?",
   "aspire-vscode.strings.resourceDebugToolInvocationMessage": "Attaching debugger to Aspire resource {0}...",
-  "aspire-vscode.strings.resourceDebugToolUnavailableInvocationMessage": "Unable to attach debugger to the requested Aspire resource.",
+  "aspire-vscode.strings.resourceDebugToolUnavailableInvocationMessage": "Attaching debugger to the requested Aspire resource...",
   "languageModelTool.aspireAppHostStart.displayName": "Start Aspire AppHost",
   "languageModelTool.aspireAppHostStart.modelDescription": "Prefer this tool over invoking Aspire AppHost lifecycle commands in a terminal whenever VS Code is active. Start an Aspire AppHost that Aspire has already discovered in the current workspace, using the editor's own debug lifecycle. Requires the workspace-relative path of one of the discovered AppHosts; absolute paths are rejected. Also requires whether to start it in 'run' mode (no debugger attached) or 'debug' mode (debugger attached). Does not create, pick, or guess an AppHost: if the path does not name a discovered AppHost, or names more than one, the call fails and the result lists the AppHosts you can pass. If the AppHost is already starting or already running, no second process is started.",
   "languageModelTool.aspireAppHostStart.userDescription": "Start an Aspire AppHost from this workspace in run or debug mode.",

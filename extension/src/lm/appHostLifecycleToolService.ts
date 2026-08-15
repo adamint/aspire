@@ -237,7 +237,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             effectiveMode);
     }
 
-    async resolveTarget(rawAppHost: unknown, token: vscode.CancellationToken): Promise<AppHostTargetResolution> {
+    private async resolveTarget(rawAppHost: unknown, token: vscode.CancellationToken): Promise<AppHostTargetResolution> {
         return await this._dependencies.targetResolver.resolveTarget(rawAppHost, token);
     }
 
@@ -315,7 +315,6 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         extensionLogOutputChannel.error(`Aspire language model tool ${tool} failed: ${String(error)}`);
         return createResult(tool, 'failed', relativePath, controller, requestedMode, effectiveMode);
     }
-
 }
 
 function getSessionMode(session: AppHostLifecycleEditorSession): AppHostLifecycleMode {

@@ -283,4 +283,4 @@ export const resourceDebugToolConfirmationTitle = vscode.l10n.t('Attach debugger
 export const resourceDebugToolConfirmationMessage = (resourceName: string, appHostPath: string) => vscode.l10n.t('Attach the debugger to resource {0} from Aspire AppHost {1}?', resourceName, appHostPath);
 export const resourceDebugToolUnresolvedConfirmationMessage = vscode.l10n.t('Attach the debugger to the requested Aspire resource?');
 export const resourceDebugToolInvocationMessage = (resourceName: string) => vscode.l10n.t('Attaching debugger to Aspire resource {0}...', resourceName);
-export const resourceDebugToolUnavailableInvocationMessage = vscode.l10n.t('Unable to attach debugger to the requested Aspire resource.');
+export const resourceDebugToolUnavailableInvocationMessage = vscode.l10n.t('Attaching debugger to the requested Aspire resource...');

@@ -165,6 +165,27 @@ suite('Aspire package contribution surface E2E', function () {
         assert.deepStrictEqual(Object.entries(assetStatus).filter(([, exists]) => !exists), []);
     });
 
+    test('prepares the resource debug tool from the merged preparable tool map when its AppHost is unresolved', async () => {
+        const prepared = (await executeE2eControlCommand({
+            name: 'prepareLanguageModelToolInvocation',
+            toolName: 'aspire_resource_debug',
+            input: {
+                appHostPath: 'unresolved/AppHost.csproj',
+                resourceName: 'api',
+            },
+        })).result as {
+            invocationMessage?: string;
+            confirmationTitle?: string;
+            confirmationMessage?: string;
+        };
+
+        assert.deepStrictEqual(prepared, {
+            invocationMessage: 'Attaching debugger to the requested Aspire resource...',
+            confirmationTitle: 'Attach debugger to Aspire resource',
+            confirmationMessage: 'Attach the debugger to the requested Aspire resource?',
+        });
+    });
+
     test('applies the shared CLI availability path to visible CLI-dependent package commands', async () => {
         await openAspireView();
         await waitForRepositoryIdle();

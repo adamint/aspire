@@ -109,6 +109,9 @@
     <trans-unit id="aspire-vscode.strings.resourceDebugToolInvocationMessage">
       <source xml:lang="en">Attaching debugger to Aspire resource {0}...</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.resourceDebugToolUnavailableInvocationMessage">
+      <source xml:lang="en">Attaching debugger to the requested Aspire resource...</source>
+    </trans-unit>
     <trans-unit id="aspire-vscode.strings.attachingDebugger">
       <source xml:lang="en">Attaching debugger to {0}...</source>
     </trans-unit>
@@ -885,9 +888,6 @@
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.unableToAddFolderToWorkspace">
       <source xml:lang="en">Unable to add folder to workspace: {0}</source>
-    </trans-unit>
-    <trans-unit id="aspire-vscode.strings.resourceDebugToolUnavailableInvocationMessage">
-      <source xml:lang="en">Unable to attach debugger to the requested Aspire resource.</source>
     </trans-unit>
     <trans-unit id="command.updateSelf">
       <source xml:lang="en">Update Aspire CLI</source>

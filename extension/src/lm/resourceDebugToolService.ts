@@ -33,13 +33,21 @@ interface ParsedInput {
  * lifecycle policy remain with the shared resolver and ResourceDebugger respectively.
  */
 export class AspireResourceDebugToolService implements vscode.Disposable {
+    private readonly _operationCancellationSources = new Set<vscode.CancellationTokenSource>();
     private _disposed = false;
 
     constructor(private readonly _dependencies: AspireResourceDebugToolDependencies) {
     }
 
     dispose(): void {
+        if (this._disposed) {
+            return;
+        }
+
         this._disposed = true;
+        for (const cancellationSource of this._operationCancellationSources) {
+            cancellationSource.cancel();
+        }
     }
 
     /**
@@ -47,12 +55,51 @@ export class AspireResourceDebugToolService implements vscode.Disposable {
      * calls this again rather than retaining the absolute path from confirmation.
      */
     async prepare(input: unknown, token: vscode.CancellationToken): Promise<AspireResourceDebugToolPreparation> {
+        return await this._runOperation(token, operationToken => this._prepare(input, operationToken));
+    }
+
+    async debug(input: unknown, token: vscode.CancellationToken): Promise<AspireResourceDebugToolResult> {
+        return await this._runOperation(token, async operationToken => {
+            const preparation = await this._prepare(input, operationToken);
+            if (!preparation.canDebug) {
+                return preparation.result;
+            }
+
+            if (operationToken.isCancellationRequested) {
+                return this.createResult(
+                    'cancelled',
+                    preparation.target.displayPath,
+                    preparation.resourceName,
+                    preparation.requestedStrategy);
+            }
+
+            try {
+                const result = await this._dependencies.resourceDebugger.debug({
+                    source: 'languageModelTool',
+                    strategy: preparation.requestedStrategy,
+                    appHost: preparation.target,
+                    resourceName: preparation.resourceName,
+                    cancellationToken: operationToken,
+                });
+                return mapResourceDebugResult(result, preparation.target.displayPath, preparation.resourceName, preparation.requestedStrategy);
+            }
+            catch (error) {
+                return this.createResult(
+                    isCommandCancellation(error) || operationToken.isCancellationRequested ? 'cancelled' : 'failed',
+                    preparation.target.displayPath,
+                    preparation.resourceName,
+                    preparation.requestedStrategy);
+            }
+        });
+    }
+
+    private async _prepare(input: unknown, token: vscode.CancellationToken): Promise<AspireResourceDebugToolPreparation> {
         const parsed = parseInput(input);
         if (!parsed) {
             return this.reject('invalidInput');
         }
 
-        if (this._disposed || token.isCancellationRequested) {
+        if (token.isCancellationRequested) {
             return this.reject('cancelled', '', parsed);
         }
 
@@ -64,7 +111,7 @@ export class AspireResourceDebugToolService implements vscode.Disposable {
 
         try {
             const resolution = await this._dependencies.targetResolver.resolveTarget(parsed.appHostPath, token);
-            if (this._disposed || token.isCancellationRequested) {
+            if (token.isCancellationRequested) {
                 return this.reject('cancelled', '', parsed);
             }
 
@@ -84,47 +131,24 @@ export class AspireResourceDebugToolService implements vscode.Disposable {
         }
     }
 
-    async debug(input: unknown, token: vscode.CancellationToken): Promise<AspireResourceDebugToolResult> {
-        const preparation = await this.prepare(input, token);
-        if (!preparation.canDebug) {
-            return preparation.result;
-        }
-
-        if (this._disposed || token.isCancellationRequested) {
-            return this.createResult(
-                'cancelled',
-                preparation.target.displayPath,
-                preparation.resourceName,
-                preparation.requestedStrategy);
-        }
-
+    private async _runOperation<T>(
+        callerToken: vscode.CancellationToken,
+        operation: (token: vscode.CancellationToken) => Promise<T>,
+    ): Promise<T> {
+        const cancellationSource = new vscode.CancellationTokenSource();
+        this._operationCancellationSources.add(cancellationSource);
+        const cancellationRegistration = callerToken.onCancellationRequested(() => cancellationSource.cancel());
         try {
-            // Re-check immediately before crossing into the shared debugger service. A
-            // deactivating extension must not initiate a new attach after preparation won
-            // the race with disposal.
-            if (this._disposed || token.isCancellationRequested) {
-                return this.createResult(
-                    'cancelled',
-                    preparation.target.displayPath,
-                    preparation.resourceName,
-                    preparation.requestedStrategy);
+            if (this._disposed || callerToken.isCancellationRequested) {
+                cancellationSource.cancel();
             }
 
-            const result = await this._dependencies.resourceDebugger.debug({
-                source: 'languageModelTool',
-                strategy: preparation.requestedStrategy,
-                appHost: preparation.target,
-                resourceName: preparation.resourceName,
-                cancellationToken: token,
-            });
-            return mapResourceDebugResult(result, preparation.target.displayPath, preparation.resourceName, preparation.requestedStrategy);
+            return await operation(cancellationSource.token);
         }
-        catch (error) {
-            return this.createResult(
-                isCommandCancellation(error) || token.isCancellationRequested ? 'cancelled' : 'failed',
-                preparation.target.displayPath,
-                preparation.resourceName,
-                preparation.requestedStrategy);
+        finally {
+            cancellationRegistration.dispose();
+            this._operationCancellationSources.delete(cancellationSource);
+            cancellationSource.dispose();
         }
     }
 
