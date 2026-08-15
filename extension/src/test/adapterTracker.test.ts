@@ -421,6 +421,34 @@ suite('Debug Adapter Tracker Tests', () => {
         }
     });
 
+    test('ignores VS Code cleanup disconnects before an AppHost terminated or exited event', () => {
+        const terminationRequested = sinon.stub();
+        const disposable = createDebugAdapterTracker(
+            dcpServer as any,
+            'pwa-node',
+            undefined,
+            undefined,
+            terminationRequested);
+        const factory = registerFactoryStub.lastCall.args[1];
+        const tracker = factory.createDebugAdapterTracker({
+            ...debugSession,
+            configuration: {
+                ...debugSession.configuration,
+                isApphost: true
+            }
+        });
+
+        tracker.onWillReceiveMessage({
+            type: 'request',
+            seq: 1,
+            command: 'disconnect',
+            arguments: { terminateDebuggee: false }
+        });
+
+        sinon.assert.notCalled(terminationRequested);
+        disposable.dispose();
+    });
+
     test('reports an explicit AppHost disconnect before the adapter terminates', () => {
         const terminationRequested = sinon.stub();
         const disposable = createDebugAdapterTracker(

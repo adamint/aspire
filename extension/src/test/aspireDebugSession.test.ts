@@ -3897,7 +3897,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(trackAppHostDebugSession.calledOnceWithExactly(aspireDebugSession, appHostPath, childDebugSession), true);
     });
 
-    test('records a pre-start process exit when VS Code disconnects after adapter termination', async () => {
+    test('records a pre-start process exit when VS Code sends a cleanup disconnect before adapter termination', async () => {
         const appHostPath = join(makeTempDir(), 'apphost.mts');
         writeFileSync(appHostPath, '');
         const parentDebugSession = {
@@ -3948,16 +3948,16 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         await aspireDebugSession.startAppHost(appHostPath, [], [], true, { forceBuild: false });
 
         const adapterTracker = adapterTrackerFactory!.createDebugAdapterTracker(appHostVsCodeSession) as vscode.DebugAdapterTracker;
-        adapterTracker.onDidSendMessage!({
-            type: 'event',
-            event: 'terminated',
-            body: {},
-        });
         adapterTracker.onWillReceiveMessage!({
             type: 'request',
             seq: 1,
             command: 'disconnect',
             arguments: { terminateDebuggee: false },
+        });
+        adapterTracker.onDidSendMessage!({
+            type: 'event',
+            event: 'terminated',
+            body: {},
         });
         await terminateCallback!(appHostVsCodeSession);
 

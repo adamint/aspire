@@ -40,21 +40,18 @@ export function createDebugAdapterTracker(
 
             return {
                 onWillReceiveMessage: message => {
-                    if (configuration.isApphost &&
-                        (message.command === 'disconnect' || message.command === 'terminate') &&
-                        !appHostExitObserved &&
-                        debugSessionId) {
-                        // A client-to-adapter disconnect/terminate request identifies deliberate
-                        // child-session termination before VS Code raises the termination event.
-                        // A process crash has no matching inbound request, so startup attribution
-                        // can still distinguish it without inferring intent from an exit code.
+                    if (configuration.isApphost && !appHostExitObserved && debugSessionId) {
                         if (message.arguments?.restart) {
                             const shouldSuppress = onAppHostRestartRequested?.(debugSessionId) ?? false;
                             if (shouldSuppress) {
                                 message.arguments.restart = false;
                             }
                         }
-                        else {
+                        else if (message.command === 'terminate' ||
+                            (message.command === 'disconnect' && message.arguments?.terminateDebuggee === true)) {
+                            // VS Code can send disconnect({ terminateDebuggee: false }) only to
+                            // clean up an adapter. Treat only explicit debuggee termination as user
+                            // intent so a pre-start crash still records its launch failure.
                             onAppHostTerminationRequested?.(debugSessionId);
                         }
                     }
