@@ -1098,7 +1098,7 @@ suite('Editor assistance AppHost services', () => {
             assert.strictEqual(serialized.includes('pid'), false);
         });
 
-        test('returns stopped resource status without waiting and preserves active-session errors', async () => {
+        test('fails closed for an unverified stopped resource without waiting and preserves active-session errors', async () => {
             resourceRepository.error = new AspireCliParseError(
                 'aspire describe',
                 '',
@@ -1107,9 +1107,9 @@ suite('Editor assistance AppHost services', () => {
                 { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api' },
                 new vscode.CancellationTokenSource().token);
             assert.deepStrictEqual(stopped, {
-                success: true,
+                success: false,
                 tool: aspireDebugSessionStatusToolName,
-                outcome: 'notDebugging',
+                outcome: 'resourceNotFound',
                 scope: 'resource',
                 controller: 'editor',
                 appHost: 'AppHost/AppHost.csproj',

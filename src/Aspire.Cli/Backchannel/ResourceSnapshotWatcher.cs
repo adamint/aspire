@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 
 namespace Aspire.Cli.Backchannel;
@@ -14,11 +15,13 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
 {
     private readonly IAppHostAuxiliaryBackchannel _connection;
     private readonly ConcurrentDictionary<string, ResourceSnapshot> _resources = new(StringComparers.ResourceName);
-    private readonly Channel<ResourceSnapshot> _updates = Channel.CreateUnbounded<ResourceSnapshot>(
+    private readonly Channel<ResourceSnapshotUpdate> _updates = Channel.CreateUnbounded<ResourceSnapshotUpdate>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
+    private readonly object _resourcesLock = new();
     private readonly CancellationTokenSource _cts = new();
     private readonly TaskCompletionSource _initialLoadTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Task _watchTask;
+    private long _updateSequence;
     private volatile Exception? _watchException;
 
     public ResourceSnapshotWatcher(IAppHostAuxiliaryBackchannel connection, bool includeHidden = false)
@@ -51,9 +54,12 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
             var watchTask = WatchChangesAsync(cancellationToken);
             var snapshots = await _connection.GetResourceSnapshotsAsync(includeHidden: true, cancellationToken).ConfigureAwait(false);
 
-            foreach (var snapshot in snapshots)
+            lock (_resourcesLock)
             {
-                _resources.TryAdd(snapshot.Name, snapshot);
+                foreach (var snapshot in snapshots)
+                {
+                    _resources.TryAdd(snapshot.Name, snapshot);
+                }
             }
 
             _initialLoadTcs.TrySetResult();
@@ -80,20 +86,32 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
     {
         await foreach (var snapshot in _connection.WatchResourceSnapshotsAsync(includeHidden: true, cancellationToken).ConfigureAwait(false))
         {
-            _resources[snapshot.Name] = snapshot;
-            _updates.Writer.TryWrite(snapshot);
+            ResourceSnapshotUpdate update;
+            lock (_resourcesLock)
+            {
+                _resources[snapshot.Name] = snapshot;
+                update = new(++_updateSequence, snapshot);
+            }
+            _updates.Writer.TryWrite(update);
         }
     }
 
     /// <summary>
     /// Streams updates from the same subscription that maintains the current resource collection.
-    /// Callers should emit <see cref="GetAllResources"/> after the initial load before consuming
-    /// updates. Any update already represented by that snapshot can be deduplicated by the caller.
+    /// Callers should first capture the initial state with <see cref="CaptureAllResources"/>.
     /// </summary>
-    public IAsyncEnumerable<ResourceSnapshot> WatchResourceSnapshotsAsync(CancellationToken cancellationToken = default)
+    public async IAsyncEnumerable<ResourceSnapshot> WatchResourceSnapshotsAsync(
+        long afterSequence,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         EnsureInitialLoadComplete();
-        return _updates.Reader.ReadAllAsync(cancellationToken);
+        await foreach (var update in _updates.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (update.Sequence > afterSequence)
+            {
+                yield return update.Snapshot;
+            }
+        }
     }
 
     /// <summary>
@@ -136,18 +154,33 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
         return GetResources(includeHidden: true);
     }
 
+    /// <summary>
+    /// Atomically captures the current resources and the last update represented by that state.
+    /// </summary>
+    public ResourceSnapshotCapture CaptureAllResources()
+    {
+        EnsureInitialLoadComplete();
+        lock (_resourcesLock)
+        {
+            return new(GetResources(includeHidden: true).ToList(), _updateSequence);
+        }
+    }
+
     private IEnumerable<ResourceSnapshot> GetResources(bool includeHidden)
     {
         EnsureInitialLoadComplete();
 
-        var snapshots = _resources.Values.AsEnumerable();
-
-        if (!includeHidden)
+        lock (_resourcesLock)
         {
-            snapshots = snapshots.Where(s => !ResourceSnapshotMapper.IsHiddenResource(s));
-        }
+            var snapshots = _resources.Values.AsEnumerable();
 
-        return snapshots.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase);
+            if (!includeHidden)
+            {
+                snapshots = snapshots.Where(s => !ResourceSnapshotMapper.IsHiddenResource(s));
+            }
+
+            return snapshots.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase).ToArray();
+        }
     }
 
     public void Dispose()
@@ -155,4 +188,12 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
         _cts.Cancel();
         _cts.Dispose();
     }
+
+    internal readonly record struct ResourceSnapshotCapture(
+        IReadOnlyList<ResourceSnapshot> Resources,
+        long UpdateSequence);
+
+    private readonly record struct ResourceSnapshotUpdate(
+        long Sequence,
+        ResourceSnapshot Snapshot);
 }

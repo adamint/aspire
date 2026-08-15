@@ -238,6 +238,62 @@ suite('AppHostDataRepository', () => {
         }
     });
 
+    test('editor assistance falls back to one-shot describe when follow has no initial resource', async () => {
+        const clock = sinon.useFakeTimers();
+        const repository = new AppHostDataRepository(terminalProvider);
+        const cancellationSource = new vscode.CancellationTokenSource();
+
+        try {
+            repository.activate();
+            repository.setViewMode('global');
+            const resourcesPromise = repository.getAppHostResources(
+                '/workspace/AppHost.csproj',
+                'api',
+                true,
+                cancellationSource.token);
+            await waitForMicrotasks();
+
+            const snapshotCall = spawnStub.getCalls().find(call => {
+                const args = call.args[2] as string[];
+                return args[0] === 'ps' && !args.includes('--follow');
+            });
+            assert.ok(snapshotCall, 'expected an authoritative ps snapshot for the temporary consumer');
+            snapshotCall.args[3].stdoutCallback(JSON.stringify([{
+                appHostPath: '/workspace/AppHost.csproj',
+                appHostPid: 1234,
+                status: 'running',
+            }]));
+            snapshotCall.args[3].exitCallback(0);
+            await waitForMicrotasks();
+
+            await clock.tickAsync(10_000);
+            const oneShotDescribeCall = spawnStub.getCalls().find(call => {
+                const args = call.args[2] as string[];
+                return args[0] === 'describe' && !args.includes('--follow');
+            });
+            assert.ok(oneShotDescribeCall, 'expected one-shot describe fallback for an older CLI');
+            oneShotDescribeCall.args[3].stdoutCallback(JSON.stringify({
+                resources: [{
+                    name: 'api',
+                    resourceType: 'Project',
+                    state: 'Running',
+                }],
+            }));
+            oneShotDescribeCall.args[3].exitCallback(0);
+
+            assert.deepStrictEqual(await resourcesPromise, [{
+                name: 'api',
+                resourceType: 'Project',
+                state: 'Running',
+            }]);
+        }
+        finally {
+            clock.restore();
+            cancellationSource.dispose();
+            repository.dispose();
+        }
+    });
+
     test('keeps ps polling active after a workspace-folder change while discovery is stuck', async () => {
         const workspaceFoldersStub = stubWorkspaceFolders([{
             uri: vscode.Uri.file('/workspace'),

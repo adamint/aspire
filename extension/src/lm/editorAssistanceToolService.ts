@@ -177,13 +177,6 @@ export class EditorAssistanceToolService {
 
             const matches = resources.filter(resource => isResourceNameMatch(resource, resourceName));
             if (matches.length === 0) {
-                if (appHostSummary.state === 'notDebugging' && resources.length === 0) {
-                    return createResourceStatusResult(
-                        'notDebugging',
-                        preflight.target.displayPath,
-                        resourceName);
-                }
-
                 return createResourceFailure(
                     'resourceNotFound',
                     preflight.target.displayPath,

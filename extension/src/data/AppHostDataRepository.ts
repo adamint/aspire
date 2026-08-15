@@ -520,7 +520,15 @@ export class AppHostDataRepository {
         this._syncPolling();
         try {
             this.refreshRuntimeState();
-            return await this._waitForAppHostResources(appHostPath, resourceName, cancellationToken);
+            const streamedResources = await this._waitForAppHostResources(appHostPath, resourceName, cancellationToken);
+            if (streamedResources.some(resource => isResourceNameMatch(resource, resourceName))) {
+                return streamedResources;
+            }
+
+            // Older supported CLIs do not emit the initial state from `describe --follow`.
+            // Keep the stream as the fast path, then use the existing one-shot command to
+            // distinguish an unchanged resource from an exact-name miss.
+            return await this.fetchAppHostResourcesOnce(appHostPath, cancellationToken);
         }
         finally {
             this._editorAssistanceConsumers--;

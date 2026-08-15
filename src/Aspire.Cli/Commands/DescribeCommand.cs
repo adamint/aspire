@@ -275,7 +275,8 @@ internal sealed class DescribeCommand : BaseCommand
             }
         }
 
-        var initialSnapshots = resourceWatcher.GetAllResources().ToList();
+        var initialCapture = resourceWatcher.CaptureAllResources();
+        var initialSnapshots = initialCapture.Resources;
         foreach (var snapshot in initialSnapshots)
         {
             DisplaySnapshot(snapshot, initialSnapshots);
@@ -283,7 +284,7 @@ internal sealed class DescribeCommand : BaseCommand
 
         // Stream resource snapshots. The watcher keeps its dictionary up to date in the
         // background, so we use it for relationship resolution and display name deduplication.
-        await foreach (var snapshot in resourceWatcher.WatchResourceSnapshotsAsync(cancellationToken).ConfigureAwait(false))
+        await foreach (var snapshot in resourceWatcher.WatchResourceSnapshotsAsync(initialCapture.UpdateSequence, cancellationToken).ConfigureAwait(false))
         {
             var currentSnapshots = resourceWatcher.GetAllResources().ToList();
             DisplaySnapshot(snapshot, currentSnapshots);
