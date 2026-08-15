@@ -38,6 +38,27 @@ export interface ResourceDebugExtensionRequirement {
     readonly label: string;
 }
 
+/**
+ * A language-specific debugger attach provider. The resource-debug orchestrator supplies a
+ * cancellation token because future providers may have cancellable configuration discovery.
+ * Existing providers that delegate to debugger APIs without cancellation support can omit it.
+ */
+export interface ResourceAttachProvider {
+    readonly id: ResourceAttachProviderId;
+    readonly requiredDebuggerExtensions: readonly ResourceDebugExtensionRequirement[];
+    canAttachToResource(resource: ResourceDebugResourceSnapshot): boolean;
+    createDebugConfiguration(resource: ResourceDebugResourceSnapshot, cancellationToken?: vscode.CancellationToken): Promise<vscode.DebugConfiguration>;
+}
+
+/**
+ * The tree consumes only the extension-wide debug service. It must not create its own service
+ * because that would split session tracking and allow duplicate attach commands.
+ */
+export interface ResourceDebugger {
+    debug(request: ResourceDebugRequest): Promise<ResourceDebugResult>;
+    canAttachToResource(resource: ResourceDebugResourceSnapshot): boolean;
+}
+
 export type ResourceDebugErrorKind =
     | 'resourceSnapshotFailed'
     | 'providerResolutionFailed'

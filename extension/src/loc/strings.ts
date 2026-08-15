@@ -148,6 +148,8 @@ export const attachDebuggerUnavailable = vscode.l10n.t('This resource is not a r
 export const attachDebuggerResourceNotFound = vscode.l10n.t('The selected resource is no longer available. Refresh the Aspire pane and try again.');
 export const attachDebuggerCsharpExtensionRequired = vscode.l10n.t('Install the C# extension to attach the debugger to .NET project resources.');
 export const attachDebuggerDeclined = (resource: string) => vscode.l10n.t('VS Code did not start the debugger attach session for {0}.', resource);
+export const attachingDebugger = (resource: string) => vscode.l10n.t('Attaching debugger to {0}...', resource);
+export const attachDebuggerAlreadyDebugging = (resource: string) => vscode.l10n.t('A debugger is already attached to {0}.', resource);
 export const resourceCountDescription = (count: number) => vscode.l10n.t('({0} resources)', count);
 export const appHostCandidateDescription = (language: string, status: string) => vscode.l10n.t('{0} · {1}', language, status);
 export const workspaceViewSelectedSingleAppHost = (language?: string) => language

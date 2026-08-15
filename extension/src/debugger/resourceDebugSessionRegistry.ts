@@ -15,10 +15,15 @@ export interface ResourceDebugSessionAttempt {
     abandon(): void;
 }
 
+export interface ResourceDebugSessionRegistryOptions {
+    readonly pendingStartTimeoutMs?: number;
+}
+
 interface TrackedAttachAttempt {
     readonly marker: number;
     readonly resourceKey: string;
     readonly sessionIds: Set<string>;
+    pendingStartTimeout: ReturnType<typeof setTimeout> | undefined;
     startAccepted: boolean;
     terminated: boolean;
 }
@@ -29,13 +34,17 @@ interface TrackedAttachAttempt {
  * resource attach serialization or lifecycle state.
  */
 export class ResourceDebugSessionRegistry implements vscode.Disposable {
+    private static readonly _defaultPendingStartTimeoutMs = 10_000;
+
     private readonly _attempts = new Map<number, TrackedAttachAttempt>();
     private readonly _attemptsByResource = new Map<string, Set<number>>();
     private readonly _resourceLocks = new Map<string, Promise<void>>();
     private readonly _subscriptions: vscode.Disposable;
+    private readonly _pendingStartTimeoutMs: number;
     private _nextMarker = 0;
 
-    constructor(events: ResourceDebugSessionEvents = vscode.debug) {
+    constructor(events: ResourceDebugSessionEvents = vscode.debug, options: ResourceDebugSessionRegistryOptions = {}) {
+        this._pendingStartTimeoutMs = options.pendingStartTimeoutMs ?? ResourceDebugSessionRegistry._defaultPendingStartTimeoutMs;
         this._subscriptions = vscode.Disposable.from(
             events.onDidStartDebugSession(session => this._onDidStartDebugSession(session)),
             events.onDidTerminateDebugSession(session => this._onDidTerminateDebugSession(session)));
@@ -43,6 +52,9 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
 
     dispose(): void {
         this._subscriptions.dispose();
+        for (const attempt of this._attempts.values()) {
+            this._clearPendingStartExpiry(attempt);
+        }
         this._attempts.clear();
         this._attemptsByResource.clear();
         this._resourceLocks.clear();
@@ -60,7 +72,13 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
         });
     }
 
-    async runSerialized<T>(appHost: ResourceDebugAppHostTarget, resourceName: string, operation: () => Promise<T>): Promise<T> {
+    async runSerialized<T>(
+        appHost: ResourceDebugAppHostTarget,
+        resourceName: string,
+        cancellationToken: vscode.CancellationToken | undefined,
+        operation: () => Promise<T>,
+        getCancelledResult: () => T,
+    ): Promise<T> {
         const resourceKey = this._getResourceKey(appHost.absolutePath, resourceName);
         const precedingOperation = this._resourceLocks.get(resourceKey);
         let releaseCurrentOperation: (() => void) | undefined;
@@ -69,8 +87,11 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
         });
         this._resourceLocks.set(resourceKey, currentOperation);
 
-        await precedingOperation?.catch(() => undefined);
         try {
+            if (!await this._waitForLock(precedingOperation, cancellationToken)) {
+                return getCancelledResult();
+            }
+
             return await operation();
         }
         finally {
@@ -88,6 +109,7 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
             marker,
             resourceKey,
             sessionIds: new Set<string>(),
+            pendingStartTimeout: undefined,
             startAccepted: false,
             terminated: false,
         };
@@ -102,12 +124,14 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
                 [resourceDebugSessionMarkerConfigKey]: marker,
             },
             markStarted: () => {
-                if (attempt.terminated) {
-                    this._removeAttempt(attempt);
+                if (this._attempts.get(attempt.marker) !== attempt || attempt.terminated) {
                     return;
                 }
 
                 attempt.startAccepted = true;
+                if (attempt.sessionIds.size === 0) {
+                    this._schedulePendingStartExpiry(attempt);
+                }
             },
             abandon: () => this._removeAttempt(attempt),
         };
@@ -120,6 +144,7 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
         }
 
         attempt.sessionIds.add(session.id);
+        this._clearPendingStartExpiry(attempt);
     }
 
     private _onDidTerminateDebugSession(session: vscode.DebugSession): void {
@@ -134,16 +159,7 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
         }
 
         attempt.terminated = true;
-        if (attempt.startAccepted) {
-            this._removeAttempt(attempt);
-        }
-        else {
-            const attemptMarkers = this._attemptsByResource.get(attempt.resourceKey);
-            attemptMarkers?.delete(attempt.marker);
-            if (attemptMarkers?.size === 0) {
-                this._attemptsByResource.delete(attempt.resourceKey);
-            }
-        }
+        this._removeAttempt(attempt);
     }
 
     private _getAttempt(session: vscode.DebugSession): TrackedAttachAttempt | undefined {
@@ -152,12 +168,61 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
     }
 
     private _removeAttempt(attempt: TrackedAttachAttempt): void {
+        this._clearPendingStartExpiry(attempt);
         this._attempts.delete(attempt.marker);
         const attemptMarkers = this._attemptsByResource.get(attempt.resourceKey);
         attemptMarkers?.delete(attempt.marker);
         if (attemptMarkers?.size === 0) {
             this._attemptsByResource.delete(attempt.resourceKey);
         }
+    }
+
+    private _schedulePendingStartExpiry(attempt: TrackedAttachAttempt): void {
+        this._clearPendingStartExpiry(attempt);
+        attempt.pendingStartTimeout = setTimeout(() => {
+            attempt.pendingStartTimeout = undefined;
+            if (this._attempts.get(attempt.marker) === attempt && attempt.sessionIds.size === 0) {
+                this._removeAttempt(attempt);
+            }
+        }, this._pendingStartTimeoutMs);
+    }
+
+    private _clearPendingStartExpiry(attempt: TrackedAttachAttempt): void {
+        if (attempt.pendingStartTimeout) {
+            clearTimeout(attempt.pendingStartTimeout);
+            attempt.pendingStartTimeout = undefined;
+        }
+    }
+
+    private async _waitForLock(
+        precedingOperation: Promise<void> | undefined,
+        cancellationToken: vscode.CancellationToken | undefined,
+    ): Promise<boolean> {
+        if (!precedingOperation) {
+            return !cancellationToken?.isCancellationRequested;
+        }
+
+        return await new Promise<boolean>(resolve => {
+            let settled = false;
+            let cancellationRegistration: vscode.Disposable | undefined;
+            const settle = (acquired: boolean) => {
+                if (settled) {
+                    return;
+                }
+
+                settled = true;
+                cancellationRegistration?.dispose();
+                resolve(acquired);
+            };
+
+            cancellationRegistration = cancellationToken?.onCancellationRequested(() => settle(false));
+            if (cancellationToken?.isCancellationRequested) {
+                settle(false);
+                return;
+            }
+
+            void precedingOperation.catch(() => undefined).then(() => settle(true));
+        });
     }
 
     private _getResourceKey(appHostPath: string, resourceName: string): string {

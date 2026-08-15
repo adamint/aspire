@@ -3,10 +3,11 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import type { AppHostDisplayInfo, ResourceJson } from '../data/AppHostDataRepository';
 import { projectDebuggerExtension, projectResourceAttachProvider } from '../debugger/languages/dotnet';
-import { ResourceAttachProvider, ResourceAttachProviderRegistry } from '../debugger/resourceAttachProviders';
+import { ResourceAttachProviderRegistry } from '../debugger/resourceAttachProviders';
 import { ResourceDebugAppHostIdentityComparer, ResourceDebugAppHostRepository, ResourceDebugService } from '../debugger/resourceDebugService';
 import { ResourceDebugSessionEvents, ResourceDebugSessionRegistry } from '../debugger/resourceDebugSessionRegistry';
-import type { ResourceDebugAppHostTarget, ResourceDebugRequest, ResourceDebugResourceSnapshot } from '../debugger/resourceDebugContracts';
+import { ResourceAttachConfigurationError, type ResourceAttachProvider, type ResourceDebugAppHostTarget, type ResourceDebugRequest, type ResourceDebugResourceSnapshot } from '../debugger/resourceDebugContracts';
+import { extensionLogOutputChannel } from '../utils/logging';
 
 const target: ResourceDebugAppHostTarget = {
     absolutePath: '/repo/AppHost.csproj',
@@ -117,7 +118,9 @@ function createService(options: {
     events: TestDebugSessionEvents;
 } {
     const repository: ResourceDebugAppHostRepository = {
-        fetchAppHostsOnce: async () => options.appHosts ?? [createAppHost()],
+        fetchRunningAppHostsOnce: async () => options.appHosts ?? [createAppHost()],
+        fetchAppHostResourcesOnce: async appHostPath =>
+            (options.appHosts ?? [createAppHost()]).find(appHost => appHost.appHostPath === appHostPath)?.resources ?? [],
     };
     const events = new TestDebugSessionEvents();
     const sessions = new ResourceDebugSessionRegistry(events);
@@ -168,15 +171,16 @@ suite('Resource debug service', () => {
         let fetchCount = 0;
         let configuredResource: ResourceDebugResourceSnapshot | undefined;
         const repository: ResourceDebugAppHostRepository = {
-            fetchAppHostsOnce: async () => {
+            fetchRunningAppHostsOnce: async () => {
+                return [createAppHost({ resources: null })];
+            },
+            fetchAppHostResourcesOnce: async () => {
                 fetchCount++;
-                return [createAppHost({
-                    resources: [createResource({
-                        properties: {
-                            'project.path': '/repo/api/Api.csproj',
-                            'executable.path': `dotnet-${fetchCount}`,
-                        },
-                    })],
+                return [createResource({
+                    properties: {
+                        'project.path': '/repo/api/Api.csproj',
+                        'executable.path': `dotnet-${fetchCount}`,
+                    },
                 })];
             },
         };
@@ -201,6 +205,72 @@ suite('Resource debug service', () => {
         assert.strictEqual(fetchCount, 1);
         assert.strictEqual(configuredResource?.properties?.['executable.path'], 'dotnet-1');
         sessions.dispose();
+    });
+
+    test('resolves the running AppHost before fetching only its resource snapshot', async () => {
+        const cancellation = new vscode.CancellationTokenSource();
+        const fetchedPaths: string[] = [];
+        const receivedTokens: Array<vscode.CancellationToken | undefined> = [];
+        const repository: ResourceDebugAppHostRepository = {
+            fetchRunningAppHostsOnce: async token => {
+                assert.strictEqual(token, cancellation.token);
+                return [
+                    createAppHost({ appHostPath: '/repo/other/AppHost.csproj', resources: null }),
+                    createAppHost({ appHostPath: '/repo/resolved/AppHost.csproj', resources: null }),
+                ];
+            },
+            fetchAppHostResourcesOnce: async (appHostPath, token) => {
+                fetchedPaths.push(appHostPath);
+                receivedTokens.push(token);
+                return [createResource()];
+            },
+        };
+        const events = new TestDebugSessionEvents();
+        const sessions = new ResourceDebugSessionRegistry(events);
+        const service = new ResourceDebugService({
+            appHostRepository: repository,
+            attachProviders: new ResourceAttachProviderRegistry([createProvider()], () => true),
+            sessionRegistry: sessions,
+            startDebugging: async () => true,
+            compareAppHostIdentity: (requestedPath, appHostPath) =>
+                requestedPath === '/repo/alias/AppHost.csproj' && appHostPath === '/repo/resolved/AppHost.csproj'
+                    ? 'same'
+                    : 'different',
+        });
+
+        try {
+            const result = await service.debug(createRequest({
+                appHost: { absolutePath: '/repo/alias/AppHost.csproj', displayPath: 'alias/AppHost.csproj' },
+                cancellationToken: cancellation.token,
+            }));
+
+            assert.deepStrictEqual(result, { outcome: 'started', providerId: 'dotnet' });
+            assert.deepStrictEqual(fetchedPaths, ['/repo/resolved/AppHost.csproj']);
+            assert.deepStrictEqual(receivedTokens, [cancellation.token]);
+        }
+        finally {
+            cancellation.dispose();
+            sessions.dispose();
+        }
+    });
+
+    test('returns a snapshot failure when the selected AppHost cannot be described', async () => {
+        const logError = sinon.stub(extensionLogOutputChannel, 'error');
+        const { service, sessions, repository } = createService();
+        repository.fetchAppHostResourcesOnce = async () => {
+            throw new Error('process 1234 at /repo/private/AppHost.csproj');
+        };
+
+        try {
+            const result = await service.debug(createRequest());
+
+            assert.deepStrictEqual(result, { outcome: 'error', errorKind: 'resourceSnapshotFailed' });
+            assert.doesNotMatch(JSON.stringify(result), /1234|\/repo|AppHost\.csproj/);
+            assert.ok(logError.calledOnce);
+        }
+        finally {
+            sessions.dispose();
+        }
     });
 
     test('resolves duplicate resource names only within the requested AppHost', async () => {
@@ -229,6 +299,28 @@ suite('Resource debug service', () => {
         assert.deepStrictEqual(result, { outcome: 'started', providerId: 'dotnet' });
         assert.strictEqual(configuredResource?.displayName, 'Second API');
         sessions.dispose();
+    });
+
+    test('keeps a typed configuration failure when the provider rejects an unattached resource', async () => {
+        const logError = sinon.stub(extensionLogOutputChannel, 'error');
+        const { service, sessions } = createService({
+            provider: createProvider({
+                createDebugConfiguration: async () => {
+                    throw new ResourceAttachConfigurationError('resourceNotAttachable', 'process 1234 at /repo/private/Api.dll');
+                },
+            }),
+        });
+
+        try {
+            const result = await service.debug(createRequest());
+
+            assert.deepStrictEqual(result, { outcome: 'error', errorKind: 'configurationFailed' });
+            assert.doesNotMatch(JSON.stringify(result), /1234|\/repo|Api\.dll/);
+            assert.ok(logError.calledOnce);
+        }
+        finally {
+            sessions.dispose();
+        }
     });
 
     test('fails closed when the AppHost identity is ambiguous', async () => {
@@ -284,13 +376,19 @@ suite('Resource debug service', () => {
         const unsupported = createService({
             provider: createProvider({ canAttachToResource: () => false }),
         });
+        const unsupportedStopped = createService({
+            appHosts: [createAppHost({ resources: [createResource({ state: 'Finished' })] })],
+            provider: createProvider({ canAttachToResource: () => false }),
+        });
         const stopped = createService({
             appHosts: [createAppHost({ resources: [createResource({ state: 'Finished' })] })],
         });
 
         assert.deepStrictEqual(await unsupported.service.debug(createRequest()), { outcome: 'unsupportedResource' });
+        assert.deepStrictEqual(await unsupportedStopped.service.debug(createRequest()), { outcome: 'unsupportedResource' });
         assert.deepStrictEqual(await stopped.service.debug(createRequest()), { outcome: 'resourceNotRunning' });
         unsupported.sessions.dispose();
+        unsupportedStopped.sessions.dispose();
         stopped.sessions.dispose();
     });
 
@@ -325,7 +423,7 @@ suite('Resource debug service', () => {
         });
         const { service, repository, sessions } = createService({ startDebugging });
         let fetchCount = 0;
-        repository.fetchAppHostsOnce = async () => {
+        repository.fetchRunningAppHostsOnce = async () => {
             fetchCount++;
             return [createAppHost()];
         };
@@ -334,7 +432,7 @@ suite('Resource debug service', () => {
         const second = service.debug(createRequest());
         await startCalled;
         assert.strictEqual(startDebugging.callCount, 1);
-        assert.strictEqual(fetchCount, 1);
+        assert.strictEqual(fetchCount, 2);
 
         completeStart!(true);
 
@@ -343,11 +441,206 @@ suite('Resource debug service', () => {
         sessions.dispose();
     });
 
+    test('cancels a request while it waits for the resource lock', async () => {
+        let completeStart: ((value: boolean) => void) | undefined;
+        let signalStart: (() => void) | undefined;
+        let signalSecondIdentityFetch: (() => void) | undefined;
+        const startRequest = new Promise<boolean>(resolve => {
+            completeStart = resolve;
+        });
+        const startCalled = new Promise<void>(resolve => {
+            signalStart = resolve;
+        });
+        const secondIdentityFetch = new Promise<void>(resolve => {
+            signalSecondIdentityFetch = resolve;
+        });
+        const startDebugging = sinon.stub().callsFake(() => {
+            signalStart!();
+            return startRequest;
+        });
+        const { service, repository, sessions } = createService({ startDebugging });
+        let identityFetchCount = 0;
+        let resourceSnapshotCount = 0;
+        repository.fetchRunningAppHostsOnce = async () => {
+            identityFetchCount++;
+            if (identityFetchCount === 2) {
+                signalSecondIdentityFetch!();
+            }
+            return [createAppHost({ resources: null })];
+        };
+        repository.fetchAppHostResourcesOnce = async () => {
+            resourceSnapshotCount++;
+            return [createResource()];
+        };
+        const cancellation = new vscode.CancellationTokenSource();
+
+        try {
+            const first = service.debug(createRequest());
+            await startCalled;
+
+            const second = service.debug(createRequest({ cancellationToken: cancellation.token }));
+            await secondIdentityFetch;
+            cancellation.cancel();
+
+            assert.deepStrictEqual(await second, { outcome: 'cancelled' });
+            assert.strictEqual(resourceSnapshotCount, 1);
+
+            completeStart!(true);
+            assert.deepStrictEqual(await first, { outcome: 'started', providerId: 'dotnet' });
+        }
+        finally {
+            cancellation.dispose();
+            sessions.dispose();
+        }
+    });
+
+    test('passes the request cancellation token to providers that support cancellation', async () => {
+        const cancellation = new vscode.CancellationTokenSource();
+        let receivedToken: vscode.CancellationToken | undefined;
+        const { service, sessions } = createService({
+            provider: createProvider({
+                createDebugConfiguration: async (_resource, token) => {
+                    receivedToken = token;
+                    return { type: 'coreclr', request: 'attach', name: 'Attach debugger: API' };
+                },
+            }),
+        });
+
+        try {
+            assert.deepStrictEqual(await service.debug(createRequest({ cancellationToken: cancellation.token })), {
+                outcome: 'started',
+                providerId: 'dotnet',
+            });
+            assert.strictEqual(receivedToken, cancellation.token);
+        }
+        finally {
+            cancellation.dispose();
+            sessions.dispose();
+        }
+    });
+
     test('returns alreadyDebugging while an independent attach session is active', async () => {
         const { service, sessions } = createService();
 
         assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
         assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'alreadyDebugging' });
+        sessions.dispose();
+    });
+
+    test('expires an accepted start when the debugger session loses the private marker', async () => {
+        const clock = sinon.useFakeTimers();
+        const events = new TestDebugSessionEvents();
+        const sessions = new ResourceDebugSessionRegistry(events, { pendingStartTimeoutMs: 100 });
+        const service = new ResourceDebugService({
+            appHostRepository: {
+                fetchRunningAppHostsOnce: async () => [createAppHost({ resources: null })],
+                fetchAppHostResourcesOnce: async () => [createResource()],
+            },
+            attachProviders: new ResourceAttachProviderRegistry([createProvider()], () => true),
+            sessionRegistry: sessions,
+            startDebugging: async () => true,
+        });
+
+        try {
+            assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
+
+            // A third-party debug configuration provider can resolve the session without preserving
+            // private properties from the launch configuration.
+            events.start({ type: 'coreclr', request: 'attach', name: 'Attach debugger: API' });
+            await clock.tickAsync(100);
+
+            assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
+        }
+        finally {
+            sessions.dispose();
+            clock.restore();
+        }
+    });
+
+    test('keeps an accepted start active when a correlated independent session starts', async () => {
+        const clock = sinon.useFakeTimers();
+        const events = new TestDebugSessionEvents();
+        const sessions = new ResourceDebugSessionRegistry(events, { pendingStartTimeoutMs: 100 });
+        let startedConfiguration: vscode.DebugConfiguration | undefined;
+        const service = new ResourceDebugService({
+            appHostRepository: {
+                fetchRunningAppHostsOnce: async () => [createAppHost({ resources: null })],
+                fetchAppHostResourcesOnce: async () => [createResource()],
+            },
+            attachProviders: new ResourceAttachProviderRegistry([createProvider()], () => true),
+            sessionRegistry: sessions,
+            startDebugging: async (_folder, configuration) => {
+                startedConfiguration = configuration;
+                events.start(configuration);
+                return true;
+            },
+        });
+
+        try {
+            assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
+            assert.ok(startedConfiguration);
+            await clock.tickAsync(100);
+
+            assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'alreadyDebugging' });
+        }
+        finally {
+            sessions.dispose();
+            clock.restore();
+        }
+    });
+
+    test('does not reactivate an attempt terminated before start acceptance', () => {
+        const events = new TestDebugSessionEvents();
+        const sessions = new ResourceDebugSessionRegistry(events);
+        const attempt = sessions.createAttempt(target, 'api', {
+            type: 'coreclr',
+            request: 'attach',
+            name: 'Attach debugger: API',
+        });
+
+        try {
+            events.terminate(attempt.configuration);
+            attempt.markStarted();
+
+            assert.strictEqual(sessions.hasActiveSession(target, 'api'), false);
+        }
+        finally {
+            sessions.dispose();
+        }
+    });
+
+    test('serializes aliases that resolve to the same running AppHost', async () => {
+        let completeStart: ((value: boolean) => void) | undefined;
+        let signalStart: (() => void) | undefined;
+        const startRequest = new Promise<boolean>(resolve => {
+            completeStart = resolve;
+        });
+        const startCalled = new Promise<void>(resolve => {
+            signalStart = resolve;
+        });
+        const startDebugging = sinon.stub().callsFake(() => {
+            signalStart!();
+            return startRequest;
+        });
+        const { service, sessions } = createService({
+            startDebugging,
+            compareAppHostIdentity: () => 'same',
+            appHosts: [createAppHost({ appHostPath: '/repo/resolved/AppHost.csproj' })],
+        });
+        const first = service.debug(createRequest({
+            appHost: { absolutePath: '/repo/alias-one/AppHost.csproj', displayPath: 'alias-one/AppHost.csproj' },
+        }));
+        const second = service.debug(createRequest({
+            appHost: { absolutePath: '/repo/alias-two/AppHost.csproj', displayPath: 'alias-two/AppHost.csproj' },
+        }));
+
+        await startCalled;
+        assert.strictEqual(startDebugging.callCount, 1);
+
+        completeStart!(true);
+
+        assert.deepStrictEqual(await first, { outcome: 'started', providerId: 'dotnet' });
+        assert.deepStrictEqual(await second, { outcome: 'alreadyDebugging' });
         sessions.dispose();
     });
 

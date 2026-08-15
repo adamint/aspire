@@ -10,8 +10,7 @@ import * as fs from 'fs';
 import { doesFileExist } from '../../utils/io';
 import { AspireResourceExtendedDebugConfiguration, EnvVar, ExecutableLaunchConfiguration, isProjectLaunchConfiguration, ProjectLaunchConfiguration } from '../../dcp/types';
 import { ResourceDebuggerExtension } from '../debuggerExtensions';
-import { ResourceAttachConfigurationError, type ResourceDebugResourceSnapshot } from '../resourceDebugContracts';
-import type { ResourceAttachProvider } from '../resourceAttachProviders';
+import { ResourceAttachConfigurationError, type ResourceAttachProvider, type ResourceDebugResourceSnapshot } from '../resourceDebugContracts';
 import {
     readLaunchSettings,
     determineBaseLaunchProfile,

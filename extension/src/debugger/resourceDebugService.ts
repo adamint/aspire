@@ -1,19 +1,23 @@
 import * as vscode from 'vscode';
 import type { AppHostDisplayInfo, ResourceJson } from '../data/AppHostDataRepository';
 import { compareAppHostIdentity, type AppHostIdentityRelation } from '../utils/appHostIdentity';
+import { extensionLogOutputChannel } from '../utils/logging';
 import { isCommandCancellation } from '../utils/telemetry';
 import {
     ResourceAttachConfigurationError,
+    type ResourceAttachProvider,
     type ResourceDebugAppHostTarget,
     type ResourceDebugExtensionRequirement,
+    type ResourceDebugger,
     type ResourceDebugRequest,
     type ResourceDebugResult,
 } from './resourceDebugContracts';
-import { ResourceAttachProviderRegistry, type ResourceAttachProvider } from './resourceAttachProviders';
+import { ResourceAttachProviderRegistry } from './resourceAttachProviders';
 import { ResourceDebugSessionRegistry } from './resourceDebugSessionRegistry';
 
 export interface ResourceDebugAppHostRepository {
-    fetchAppHostsOnce(): Promise<readonly AppHostDisplayInfo[]>;
+    fetchRunningAppHostsOnce(cancellationToken?: vscode.CancellationToken): Promise<readonly AppHostDisplayInfo[]>;
+    fetchAppHostResourcesOnce(appHostPath: string, cancellationToken?: vscode.CancellationToken): Promise<readonly ResourceJson[]>;
 }
 
 export type ResourceDebugAppHostIdentityComparer =
@@ -34,7 +38,7 @@ export interface ResourceDebugServiceDependencies {
  * Resolves and attaches to a resource using a fresh CLI snapshot. It deliberately returns only
  * bounded, presentation-safe outcomes; tree and language-model callers own their own UX.
  */
-export class ResourceDebugService implements vscode.Disposable {
+export class ResourceDebugService implements vscode.Disposable, ResourceDebugger {
     private readonly _compareAppHostIdentity: ResourceDebugAppHostIdentityComparer;
 
     constructor(private readonly _dependencies: ResourceDebugServiceDependencies) {
@@ -45,28 +49,50 @@ export class ResourceDebugService implements vscode.Disposable {
         this._dependencies.sessionRegistry.dispose();
     }
 
+    canAttachToResource(resource: ResourceJson): boolean {
+        try {
+            return this._dependencies.attachProviders.getInstalledProviderForResource(resource) !== undefined;
+        }
+        catch (error) {
+            this._logFailure('checking whether a resource can be attached', error);
+            return false;
+        }
+    }
+
     async debug(request: ResourceDebugRequest): Promise<ResourceDebugResult> {
         if (request.cancellationToken?.isCancellationRequested) {
             return { outcome: 'cancelled' };
         }
 
-        return await this._dependencies.sessionRegistry.runSerialized(request.appHost, request.resourceName, async () =>
-            await this._debugSerialized(request));
+        const resolvedAppHost = await this._resolveAppHost(request);
+        if ('outcome' in resolvedAppHost) {
+            return resolvedAppHost;
+        }
+
+        const resolvedTarget: ResourceDebugAppHostTarget = {
+            absolutePath: resolvedAppHost.appHostPath,
+            displayPath: request.appHost.displayPath,
+        };
+        return await this._dependencies.sessionRegistry.runSerialized(
+            resolvedTarget,
+            request.resourceName,
+            request.cancellationToken,
+            async () => await this._debugSerialized(request, resolvedTarget),
+            () => ({ outcome: 'cancelled' }));
     }
 
-    private async _debugSerialized(request: ResourceDebugRequest): Promise<ResourceDebugResult> {
-        if (request.cancellationToken?.isCancellationRequested) {
-            return { outcome: 'cancelled' };
-        }
-
+    private async _resolveAppHost(request: ResourceDebugRequest): Promise<AppHostDisplayInfo | ResourceDebugResult> {
         let appHosts: readonly AppHostDisplayInfo[];
         try {
-            appHosts = await this._dependencies.appHostRepository.fetchAppHostsOnce();
+            appHosts = await this._dependencies.appHostRepository.fetchRunningAppHostsOnce(request.cancellationToken);
         }
         catch (error) {
-            return isCommandCancellation(error) || request.cancellationToken?.isCancellationRequested
-                ? { outcome: 'cancelled' }
-                : { outcome: 'error', errorKind: 'resourceSnapshotFailed' };
+            if (isCommandCancellation(error) || request.cancellationToken?.isCancellationRequested) {
+                return { outcome: 'cancelled' };
+            }
+
+            this._logFailure('resolving the running AppHost', error);
+            return { outcome: 'error', errorKind: 'resourceSnapshotFailed' };
         }
 
         if (request.cancellationToken?.isCancellationRequested) {
@@ -88,33 +114,74 @@ export class ResourceDebugService implements vscode.Disposable {
             return { outcome: 'appHostNotFound' };
         }
 
-        const appHost = matchingAppHosts[0];
-        const resources = (appHost.resources ?? []).filter(resource => resource.name === request.resourceName);
-        if (resources.length !== 1) {
+        return matchingAppHosts[0];
+    }
+
+    private async _debugSerialized(
+        request: ResourceDebugRequest,
+        resolvedTarget: ResourceDebugAppHostTarget,
+    ): Promise<ResourceDebugResult> {
+        if (request.cancellationToken?.isCancellationRequested) {
+            return { outcome: 'cancelled' };
+        }
+
+        let resources: readonly ResourceJson[];
+        try {
+            resources = await this._dependencies.appHostRepository.fetchAppHostResourcesOnce(
+                resolvedTarget.absolutePath,
+                request.cancellationToken);
+        }
+        catch (error) {
+            if (isCommandCancellation(error) || request.cancellationToken?.isCancellationRequested) {
+                return { outcome: 'cancelled' };
+            }
+
+            this._logFailure('fetching the selected AppHost resource snapshot', error);
+            return { outcome: 'error', errorKind: 'resourceSnapshotFailed' };
+        }
+
+        if (request.cancellationToken?.isCancellationRequested) {
+            return { outcome: 'cancelled' };
+        }
+
+        const matchingResources = resources.filter(resource => resource.name === request.resourceName);
+        if (matchingResources.length !== 1) {
             return { outcome: 'resourceNotFound' };
         }
 
-        const resource = resources[0];
-        if (resource.state !== 'Running') {
-            return { outcome: 'resourceNotRunning' };
-        }
-
+        const resource = matchingResources[0];
         let provider: ResourceAttachProvider | undefined;
-        let missingDebuggerExtensions: readonly ResourceDebugExtensionRequirement[];
         try {
             provider = this._dependencies.attachProviders.getKnownProviderForResource(resource);
-            missingDebuggerExtensions = provider
-                ? this._dependencies.attachProviders.getMissingDebuggerExtensions(provider)
-                : [];
         }
         catch (error) {
-            return isCommandCancellation(error) || request.cancellationToken?.isCancellationRequested
-                ? { outcome: 'cancelled' }
-                : { outcome: 'error', errorKind: 'providerResolutionFailed' };
+            if (isCommandCancellation(error) || request.cancellationToken?.isCancellationRequested) {
+                return { outcome: 'cancelled' };
+            }
+
+            this._logFailure('resolving the resource attach provider', error);
+            return { outcome: 'error', errorKind: 'providerResolutionFailed' };
         }
 
         if (!provider) {
             return { outcome: 'unsupportedResource' };
+        }
+
+        if (resource.state !== 'Running') {
+            return { outcome: 'resourceNotRunning' };
+        }
+
+        let missingDebuggerExtensions: readonly ResourceDebugExtensionRequirement[];
+        try {
+            missingDebuggerExtensions = this._dependencies.attachProviders.getMissingDebuggerExtensions(provider);
+        }
+        catch (error) {
+            if (isCommandCancellation(error) || request.cancellationToken?.isCancellationRequested) {
+                return { outcome: 'cancelled' };
+            }
+
+            this._logFailure('checking required debugger extensions', error);
+            return { outcome: 'error', errorKind: 'providerResolutionFailed' };
         }
 
         if (missingDebuggerExtensions.length > 0) {
@@ -127,10 +194,6 @@ export class ResourceDebugService implements vscode.Disposable {
             };
         }
 
-        const resolvedTarget: ResourceDebugAppHostTarget = {
-            absolutePath: appHost.appHostPath,
-            displayPath: request.appHost.displayPath,
-        };
         return await this._attach(request, resolvedTarget, resource, provider);
     }
 
@@ -155,9 +218,12 @@ export class ResourceDebugService implements vscode.Disposable {
             missingDebuggerExtensions = this._dependencies.attachProviders.getMissingDebuggerExtensions(knownProvider);
         }
         catch (error) {
-            return isCommandCancellation(error) || request.cancellationToken?.isCancellationRequested
-                ? { outcome: 'cancelled' }
-                : { outcome: 'error', errorKind: 'providerResolutionFailed' };
+            if (isCommandCancellation(error) || request.cancellationToken?.isCancellationRequested) {
+                return { outcome: 'cancelled' };
+            }
+
+            this._logFailure('resolving the installed resource attach provider', error);
+            return { outcome: 'error', errorKind: 'providerResolutionFailed' };
         }
 
         if (!provider) {
@@ -176,16 +242,19 @@ export class ResourceDebugService implements vscode.Disposable {
 
         let configuration: vscode.DebugConfiguration;
         try {
-            configuration = await provider.createDebugConfiguration(resource);
+            configuration = await provider.createDebugConfiguration(resource, request.cancellationToken);
         }
         catch (error) {
-            if (error instanceof ResourceAttachConfigurationError) {
-                return { outcome: 'unsupportedResource' };
+            if (isCommandCancellation(error) || request.cancellationToken?.isCancellationRequested) {
+                return { outcome: 'cancelled' };
             }
 
-            return isCommandCancellation(error) || request.cancellationToken?.isCancellationRequested
-                ? { outcome: 'cancelled' }
-                : { outcome: 'error', errorKind: 'configurationFailed' };
+            this._logFailure(
+                error instanceof ResourceAttachConfigurationError
+                    ? 'creating an attach configuration for an ineligible resource'
+                    : 'creating the resource attach configuration',
+                error);
+            return { outcome: 'error', errorKind: 'configurationFailed' };
         }
 
         if (request.cancellationToken?.isCancellationRequested) {
@@ -205,9 +274,16 @@ export class ResourceDebugService implements vscode.Disposable {
         }
         catch (error) {
             attempt.abandon();
-            return isCommandCancellation(error) || request.cancellationToken?.isCancellationRequested
-                ? { outcome: 'cancelled' }
-                : { outcome: 'error', errorKind: 'debuggerStartFailed' };
+            if (isCommandCancellation(error) || request.cancellationToken?.isCancellationRequested) {
+                return { outcome: 'cancelled' };
+            }
+
+            this._logFailure('starting the resource debugger', error);
+            return { outcome: 'error', errorKind: 'debuggerStartFailed' };
         }
+    }
+
+    private _logFailure(operation: string, error: unknown): void {
+        extensionLogOutputChannel.error(`Resource debugger failed while ${operation}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
     }
 }

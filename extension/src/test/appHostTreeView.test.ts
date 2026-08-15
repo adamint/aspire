@@ -7,6 +7,7 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import * as capabilities from '../capabilities';
 import { projectResourceAttachProvider } from '../debugger/languages/dotnet';
+import type { ResourceDebugger, ResourceDebugRequest, ResourceDebugResult } from '../debugger/resourceDebugContracts';
 import * as cliModule from '../utils/process/cliProcess';
 import * as cliPathModule from '../utils/cliPath';
 import * as configInfoProvider from '../utils/configInfoProvider';
@@ -71,6 +72,15 @@ function makeLaunchService(): AppHostLaunchService {
     return new AppHostLaunchService();
 }
 
+function makeResourceDebugger(result: ResourceDebugResult = { outcome: 'started', providerId: 'dotnet' }): ResourceDebugger {
+    return {
+        debug: async () => result,
+        canAttachToResource: resource =>
+            projectResourceAttachProvider.canAttachToResource(resource)
+            && capabilities.isExtensionInstalled('ms-dotnettools.csharp'),
+    };
+}
+
 function makeTerminalProvider(): AspireTerminalProvider {
     return {
         getAspireCliExecutablePath: async () => 'aspire',
@@ -94,7 +104,12 @@ function makeClipboard(): FakeClipboard {
     };
 }
 
-function makeTreeProvider(appHosts: readonly AppHostDisplayInfo[], viewMode: ViewMode = 'global', workspaceAppHostDescription?: string): AspireAppHostTreeProvider {
+function makeTreeProvider(
+    appHosts: readonly AppHostDisplayInfo[],
+    viewMode: ViewMode = 'global',
+    workspaceAppHostDescription?: string,
+    resourceDebugger: ResourceDebugger = makeResourceDebugger(),
+): AspireAppHostTreeProvider {
     const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
     const repository = {
         viewMode,
@@ -108,7 +123,7 @@ function makeTreeProvider(appHosts: readonly AppHostDisplayInfo[], viewMode: Vie
         fetchAppHostsOnce: async () => appHosts,
     } as unknown as AppHostDataRepository;
 
-    return new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+    return new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), resourceDebugger);
 }
 
 function getFirstResourceItem(provider: AspireAppHostTreeProvider): any {
@@ -142,7 +157,7 @@ function makeTreeProviderWithLaunchService(appHosts: readonly AppHostDisplayInfo
         onDidChangeData,
     } as unknown as AppHostDataRepository;
 
-    return new AspireAppHostTreeProvider(repository, makeTerminalProvider(), launchService);
+    return new AspireAppHostTreeProvider(repository, makeTerminalProvider(), launchService, makeResourceDebugger());
 }
 
 function makeWorkspaceTreeProvider(workspaceAppHostDescription: string): AspireAppHostTreeProvider {
@@ -158,7 +173,7 @@ function makeWorkspaceTreeProvider(workspaceAppHostDescription: string): AspireA
         onDidChangeData,
     } as unknown as AppHostDataRepository;
 
-    return new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+    return new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 }
 
 interface ShellProof {
@@ -490,7 +505,7 @@ suite('AspireAppHostTreeProvider', () => {
         } as unknown as AppHostDataRepository;
         const launchService = makeLaunchService();
         const stopStub = sandbox.stub(launchService, 'stopAppHost').resolves({ outcome: 'stopped', controller: 'external' });
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), launchService);
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), launchService, makeResourceDebugger());
         const [item] = provider.getChildren();
 
         provider.stopAppHost(item as any);
@@ -519,7 +534,7 @@ suite('AspireAppHostTreeProvider', () => {
             requestAppHostStopRefresh,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         provider.notifyAppHostStopping(appHostPath);
 
@@ -546,7 +561,7 @@ suite('AspireAppHostTreeProvider', () => {
             requestAppHostStopRefresh,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         provider.notifyAppHostStopping(appHostPath, false);
 
@@ -582,7 +597,7 @@ suite('AspireAppHostTreeProvider', () => {
             requestAppHostStopRefresh: sandbox.stub(),
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         try {
             provider.notifyAppHostStopping(upperCasePath);
@@ -617,7 +632,7 @@ suite('AspireAppHostTreeProvider', () => {
         sandbox.stub(launchService, 'stopAppHost').returns(new Promise(resolve => {
             resolveStop = () => resolve({ outcome: 'stopped', controller: 'external' });
         }));
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), launchService);
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), launchService, makeResourceDebugger());
         const [item] = provider.getChildren();
 
         const stopTask = provider.stopAppHost(item as any);
@@ -655,7 +670,7 @@ suite('AspireAppHostTreeProvider', () => {
             } as unknown as AppHostDataRepository;
             const launchService = makeLaunchService();
             sandbox.stub(launchService, 'stopAppHost').resolves(result);
-            const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), launchService);
+            const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), launchService, makeResourceDebugger());
             const [item] = provider.getChildren();
 
             await provider.stopAppHost(item as any);
@@ -684,7 +699,7 @@ suite('AspireAppHostTreeProvider', () => {
             requestAppHostStopRefresh,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         provider.notifyAppHostStopping(appHostPath);
 
@@ -713,7 +728,7 @@ suite('AspireAppHostTreeProvider', () => {
             requestAppHostStopRefresh,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         provider.notifyAppHostStopping(workspaceRoot);
 
@@ -743,7 +758,7 @@ suite('AspireAppHostTreeProvider', () => {
             requestAppHostStopRefresh,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         provider.notifyAppHostStopping(appHostPath);
         provider.notifyAppHostStopping(unknownAppHostPath);
@@ -774,7 +789,7 @@ suite('AspireAppHostTreeProvider', () => {
         } as unknown as AppHostDataRepository;
         const launchService = makeLaunchService();
         const stopStub = sandbox.stub(launchService, 'stopAppHost').resolves({ outcome: 'stopped', controller: 'external' });
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), launchService);
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), launchService, makeResourceDebugger());
         const [item] = provider.getChildren();
 
         provider.stopAppHost(item as any);
@@ -804,7 +819,7 @@ suite('AspireAppHostTreeProvider', () => {
         } as unknown as AppHostDataRepository;
         const launchService = makeLaunchService();
         const stopStub = sandbox.stub(launchService, 'stopAppHost').resolves({ outcome: 'stopped', controller: 'external' });
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), launchService);
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), launchService, makeResourceDebugger());
         const [item] = provider.getChildren();
 
         provider.stopAppHost(item as any);
@@ -840,7 +855,7 @@ suite('AspireAppHostTreeProvider', () => {
             workspaceAppHostDescription: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, proofTerminalProvider.terminalProvider, makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, proofTerminalProvider.terminalProvider, makeLaunchService(), makeResourceDebugger());
 
         try {
             const [workspaceItem] = provider.getChildren();
@@ -884,7 +899,7 @@ suite('AspireAppHostTreeProvider', () => {
             workspaceAppHostDescription: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, proofTerminalProvider.terminalProvider, makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, proofTerminalProvider.terminalProvider, makeLaunchService(), makeResourceDebugger());
 
         try {
             const [workspaceItem] = provider.getChildren();
@@ -923,7 +938,7 @@ suite('AspireAppHostTreeProvider', () => {
             workspaceAppHostDescription: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, proofTerminalProvider.terminalProvider, makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, proofTerminalProvider.terminalProvider, makeLaunchService(), makeResourceDebugger());
 
         try {
             const [workspaceItem] = provider.getChildren();
@@ -962,7 +977,7 @@ suite('AspireAppHostTreeProvider', () => {
             workspaceAppHostDescription: undefined,
             onDidChangeData: changeEmitter.event,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
         const [item] = provider.getChildren();
 
         provider.stopAppHost(item as any);
@@ -1344,7 +1359,7 @@ suite('AspireAppHostTreeProvider', () => {
                 return { stdout: '', stderr: '' };
             },
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, terminalProvider, makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, terminalProvider, makeLaunchService(), makeResourceDebugger());
         const infoStub = sandbox.stub(vscode.window, 'showInformationMessage');
         const [commandItem] = getResourceCommandItems(provider);
 
@@ -1386,7 +1401,7 @@ suite('AspireAppHostTreeProvider', () => {
                 throw new Error('resource command failed');
             },
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, terminalProvider, makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, terminalProvider, makeLaunchService(), makeResourceDebugger());
         const errorStub = sandbox.stub(vscode.window, 'showErrorMessage');
         const [commandItem] = getResourceCommandItems(provider);
 
@@ -1428,7 +1443,7 @@ suite('AspireAppHostTreeProvider', () => {
                 throw new Error(`${commandName} failed`);
             },
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         try {
             const [appHostItem] = provider.getChildren();
@@ -2233,7 +2248,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             workspaceAppHostName: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         const result = provider.findAppHostElement(hostPath);
 
@@ -2253,7 +2268,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             workspaceAppHostName: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         const result = provider.findAppHostElement('/repo/AppHost/AppHost.cs');
 
@@ -2272,7 +2287,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             workspaceAppHostName: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         // A single AppHost is surfaced directly at the root with no "Workspace AppHosts"
         // grouping node (https://github.com/microsoft/aspire/issues/18420).
@@ -2326,7 +2341,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             workspaceAppHostName: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         const topLevel = provider.getChildren();
         assert.strictEqual(topLevel.length, 1);
@@ -2359,7 +2374,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             workspaceAppHostName: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         try {
             const [group] = provider.getChildren();
@@ -2394,7 +2409,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             workspaceAppHostName: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         try {
             const topLevelItems = provider.getChildren();
@@ -2424,7 +2439,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
                 workspaceAppHostName: undefined,
                 onDidChangeData,
             } as unknown as AppHostDataRepository;
-            const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+            const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
             assert.deepStrictEqual(provider.getChildren(), []);
             provider.dispose();
@@ -2455,7 +2470,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             workspaceAppHostName: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), launchService);
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), launchService, makeResourceDebugger());
 
         // A single launching AppHost is surfaced directly at the root with no grouping node.
         const [item] = provider.getChildren();
@@ -2484,7 +2499,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             workspaceAppHostName: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         const topLevelItems = provider.getChildren();
 
@@ -2519,7 +2534,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             workspaceAppHostName: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         const topLevelItems = provider.getChildren();
 
@@ -2550,7 +2565,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             workspaceAppHostName: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         const topLevelItems = provider.getChildren();
 
@@ -2593,7 +2608,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             workspaceAppHostName: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), launchService);
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), launchService, makeResourceDebugger());
 
         // A single candidate is surfaced directly at the root (no grouping node); pass it to runAppHost.
         const [item] = provider.getChildren();
@@ -2625,7 +2640,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             workspaceAppHostName: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), launchService);
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), launchService, makeResourceDebugger());
 
         const [item] = provider.getChildren();
         await assert.rejects(provider.runAppHost(item as any, false), /startDebugging blew up/);
@@ -2637,7 +2652,15 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         provider.dispose();
     });
 
-    test('attachDebuggerToResource starts CoreCLR with the resource attach configuration', async () => {
+    test('attachDebuggerToResource delegates to the injected debug service', async () => {
+        let request: unknown;
+        const resourceDebugger: ResourceDebugger = {
+            debug: async value => {
+                request = value;
+                return { outcome: 'started', providerId: 'dotnet' };
+            },
+            canAttachToResource: () => true,
+        };
         const provider = makeTreeProvider([
             makeAppHost({
                 resources: [
@@ -2650,67 +2673,59 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
                     }),
                 ],
             }),
-        ]);
-        sandbox.stub(capabilities, 'isExtensionInstalled').returns(true);
-        sandbox.stub(projectResourceAttachProvider, 'createDebugConfiguration').resolves({
-            type: 'coreclr',
-            request: 'attach',
-            name: 'Attach debugger: API',
-            processName: 'Api',
-        });
-        const startDebuggingStub = sandbox.stub(vscode.debug, 'startDebugging').resolves(true);
+        ], 'global', undefined, resourceDebugger);
 
         await (provider as any).attachDebuggerToResource(getFirstResourceItem(provider));
 
-        const configuration = startDebuggingStub.firstCall.args[1] as vscode.DebugConfiguration;
-        assert.strictEqual(configuration.type, 'coreclr');
-        assert.strictEqual(configuration.request, 'attach');
-        assert.strictEqual(configuration.name, 'Attach debugger: API');
-        assert.strictEqual(configuration.processId, undefined);
-        assert.strictEqual(configuration.processName, 'Api');
+        const debugRequest = request as ResourceDebugRequest;
+        assert.strictEqual(debugRequest.source, 'tree');
+        assert.strictEqual(debugRequest.appHost.absolutePath, '/test/AppHost.csproj');
+        assert.strictEqual(debugRequest.resourceName, 'api');
         provider.dispose();
     });
 
-    test('attachDebuggerToResource creates the configuration from the latest resource snapshot', async () => {
-        const appHost = makeAppHost({
-            resources: [
-                makeResource({
-                    name: 'api',
-                    displayName: 'API',
-                    resourceType: 'Project',
-                    state: ResourceState.Running,
-                    properties: makeAttachableProjectProperties(),
-                }),
-            ],
+    test('attachDebuggerToResource shows cancellable progress and reports an active debugger', async () => {
+        const progressToken = new vscode.CancellationTokenSource();
+        const withProgressStub = sandbox.stub(vscode.window, 'withProgress').callsFake(async (options, task) => {
+            assert.strictEqual(options.cancellable, true);
+            await task({ report: () => { } }, progressToken.token);
         });
-        const provider = makeTreeProvider([appHost]);
-        sandbox.stub(capabilities, 'isExtensionInstalled').returns(true);
-        const createConfigurationStub = sandbox.stub(projectResourceAttachProvider, 'createDebugConfiguration').resolves({
-            type: 'coreclr',
-            request: 'attach',
-            name: 'Attach debugger: API',
-            processName: 'Api',
-        });
-        const startDebuggingStub = sandbox.stub(vscode.debug, 'startDebugging').resolves(true);
-        const resourceItem = getFirstResourceItem(provider);
-        appHost.resources = [
-            makeResource({
-                name: 'api',
-                displayName: 'API',
-                resourceType: 'Project',
-                state: ResourceState.Running,
-                properties: makeAttachableProjectProperties({ 'executable.pid': '5252' }),
+        const informationStub = sandbox.stub(vscode.window, 'showInformationMessage');
+        const provider = makeTreeProvider([
+            makeAppHost({
+                resources: [
+                    makeResource({
+                        name: 'api',
+                        displayName: 'API',
+                        resourceType: 'Project',
+                        state: ResourceState.Running,
+                        properties: makeAttachableProjectProperties(),
+                    }),
+                ],
             }),
-        ];
+        ], 'global', undefined, makeResourceDebugger({ outcome: 'alreadyDebugging' }));
 
-        await (provider as any).attachDebuggerToResource(resourceItem);
+        try {
+            await (provider as any).attachDebuggerToResource(getFirstResourceItem(provider));
 
-        assert.ok(startDebuggingStub.calledOnce);
-        assert.strictEqual(createConfigurationStub.firstCall.args[0].properties?.['executable.pid'], '5252');
-        provider.dispose();
+            assert.ok(withProgressStub.calledOnce);
+            assert.ok(informationStub.calledOnce);
+        }
+        finally {
+            progressToken.dispose();
+            provider.dispose();
+        }
     });
 
-    test('attachDebuggerToResource refreshes duplicate resource names from the owning AppHost', async () => {
+    test('attachDebuggerToResource preserves the owning AppHost for duplicate resource names', async () => {
+        let request: unknown;
+        const resourceDebugger: ResourceDebugger = {
+            debug: async value => {
+                request = value;
+                return { outcome: 'started', providerId: 'dotnet' };
+            },
+            canAttachToResource: () => true,
+        };
         const appHosts = [
             makeAppHost({
                 appHostPath: '/repo/first/AppHost.csproj',
@@ -2739,15 +2754,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
                 ],
             }),
         ];
-        const provider = makeTreeProvider(appHosts);
-        sandbox.stub(capabilities, 'isExtensionInstalled').returns(true);
-        const createConfigurationStub = sandbox.stub(projectResourceAttachProvider, 'createDebugConfiguration').resolves({
-            type: 'coreclr',
-            request: 'attach',
-            name: 'Attach debugger: Second API',
-            processName: 'SecondApi',
-        });
-        sandbox.stub(vscode.debug, 'startDebugging').resolves(true);
+        const provider = makeTreeProvider(appHosts, 'global', undefined, resourceDebugger);
         const secondAppHostItem = provider.getChildren()[1];
         const resourcesGroup = provider.getChildren(secondAppHostItem).find(item => item.contextValue === 'resourcesGroup');
         assert.ok(resourcesGroup, 'Expected resources group for the second AppHost');
@@ -2755,8 +2762,9 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
 
         await (provider as any).attachDebuggerToResource(secondResourceItem);
 
-        assert.strictEqual(createConfigurationStub.firstCall.args[0].displayName, 'Second API');
-        assert.strictEqual(createConfigurationStub.firstCall.args[0].properties?.['executable.pid'], '222');
+        const debugRequest = request as ResourceDebugRequest;
+        assert.strictEqual(debugRequest.appHost.absolutePath, '/repo/second/AppHost.csproj');
+        assert.strictEqual(debugRequest.resourceName, 'api');
         provider.dispose();
     });
 
@@ -2774,9 +2782,11 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
                 ],
             }),
         ];
-        const provider = makeTreeProvider(appHosts);
-        sandbox.stub(capabilities, 'isExtensionInstalled').returns(true);
-        const startDebuggingStub = sandbox.stub(vscode.debug, 'startDebugging').resolves(true);
+        const provider = makeTreeProvider(
+            appHosts,
+            'global',
+            undefined,
+            makeResourceDebugger({ outcome: 'resourceNotFound' }));
         const warningStub = sandbox.stub(vscode.window, 'showWarningMessage');
         const resourceItem = getFirstResourceItem(provider);
         appHosts.length = 0;
@@ -2784,7 +2794,6 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         const outcome = await (provider as any).attachDebuggerToResource(resourceItem);
 
         assert.deepStrictEqual(outcome, { success: false, errorKind: 'ResourceNotFound' });
-        assert.ok(startDebuggingStub.notCalled);
         assert.ok(warningStub.calledOnce);
         provider.dispose();
     });
@@ -2801,9 +2810,11 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
                 }),
             ],
         });
-        const provider = makeTreeProvider([appHost]);
-        sandbox.stub(capabilities, 'isExtensionInstalled').returns(true);
-        const startDebuggingStub = sandbox.stub(vscode.debug, 'startDebugging').resolves(true);
+        const provider = makeTreeProvider(
+            [appHost],
+            'global',
+            undefined,
+            makeResourceDebugger({ outcome: 'resourceNotRunning' }));
         const warningStub = sandbox.stub(vscode.window, 'showWarningMessage');
         const resourceItem = getFirstResourceItem(provider);
         appHost.resources = [
@@ -2819,7 +2830,6 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         const outcome = await (provider as any).attachDebuggerToResource(resourceItem);
 
         assert.deepStrictEqual(outcome, { success: false, errorKind: 'ResourceNotAttachable' });
-        assert.ok(startDebuggingStub.notCalled);
         assert.ok(warningStub.calledOnce);
         provider.dispose();
     });
@@ -2837,15 +2847,15 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
                     }),
                 ],
             }),
-        ]);
-        sandbox.stub(capabilities, 'isExtensionInstalled').returns(false);
-        const startDebuggingStub = sandbox.stub(vscode.debug, 'startDebugging').resolves(true);
+        ], 'global', undefined, makeResourceDebugger({
+            outcome: 'debuggerExtensionMissing',
+            debuggerExtensions: [{ id: 'ms-dotnettools.csharp', label: 'C#' }],
+        }));
         const warningStub = sandbox.stub(vscode.window, 'showWarningMessage');
 
         const outcome = await (provider as any).attachDebuggerToResource(getFirstResourceItem(provider));
 
         assert.deepStrictEqual(outcome, { success: false, errorKind: 'CSharpExtensionMissing' });
-        assert.ok(startDebuggingStub.notCalled);
         assert.ok(warningStub.calledOnce);
         provider.dispose();
     });
@@ -2863,15 +2873,10 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
                     }),
                 ],
             }),
-        ]);
-        sandbox.stub(capabilities, 'isExtensionInstalled').returns(true);
-        sandbox.stub(projectResourceAttachProvider, 'createDebugConfiguration').resolves({
-            type: 'coreclr',
-            request: 'attach',
-            name: 'Attach debugger: API',
-            processName: 'Api',
-        });
-        sandbox.stub(vscode.debug, 'startDebugging').resolves(false);
+        ], 'global', undefined, makeResourceDebugger({
+            outcome: 'error',
+            errorKind: 'debuggerStartDeclined',
+        }));
 
         await assert.rejects(
             (provider as any).attachDebuggerToResource(getFirstResourceItem(provider)),
@@ -2901,7 +2906,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             workspaceAppHostCandidatePaths: [hostPath],
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         const [appHostItem] = provider.getChildren();
         const appHostChildren = provider.getChildren(appHostItem);
@@ -2931,7 +2936,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             workspaceAppHostDescription: 'Workspace view selected because aspire ls found 2 buildable AppHosts.',
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         const appHostItems = provider.getChildren();
 
@@ -2971,7 +2976,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             createEnvironment: () => ({}),
             sendAspireCommandToAspireTerminal: (command: AspireSubcommand) => commands.push(command),
         } as unknown as AspireTerminalProvider;
-        const provider = new AspireAppHostTreeProvider(repository, terminalProvider, makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, terminalProvider, makeLaunchService(), makeResourceDebugger());
 
         const otherAppHostItem = provider.getChildren()[1];
         const resourcesGroup = provider.getChildren(otherAppHostItem).find(child => child.label === 'Resources');
@@ -3020,7 +3025,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             createEnvironment: () => ({}),
             sendAspireCommandToAspireTerminal: (command: AspireSubcommand) => commands.push(command),
         } as unknown as AspireTerminalProvider;
-        const provider = new AspireAppHostTreeProvider(repository, terminalProvider, makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, terminalProvider, makeLaunchService(), makeResourceDebugger());
 
         const [runningAppHostItem] = provider.getChildren();
         const resourceItem = provider.getChildren(runningAppHostItem)[0];
@@ -3066,7 +3071,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             createEnvironment: () => ({}),
             sendAspireCommandToAspireTerminal: (command: AspireSubcommand) => commands.push(command),
         } as unknown as AspireTerminalProvider;
-        const provider = new AspireAppHostTreeProvider(repository, terminalProvider, makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, terminalProvider, makeLaunchService(), makeResourceDebugger());
 
         const [workspaceItem] = provider.getChildren();
         const [resourceItem] = provider.getChildren(workspaceItem);
@@ -3095,7 +3100,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             workspaceAppHostDescription: 'Workspace view selected because aspire ls found 2 buildable AppHosts.',
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         const [selectedAppHostItem] = provider.getChildren();
         const selectedChildren = provider.getChildren(selectedAppHostItem);
@@ -3123,7 +3128,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             workspaceAppHostDescription: 'Workspace view selected because aspire ls found 2 buildable AppHosts.',
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         const [selectedAppHostItem] = provider.getChildren();
         const selectedChildren = provider.getChildren(selectedAppHostItem);
@@ -3156,7 +3161,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             workspaceAppHostName: 'AppHost.csproj',
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         const [appHostItem] = provider.getChildren();
         const appHostChildren = provider.getChildren(appHostItem);
@@ -3316,7 +3321,7 @@ suite('LogFileItem in tree', () => {
             workspaceAppHostName: 'AppHost.csproj',
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         const [appHostItem] = provider.getChildren();
         const children = provider.getChildren(appHostItem);
@@ -3343,7 +3348,7 @@ suite('LogFileItem in tree', () => {
             workspaceAppHostName: 'AppHost.csproj',
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         const [appHostItem] = provider.getChildren();
         const children = provider.getChildren(appHostItem);
@@ -3474,7 +3479,7 @@ suite('copyAppHostPath', () => {
             onDidChangeData,
         } as unknown as AppHostDataRepository;
         const clipboard = makeClipboard();
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), undefined, clipboard);
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger(), undefined, clipboard);
         try {
             const infoStub = sandbox.stub(vscode.window, 'showInformationMessage').resolves(undefined);
 
@@ -3502,7 +3507,7 @@ suite('copyAppHostPath', () => {
             workspaceAppHostDescription: undefined,
             onDidChangeData: (() => ({ dispose: () => { } })) as vscode.Event<void>,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), undefined, clipboard);
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger(), undefined, clipboard);
         try {
             const infoStub = sandbox.stub(vscode.window, 'showInformationMessage').resolves(undefined);
             const warningStub = sandbox.stub(vscode.window, 'showWarningMessage').resolves(undefined as any);
@@ -3541,7 +3546,7 @@ suite('viewAppHostSource', () => {
             workspaceAppHostName: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         const fakeDoc = { uri: vscode.Uri.parse('aspire-source:AppHost-999.json') } as vscode.TextDocument;
         sandbox.stub(vscode.workspace, 'openTextDocument').resolves(fakeDoc);
@@ -3573,7 +3578,7 @@ suite('viewAppHostSource', () => {
             workspaceAppHostName: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
         const registerStub = sandbox.stub(vscode.workspace, 'registerTextDocumentContentProvider').returns({ dispose: () => { } });
         const fakeDoc = { uri: vscode.Uri.parse('aspire-source:AppHost-999.json') } as vscode.TextDocument;
         sandbox.stub(vscode.workspace, 'openTextDocument').resolves(fakeDoc);

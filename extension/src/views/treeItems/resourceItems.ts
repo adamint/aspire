@@ -9,7 +9,6 @@ import {
 } from '../../loc/strings';
 import { isLinkableUrl } from '../../utils/urlSchemes';
 import { ResourceCommandJson, ResourceJson } from '../../data/AppHostDataRepository';
-import { getInstalledResourceAttachProviderForResource } from '../../debugger/resourceAttachProviders';
 import { getComparisonKey } from '../../utils/paths/comparison';
 import {
     buildResourceDescription,
@@ -126,7 +125,8 @@ export class ResourceItem extends vscode.TreeItem {
         public readonly appHostPid: number | null,
         hasChildren: boolean,
         public readonly allResources?: readonly ResourceJson[],
-        public readonly appHostPath?: string
+        public readonly appHostPath?: string,
+        canAttachDebugger = false,
     ) {
         const label = resource.displayName ?? resource.name;
         const hasUrls = getVisibleResourceUrls(resource).length > 0;
@@ -144,8 +144,6 @@ export class ResourceItem extends vscode.TreeItem {
         this.iconPath = getResourceIcon(resource);
         this.description = buildResourceDescription(resource);
         this.tooltip = buildResourceTooltip(resource);
-        this.contextValue = getResourceContextValue(
-            resource,
-            getInstalledResourceAttachProviderForResource(resource) !== undefined);
+        this.contextValue = getResourceContextValue(resource, canAttachDebugger);
     }
 }

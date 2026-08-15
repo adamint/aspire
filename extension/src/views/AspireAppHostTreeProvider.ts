@@ -14,6 +14,8 @@ import {
     appHostSourceOpenFailed,
     logFileOpenFailed,
     logFilePathInvalid,
+    attachingDebugger,
+    attachDebuggerAlreadyDebugging,
     attachDebuggerUnavailable,
     attachDebuggerResourceNotFound,
     attachDebuggerCsharpExtensionRequired,
@@ -40,9 +42,7 @@ import { AppHostLaunchService } from '../services/AppHostLaunchService';
 import { isSameFileSystemEntry } from '../utils/appHostDiscovery';
 import { isAppHostSourceFile, isProjectFile } from '../utils/paths/comparison';
 import { isCommandCancellation } from '../utils/telemetry';
-import { createResourceAttachProviderRegistry } from '../debugger/resourceAttachProviders';
-import { ResourceDebugService } from '../debugger/resourceDebugService';
-import { ResourceDebugSessionRegistry } from '../debugger/resourceDebugSessionRegistry';
+import type { ResourceDebugger } from '../debugger/resourceDebugContracts';
 import {
     getParentResourceName,
     getTerminalReplicaIndex,
@@ -116,8 +116,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
     private _contentProviderRegistration: vscode.Disposable | undefined;
     private readonly _appHostSourceContents = new Map<string, string>();
     private _treeView: vscode.TreeView<TreeElement> | undefined;
-    private readonly _resourceDebugService: ResourceDebugService;
-    private readonly _ownsResourceDebugService: boolean;
+    private readonly _resourceDebugService: ResourceDebugger;
 
     private _documentCloseSubscription: vscode.Disposable | undefined;
 
@@ -125,18 +124,11 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         private readonly _repository: AppHostDataRepository,
         private readonly _terminalProvider: AspireTerminalProvider,
         private readonly _launchService: AppHostLaunchService,
+        resourceDebugService: ResourceDebugger,
         private readonly _secretWarningState?: vscode.Memento,
         private readonly _clipboard: Clipboard = vscode.env.clipboard,
-        resourceDebugService?: ResourceDebugService,
     ) {
-        this._ownsResourceDebugService = resourceDebugService === undefined;
-        this._resourceDebugService = resourceDebugService ?? new ResourceDebugService({
-            appHostRepository: this._repository,
-            attachProviders: createResourceAttachProviderRegistry(),
-            sessionRegistry: new ResourceDebugSessionRegistry(),
-            startDebugging: (workspaceFolder, configuration) =>
-                vscode.debug.startDebugging(workspaceFolder, configuration),
-        });
+        this._resourceDebugService = resourceDebugService;
         this._dataSubscription = this._repository.onDidChangeData(() => {
             this._clearLaunchingPathsForRunningAppHosts();
             this._clearStoppingPathsForStoppedAppHosts();
@@ -191,9 +183,6 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
     }
 
     dispose(): void {
-        if (this._ownsResourceDebugService) {
-            this._resourceDebugService.dispose();
-        }
         this._dataSubscription.dispose();
         this._launchingSubscription.dispose();
         for (const timeout of this._stoppingAppHostTimeouts.values()) {
@@ -661,7 +650,13 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
             const topLevel = element.resources.filter(r => !getParentResourceName(r));
             for (const resource of sortResources(topLevel)) {
                 const hasChildren = element.resources.some(r => getParentResourceName(r) === resource.name);
-                items.push(new ResourceItem(resource, null, hasChildren, element.resources, element.appHostPath));
+                items.push(new ResourceItem(
+                    resource,
+                    null,
+                    hasChildren,
+                    element.resources,
+                    element.appHostPath,
+                    this._resourceDebugService.canAttachToResource(resource)));
             }
             return items;
         }
@@ -721,7 +716,13 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
             const topLevel = element.resources.filter(r => !getParentResourceName(r));
             return sortResources(topLevel).map(r => {
                 const hasChildren = element.resources.some(c => getParentResourceName(c) === r.name);
-                return new ResourceItem(r, element.appHostPid, hasChildren, element.resources);
+                return new ResourceItem(
+                    r,
+                    element.appHostPid,
+                    hasChildren,
+                    element.resources,
+                    undefined,
+                    this._resourceDebugService.canAttachToResource(r));
             });
         }
 
@@ -747,7 +748,13 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         const children = allResources.filter(r => getParentResourceName(r) === element.resource.name);
         for (const child of sortResources(children)) {
             const hasChildren = allResources.some(r => getParentResourceName(r) === child.name);
-            items.push(new ResourceItem(child, element.appHostPid, hasChildren, allResources, element.appHostPath));
+            items.push(new ResourceItem(
+                child,
+                element.appHostPid,
+                hasChildren,
+                allResources,
+                element.appHostPath,
+                this._resourceDebugService.canAttachToResource(child)));
         }
 
         const urls = getVisibleResourceUrls(element.resource);
@@ -990,6 +997,18 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
     }
 
     async attachDebuggerToResource(element: ResourceItem): Promise<AttachDebuggerHandledFailure | void> {
+        return await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: attachingDebugger(element.resource.displayName ?? element.resource.name),
+            cancellable: true,
+        }, async (_progress, cancellationToken) =>
+            await this._attachDebuggerToResource(element, cancellationToken));
+    }
+
+    private async _attachDebuggerToResource(
+        element: ResourceItem,
+        cancellationToken: vscode.CancellationToken,
+    ): Promise<AttachDebuggerHandledFailure | void> {
         // Global resource items retain the AppHost PID rather than its path. Resolve that
         // owner again before refreshing the resource snapshot so duplicate resource names
         // in different AppHosts cannot attach to whichever host happens to render first.
@@ -1006,11 +1025,14 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
                 displayPath: vscode.workspace.asRelativePath(ownerAppHostPath),
             },
             resourceName: element.resource.name,
+            cancellationToken,
         });
         switch (result.outcome) {
             case 'started':
-            case 'alreadyDebugging':
             case 'cancelled':
+                return;
+            case 'alreadyDebugging':
+                vscode.window.showInformationMessage(attachDebuggerAlreadyDebugging(element.resource.displayName ?? element.resource.name));
                 return;
             case 'appHostNotFound':
             case 'resourceNotFound':

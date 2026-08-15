@@ -8,7 +8,7 @@ import { createProjectDebuggerExtension, createProjectResourceAttachProvider, Do
 import { AspireExtendedDebugConfiguration, AspireResourceExtendedDebugConfiguration, ExecutableLaunchConfiguration, ProjectLaunchConfiguration } from '../dcp/types';
 import * as io from '../utils/io';
 import { createDebugSessionConfiguration, ResourceDebuggerExtension } from '../debugger/debuggerExtensions';
-import type { ResourceAttachProvider } from '../debugger/resourceAttachProviders';
+import type { ResourceAttachProvider } from '../debugger/resourceDebugContracts';
 import { AppHostParentOutputFilter, AspireDebugSession } from '../debugger/AspireDebugSession';
 import * as hotReload from '../debugger/hotReload';
 
