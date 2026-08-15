@@ -14,7 +14,7 @@ import {
     __resetLaunchFailureJournalForTests,
     readLatestLaunchFailures,
     type LaunchFailureRecord,
-} from '../lm/launchFailureJournal';
+} from '../services/launchFailureJournal';
 import * as cliPathModule from '../utils/cliPath';
 import { AppHostDiscoveryService } from '../utils/appHostDiscovery';
 import { __resetAppHostIdentityRegistryForTests } from '../utils/appHostIdentity';
@@ -661,8 +661,10 @@ suite('AspireDebugConfigurationProvider', () => {
         assert.strictEqual(configs[0].program, folder.uri.fsPath);
     });
 
-    test('leaves launch config program unchanged when debug target resolution fails', async () => {
+    test('continues with an existing exact target without journaling a recoverable discovery failure', async () => {
         const programPath = path.join(tempDir, 'AppHost', 'Program.cs');
+        fs.mkdirSync(path.dirname(programPath), { recursive: true });
+        fs.writeFileSync(programPath, 'var builder = DistributedApplication.CreateBuilder(args);');
         const provider = new AspireDebugConfigurationProvider(createFailingAppHostDiscoveryService(), launchReservation);
 
         const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined, {
@@ -673,18 +675,13 @@ suite('AspireDebugConfigurationProvider', () => {
         });
 
         assert.strictEqual(config?.program, programPath);
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(programPath)[0]), {
-            stage: 'discovery',
-            category: 'unknown',
-            controller: 'editor',
-            mode: 'debug',
-            providerKind: 'dotnet',
-            exitCodeBucket: 'none',
-        });
+        assert.deepStrictEqual(readLatestLaunchFailures(programPath), []);
     });
 
-    test('records one discovery failure across the initial and dynamic provider passes', async () => {
+    test('does not journal a recoverable discovery failure across provider passes', async () => {
         const programPath = path.join(tempDir, 'AppHost', 'Program.cs');
+        fs.mkdirSync(path.dirname(programPath), { recursive: true });
+        fs.writeFileSync(programPath, 'var builder = DistributedApplication.CreateBuilder(args);');
         const discoveryService = createFailingAppHostDiscoveryService();
         const initialProvider = new AspireDebugConfigurationProvider(
             discoveryService,
@@ -707,7 +704,7 @@ suite('AspireDebugConfigurationProvider', () => {
             undefined,
             { ...initialResult } as vscode.DebugConfiguration);
 
-        assert.strictEqual(readLatestLaunchFailures(programPath).length, 1);
+        assert.strictEqual(readLatestLaunchFailures(programPath).length, 0);
         assert.ok(dynamicResult);
         stripAspireDebugConfigurationProviderInternalProperties(dynamicResult);
         assert.deepStrictEqual(
@@ -717,6 +714,8 @@ suite('AspireDebugConfigurationProvider', () => {
 
     test('records exact-target discovery cancellation without treating it as a timeout', async () => {
         const programPath = path.join(tempDir, 'AppHost', 'Program.cs');
+        fs.mkdirSync(path.dirname(programPath), { recursive: true });
+        fs.writeFileSync(programPath, 'var builder = DistributedApplication.CreateBuilder(args);');
         const provider = new AspireDebugConfigurationProvider(createFailingAppHostDiscoveryService(new vscode.CancellationError()), launchReservation);
 
         const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined, {
@@ -727,12 +726,78 @@ suite('AspireDebugConfigurationProvider', () => {
             noDebug: true,
         });
 
-        assert.strictEqual(config?.program, programPath);
+        assert.strictEqual(config, undefined);
         assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(programPath)[0]), {
             stage: 'discovery',
             category: 'canceled',
             controller: 'editor',
             mode: 'run',
+            providerKind: 'dotnet',
+            exitCodeBucket: 'none',
+        });
+    });
+
+    test('records a terminal discovery failure for a missing exact target', async () => {
+        const programPath = path.join(tempDir, 'Missing', 'AppHost.csproj');
+        const provider = new AspireDebugConfigurationProvider(createFailingAppHostDiscoveryService(), launchReservation);
+
+        const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined, {
+            name: 'Debug AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: programPath,
+        });
+
+        assert.strictEqual(config, undefined);
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(programPath)[0]), {
+            stage: 'discovery',
+            category: 'unknown',
+            controller: 'editor',
+            mode: 'debug',
+            providerKind: 'dotnet',
+            exitCodeBucket: 'none',
+        });
+    });
+
+    test('records terminal F# AppHost discovery failures as dotnet failures', async () => {
+        const programPath = path.join(tempDir, 'Missing', 'AppHost.fsproj');
+        const provider = new AspireDebugConfigurationProvider(createFailingAppHostDiscoveryService(), launchReservation);
+
+        const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined, {
+            name: 'Debug AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: programPath,
+        });
+
+        assert.strictEqual(config, undefined);
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(programPath)[0]), {
+            stage: 'discovery',
+            category: 'unknown',
+            controller: 'editor',
+            mode: 'debug',
+            providerKind: 'dotnet',
+            exitCodeBucket: 'none',
+        });
+    });
+
+    test('records terminal Visual Basic AppHost discovery failures as dotnet failures', async () => {
+        const programPath = path.join(tempDir, 'Missing', 'AppHost.vbproj');
+        const provider = new AspireDebugConfigurationProvider(createFailingAppHostDiscoveryService(), launchReservation);
+
+        const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined, {
+            name: 'Debug AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: programPath,
+        });
+
+        assert.strictEqual(config, undefined);
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(programPath)[0]), {
+            stage: 'discovery',
+            category: 'unknown',
+            controller: 'editor',
+            mode: 'debug',
             providerKind: 'dotnet',
             exitCodeBucket: 'none',
         });

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { AspireCommandType, AspireExtendedDebugConfiguration, type AspireResourceDebugSession } from '../dcp/types';
 import { startDebuggingDeclined } from '../loc/strings';
-import { recordLaunchFailureForAppHostPath, type LaunchFailureCategory, type LaunchFailureMode, type LaunchFailureProviderKind } from '../lm/launchFailureJournal';
+import { recordLaunchFailureForAppHostPath, type LaunchFailureCategory, type LaunchFailureMode, type LaunchFailureProviderKind } from './launchFailureJournal';
 import { compareAppHostIdentity, getAppHostIdentityKeyInfo, isAppHostPathWithinDirectory, type AppHostIdentityKeyInfo, type AppHostIdentityRelation } from '../utils/appHostIdentity';
 import { classifyAppHostPath } from '../utils/appHostLanguage';
 import { classifyError, isCommandCancellation, sendTelemetryEvent, type EventProperties } from '../utils/telemetry';

@@ -9,6 +9,7 @@ import { AspireTerminalProvider } from './utils/AspireTerminalProvider';
 import { AspireEditorCommandProvider } from './editor/AspireEditorCommandProvider';
 import type { AspireDebugConsoleOutputEvent } from './types/extensionApi';
 import { extensionLogOutputChannel } from './utils/logging';
+import { resetEditorAssistanceWindowState } from './services/editorAssistanceWindowState';
 
 export class AspireExtensionContext implements vscode.Disposable {
     private static readonly _cliStopTimeoutMs = 5_000;
@@ -381,6 +382,7 @@ export class AspireExtensionContext implements vscode.Disposable {
         }
 
         this._isDisposed = true;
+        resetEditorAssistanceWindowState();
         this._debugSessionStateSubscriptions.forEach(disposable => disposable.dispose());
         this._debugSessionStateSubscriptions.clear();
         this._debugSessionOutputSubscriptions.forEach(disposable => disposable.dispose());

@@ -13,6 +13,15 @@ import { AspireDebugSession } from '../debugger/AspireDebugSession';
 import * as cliModule from '../utils/process/cliProcess';
 import { deactivate as deactivateExtension } from '../extension';
 import { extensionLogOutputChannel } from '../utils/logging';
+import {
+    __resetLaunchFailureJournalForTests,
+    readLatestLaunchFailures,
+    recordLaunchFailureForAppHostPath,
+} from '../services/launchFailureJournal';
+import {
+    __resetAppHostIdentityRegistryForTests,
+    getOrCreateIdentityForAbsolutePath,
+} from '../utils/appHostIdentity';
 
 suite('AspireExtensionContext', () => {
     test('extension deactivate returns the AspireExtensionContext shutdown promise', () => {
@@ -25,6 +34,37 @@ suite('AspireExtensionContext', () => {
         }
         finally {
             deactivateStub.restore();
+        }
+    });
+
+    test('deactivation resets editor-assistance window state', async () => {
+        __resetLaunchFailureJournalForTests();
+        __resetAppHostIdentityRegistryForTests();
+        const context = createContext([]);
+
+        try {
+            const firstIdentity = getOrCreateIdentityForAbsolutePath('/workspace/First/AppHost.csproj');
+            const secondIdentity = getOrCreateIdentityForAbsolutePath('/workspace/Second/AppHost.csproj');
+            recordLaunchFailureForAppHostPath('/workspace/First/AppHost.csproj', {
+                stage: 'debugSession',
+                category: 'unknown',
+                controller: 'editor',
+            });
+
+            assert.strictEqual(firstIdentity, 'apphost-1');
+            assert.strictEqual(secondIdentity, 'apphost-2');
+            assert.strictEqual(readLatestLaunchFailures().length, 1);
+
+            await deactivateContext(context);
+
+            assert.deepStrictEqual(readLatestLaunchFailures(), []);
+            assert.strictEqual(
+                getOrCreateIdentityForAbsolutePath('/workspace/Third/AppHost.csproj'),
+                'apphost-1');
+        }
+        finally {
+            __resetLaunchFailureJournalForTests();
+            __resetAppHostIdentityRegistryForTests();
         }
     });
 

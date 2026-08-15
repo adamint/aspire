@@ -13,10 +13,13 @@ import {
 } from '../lm/appHostLifecycleToolContracts';
 import { EditorStateSnapshotService } from '../lm/editorStateSnapshotService';
 import {
+    __resetLaunchFailureJournalForTests,
     LaunchFailureJournal,
     normalizeLaunchFailure,
+    readLatestLaunchFailures,
+    recordLaunchFailureForAppHostPath,
     type LaunchFailureInput,
-} from '../lm/launchFailureJournal';
+} from '../services/launchFailureJournal';
 import { SafeAppHostTargetResolver } from '../lm/safeAppHostTargetResolver';
 import { type CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
 import {
@@ -149,6 +152,7 @@ suite('Editor assistance AppHost services', () => {
 
     setup(() => {
         __resetAppHostIdentityRegistryForTests();
+        __resetLaunchFailureJournalForTests();
         workspaceRoot = createFixtureDirectory('workspace');
         outsideRoot = createFixtureDirectory('outside');
         appHostProjectPath = path.join(workspaceRoot, 'AppHost', 'AppHost.csproj');
@@ -170,6 +174,7 @@ suite('Editor assistance AppHost services', () => {
     });
 
     teardown(() => {
+        __resetLaunchFailureJournalForTests();
         __resetAppHostIdentityRegistryForTests();
         workspaceFoldersStub.restore();
         fs.rmSync(workspaceRoot, { recursive: true, force: true });
@@ -793,6 +798,43 @@ suite('Editor assistance AppHost services', () => {
 
             fs.unlinkSync(sourcePath);
             assert.strictEqual(getOrCreateIdentityForAbsolutePath(projectPath), identity);
+        });
+
+        test('preserves issued path histories when project-source uniqueness changes', () => {
+            const directoryPath = path.join(workspaceRoot, 'Rebinding');
+            const projectPath = path.join(directoryPath, 'AppHost.csproj');
+            const secondProjectPath = path.join(directoryPath, 'Other.csproj');
+            const sourcePath = path.join(directoryPath, 'Program.cs');
+            fs.mkdirSync(directoryPath, { recursive: true });
+            fs.writeFileSync(projectPath, '<Project />');
+            fs.writeFileSync(secondProjectPath, '<Project />');
+            fs.writeFileSync(sourcePath, 'var builder = DistributedApplication.CreateBuilder(args);');
+
+            const projectIdentity = getOrCreateIdentityForAbsolutePath(projectPath);
+            const sourceIdentity = getOrCreateIdentityForAbsolutePath(sourcePath);
+            assert.notStrictEqual(projectIdentity, sourceIdentity);
+
+            recordLaunchFailureForAppHostPath(projectPath, {
+                stage: 'build',
+                category: 'buildFailed',
+                controller: 'editor',
+            });
+            recordLaunchFailureForAppHostPath(sourcePath, {
+                stage: 'dcpStartup',
+                category: 'processExited',
+                controller: 'editor',
+            });
+
+            fs.unlinkSync(secondProjectPath);
+
+            assert.deepStrictEqual(
+                readLatestLaunchFailures(projectPath).map(record => record.stage),
+                ['build']);
+            assert.deepStrictEqual(
+                readLatestLaunchFailures(sourcePath).map(record => record.stage),
+                ['dcpStartup']);
+            assert.strictEqual(getOrCreateIdentityForAbsolutePath(projectPath), projectIdentity);
+            assert.strictEqual(getOrCreateIdentityForAbsolutePath(sourcePath), sourceIdentity);
         });
 
         test('keeps the latest five failures per AppHost in latest-first order', () => {

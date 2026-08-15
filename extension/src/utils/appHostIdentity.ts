@@ -16,7 +16,7 @@ export interface AppHostIdentityKeyInfo {
     readonly pathKeys: readonly string[];
 }
 
-const appHostProjectFileExtensions = ['.csproj'];
+const appHostProjectFileExtensions = ['.csproj', '.fsproj', '.vbproj'];
 const appHostAliasKeySuffix = '\u0000apphost';
 const opaqueIdentityRegistry = new Map<string, OpaqueAppHostIdentity>();
 let nextOpaqueIdentity = 0;
@@ -120,28 +120,63 @@ function getLexicalAppHostIdentityKeyInfo(appHostPath: string): AppHostIdentityK
  */
 export function getOrCreateIdentityForAbsolutePath(appHostPath: string): OpaqueAppHostIdentity {
     const keyInfo = getLexicalAppHostIdentityKeyInfo(appHostPath);
-    let identity = opaqueIdentityRegistry.get(keyInfo.key);
-    if (!identity) {
-        for (const pathKey of keyInfo.pathKeys) {
-            identity = opaqueIdentityRegistry.get(pathKey);
-            if (identity) {
-                break;
-            }
+    const exactPathKey = getLexicalPathComparisonKey(appHostPath);
+    const exactIdentity = opaqueIdentityRegistry.get(exactPathKey);
+    if (exactIdentity) {
+        assignUnmappedAliases(keyInfo, exactIdentity);
+        return exactIdentity;
+    }
+
+    const issuedIdentities = new Set<OpaqueAppHostIdentity>();
+    const aliasIdentity = opaqueIdentityRegistry.get(keyInfo.key);
+    if (aliasIdentity) {
+        issuedIdentities.add(aliasIdentity);
+    }
+    for (const pathKey of keyInfo.pathKeys) {
+        const pathIdentity = opaqueIdentityRegistry.get(pathKey);
+        if (pathIdentity) {
+            issuedIdentities.add(pathIdentity);
         }
     }
 
-    identity ??= `apphost-${++nextOpaqueIdentity}` as OpaqueAppHostIdentity;
-    opaqueIdentityRegistry.set(keyInfo.key, identity);
-    for (const pathKey of keyInfo.pathKeys) {
-        opaqueIdentityRegistry.set(pathKey, identity);
+    const identity = issuedIdentities.size === 1
+        ? [...issuedIdentities][0]
+        : `apphost-${++nextOpaqueIdentity}` as OpaqueAppHostIdentity;
+    opaqueIdentityRegistry.set(exactPathKey, identity);
+
+    // Project/source uniqueness is filesystem-dependent and can change after an identity
+    // is issued. Share newly discovered aliases only when every existing mapping agrees;
+    // overwriting a different issued identity would orphan records already stored under it.
+    if (issuedIdentities.size <= 1) {
+        assignUnmappedAliases(keyInfo, identity);
     }
 
     return identity;
 }
 
-export function __resetAppHostIdentityRegistryForTests(): void {
+function assignUnmappedAliases(keyInfo: AppHostIdentityKeyInfo, identity: OpaqueAppHostIdentity): void {
+    const keys = new Set([keyInfo.key, ...keyInfo.pathKeys]);
+    if ([...keys].some(key => {
+        const existing = opaqueIdentityRegistry.get(key);
+        return existing !== undefined && existing !== identity;
+    })) {
+        return;
+    }
+
+    for (const key of keys) {
+        if (!opaqueIdentityRegistry.has(key)) {
+            opaqueIdentityRegistry.set(key, identity);
+        }
+    }
+}
+
+export function resetAppHostIdentityRegistry(): void {
     opaqueIdentityRegistry.clear();
     nextOpaqueIdentity = 0;
+}
+
+export function __resetAppHostIdentityRegistryForTests(): void {
+    resetAppHostIdentityRegistry();
 }
 
 export function getAppHostIdentityKeyInfo(appHostPath: string): AppHostIdentityKeyInfo {

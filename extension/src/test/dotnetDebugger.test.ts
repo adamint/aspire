@@ -4,12 +4,13 @@ import { EventEmitter } from 'events';
 import * as nodePath from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
-import { createProjectDebuggerExtension, projectDebuggerExtension, quoteCommandLineArgument } from '../debugger/languages/dotnet';
+import { createProjectDebuggerExtension, DotNetService, projectDebuggerExtension, quoteCommandLineArgument } from '../debugger/languages/dotnet';
 import { AspireExtendedDebugConfiguration, AspireResourceExtendedDebugConfiguration, ExecutableLaunchConfiguration, ProjectLaunchConfiguration } from '../dcp/types';
 import * as io from '../utils/io';
 import { createDebugSessionConfiguration, ResourceDebuggerExtension } from '../debugger/debuggerExtensions';
 import { AppHostParentOutputFilter, AspireDebugSession } from '../debugger/AspireDebugSession';
 import * as hotReload from '../debugger/hotReload';
+import { AppHostBuildFailureError } from '../debugger/appHostBuildFailureError';
 
 class TestDotNetService {
     private _getDotNetTargetPathStub: sinon.SinonStub;
@@ -78,6 +79,25 @@ suite('Dotnet Debugger Extension Tests', () => {
         return { dotNetService: fakeDotNetService, extension: createProjectDebuggerExtension(() => fakeDotNetService), doesFileExistStub: sinon.stub(io, 'doesFileExist').resolves(doesOutputFileExist) };
     }
 
+    test('dotnet build failures use the typed AppHost build failure boundary', async () => {
+        const buildProcess = Object.assign(new EventEmitter(), {
+            stdout: new EventEmitter(),
+            stderr: new EventEmitter(),
+        });
+        sinon.stub(childProcess, 'spawn').callsFake(() => {
+            setImmediate(() => buildProcess.emit('close', 1));
+            return buildProcess as unknown as childProcess.ChildProcessWithoutNullStreams;
+        });
+        const debugSession = {
+            sendMessage: sinon.stub(),
+        } as unknown as AspireDebugSession;
+        const service = new DotNetService(debugSession);
+
+        await assert.rejects(
+            service.buildDotNetProject('/workspace/AppHost/AppHost.csproj'),
+            error => error instanceof Error && error.name === 'AppHostBuildFailureError');
+    });
+
     test('failed AppHost start writes error to debug console', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
@@ -134,8 +154,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
         const outputEvents: any[] = [];
         const outputSubscription = aspireDebugSession.onDidSendMessage(message => outputEvents.push(message));
-        const startError = new Error('Build FAILED.');
-        (startError as Error & { debugConsoleOutputAlreadyWritten?: boolean }).debugConsoleOutputAlreadyWritten = true;
+        const startError = new AppHostBuildFailureError('Build FAILED.', true);
 
         sinon.stub(aspireDebugSession, 'createDebugAdapterTrackerCore');
         sinon.stub(aspireDebugSession, 'startAndGetDebugSession').rejects(startError);

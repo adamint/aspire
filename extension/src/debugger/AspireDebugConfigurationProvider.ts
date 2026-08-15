@@ -7,8 +7,11 @@ import type { CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
 import { compareAppHostIdentity, isAppHostProjectFile } from '../utils/appHostIdentity';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
 import { extensionLogOutputChannel } from '../utils/logging';
-import { recordLaunchFailureForAppHostPath, type LaunchFailureMode, type LaunchFailureProviderKind } from '../lm/launchFailureJournal';
+import { recordLaunchFailureForAppHostPath, type LaunchFailureMode, type LaunchFailureProviderKind } from '../services/launchFailureJournal';
 import { isAppHostSourceFile } from '../utils/paths/comparison';
+import { doesFileExist } from '../utils/io';
+import { isCommandCancellation } from '../utils/telemetry';
+import { classifyAppHostPath } from '../utils/appHostLanguage';
 import { appHostLaunchReservationIdConfigKey, appHostSelectionOriginConfigKey, appHostTelemetryTargetPathConfigKey } from './AspireDebugConfigurationMetadata';
 import { getAspireDebugConfigurationCommand } from '../services/AppHostLaunchService';
 import { getAspireDebugConfigurationExternalLaunchReservation, isAspireDebugConfigurationExtensionOwned, markAspireDebugConfigurationAsExtensionOwned, markAspireDebugConfigurationWithExternalLaunchReservation, tryMarkAspireDebugConfigurationDiscoveryFailureRecorded } from './AspireDebugConfigurationProviderInternal';
@@ -130,7 +133,11 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
                 aspireConfig[appHostSelectionOriginConfigKey] = 'default-discovery';
             }
 
-            config.program = await this.resolveDebugTarget(program, folder, aspireConfig);
+            const resolvedDebugTarget = await this.resolveDebugTarget(program, folder, aspireConfig);
+            if (resolvedDebugTarget === undefined) {
+                return undefined;
+            }
+            config.program = resolvedDebugTarget;
 
             const telemetryTarget = await this.tryFindWorkspaceDefaultCandidate(program, folder);
             if (telemetryTarget) {
@@ -210,12 +217,16 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
         }
     }
 
-    private async resolveDebugTarget(filePath: string, folder: vscode.WorkspaceFolder | undefined, config: AspireExtendedDebugConfiguration): Promise<string> {
+    private async resolveDebugTarget(filePath: string, folder: vscode.WorkspaceFolder | undefined, config: AspireExtendedDebugConfiguration): Promise<string | undefined> {
         try {
             return await this._appHostDiscoveryService.resolveDebugTarget(filePath, folder);
         }
         catch (error) {
-            if (isConcreteAppHostTarget(filePath) &&
+            const exactTarget = isConcreteAppHostTarget(filePath);
+            const terminalFailure = isCommandCancellation(error) ||
+                (exactTarget && !await doesFileExist(filePath));
+            if (terminalFailure &&
+                exactTarget &&
                 tryMarkAspireDebugConfigurationDiscoveryFailureRecorded(config)) {
                 recordLaunchFailureForAppHostPath(filePath, {
                     stage: 'discovery',
@@ -226,7 +237,7 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
                 });
             }
             extensionLogOutputChannel.warn(`Failed to resolve AppHost debug target ${filePath}: ${error}`);
-            return filePath;
+            return terminalFailure ? undefined : filePath;
         }
     }
 
@@ -282,18 +293,12 @@ function getLaunchFailureMode(config: AspireExtendedDebugConfiguration): LaunchF
 }
 
 function getAppHostProviderKind(appHostPath: string): LaunchFailureProviderKind {
-    switch (path.extname(appHostPath).toLowerCase()) {
-        case '.cs':
-        case '.csproj':
+    switch (classifyAppHostPath(appHostPath)) {
+        case 'csharp':
             return 'dotnet';
-        case '.js':
-        case '.ts':
-        case '.mjs':
-        case '.mts':
-        case '.cjs':
-        case '.cts':
+        case 'typescript':
             return 'node';
-        case '.rs':
+        case 'rust':
             return 'rust';
         default:
             return 'other';

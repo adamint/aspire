@@ -25,6 +25,7 @@ import {
 import { AspireDebugSession } from '../AspireDebugSession';
 import { createAspireCliPathProcessEnvironment } from '../../utils/cliPathEnvironment';
 import { getHotReloadDiagnostics, logHotReloadDiagnostics, showHotReloadDisabledAdvisoryIfNeeded } from '../hotReload';
+import { AppHostBuildFailureError } from '../appHostBuildFailureError';
 
 interface IDotNetService {
     getAndActivateDevKit(): Promise<boolean>
@@ -94,19 +95,23 @@ export class DotNetService implements IDotNetService {
 
             buildProcess.on('error', (err) => {
                 extensionLogOutputChannel.error(`dotnet build process error: ${err}`);
-                reject(new Error(buildFailedForProjectWithError(projectFile, err.message)));
+                reject(new AppHostBuildFailureError(
+                    buildFailedForProjectWithError(projectFile, err.message),
+                    false));
             });
 
             buildProcess.on('close', (code) => {
                 if (code === 0) {
                     // if build succeeds, simply return. otherwise throw to trigger error handling
                     if (stderrOutput) {
-                        reject(createErrorWithStreamedDebugConsoleOutput(stderrOutput));
+                        reject(new AppHostBuildFailureError(stderrOutput, true));
                     } else {
                         resolve();
                     }
                 } else {
-                    reject(createErrorWithStreamedDebugConsoleOutput(buildFailedForProjectWithError(projectFile, stdoutOutput || stderrOutput || `Exit code ${code}`)));
+                    reject(new AppHostBuildFailureError(
+                        buildFailedForProjectWithError(projectFile, stdoutOutput || stderrOutput || `Exit code ${code}`),
+                        true));
                 }
             });
         });
@@ -275,14 +280,6 @@ function combineRunApiArguments(hostArguments: string | undefined, applicationAr
         .join(' ');
 
     return combined.length > 0 ? combined : undefined;
-}
-
-function createErrorWithStreamedDebugConsoleOutput(message: string): Error {
-    // Mark build errors whose output was already streamed to avoid replaying the transcript in AppHost startup handling.
-    const error = new Error(message) as Error & { debugConsoleOutputAlreadyWritten?: boolean };
-    error.debugConsoleOutputAlreadyWritten = true;
-
-    return error;
 }
 
 async function shouldLaunchProjectWithDotNetRun(outputPath: string): Promise<boolean> {

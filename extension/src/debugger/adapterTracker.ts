@@ -10,6 +10,7 @@ import { dcpServerNotInitialized } from '../loc/strings';
  * Return `true` to suppress VS Code's automatic child session restart.
  */
 export type AppHostRestartHandler = (debugSessionId: string) => boolean;
+export type AppHostTerminationRequestHandler = (debugSessionId: string) => void;
 
 /**
  * DAP output event categories. Per the DAP spec the `category` field is optional;
@@ -20,7 +21,12 @@ export type AppHostRestartHandler = (debugSessionId: string) => boolean;
 export type DapOutputCategory = 'console' | 'important' | 'stdout' | 'stderr' | 'debug' | 'telemetry' | (string & {}) | undefined;
 export type AppHostOutputHandler = (output: string, category: DapOutputCategory) => void;
 
-export function createDebugAdapterTracker(dcpServer: AspireDcpServer, debugAdapter: string, onAppHostRestartRequested?: AppHostRestartHandler, onAppHostOutput?: AppHostOutputHandler): vscode.Disposable {
+export function createDebugAdapterTracker(
+    dcpServer: AspireDcpServer,
+    debugAdapter: string,
+    onAppHostRestartRequested?: AppHostRestartHandler,
+    onAppHostOutput?: AppHostOutputHandler,
+    onAppHostTerminationRequested?: AppHostTerminationRequestHandler): vscode.Disposable {
     return vscode.debug.registerDebugAdapterTrackerFactory(debugAdapter, {
         createDebugAdapterTracker(session: vscode.DebugSession) {
             const configuration = session.configuration;
@@ -33,18 +39,21 @@ export function createDebugAdapterTracker(dcpServer: AspireDcpServer, debugAdapt
 
             return {
                 onWillReceiveMessage: message => {
-                    // Detect restart requests on app host debug sessions.
-                    // When the user clicks "restart" on the app host child session,
-                    // suppress VS Code's automatic child restart so the Aspire debug
-                    // session can restart entirely instead.
-                    if (configuration.isApphost
-                        && (message.command === 'disconnect' || message.command === 'terminate')
-                        && message.arguments?.restart
-                        && onAppHostRestartRequested
-                        && debugSessionId) {
-                        const shouldSuppress = onAppHostRestartRequested(debugSessionId);
-                        if (shouldSuppress) {
-                            message.arguments.restart = false;
+                    if (configuration.isApphost &&
+                        (message.command === 'disconnect' || message.command === 'terminate') &&
+                        debugSessionId) {
+                        // A client-to-adapter disconnect/terminate request identifies deliberate
+                        // child-session termination before VS Code raises the termination event.
+                        // A process crash has no matching inbound request, so startup attribution
+                        // can still distinguish it without inferring intent from an exit code.
+                        if (message.arguments?.restart) {
+                            const shouldSuppress = onAppHostRestartRequested?.(debugSessionId) ?? false;
+                            if (shouldSuppress) {
+                                message.arguments.restart = false;
+                            }
+                        }
+                        else {
+                            onAppHostTerminationRequested?.(debugSessionId);
                         }
                     }
                 },

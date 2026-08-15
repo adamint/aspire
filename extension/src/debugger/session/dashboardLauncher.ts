@@ -3,7 +3,7 @@ import os from "os";
 import { extensionLogOutputChannel } from "../../utils/logging";
 import { aspireDashboard, debugSessionStartTimedOut } from "../../loc/strings";
 import { describeStopFailure, startStop, stopSessionInBackground } from "./stopHelpers";
-import { normalizeLaunchFailure, type LaunchFailureMode, type SanitizedLaunchFailure } from "../../lm/launchFailureJournal";
+import { normalizeLaunchFailure, type LaunchFailureMode, type SanitizedLaunchFailure } from "../../services/launchFailureJournal";
 
 export type DashboardLaunchBehavior = 'none' | 'notification' | DashboardBrowserType;
 export type DashboardBrowserType = 'openExternalBrowser' | 'integratedBrowser' | 'debugChrome' | 'debugEdge' | 'debugFirefox';
@@ -172,7 +172,6 @@ export class DashboardLauncher implements vscode.Disposable {
     if (!didStart) {
       disposable.dispose();
       extensionLogOutputChannel.warn(`Failed to start debug browser (${debugType}), falling back to default browser`);
-      this.recordDashboardLaunchFailure();
 
       // Falling back after disposal would pop an untracked browser window open during
       // teardown, long after the user stopped the session.
@@ -186,7 +185,10 @@ export class DashboardLauncher implements vscode.Disposable {
 
   private async openDashboardCore(operation: () => Thenable<unknown>): Promise<void> {
     try {
-      await operation();
+      const result = await operation();
+      if (result === false) {
+        this.recordDashboardLaunchFailure();
+      }
     }
     catch (error) {
       this.recordDashboardLaunchFailure(error);

@@ -232,8 +232,12 @@ export function readLatestLaunchFailures(appHostPath?: string): readonly LaunchF
     return defaultLaunchFailureJournal.readLatest(identity);
 }
 
-export function __resetLaunchFailureJournalForTests(): void {
+export function resetLaunchFailureJournal(): void {
     defaultLaunchFailureJournal.clear();
+}
+
+export function __resetLaunchFailureJournalForTests(): void {
+    resetLaunchFailureJournal();
 }
 
 function normalizeCategory(input: LaunchFailureInput): LaunchFailureCategory {

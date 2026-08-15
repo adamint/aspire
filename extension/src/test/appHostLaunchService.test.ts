@@ -11,7 +11,7 @@ import {
     __resetLaunchFailureJournalForTests,
     readLatestLaunchFailures,
     type LaunchFailureRecord,
-} from '../lm/launchFailureJournal';
+} from '../services/launchFailureJournal';
 import { appHostLifecycleBusy } from '../loc/strings';
 import { AppHostLaunchService, AppHostLifecycleLockTimeoutError, AppHostStopCancellationError, appHostLifecycleLockMaxHoldMs, appHostLifecycleLockWaitTimeoutMs, externalLaunchReservationTimeoutMs, type AppHostLaunchSession } from '../services/AppHostLaunchService';
 import { __resetAppHostIdentityRegistryForTests, getAppHostIdentityKey } from '../utils/appHostIdentity';
