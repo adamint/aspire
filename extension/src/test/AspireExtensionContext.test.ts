@@ -73,7 +73,8 @@ suite('AspireExtensionContext', () => {
         const context = createContext([]);
         const snapshots: readonly EditorResourceSessionSnapshot[] = [{
             appHostPath: '/workspace/AppHost/AppHost.csproj',
-            projectPath: '/workspace/Api/Api.csproj',
+            targetPath: '/workspace/Api/Api.csproj',
+            resourceExecutablePaths: ['/workspace/.dotnet/dotnet'],
             state: 'running',
             mode: 'debug',
         }];
@@ -90,7 +91,7 @@ suite('AspireExtensionContext', () => {
         assert.deepStrictEqual(context.editorResourceSessions, snapshots);
         assert.deepStrictEqual(
             Object.keys(context.editorResourceSessions[0]).sort(),
-            ['appHostPath', 'mode', 'projectPath', 'state']);
+            ['appHostPath', 'mode', 'resourceExecutablePaths', 'state', 'targetPath']);
     });
 
     test('deactivation waits for every CLI stop request before disposing transport', async () => {

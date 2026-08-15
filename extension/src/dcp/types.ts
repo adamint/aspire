@@ -1,3 +1,4 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import type { AspireDebugSession, DashboardLaunchBehavior } from '../debugger/AspireDebugSession';
 import { appHostLaunchTokenConfigKey, appHostRestartSourceSessionIdConfigKey, appHostSelectionOriginConfigKey, type AppHostSelectionOrigin } from '../debugger/AspireDebugConfigurationMetadata';
@@ -110,6 +111,92 @@ export function isBrowserLaunchConfiguration(obj: any): obj is BrowserLaunchConf
     return obj && obj.type === 'browser';
 }
 
+/**
+ * Returns the stable resource target carried by DCP launch metadata.
+ *
+ * Only typed path fields are eligible. Session names, arguments, and environment values
+ * are intentionally excluded because they are free-form and can contain secrets or
+ * attacker-controlled text unrelated to the launched resource's identity.
+ */
+export function getLaunchConfigurationTargetPath(configuration: ExecutableLaunchConfiguration): string | undefined {
+    if (isProjectLaunchConfiguration(configuration) ||
+        isAzureFunctionsLaunchConfiguration(configuration) ||
+        isMauiLaunchConfiguration(configuration)) {
+        return getNonEmptyPath(configuration.project_path);
+    }
+
+    if (isJavaScriptRuntimeLaunchConfiguration(configuration)) {
+        return getNonEmptyPath(configuration.script_path) ??
+            getNonEmptyPath(configuration.working_directory);
+    }
+
+    if (isPythonLaunchConfiguration(configuration)) {
+        return getNonEmptyPath(configuration.program_path) ??
+            getNonEmptyPath(configuration.project_path) ??
+            getNonEmptyPath(configuration.working_directory);
+    }
+
+    if (isGoLaunchConfiguration(configuration)) {
+        return getNonEmptyPath(configuration.program) ??
+            getNonEmptyPath(configuration.working_directory);
+    }
+
+    if (isRustLaunchConfiguration(configuration)) {
+        return getNonEmptyPath(configuration.cargo?.executable_path) ??
+            getNonEmptyPath(configuration.working_directory);
+    }
+
+    return undefined;
+}
+
+/**
+ * Returns the possible executable identities that DCP exposes as `executable.path`.
+ *
+ * Source targets such as JavaScript scripts and Go package directories identify what
+ * the debugger launches, but the resource snapshot retains the executable command
+ * (`node`, the Python interpreter, `go`, or `cargo`). Keep that second structured
+ * identities separately so executable resources can be correlated without inspecting
+ * free-form arguments or environment values.
+ */
+export function getLaunchConfigurationExecutablePaths(configuration: ExecutableLaunchConfiguration): readonly string[] {
+    if (isJavaScriptRuntimeLaunchConfiguration(configuration)) {
+        const runtimeExecutable = getNonEmptyPath(configuration.runtime_executable);
+        return runtimeExecutable === undefined ? [] : [runtimeExecutable];
+    }
+
+    if (isPythonLaunchConfiguration(configuration)) {
+        const interpreterPath = getNonEmptyPath(configuration.interpreter_path);
+        if (interpreterPath === undefined) {
+            return [];
+        }
+
+        const executablePaths = [interpreterPath];
+        const entrypoint = getNonEmptyPath(configuration.module);
+        if (entrypoint !== undefined) {
+            // Python module and executable entrypoints currently share one launch shape.
+            // Preserve both commands and let resource correlation fail closed if the
+            // AppHost contains resources matching both candidates.
+            const executableName = process.platform === 'win32' ? `${entrypoint}.exe` : entrypoint;
+            const entrypointPath = path.join(path.dirname(interpreterPath), executableName);
+            if (entrypointPath !== interpreterPath) {
+                executablePaths.push(entrypointPath);
+            }
+        }
+
+        return executablePaths;
+    }
+
+    if (isGoLaunchConfiguration(configuration)) {
+        return ['go'];
+    }
+
+    if (isRustLaunchConfiguration(configuration)) {
+        return ['cargo'];
+    }
+
+    return [];
+}
+
 export interface AzureFunctionsLaunchConfiguration extends ExecutableLaunchConfiguration {
     type: "azure-functions";
     project_path: string;
@@ -214,7 +301,8 @@ export interface AspireResourceDebugSession {
 export interface AspireResourceExtendedDebugConfiguration extends vscode.DebugConfiguration {
     runId: string;
     debugSessionId: string | null;
-    projectFile?: string;
+    targetPath?: string;
+    resourceExecutablePaths?: readonly string[];
     isApphost?: boolean;
 }
 
@@ -237,6 +325,10 @@ export interface AspireExtendedDebugConfiguration extends vscode.DebugConfigurat
 
 interface AspireDebuggersConfiguration {
     [key: string]: DebugLaunchSettings;
+}
+
+function getNonEmptyPath(value: string | undefined): string | undefined {
+    return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
 export interface RunSessionInfo {

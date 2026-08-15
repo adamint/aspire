@@ -85,7 +85,10 @@ export class AspireExtensionContext implements vscode.Disposable {
         return this.aspireDebugSessions.flatMap(session =>
             session.editorResourceSessions.map(resourceSession => ({
                 appHostPath: resourceSession.appHostPath,
-                projectPath: resourceSession.projectPath,
+                targetPath: resourceSession.targetPath,
+                ...(resourceSession.resourceExecutablePaths === undefined
+                    ? {}
+                    : { resourceExecutablePaths: [...resourceSession.resourceExecutablePaths] }),
                 state: resourceSession.state,
                 mode: resourceSession.mode,
             })));

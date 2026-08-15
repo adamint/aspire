@@ -1,5 +1,5 @@
 import path from "path";
-import { ExecutableLaunchConfiguration, EnvVar, LaunchOptions, AspireResourceExtendedDebugConfiguration, AspireExtendedDebugConfiguration, AspireResourceDebugSession } from "../dcp/types";
+import { ExecutableLaunchConfiguration, EnvVar, LaunchOptions, AspireResourceExtendedDebugConfiguration, AspireExtendedDebugConfiguration, AspireResourceDebugSession, getLaunchConfigurationExecutablePaths, getLaunchConfigurationTargetPath } from "../dcp/types";
 import { debugProject, runProject } from "../loc/strings";
 import { getEnvironmentWithoutE2EBridgeVariables, mergeEnvs } from "../utils/environment";
 import { extensionLogOutputChannel } from "../utils/logging";
@@ -85,11 +85,15 @@ export async function prepareDebugSession(debugSessionConfig: AspireExtendedDebu
     }
 
     // Debugger-specific callbacks can replace `program` with an output binary,
-    // runtime executable, or package-manager command. Keep the CLI-provided
-    // project identity separately so editor assistance can correlate the child
-    // session with ResourceJson.properties["project.path"] without inspecting
-    // or exposing the final debug configuration.
-    configuration.projectFile = projectPath;
+    // runtime executable, or package-manager command. Keep the source target and
+    // resource executable identity from DCP's typed launch metadata so editor
+    // assistance never has to inspect the final debug configuration or infer
+    // identity from free-form args/environment.
+    configuration.targetPath = getLaunchConfigurationTargetPath(launchConfig);
+    const resourceExecutablePaths = getLaunchConfigurationExecutablePaths(launchConfig);
+    if (resourceExecutablePaths.length > 0) {
+        configuration.resourceExecutablePaths = resourceExecutablePaths;
+    }
 
     return {
         debugConfiguration: configuration,

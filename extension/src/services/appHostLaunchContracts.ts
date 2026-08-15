@@ -59,14 +59,15 @@ export type EditorResourceSessionMode = 'run' | 'debug' | 'other';
 /**
  * Safe child-session details exposed to editor-assistance services.
  *
- * AppHost and project paths are used only for exact internal correlation. The
- * snapshot deliberately omits the VS Code session id, process id, full debug
- * configuration, and resource metadata so callers cannot turn it into an
- * ambient debug-session handle.
+ * AppHost, source-target, and resource-executable paths are used only for exact
+ * internal correlation. The snapshot deliberately omits the VS Code session id,
+ * process id, full debug configuration, and resource metadata so callers cannot
+ * turn it into an ambient debug-session handle.
  */
 export interface EditorResourceSessionSnapshot {
     readonly appHostPath: string;
-    readonly projectPath: string;
+    readonly targetPath: string;
+    readonly resourceExecutablePaths?: readonly string[];
     readonly state: EditorResourceSessionState;
     readonly mode: EditorResourceSessionMode;
 }

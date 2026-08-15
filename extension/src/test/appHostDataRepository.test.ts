@@ -7,7 +7,7 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
-import { AppHostDataRepository, AspireCliFailedError, isMatchingAppHostPath, shortenPath } from '../data/AppHostDataRepository';
+import { AppHostDataRepository, AspireCliFailedError, AspireCliParseError, isMatchingAppHostPath, shortenPath } from '../data/AppHostDataRepository';
 import { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
 import { AppHostDiscoveryService, type CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
 import * as cliModule from '../utils/process/cliProcess';
@@ -1267,6 +1267,29 @@ suite('AppHostDataRepository', () => {
         }
         finally {
             cancellationSource.dispose();
+            repository.dispose();
+        }
+    });
+
+    test('fetchAppHostResourcesOnce reports empty stopped-AppHost output as an aspire describe parse failure', async () => {
+        const describeProcess = new TestChildProcess();
+        spawnStub.returns(describeProcess);
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        try {
+            const fetchPromise = repository.fetchAppHostResourcesOnce('/workspace/Stopped/AppHost.csproj');
+            await waitForMicrotasks();
+
+            spawnStub.firstCall.args[3].exitCallback(0);
+
+            await assert.rejects(fetchPromise, (error: unknown) => {
+                assert.ok(error instanceof AspireCliParseError);
+                assert.strictEqual(error.command, 'aspire describe');
+                assert.strictEqual(error.output, '');
+                return true;
+            });
+        }
+        finally {
             repository.dispose();
         }
     });

@@ -5216,7 +5216,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         aspireDebugSession.dispose();
     });
 
-    test('tracks only safe resource project lifecycle snapshots', async () => {
+    test('tracks only safe resource target lifecycle snapshots', async () => {
         let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
         let terminateSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
         const startGate = createDeferred<boolean>();
@@ -5245,7 +5245,8 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             name: 'Project',
             request: 'launch',
             program: '/workspace/Api/bin/Debug/net10.0/Api.dll',
-            projectFile: '/workspace/Api/Api.csproj',
+            targetPath: '/workspace/Api/Api.csproj',
+            resourceExecutablePaths: ['/workspace/.dotnet/dotnet'],
             noDebug: false,
         } as AspireResourceExtendedDebugConfiguration;
         const resourceSession = {
@@ -5280,7 +5281,8 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         await Promise.resolve();
         assert.deepStrictEqual(aspireDebugSession.editorResourceSessions, [{
             appHostPath: '/workspace/AppHost/AppHost.csproj',
-            projectPath: '/workspace/Api/Api.csproj',
+            targetPath: '/workspace/Api/Api.csproj',
+            resourceExecutablePaths: ['/workspace/.dotnet/dotnet'],
             state: 'starting',
             mode: 'debug',
         }]);
@@ -5291,7 +5293,8 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.ok(resource);
         assert.deepStrictEqual(aspireDebugSession.editorResourceSessions, [{
             appHostPath: '/workspace/AppHost/AppHost.csproj',
-            projectPath: '/workspace/Api/Api.csproj',
+            targetPath: '/workspace/Api/Api.csproj',
+            resourceExecutablePaths: ['/workspace/.dotnet/dotnet'],
             state: 'running',
             mode: 'debug',
         }]);
@@ -5299,7 +5302,8 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         const stop = resource.stopSession();
         assert.deepStrictEqual(aspireDebugSession.editorResourceSessions, [{
             appHostPath: '/workspace/AppHost/AppHost.csproj',
-            projectPath: '/workspace/Api/Api.csproj',
+            targetPath: '/workspace/Api/Api.csproj',
+            resourceExecutablePaths: ['/workspace/.dotnet/dotnet'],
             state: 'stopping',
             mode: 'debug',
         }]);

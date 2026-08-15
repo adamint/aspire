@@ -220,7 +220,12 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
   }
 
   get editorResourceSessions(): readonly EditorResourceSessionSnapshot[] {
-    return [...this._editorResourceSessions.values()].map(session => ({ ...session }));
+    return [...this._editorResourceSessions.values()].map(session => ({
+      ...session,
+      ...(session.resourceExecutablePaths === undefined
+        ? {}
+        : { resourceExecutablePaths: [...session.resourceExecutablePaths] }),
+    }));
   }
 
   get parentSession(): vscode.DebugSession {
@@ -503,8 +508,8 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
 
   private trackEditorResourceSession(debugConfig: AspireResourceExtendedDebugConfiguration, state: EditorResourceSessionState): void {
     if (debugConfig.isApphost === true ||
-      typeof debugConfig.projectFile !== 'string' ||
-      debugConfig.projectFile.trim().length === 0) {
+      typeof debugConfig.targetPath !== 'string' ||
+      debugConfig.targetPath.trim().length === 0) {
       return;
     }
 
@@ -513,9 +518,14 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
       return;
     }
 
+    const resourceExecutablePaths = debugConfig.resourceExecutablePaths?.filter(
+      executablePath => typeof executablePath === 'string' && executablePath.trim().length > 0);
     this._editorResourceSessions.set(debugConfig.runId, {
       appHostPath,
-      projectPath: debugConfig.projectFile,
+      targetPath: debugConfig.targetPath,
+      ...(resourceExecutablePaths && resourceExecutablePaths.length > 0
+        ? { resourceExecutablePaths: [...resourceExecutablePaths] }
+        : {}),
       state,
       mode: getEditorResourceSessionMode(debugConfig.noDebug),
     });

@@ -1,7 +1,9 @@
 import * as vscode from 'vscode';
 
+import { AspireCliParseError, type ResourceJson } from '../data/appHostCliContracts';
+import { type EditorResourceSessionSnapshot } from '../services/appHostLaunchContracts';
 import { extensionLogOutputChannel } from '../utils/logging';
-import { isSameAppHostPath, isSamePath } from '../utils/paths/comparison';
+import { isSamePath } from '../utils/paths/comparison';
 import { isCommandCancellation } from '../utils/telemetry';
 import {
     aspireDebugSessionStatusToolName,
@@ -56,51 +58,88 @@ export class EditorAssistanceToolService {
                 return createAppHostStatusResult(summary);
             }
 
-            const resources = await this._dependencies.resourceRepository.fetchAppHostResourcesOnce(
-                preflight.target.absolutePath,
-                token);
+            const resourceName = preflight.input.resourceName;
+            const appHostSummary = await this._dependencies.snapshotService.getAppHostSummary(preflight.target, token);
+            let resources: readonly ResourceJson[];
+            try {
+                resources = await this._dependencies.resourceRepository.fetchAppHostResourcesOnce(
+                    preflight.target.absolutePath,
+                    token);
+            }
+            catch (error) {
+                throwIfCanceled(token);
+                if (appHostSummary.state === 'notDebugging' && isMissingStoppedAppHostSnapshot(error)) {
+                    return createResourceStatusResult(
+                        'notDebugging',
+                        preflight.target.displayPath,
+                        resourceName);
+                }
+
+                throw error;
+            }
             throwIfCanceled(token);
 
-            const matches = resources.filter(resource => resource.name === preflight.input.resourceName);
+            const matches = resources.filter(resource => resource.name === resourceName);
             if (matches.length === 0) {
                 return createResourceFailure(
                     'resourceNotFound',
                     preflight.target.displayPath,
-                    preflight.input.resourceName);
+                    resourceName);
             }
             if (matches.length > 1) {
                 return createResourceFailure(
                     'resourceAmbiguous',
                     preflight.target.displayPath,
-                    preflight.input.resourceName);
+                    resourceName);
             }
 
             const resource = matches[0];
-            const projectPath = resource.properties?.['project.path'];
-            if (typeof projectPath !== 'string' || projectPath.trim().length === 0) {
+            const resourceTarget = getResourceTarget(resource);
+            if (resourceTarget === undefined) {
                 return createResourceStatusResult(
                     'notDebugging',
                     preflight.target.displayPath,
                     resource.name);
             }
 
-            const sessions = this._dependencies.getEditorResourceSessions().filter(session =>
-                isSameAppHostPath(session.appHostPath, preflight.target.absolutePath) &&
-                isSamePath(session.projectPath, projectPath));
-            if (sessions.length === 0) {
+            // A Python module/executable launch can carry both the interpreter and
+            // console-script paths because the current typed launch shape does not
+            // distinguish those entrypoint kinds. Resolve every safe candidate against
+            // the exact AppHost resource set, then fail closed if one session could
+            // claim more than one resource.
+            const matchingSessions = this._dependencies.getEditorResourceSessions()
+                .filter(session =>
+                    this._dependencies.targetResolver.getIdentityForAppHostPath(session.appHostPath) === preflight.target.identity)
+                .map(session => ({
+                    session,
+                    matchingResources: resources.filter(candidate => {
+                        const candidateTarget = getResourceTarget(candidate);
+                        return candidateTarget !== undefined &&
+                            isSessionTargetMatch(session, candidateTarget);
+                    }),
+                }))
+                .filter(match => match.matchingResources.includes(resource));
+            if (matchingSessions.length === 0) {
                 return createResourceStatusResult(
                     'notDebugging',
                     preflight.target.displayPath,
                     resource.name);
             }
-            if (sessions.length > 1) {
+
+            if (matchingSessions.some(match => match.matchingResources.length > 1)) {
+                return createResourceFailure(
+                    'resourceAmbiguous',
+                    preflight.target.displayPath,
+                    resource.name);
+            }
+            if (matchingSessions.length > 1) {
                 return createResourceStatusResult(
                     'multipleSessions',
                     preflight.target.displayPath,
                     resource.name);
             }
 
-            const session = sessions[0];
+            const session = matchingSessions[0].session;
             return createResourceStatusResult(
                 session.state,
                 preflight.target.displayPath,
@@ -316,4 +355,38 @@ function throwIfCanceled(token: vscode.CancellationToken): void {
     if (token.isCancellationRequested) {
         throw new vscode.CancellationError();
     }
+}
+
+type ResourceTarget = {
+    readonly kind: 'project' | 'executable';
+    readonly path: string;
+};
+
+function getResourceTarget(resource: ResourceJson): ResourceTarget | undefined {
+    const projectPath = resource.properties?.['project.path'];
+    if (typeof projectPath === 'string' && projectPath.trim().length > 0) {
+        return { kind: 'project', path: projectPath };
+    }
+
+    const executablePath = resource.properties?.['executable.path'];
+    return typeof executablePath === 'string' && executablePath.trim().length > 0
+        ? { kind: 'executable', path: executablePath }
+        : undefined;
+}
+
+function isSessionTargetMatch(
+    session: EditorResourceSessionSnapshot,
+    resourceTarget: ResourceTarget): boolean {
+    if (resourceTarget.kind === 'project') {
+        return isSamePath(session.targetPath, resourceTarget.path);
+    }
+
+    const executablePaths = session.resourceExecutablePaths ?? [session.targetPath];
+    return executablePaths.some(executablePath => isSamePath(executablePath, resourceTarget.path));
+}
+
+function isMissingStoppedAppHostSnapshot(error: unknown): boolean {
+    return error instanceof AspireCliParseError &&
+        error.command === 'aspire describe' &&
+        error.output === '';
 }
