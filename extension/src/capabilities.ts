@@ -15,17 +15,22 @@ export type Capability =
     | 'ms-python.python' // Older AppHost versions used this extension identifier instead of python
     | 'go' // Support for running Go projects
     | 'golang.go' // Older AppHost versions used this extension identifier instead of go
+    | 'rust' // Support for running Rust projects
+    | 'ms-vscode.cpptools' // Rust debug adapter extension identifier on Windows (cppvsdbg)
+    | 'vadimcn.vscode-lldb' // Rust debug adapter extension identifier on macOS/Linux (CodeLLDB)
     | 'node' // Support for running Node.js projects
     | 'bun' // Support for running Bun projects
     | 'oven.bun-vscode' // Bun debug adapter extension identifier
     | 'browser' // Support for browser debugging (built-in to VS Code via js-debug)
-    | 'azure-functions' // Support for running Azure Functions projects
+    | 'maui' // Support for running .NET MAUI projects
+    | 'ms-dotnettools.dotnet-maui' // MAUI debug adapter extension identifier
     | 'java' // Support for running Java projects
-    | 'vscjava.vscode-java-debug'; // Java debug adapter extension identifier
+    | 'vscjava.vscode-java-debug' // Java debug adapter extension identifier
+    | 'azure-functions'; // Support for running Azure Functions projects
 
 export type Capabilities = Capability[];
 
-function isExtensionInstalled(extensionId: string): boolean {
+export function isExtensionInstalled(extensionId: string): boolean {
     const extension = vscode.extensions.getExtension(extensionId);
     return !!extension;
 }
@@ -46,8 +51,34 @@ export function isGoInstalled() {
     return isExtensionInstalled("golang.go");
 }
 
+// Rust debugging depends on a native debugger extension. Prefer the Microsoft C++ extension's
+// Windows-only cppvsdbg engine when it is available, but CodeLLDB is also a valid Windows adapter
+// and is required for GNU Rust targets. CodeLLDB remains the default on macOS/Linux. See:
+// https://code.visualstudio.com/docs/languages/rust#_install-debugging-support
+export function getRustExtensionId(
+    platform: NodeJS.Platform = process.platform,
+    extensionInstalled?: (extensionId: string) => boolean
+): 'ms-vscode.cpptools' | 'vadimcn.vscode-lldb' {
+    if (platform === 'win32'
+        && extensionInstalled
+        && !extensionInstalled('ms-vscode.cpptools')
+        && extensionInstalled('vadimcn.vscode-lldb')) {
+        return 'vadimcn.vscode-lldb';
+    }
+
+    return platform === 'win32' ? 'ms-vscode.cpptools' : 'vadimcn.vscode-lldb';
+}
+
+export function isRustInstalled(platform: NodeJS.Platform = process.platform) {
+    return isExtensionInstalled(getRustExtensionId(platform, isExtensionInstalled));
+}
+
 export function isAzureFunctionsExtensionInstalled() {
     return isExtensionInstalled("ms-azuretools.vscode-azurefunctions");
+}
+
+export function isMauiInstalled() {
+    return isExtensionInstalled("ms-dotnettools.dotnet-maui");
 }
 
 export function isNodeInstalled() {
@@ -63,7 +94,7 @@ export function isJavaInstalled() {
     return isExtensionInstalled("vscjava.vscode-java-debug");
 }
 
-export function getSupportedCapabilities(): Capabilities {
+export function getSupportedCapabilities(platform: NodeJS.Platform = process.platform): Capabilities {
     const capabilities: Capabilities = ['prompting', 'baseline.v1', 'secret-prompts.v1', 'file-pickers.v1', 'build-dotnet-using-cli'];
 
     if (isCsDevKitInstalled()) {
@@ -92,6 +123,12 @@ export function getSupportedCapabilities(): Capabilities {
         capabilities.push("golang.go");
     }
 
+    if (isRustInstalled(platform)) {
+        const rustExtensionId = getRustExtensionId(platform, isExtensionInstalled);
+        capabilities.push("rust");
+        capabilities.push(rustExtensionId);
+    }
+
     if (isNodeInstalled()) {
         capabilities.push("node");
         capabilities.push("browser");
@@ -100,6 +137,11 @@ export function getSupportedCapabilities(): Capabilities {
     if (isBunInstalled()) {
         capabilities.push("bun");
         capabilities.push("oven.bun-vscode");
+    }
+
+    if (isMauiInstalled()) {
+        capabilities.push("maui");
+        capabilities.push("ms-dotnettools.dotnet-maui");
     }
 
     if (isJavaInstalled()) {
