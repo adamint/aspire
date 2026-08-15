@@ -353,7 +353,7 @@ function getE2eErrorMessage(error: unknown): string {
     return 'E2E control command cancelled.';
   }
 
-  return error instanceof Error
+  return error instanceof Error && error.message.startsWith('Aspire extension E2E ')
     ? error.message
     : 'E2E control command failed.';
 }

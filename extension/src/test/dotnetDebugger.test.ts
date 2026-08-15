@@ -12,6 +12,7 @@ import type { ResourceAttachProvider } from '../debugger/resourceDebugContracts'
 import { AppHostParentOutputFilter, AspireDebugSession } from '../debugger/AspireDebugSession';
 import * as hotReload from '../debugger/hotReload';
 import * as cliProcess from '../utils/process/cliProcess';
+import { extensionLogOutputChannel } from '../utils/logging';
 import {
     LaunchedChildProcessResolver,
     type LaunchedChildProcess,
@@ -1261,6 +1262,30 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(dotNetService.getDotNetAttachTargetInfoStub.called, false);
     });
 
+    test('attach configuration rejects a present null launch command before older fallback', async () => {
+        const { attachProvider, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/Api.dll', null, true, true);
+
+        await assert.rejects(
+            attachProvider.createDebugConfiguration({
+                name: 'api',
+                displayName: 'API',
+                resourceType: 'Project',
+                state: 'Running',
+                properties: {
+                    'executable.pid': '1234',
+                    'executable.path': 'dotnet',
+                    'executable.args': null,
+                    'project.path': '/repo/api/Api.csproj',
+                    'project.launchCommand': null,
+                },
+            }),
+            (error: unknown) => error instanceof Error
+                && error.message === 'Invalid launch configuration for api.');
+
+        assert.strictEqual(dotNetService.getDotNetAttachTargetInfoStub.called, false);
+        assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
+    });
+
     test('attach configuration passes cancellation to target discovery', async () => {
         const { attachProvider, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/Api.dll', null, true, true);
         const cancellation = new vscode.CancellationTokenSource();
@@ -2004,6 +2029,52 @@ suite('Dotnet Debugger Extension Tests', () => {
         const fileBasedConfig: ProjectLaunchConfiguration = { type: 'project', project_path: '/tmp/app.cs' };
         assert.strictEqual(projectDebuggerExtension.getProjectFile(csprojConfig), '/tmp/Worker.csproj');
         assert.strictEqual(projectDebuggerExtension.getProjectFile(fileBasedConfig), '/tmp/app.cs');
+    });
+
+    test('invalid project launch configurations do not expose arbitrary properties', async () => {
+        const secret = 'top-secret';
+        const invalidLaunchConfig = {
+            type: 'node',
+            name: 'api',
+            secret,
+        } as unknown as ExecutableLaunchConfiguration;
+        const info = sinon.stub(extensionLogOutputChannel, 'info');
+
+        assert.throws(
+            () => projectDebuggerExtension.getProjectFile(invalidLaunchConfig),
+            (error: unknown) => {
+                assert.ok(error instanceof Error);
+                assert.strictEqual(error.message, 'Invalid launch configuration for node.');
+                return true;
+            });
+
+        await assert.rejects(
+            projectDebuggerExtension.createDebugSessionConfigurationCallback!(
+                invalidLaunchConfig,
+                [],
+                [],
+                {
+                    debug: true,
+                    runId: '1',
+                    debugSessionId: '1',
+                    isApphost: false,
+                    debugSession: sinon.createStubInstance(AspireDebugSession),
+                },
+                {
+                    runId: '1',
+                    debugSessionId: '1',
+                    type: 'coreclr',
+                    name: 'Test Debug Config',
+                    request: 'launch',
+                }),
+            (error: unknown) => {
+                assert.ok(error instanceof Error);
+                assert.strictEqual(error.message, 'Invalid launch configuration for node.');
+                return true;
+            });
+
+        assert.strictEqual(info.calledOnceWithExactly('The resource type was not project for node'), true);
+        assert.strictEqual(info.firstCall.args.join(' ').includes(secret), false);
     });
 
     test('file-based AppHost follows CLI build ownership', async () => {

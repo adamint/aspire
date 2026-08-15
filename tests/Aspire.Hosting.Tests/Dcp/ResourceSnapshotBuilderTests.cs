@@ -170,6 +170,53 @@ public class ResourceSnapshotBuilderTests
     }
 
     [Fact]
+    public void ProjectSnapshotIncludesNullLaunchCommandWhenDotNetArgumentsAreMissing()
+    {
+        var project = new ProjectResource("project");
+        project.Annotations.Add(new TestProjectMetadata());
+
+        var executable = Executable.Create("project", "dotnet");
+        executable.Annotate(DcpCustomResource.ResourceNameAnnotation, project.Name);
+        executable.Status = new ExecutableStatus
+        {
+            ProcessId = 1234
+        };
+
+        var snapshot = CreateSnapshotBuilder(new Dictionary<string, IResource>
+        {
+            [project.Name] = project
+        }).ToSnapshot(executable, CreatePreviousSnapshot());
+
+        var launchCommand = GetProperty(snapshot, KnownProperties.Project.LaunchCommand);
+        Assert.Null(launchCommand.Value);
+        Assert.False(launchCommand.IsSensitive);
+    }
+
+    [Fact]
+    public void ProjectSnapshotIncludesNullLaunchCommandWhenDotNetCommandIsUnsupported()
+    {
+        var project = new ProjectResource("project");
+        project.Annotations.Add(new TestProjectMetadata());
+
+        var executable = Executable.Create("project", "dotnet.exe");
+        executable.Annotate(DcpCustomResource.ResourceNameAnnotation, project.Name);
+        executable.Status = new ExecutableStatus
+        {
+            EffectiveArgs = ["publish", "--configuration", "Release"],
+            ProcessId = 1234
+        };
+
+        var snapshot = CreateSnapshotBuilder(new Dictionary<string, IResource>
+        {
+            [project.Name] = project
+        }).ToSnapshot(executable, CreatePreviousSnapshot());
+
+        var launchCommand = GetProperty(snapshot, KnownProperties.Project.LaunchCommand);
+        Assert.Null(launchCommand.Value);
+        Assert.False(launchCommand.IsSensitive);
+    }
+
+    [Fact]
     public void ProjectSnapshotRejectsMultipleProjectMetadataAnnotations()
     {
         var project = new ProjectResource("project");

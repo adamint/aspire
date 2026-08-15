@@ -284,10 +284,9 @@ export class LaunchedChildProcessResolver {
         let processId = candidatePid;
         const visited = new Set<number>();
 
-        // `ps` renders command arguments verbatim, including newlines. A malicious command can
-        // therefore forge a plausible extra row in an all-process listing. Re-query every PID in
-        // the selected transitive ancestry immediately before returning so topology and command
-        // identity come from the kernel's actual process record rather than a synthetic line.
+        // POSIX process-list rows contain only PID/PPID topology, while Windows CIM rows can also
+        // carry trusted identity for candidate discovery. Regardless of the listing source, re-read
+        // every PID in the selected transitive ancestry from the OS immediately before returning.
         while (true) {
             if (visited.has(processId) || this._clock.now() > deadline) {
                 return false;

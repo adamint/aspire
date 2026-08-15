@@ -121,15 +121,21 @@ suite('Launched child process discovery', () => {
     });
 
     test('parses Windows CIM process listings', () => {
-        assert.deepStrictEqual(parseWindowsProcessList(JSON.stringify({
+        const processes = parseWindowsProcessList(JSON.stringify({
             ProcessId: 42,
             ParentProcessId: 10,
             Name: 'api.exe',
             ExecutablePath: 'C:\\target\\api.exe',
             CommandLine: 'C:\\target\\api.exe',
-        })), [
+        }));
+
+        assert.deepStrictEqual(processes, [
             process(42, 10, 'C:\\target\\api.exe', 'C:\\target\\api.exe'),
         ]);
+        assert.strictEqual(processes.length, 1);
+        const parsedProcess = processes[0];
+        assert.strictEqual(parsedProcess.hasCompleteIdentity, true);
+        assert.strictEqual(Object.keys(parsedProcess).includes('hasCompleteIdentity'), false);
     });
 
     test('trusts listed process identity only on Windows', () => {

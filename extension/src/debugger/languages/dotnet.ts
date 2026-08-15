@@ -984,12 +984,12 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 return launchConfig.project_path;
             }
 
-            throw new Error(invalidLaunchConfiguration(JSON.stringify(launchConfig)));
+            throw new Error(invalidLaunchConfiguration(launchConfig.type));
         },
         createDebugSessionConfigurationCallback: async (launchConfig, args, env, launchOptions, debugConfiguration: AspireResourceExtendedDebugConfiguration): Promise<void> => {
             if (!isProjectLaunchConfiguration(launchConfig)) {
-                extensionLogOutputChannel.info(`The resource type was not project for ${JSON.stringify(launchConfig)}`);
-                throw new Error(invalidLaunchConfiguration(JSON.stringify(launchConfig)));
+                extensionLogOutputChannel.info(`The resource type was not project for ${launchConfig.type}`);
+                throw new Error(invalidLaunchConfiguration(launchConfig.type));
             }
 
             const projectPath = launchConfig.project_path;

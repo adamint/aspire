@@ -250,7 +250,7 @@ internal class ResourceSnapshotBuilder
             (!string.Equals(command, "run", StringComparison.OrdinalIgnoreCase) &&
              !string.Equals(command, "watch", StringComparison.OrdinalIgnoreCase)))
         {
-            return [];
+            return [new(KnownProperties.Project.LaunchCommand, null)];
         }
 
         string? configuration = null;
