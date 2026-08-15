@@ -505,6 +505,20 @@ public static class JavaHostingExtensions
     /// https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases, and point this at the
     /// resulting file. The OTLP exporter is configured by <c>AddJavaApp</c> regardless of whether an agent
     /// is used, so call this only when you want the agent's automatic instrumentation.
+    /// <para>
+    /// A relative <paramref name="agentPath"/> is resolved against the application directory and made absolute
+    /// when running locally. This is required, not cosmetic: <c>JAVA_TOOL_OPTIONS</c> is inherited by every JVM
+    /// started beneath the resource, and build tools start JVMs whose working directory is not the application
+    /// directory. The Gradle daemon, for example, starts from its own distribution directory, so a relative
+    /// <c>-javaagent:</c> path fails to resolve and the daemon dies during VM initialization with
+    /// "Error opening zip file or JAR manifest missing".
+    /// </para>
+    /// <para>
+    /// In publish mode a relative path is rewritten to the location the generated Dockerfile copies the
+    /// agent to, because the path has to be interpreted inside the container rather than on the build
+    /// machine. An absolute path is emitted unchanged, since it cannot have come from the build context
+    /// and must be supplied by the base image or a mount.
+    /// </para>
     /// </remarks>
     [AspireExport]
     public static IResourceBuilder<T> WithOtelAgent<T>(
@@ -514,7 +528,29 @@ public static class JavaHostingExtensions
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(agentPath);
 
-        return builder.WithEnvironment(context => AppendJavaToolOptions(context.EnvironmentVariables, [$"-javaagent:{agentPath}"]));
+        // Recorded so the container build can copy the agent forward. The environment variable alone
+        // would leave a published image pointing at a JAR that is not in it.
+        builder.WithAnnotation(new JavaOtelAgentAnnotation(agentPath), ResourceAnnotationMutationBehavior.Replace);
+
+        return builder.WithEnvironment(context =>
+        {
+            string resolved;
+
+            if (context.ExecutionContext.IsRunMode)
+            {
+                resolved = Path.GetFullPath(Path.Combine(builder.Resource.WorkingDirectory, agentPath));
+            }
+            else if (JavaDockerfileGenerator.TryGetBuildProducedAgentPath(builder.Resource, out _))
+            {
+                resolved = JavaDockerfileGenerator.ContainerAgentPath;
+            }
+            else
+            {
+                resolved = agentPath;
+            }
+
+            AppendJavaToolOptions(context.EnvironmentVariables, [$"-javaagent:{resolved}"]);
+        });
     }
 
     /// <summary>

@@ -4,6 +4,7 @@
 #pragma warning disable ASPIREDOCKERFILEBUILDER001
 
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.ApplicationModel.Docker;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,6 +25,12 @@ internal static class JavaDockerfileGenerator
     // Kept outside /app so a build that writes into its own working directory cannot move the JAR
     // somewhere COPY --from does not look.
     private const string ContainerArtifactPath = "/build/app.jar";
+
+    /// <summary>
+    /// Where a build-produced OpenTelemetry agent lands in the runtime image. Fixed rather than mirroring
+    /// the source layout so the entrypoint environment does not depend on the build tool's output paths.
+    /// </summary>
+    internal const string ContainerAgentPath = "/app/agent.jar";
 
     // Without this, target/ and build/ — routinely hundreds of megabytes after a local build — are
     // uploaded to the daemon and copied into the image by `COPY . .`. Multi-module projects put one next
@@ -125,11 +132,50 @@ internal static class JavaDockerfileGenerator
             .WorkDir("/app")
             // Add COPY --from=<source> instructions for each container files source.
             .AddContainerFiles(context.Resource, "/app", logger)
-            .CopyFrom("build", ContainerArtifactPath, "/app/app.jar")
+            .CopyFrom("build", ContainerArtifactPath, "/app/app.jar");
+
+        // A relative agent path names a file the build produced, so it only exists in the build stage.
+        // Carry it into the runtime image; the matching JAVA_TOOL_OPTIONS value is written by
+        // WithOtelAgent, which points at ContainerAgentPath in publish mode.
+        if (TryGetBuildProducedAgentPath(resource, out var agentPath))
+        {
+            runtimeStage.CopyFrom("build", $"/app/{agentPath}", ContainerAgentPath);
+        }
+
+        runtimeStage
             .User("app")
             // No shell form: with an ENTRYPOINT array the JVM is PID 1 and receives SIGTERM directly, so
             // Spring's shutdown hooks run instead of the container being killed after the stop timeout.
             .Entrypoint(["java", "-jar", "/app/app.jar"]);
+    }
+
+    /// <summary>
+    /// Gets the OpenTelemetry agent path when it names a file the build produces inside the context.
+    /// </summary>
+    /// <remarks>
+    /// An absolute path is left alone. It cannot have come out of the build context, so it has to be
+    /// supplied by the base image or a mount, and rewriting it would break that arrangement.
+    /// </remarks>
+    internal static bool TryGetBuildProducedAgentPath(JavaAppResource resource, [NotNullWhen(true)] out string? agentPath)
+    {
+        agentPath = null;
+
+        if (!resource.TryGetLastAnnotation<JavaOtelAgentAnnotation>(out var annotation))
+        {
+            return false;
+        }
+
+        var authored = annotation.AgentPath;
+
+        if (Path.IsPathRooted(authored))
+        {
+            return false;
+        }
+
+        // Container paths are POSIX even when the AppHost authored a Windows-style relative path.
+        agentPath = authored.Replace('\\', '/').TrimStart('.', '/');
+
+        return agentPath.Length > 0;
     }
 
     /// <summary>

@@ -369,6 +369,9 @@
     <Project Path="playground/Redis/Redis.ApiService/Redis.ApiService.csproj" />
     <Project Path="playground/Redis/Redis.AppHost/Redis.AppHost.csproj" />
   </Folder>
+  <Folder Name="/playground/JavaSpringBoot/">
+    <Project Path="playground/JavaSpringBoot/JavaSpringBoot.AppHost/JavaSpringBoot.AppHost.csproj" />
+  </Folder>
   <Folder Name="/playground/rust/">
     <Project Path="playground/rust/Rust.AppHost/Rust.AppHost.csproj" />
   </Folder>

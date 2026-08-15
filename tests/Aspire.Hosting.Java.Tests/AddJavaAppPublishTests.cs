@@ -43,6 +43,39 @@ public class AddJavaAppPublishTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task VerifyPublish_CopiesABuildProducedOtelAgentIntoTheRuntimeImage()
+    {
+        var content = await PublishDockerfileAsync(
+            configureSource: source => WritePom(source, javaVersion: "21"),
+            configureResource: app => app
+                .WithMavenGoal("spring-boot:run")
+                .WithOtelAgent("target/agent/opentelemetry-javaagent.jar"));
+
+        // The agent is produced by the build, so it exists only in the build stage. Without this COPY the
+        // published container starts a JVM pointing at a JAR that is not in the image and dies during VM
+        // initialization with "Error opening zip file or JAR manifest missing".
+        Assert.Contains(
+            "COPY --from=build /app/target/agent/opentelemetry-javaagent.jar /app/agent.jar",
+            content);
+        await Verify(content);
+    }
+
+    [Fact]
+    public async Task VerifyPublish_DoesNotCopyAnAbsoluteOtelAgentPath()
+    {
+        var agentPath = OperatingSystem.IsWindows() ? @"C:\opt\otel\agent.jar" : "/opt/otel/agent.jar";
+
+        var content = await PublishDockerfileAsync(
+            configureSource: source => WritePom(source, javaVersion: "21"),
+            configureResource: app => app
+                .WithMavenGoal("spring-boot:run")
+                .WithOtelAgent(agentPath));
+
+        // An absolute path cannot have come out of the build context, so there is nothing to copy from.
+        Assert.DoesNotContain("/app/agent.jar", content);
+    }
+
+    [Fact]
     public async Task VerifyPublish_UsesTheWrapperWhenTheProjectShipsOne()
     {
         var content = await PublishDockerfileAsync(

@@ -11,6 +11,13 @@ namespace Aspire.Hosting.Java.Tests;
 
 public class AddJavaAppTests
 {
+    // An absolute path on the current platform. A POSIX-style literal would be rewritten to C:\opt\...
+    // by Path.GetFullPath on Windows, so the expected value has to be platform-specific.
+    private static readonly string s_absoluteAgentPath =
+        OperatingSystem.IsWindows() ? @"C:\opt\otel\agent.jar" : "/opt/otel/agent.jar";
+
+    private static string AbsoluteAgentPath => s_absoluteAgentPath;
+
     // ---- Launch mode -------------------------------------------------------
 
     [Fact]
@@ -566,12 +573,12 @@ public class AddJavaAppTests
         using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
 
         var app = builder.AddJavaApp("api", AppContext.BaseDirectory)
-            .WithOtelAgent("/opt/otel/agent.jar");
+            .WithOtelAgent(AbsoluteAgentPath);
 
         var envVars = await EnvironmentVariableEvaluator.GetEnvironmentVariablesAsync(
             app.Resource, DistributedApplicationOperation.Run, TestServiceProvider.Instance);
 
-        Assert.Equal("-javaagent:/opt/otel/agent.jar", envVars["JAVA_TOOL_OPTIONS"]);
+        Assert.Equal($"-javaagent:{AbsoluteAgentPath}", envVars["JAVA_TOOL_OPTIONS"]);
     }
 
     [Fact]
@@ -581,12 +588,67 @@ public class AddJavaAppTests
 
         var app = builder.AddJavaApp("api", AppContext.BaseDirectory)
             .WithJvmArgs(["-Xmx512m"])
-            .WithOtelAgent("/opt/otel/agent.jar");
+            .WithOtelAgent(AbsoluteAgentPath);
 
         var envVars = await EnvironmentVariableEvaluator.GetEnvironmentVariablesAsync(
             app.Resource, DistributedApplicationOperation.Run, TestServiceProvider.Instance);
 
-        Assert.Equal("-Xmx512m -javaagent:/opt/otel/agent.jar", envVars["JAVA_TOOL_OPTIONS"]);
+        Assert.Equal($"-Xmx512m -javaagent:{AbsoluteAgentPath}", envVars["JAVA_TOOL_OPTIONS"]);
+    }
+
+    [Fact]
+    public async Task WithOtelAgent_RelativeAgentPath_IsMadeAbsoluteInRunMode()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
+
+        var app = builder.AddJavaApp("api", AppContext.BaseDirectory)
+            .WithOtelAgent(Path.Combine("target", "agent", "opentelemetry-javaagent.jar"));
+
+        var envVars = await EnvironmentVariableEvaluator.GetEnvironmentVariablesAsync(
+            app.Resource, DistributedApplicationOperation.Run, TestServiceProvider.Instance);
+
+        // JAVA_TOOL_OPTIONS is inherited by every JVM started beneath the resource, and build tools start
+        // JVMs from directories other than the application directory. The Gradle daemon in particular
+        // starts from its own distribution directory, so a relative -javaagent: path fails to resolve and
+        // the daemon dies during VM initialization rather than reporting a normal build failure.
+        var expected = Path.GetFullPath(
+            Path.Combine(app.Resource.WorkingDirectory, "target", "agent", "opentelemetry-javaagent.jar"));
+
+        Assert.Equal($"-javaagent:{expected}", envVars["JAVA_TOOL_OPTIONS"]);
+        Assert.True(Path.IsPathFullyQualified(expected));
+    }
+
+    [Fact]
+    public async Task WithOtelAgent_RelativeAgentPath_PointsAtContainerPathInPublishMode()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+        var app = builder.AddJavaApp("api", AppContext.BaseDirectory)
+            .WithOtelAgent("target/agent/opentelemetry-javaagent.jar");
+
+        var envVars = await EnvironmentVariableEvaluator.GetEnvironmentVariablesAsync(
+            app.Resource, DistributedApplicationOperation.Publish, TestServiceProvider.Instance);
+
+        // The path has to be interpreted inside the container, so a build-machine path would be wrong.
+        // The generated Dockerfile copies the build-produced agent to a fixed location, and this has to
+        // agree with it or the container starts a JVM pointing at a JAR that is not in the image.
+        Assert.Equal("-javaagent:/app/agent.jar", envVars["JAVA_TOOL_OPTIONS"]);
+    }
+
+    [Fact]
+    public async Task WithOtelAgent_AbsoluteAgentPath_IsLeftUnchangedInPublishMode()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+        var app = builder.AddJavaApp("api", AppContext.BaseDirectory)
+            .WithOtelAgent(AbsoluteAgentPath);
+
+        var envVars = await EnvironmentVariableEvaluator.GetEnvironmentVariablesAsync(
+            app.Resource, DistributedApplicationOperation.Publish, TestServiceProvider.Instance);
+
+        // An absolute path cannot have come out of the build context, so it is the base image's or a
+        // mount's responsibility and rewriting it would break that arrangement.
+        Assert.Equal($"-javaagent:{AbsoluteAgentPath}", envVars["JAVA_TOOL_OPTIONS"]);
     }
 
     // ---- WithMavenBuild / WithGradleBuild -----------------------------------
@@ -761,14 +823,14 @@ public class AddJavaAppTests
 
         var app = builder.AddJavaApp("api", AppContext.BaseDirectory)
             .WithGradleTask("bootRun")
-            .WithOtelAgent("/opt/otel/agent.jar");
+            .WithOtelAgent(AbsoluteAgentPath);
 
         var args = await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
         Assert.Contains("bootRun", args);
 
         var envVars = await EnvironmentVariableEvaluator.GetEnvironmentVariablesAsync(
             app.Resource, DistributedApplicationOperation.Run, TestServiceProvider.Instance);
-        Assert.Equal("-javaagent:/opt/otel/agent.jar", envVars["JAVA_TOOL_OPTIONS"]);
+        Assert.Equal($"-javaagent:{AbsoluteAgentPath}", envVars["JAVA_TOOL_OPTIONS"]);
     }
 
     [Fact]

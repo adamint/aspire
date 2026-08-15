@@ -49,3 +49,16 @@ internal sealed class JavaBuildToolAnnotation(JavaBuildTool tool, string[] args)
 /// <param name="Tool">The build tool that produces the artifact.</param>
 /// <param name="Args">The arguments passed to the build tool.</param>
 internal sealed record JavaBuildStepAnnotation(string? ResourceName, JavaBuildTool Tool, string[] Args) : IResourceAnnotation;
+
+/// <summary>
+/// Records the OpenTelemetry Java agent configured by <c>WithOtelAgent</c>.
+/// </summary>
+/// <remarks>
+/// The environment variable alone is not enough to reproduce the agent in a container. A relative agent
+/// path names a file produced by the build, which only exists in the Dockerfile's build stage, so the
+/// runtime stage has to copy it forward and the environment variable has to point at where it landed.
+/// Without this the published container starts a JVM pointing at an agent JAR that is not in the image
+/// and dies during VM initialization.
+/// </remarks>
+/// <param name="AgentPath">The agent path exactly as authored, before any resolution.</param>
+internal sealed record JavaOtelAgentAnnotation(string AgentPath) : IResourceAnnotation;
