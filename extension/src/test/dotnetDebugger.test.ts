@@ -110,6 +110,7 @@ interface TestLaunchedChildProcess {
     readonly parentPid: number;
     readonly executable: string;
     readonly command: string;
+    readonly commandLineArguments?: readonly string[];
 }
 
 interface TestLaunchedChildProcessIdentity {
@@ -244,7 +245,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         }), false);
     });
 
-    test('matches a spaced evaluated TargetPath from the raw framework-dependent command', async () => {
+    test('matches a spaced evaluated TargetPath from the raw framework-dependent command without matching a prefix sibling', async () => {
         const targetPath = '/repo/OneDrive - Microsoft/über-long-path/My Attach Service.dll';
         const { dotNetService } = createDebuggerExtension(targetPath, null, true, true);
         dotNetService.getDotNetAttachTargetInfoStub.resolves({ targetPath, useAppHost: false });
@@ -279,10 +280,16 @@ suite('Dotnet Debugger Extension Tests', () => {
             parentPid: 1234,
             executable: '/usr/local/share/dotnet/dotnet',
             command: `dotnet exec ${targetPath}.bak`,
-        }), true);
+        }), false);
+        assert.strictEqual(processIdentity.isCandidate({
+            pid: 4323,
+            parentPid: 1234,
+            executable: '/usr/local/share/dotnet/dotnet',
+            command: `dotnet run ${targetPath}`,
+        }), false);
     });
 
-    test('matches a uniquely scoped dotnet child when a spaced DLL path cannot be reconstructed from POSIX command text', async () => {
+    test('matches a structured framework-dependent TargetPath without accepting other dotnet children', async () => {
         const targetPath = '/repo/OneDrive - Microsoft/über-long-path/My Attach Service.dll';
         const { dotNetService } = createDebuggerExtension(targetPath, null, true, true);
         dotNetService.getDotNetAttachTargetInfoStub.resolves({ targetPath, useAppHost: false });
@@ -311,7 +318,15 @@ suite('Dotnet Debugger Extension Tests', () => {
             parentPid: 1234,
             executable: '/usr/local/share/dotnet/dotnet',
             command: 'dotnet exec malformed-posix-command',
+            commandLineArguments: ['dotnet', 'exec', targetPath, '', '--urls', 'http://localhost:5000'],
         }), true);
+        assert.strictEqual(processIdentity.isCandidate({
+            pid: 4322,
+            parentPid: 1234,
+            executable: '/usr/local/share/dotnet/dotnet',
+            command: 'dotnet exec malformed-posix-command',
+            commandLineArguments: ['dotnet', 'exec', `${targetPath}.bak`],
+        }), false);
     });
 
     test('attach configuration resolves an apphost child by its evaluated executable identity', async () => {
@@ -365,6 +380,12 @@ suite('Dotnet Debugger Extension Tests', () => {
             parentPid: 1234,
             executable: '/repo/OneDrive',
             command: `"${targetPath}"`,
+        }), false);
+        assert.strictEqual(processIdentity.isCandidate({
+            pid: 4325,
+            parentPid: 1234,
+            executable: `${targetPath} Worker`,
+            command: `${targetPath} Worker`,
         }), false);
     });
 

@@ -732,11 +732,11 @@ function isFrameworkDependentProcessForTarget(process: LaunchedChildProcess, tar
         return false;
     }
 
-    // `ps` exposes a flattened command string, not argv. An unquoted TargetPath such as
-    // "/repo/My Attach Service.dll" cannot be reconstructed safely because the boundaries of its
-    // whitespace-containing argument are lost. The resolver scopes these children directly to the
-    // launcher and rejects ambiguity, so use the structured executable identity in that case.
-    return /\s/.test(targetPath) || commandContainsPathArgument(process.command, targetPath);
+    if (process.commandLineArguments) {
+        return commandLineArgumentsContainTargetPath(process.commandLineArguments, targetPath);
+    }
+
+    return commandContainsPathArgumentAfterDotNetExec(process.command, targetPath);
 }
 
 function areProcessPathsEqual(left: string, right: string): boolean {
@@ -755,6 +755,21 @@ function getAppHostPaths(targetPath: string): readonly string[] {
 
     const appHostPath = targetPath.slice(0, -'.dll'.length);
     return [appHostPath, `${appHostPath}.exe`];
+}
+
+function commandLineArgumentsContainTargetPath(argumentsList: readonly string[], targetPath: string): boolean {
+    const execIndex = argumentsList.indexOf('exec');
+    return execIndex >= 1 &&
+        argumentsList.slice(execIndex + 1).some(argument => areProcessPathsEqual(argument, targetPath));
+}
+
+function commandContainsPathArgumentAfterDotNetExec(command: string, targetPath: string): boolean {
+    const dotNetExec = /^\s*(?:"[^"]+"|'[^']+'|\S+)\s+exec(?:\s+|$)/.exec(command);
+    if (!dotNetExec) {
+        return false;
+    }
+
+    return commandContainsPathArgument(command.slice(dotNetExec[0].length), targetPath);
 }
 
 function commandContainsPathArgument(command: string, targetPath: string): boolean {

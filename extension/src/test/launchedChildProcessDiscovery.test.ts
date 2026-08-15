@@ -12,6 +12,7 @@ import {
     type LaunchedChildProcess,
     type LaunchedChildProcessClock,
     type LaunchedChildProcessCommandRunner,
+    type LaunchedChildProcessFileSystem,
     type LaunchedChildProcessIdentity,
     type LaunchedChildProcessQuery,
 } from '../debugger/launchedChildProcessDiscovery';
@@ -49,8 +50,20 @@ class SequenceProcessQuery implements LaunchedChildProcessQuery {
     }
 }
 
-function process(pid: number, parentPid: number, executable: string, command = executable): LaunchedChildProcess {
-    return { pid, parentPid, executable, command };
+function process(
+    pid: number,
+    parentPid: number,
+    executable: string,
+    command = executable,
+    commandLineArguments?: readonly string[],
+): LaunchedChildProcess {
+    return {
+        pid,
+        parentPid,
+        executable,
+        command,
+        ...(commandLineArguments ? { commandLineArguments } : {}),
+    };
 }
 
 function createCommandProcess(): childProcess.ChildProcessWithoutNullStreams {
@@ -73,6 +86,13 @@ const identity: LaunchedChildProcessIdentity = {
     isLauncher: candidate => candidate.executable === '/tool/launcher',
     isCandidate: candidate => candidate.executable.includes('/target/'),
 };
+
+function createLinuxProcessQuery(
+    commandRunner: LaunchedChildProcessCommandRunner,
+    fileSystem: LaunchedChildProcessFileSystem,
+): SystemLaunchedChildProcessQuery {
+    return new SystemLaunchedChildProcessQuery('linux', commandRunner, fileSystem);
+}
 
 suite('Launched child process discovery', () => {
     teardown(() => sinon.restore());
@@ -112,8 +132,11 @@ suite('Launched child process discovery', () => {
         ]);
     });
 
-    test('uses an identity-free POSIX topology query and fixed per-process identity queries', async () => {
+    test('reads exact Linux process details from procfs without using truncated ps command output', async () => {
         const calls: Array<{ command: string; args: readonly string[] }> = [];
+        const fileSystemCalls: string[] = [];
+        const executablePath = '/repo/OneDrive - Microsoft/über-long-path/My Attach Service';
+        const targetPath = '/repo/OneDrive - Microsoft/über-long-path/My Attach Service.dll';
         const commandRunner: LaunchedChildProcessCommandRunner = {
             async run(command, args): Promise<string> {
                 calls.push({ command, args });
@@ -122,16 +145,7 @@ suite('Launched child process discovery', () => {
                         return '10 1\n42 10';
                     }
 
-                    switch (args[args.length - 1]) {
-                        case 'ppid=':
-                            return '10';
-                        case 'comm=':
-                            return '/repo/OneDrive - Microsoft/über-long-path/My Attach Service';
-                        case 'args=':
-                            return '"/repo/OneDrive - Microsoft/über-long-path/My Attach Service" --urls http://localhost:5000';
-                        default:
-                            throw new Error(`Unexpected ps query: ${args.join(' ')}`);
-                    }
+                    throw new Error(`Unexpected ps query: ${args.join(' ')}`);
                 }
 
                 return JSON.stringify({
@@ -143,8 +157,26 @@ suite('Launched child process discovery', () => {
                 });
             },
         };
+        const fileSystem: LaunchedChildProcessFileSystem = {
+            async readlink(path): Promise<string> {
+                fileSystemCalls.push(path);
+                assert.strictEqual(path, '/proc/42/exe');
+                return executablePath;
+            },
+            async readFile(path): Promise<Buffer> {
+                fileSystemCalls.push(path);
+                switch (path) {
+                    case '/proc/42/cmdline':
+                        return Buffer.from(['/usr/local/share/dotnet/dotnet', 'exec', targetPath, '', '--urls', 'http://localhost:5000'].join('\0') + '\0');
+                    case '/proc/42/status':
+                        return Buffer.from('Name:\tMy Attach Service\nPid:\t42\nPPid:\t10\nNSpid:\t42\n');
+                    default:
+                        throw new Error(`Unexpected procfs path: ${path}`);
+                }
+            },
+        };
 
-        const query = new SystemLaunchedChildProcessQuery('linux', commandRunner);
+        const query = createLinuxProcessQuery(commandRunner, fileSystem);
         assert.deepStrictEqual(await query.listProcesses(), [
             process(10, 1, '', ''),
             process(42, 10, '', ''),
@@ -152,26 +184,16 @@ suite('Launched child process discovery', () => {
         assert.deepStrictEqual(await query.getProcess(42), process(
             42,
             10,
-            '/repo/OneDrive - Microsoft/über-long-path/My Attach Service',
-            '"/repo/OneDrive - Microsoft/über-long-path/My Attach Service" --urls http://localhost:5000'));
+            executablePath,
+            `/usr/local/share/dotnet/dotnet exec ${targetPath}  --urls http://localhost:5000`,
+            ['/usr/local/share/dotnet/dotnet', 'exec', targetPath, '', '--urls', 'http://localhost:5000']));
+        await query.getProcess(42);
         await new SystemLaunchedChildProcessQuery('win32', commandRunner).listProcesses();
 
         assert.deepStrictEqual(calls, [
             {
                 command: 'ps',
                 args: ['-axo', 'pid=,ppid='],
-            },
-            {
-                command: 'ps',
-                args: ['-p', '42', '-o', 'ppid='],
-            },
-            {
-                command: 'ps',
-                args: ['-p', '42', '-o', 'comm='],
-            },
-            {
-                command: 'ps',
-                args: ['-p', '42', '-o', 'args='],
             },
             {
                 command: 'powershell.exe',
@@ -184,9 +206,17 @@ suite('Launched child process discovery', () => {
                 ],
             },
         ]);
+        assert.deepStrictEqual(fileSystemCalls.sort(), [
+            '/proc/42/cmdline',
+            '/proc/42/cmdline',
+            '/proc/42/exe',
+            '/proc/42/exe',
+            '/proc/42/status',
+            '/proc/42/status',
+        ]);
     });
 
-    test('resolves a POSIX child with a spaced non-ASCII executable path from separately queried details', async () => {
+    test('resolves a macOS child with a spaced non-ASCII executable path from per-candidate ps details', async () => {
         const calls: Array<{ command: string; args: readonly string[] }> = [];
         const processDetails = new Map([
             [10, { parentPid: 1, executable: '/tool/launcher', command: '/tool/launcher --run' }],
@@ -223,7 +253,7 @@ suite('Launched child process discovery', () => {
             },
         };
         const resolver = new LaunchedChildProcessResolver(
-            new SystemLaunchedChildProcessQuery('linux', commandRunner),
+            new SystemLaunchedChildProcessQuery('darwin', commandRunner),
             new TestClock(),
             { timeoutMs: 100, retryDelayMs: 10 });
         const spacedTargetPath = '/repo/OneDrive - Microsoft/über-long-path/My Attach Service';
@@ -235,6 +265,103 @@ suite('Launched child process discovery', () => {
 
         assert.strictEqual(await resolver.resolveProcessId(10, exactPathIdentity), 42);
         assert.ok(calls.every(call => call.args.join(' ') !== '-axo pid=,ppid=,comm=,args='));
+    });
+
+    test('retries when a Linux candidate exits between topology and procfs reads', async () => {
+        const targetPath = '/repo/OneDrive - Microsoft/über-long-path/My Attach Service.dll';
+        let candidateReadAttempts = 0;
+        const commandRunner: LaunchedChildProcessCommandRunner = {
+            async run(command, args): Promise<string> {
+                assert.strictEqual(command, 'ps');
+                assert.deepStrictEqual(args, ['-axo', 'pid=,ppid=']);
+                return '10 1\n42 10';
+            },
+        };
+        const fileSystem: LaunchedChildProcessFileSystem = {
+            async readlink(path): Promise<string> {
+                if (path === '/proc/42/exe') {
+                    candidateReadAttempts++;
+                    if (candidateReadAttempts === 1) {
+                        throw new Error('Process exited.');
+                    }
+
+                    return '/usr/local/share/dotnet/dotnet';
+                }
+
+                assert.strictEqual(path, '/proc/10/exe');
+                return '/tool/launcher';
+            },
+            async readFile(path): Promise<Buffer> {
+                switch (path) {
+                    case '/proc/10/cmdline':
+                        return Buffer.from('/tool/launcher\0');
+                    case '/proc/10/status':
+                        return Buffer.from('Name:\tlauncher\nPPid:\t1\n');
+                    case '/proc/42/cmdline':
+                        return Buffer.from(`/usr/local/share/dotnet/dotnet\0exec\0${targetPath}\0`);
+                    case '/proc/42/status':
+                        return Buffer.from('Name:\tdotnet\nPPid:\t10\n');
+                    default:
+                        throw new Error(`Unexpected procfs path: ${path}`);
+                }
+            },
+        };
+        const resolver = new LaunchedChildProcessResolver(
+            createLinuxProcessQuery(commandRunner, fileSystem),
+            new TestClock(),
+            { timeoutMs: 100, retryDelayMs: 10 });
+        const frameworkDependentIdentity: LaunchedChildProcessIdentity = {
+            requiresDirectChild: true,
+            isLauncher: candidate => candidate.executable === '/tool/launcher',
+            isCandidate: candidate => candidate.executable === '/usr/local/share/dotnet/dotnet' &&
+                candidate.commandLineArguments?.includes(targetPath) === true,
+        };
+
+        assert.strictEqual(await resolver.resolveProcessId(10, frameworkDependentIdentity), 42);
+        assert.ok(candidateReadAttempts >= 3);
+    });
+
+    test('fails closed after repeated Linux procfs permission errors', async () => {
+        let candidateReadAttempts = 0;
+        const commandRunner: LaunchedChildProcessCommandRunner = {
+            async run(command, args): Promise<string> {
+                assert.strictEqual(command, 'ps');
+                assert.deepStrictEqual(args, ['-axo', 'pid=,ppid=']);
+                return '10 1\n42 10';
+            },
+        };
+        const fileSystem: LaunchedChildProcessFileSystem = {
+            async readlink(path): Promise<string> {
+                if (path === '/proc/42/exe') {
+                    candidateReadAttempts++;
+                    throw new Error('EACCES');
+                }
+
+                assert.strictEqual(path, '/proc/10/exe');
+                return '/tool/launcher';
+            },
+            async readFile(path): Promise<Buffer> {
+                switch (path) {
+                    case '/proc/10/cmdline':
+                        return Buffer.from('/tool/launcher\0');
+                    case '/proc/10/status':
+                        return Buffer.from('Name:\tlauncher\nPPid:\t1\n');
+                    case '/proc/42/cmdline':
+                        return Buffer.from('/target/api\0');
+                    case '/proc/42/status':
+                        return Buffer.from('Name:\tapi\nPPid:\t10\n');
+                    default:
+                        throw new Error(`Unexpected procfs path: ${path}`);
+                }
+            },
+        };
+        const resolver = new LaunchedChildProcessResolver(
+            createLinuxProcessQuery(commandRunner, fileSystem),
+            new TestClock(),
+            { timeoutMs: 20, retryDelayMs: 10 });
+
+        await assert.rejects(resolver.resolveProcessId(10, identity));
+        assert.ok(candidateReadAttempts >= 2);
     });
 
     test('command runner returns UTF-8/BOM output after draining stderr', async () => {

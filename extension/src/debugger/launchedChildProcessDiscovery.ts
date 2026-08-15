@@ -1,4 +1,5 @@
 import * as childProcess from 'child_process';
+import * as fs from 'fs';
 import * as vscode from 'vscode';
 
 export interface LaunchedChildProcess {
@@ -6,6 +7,7 @@ export interface LaunchedChildProcess {
     readonly parentPid: number;
     readonly executable: string;
     readonly command: string;
+    readonly commandLineArguments?: readonly string[];
 }
 
 export interface LaunchedChildProcessQuery {
@@ -26,6 +28,11 @@ export interface LaunchedChildProcessIdentity {
 
 export interface LaunchedChildProcessCommandRunner {
     run(command: string, args: readonly string[], cancellationToken?: vscode.CancellationToken, timeoutMs?: number): Promise<string>;
+}
+
+export interface LaunchedChildProcessFileSystem {
+    readlink(path: string): Promise<string>;
+    readFile(path: string): Promise<Buffer>;
 }
 
 export type LaunchedChildProcessSpawner = (
@@ -314,6 +321,7 @@ export class SystemLaunchedChildProcessQuery implements LaunchedChildProcessQuer
     constructor(
         private readonly _platform: NodeJS.Platform = process.platform,
         private readonly _commandRunner: LaunchedChildProcessCommandRunner = new SystemLaunchedChildProcessCommandRunner(),
+        private readonly _fileSystem: LaunchedChildProcessFileSystem = systemLaunchedChildProcessFileSystem,
     ) {
     }
 
@@ -350,6 +358,10 @@ export class SystemLaunchedChildProcessQuery implements LaunchedChildProcessQuer
             return parseWindowsProcessList(output).find(process => process.pid === processId);
         }
 
+        if (this._platform === 'linux') {
+            return this._getLinuxProcess(processId, cancellationToken, timeoutMs);
+        }
+
         const [parentPidOutput, executableOutput, commandOutput] = await Promise.all([
             this._commandRunner.run('ps', ['-p', String(processId), '-o', 'ppid='], cancellationToken, timeoutMs),
             this._commandRunner.run('ps', ['-p', String(processId), '-o', 'comm='], cancellationToken, timeoutMs),
@@ -360,6 +372,36 @@ export class SystemLaunchedChildProcessQuery implements LaunchedChildProcessQuer
             parentPidOutput.trim(),
             executableOutput.trim(),
             commandOutput.trim());
+    }
+
+    private async _getLinuxProcess(
+        processId: number,
+        cancellationToken: vscode.CancellationToken | undefined,
+        timeoutMs: number | undefined,
+    ): Promise<LaunchedChildProcess | undefined> {
+        // Procfs exposes exact details as separate kernel-owned files. `cmdline` is a NUL-separated
+        // byte sequence such as `dotnet\0exec\0/repo/My Service.dll\0`; do not route it through a
+        // shell or flatten it before identity matching.
+        const [executable, commandLine, status] = await awaitProcessDetails(
+            Promise.all([
+                this._fileSystem.readlink(`/proc/${processId}/exe`),
+                this._fileSystem.readFile(`/proc/${processId}/cmdline`),
+                this._fileSystem.readFile(`/proc/${processId}/status`),
+            ]),
+            cancellationToken,
+            timeoutMs);
+        const parentPid = parseLinuxParentPid(status);
+        if (parentPid === undefined) {
+            return undefined;
+        }
+
+        const commandLineArguments = parseLinuxCommandLine(commandLine);
+        return createProcessInfo(
+            processId,
+            parentPid,
+            executable,
+            commandLineArguments.join(' '),
+            commandLineArguments);
     }
 }
 
@@ -454,10 +496,21 @@ const systemLaunchedChildProcessClock: LaunchedChildProcessClock = {
     }),
 };
 
+const systemLaunchedChildProcessFileSystem: LaunchedChildProcessFileSystem = {
+    readlink: path => fs.promises.readlink(path),
+    readFile: path => fs.promises.readFile(path),
+};
+
 export const launchedChildProcessResolver = new LaunchedChildProcessResolver(
     new SystemLaunchedChildProcessQuery());
 
-function createProcessInfo(pidValue: unknown, parentPidValue: unknown, executableValue: unknown, commandValue: unknown): LaunchedChildProcess | undefined {
+function createProcessInfo(
+    pidValue: unknown,
+    parentPidValue: unknown,
+    executableValue: unknown,
+    commandValue: unknown,
+    commandLineArguments?: readonly string[],
+): LaunchedChildProcess | undefined {
     const pid = parsePid(pidValue);
     const parentPid = parseParentPid(parentPidValue);
     const executable = typeof executableValue === 'string' ? executableValue.trim() : '';
@@ -471,7 +524,57 @@ function createProcessInfo(pidValue: unknown, parentPidValue: unknown, executabl
         parentPid,
         executable,
         command: command.length > 0 ? command : executable,
+        ...(commandLineArguments ? { commandLineArguments } : {}),
     };
+}
+
+function parseLinuxCommandLine(commandLine: Buffer): readonly string[] {
+    const argumentsList = commandLine.toString('utf8').split('\0');
+    if (argumentsList.at(-1) === '') {
+        argumentsList.pop();
+    }
+
+    return argumentsList;
+}
+
+function parseLinuxParentPid(status: Buffer): number | undefined {
+    const match = /^PPid:\s*(\d+)\s*$/m.exec(status.toString('utf8'));
+    return match ? parseParentPid(match[1]) : undefined;
+}
+
+function awaitProcessDetails<T>(
+    details: Promise<T>,
+    cancellationToken: vscode.CancellationToken | undefined,
+    timeoutMs: number | undefined,
+): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        let completed = false;
+        let cancellationRegistration: vscode.Disposable | undefined;
+        const timeout = setTimeout(
+            () => complete(() => reject(createProcessDiscoveryError())),
+            Math.max(1, timeoutMs ?? 30_000));
+        const complete = (action: () => void) => {
+            if (completed) {
+                return;
+            }
+
+            completed = true;
+            clearTimeout(timeout);
+            cancellationRegistration?.dispose();
+            action();
+        };
+
+        cancellationRegistration = cancellationToken?.onCancellationRequested(
+            () => complete(() => reject(new vscode.CancellationError())));
+        if (cancellationToken?.isCancellationRequested) {
+            complete(() => reject(new vscode.CancellationError()));
+            return;
+        }
+
+        details.then(
+            result => complete(() => resolve(result)),
+            error => complete(() => reject(error)));
+    });
 }
 
 function findDescendantProcessIds(
