@@ -200,7 +200,7 @@ suite('Aspire resource debug language model tool E2E', function () {
                 appHostPath: relativeAppHostPath,
                 resourceName: worker.name,
             },
-            { cancelAfterMs: 0, expectedConfirmations: 0 });
+            { cancelAfterMs: 0, expectedConfirmations: 1 });
         assert.strictEqual(cancelled.cancelled, true);
         assert.deepStrictEqual(cancelled.results, []);
 
