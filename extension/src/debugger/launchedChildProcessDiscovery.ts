@@ -11,6 +11,7 @@ export interface LaunchedChildProcess {
 }
 
 export interface LaunchedChildProcessQuery {
+    readonly canTrustListedProcessIdentity?: boolean;
     listProcesses(cancellationToken?: vscode.CancellationToken, timeoutMs?: number): Promise<readonly LaunchedChildProcess[]>;
     getProcess?(processId: number, cancellationToken?: vscode.CancellationToken, timeoutMs?: number): Promise<LaunchedChildProcess | undefined>;
 }
@@ -255,13 +256,25 @@ export class LaunchedChildProcessResolver {
             return true;
         }
 
+        if (identity.requiresDirectChild === true) {
+            const candidate = await this._getProcess(
+                candidatePid,
+                undefined,
+                cancellationToken,
+                deadline,
+                true);
+            return candidate !== undefined &&
+                candidate.parentPid === launcherPid &&
+                identity.isCandidate(candidate);
+        }
+
         let processId = candidatePid;
         const visited = new Set<number>();
 
         // `ps` renders command arguments verbatim, including newlines. A malicious command can
         // therefore forge a plausible extra row in an all-process listing. Re-query every PID in
-        // the selected ancestry immediately before returning so topology and command identity come
-        // from the kernel's actual process record rather than a synthetic line.
+        // the selected transitive ancestry immediately before returning so topology and command
+        // identity come from the kernel's actual process record rather than a synthetic line.
         while (true) {
             if (visited.has(processId) || this._clock.now() > deadline) {
                 return false;
@@ -273,9 +286,7 @@ export class LaunchedChildProcessResolver {
                 return false;
             }
 
-            if (processId === candidatePid &&
-                (!identity.isCandidate(process) ||
-                    (identity.requiresDirectChild === true && process.parentPid !== launcherPid))) {
+            if (processId === candidatePid && !identity.isCandidate(process)) {
                 return false;
             }
 
@@ -296,8 +307,14 @@ export class LaunchedChildProcessResolver {
         topologyProcess: LaunchedChildProcess | undefined,
         cancellationToken: vscode.CancellationToken | undefined,
         deadline: number,
+        requireFresh = false,
     ): Promise<LaunchedChildProcess | undefined> {
-        if (!this._processQuery.getProcess) {
+        if (!this._processQuery.getProcess ||
+            (!requireFresh &&
+                this._processQuery.canTrustListedProcessIdentity === true &&
+                topologyProcess !== undefined &&
+                topologyProcess.executable.length > 0 &&
+                topologyProcess.command.length > 0)) {
             return topologyProcess;
         }
 
@@ -319,11 +336,14 @@ export class LaunchedChildProcessResolver {
 }
 
 export class SystemLaunchedChildProcessQuery implements LaunchedChildProcessQuery {
+    readonly canTrustListedProcessIdentity: boolean;
+
     constructor(
         private readonly _platform: NodeJS.Platform = process.platform,
         private readonly _commandRunner: LaunchedChildProcessCommandRunner = new SystemLaunchedChildProcessCommandRunner(),
         private readonly _fileSystem: LaunchedChildProcessFileSystem = systemLaunchedChildProcessFileSystem,
     ) {
+        this.canTrustListedProcessIdentity = this._platform === 'win32';
     }
 
     async listProcesses(cancellationToken?: vscode.CancellationToken, timeoutMs?: number): Promise<readonly LaunchedChildProcess[]> {

@@ -120,6 +120,12 @@ suite('Launched child process discovery', () => {
         ]);
     });
 
+    test('trusts listed process identity only on Windows', () => {
+        assert.strictEqual(new SystemLaunchedChildProcessQuery('win32').canTrustListedProcessIdentity, true);
+        assert.strictEqual(new SystemLaunchedChildProcessQuery('darwin').canTrustListedProcessIdentity, false);
+        assert.strictEqual(new SystemLaunchedChildProcessQuery('linux').canTrustListedProcessIdentity, false);
+    });
+
     test('parses UTF-8 BOM-prefixed Windows CIM output with non-ASCII command text', () => {
         assert.deepStrictEqual(parseWindowsProcessList(`\uFEFF${JSON.stringify({
             ProcessId: 42,
@@ -558,6 +564,127 @@ suite('Launched child process discovery', () => {
             { timeoutMs: 20, retryDelayMs: 10 });
 
         await assert.rejects(cyclic.resolveProcessId(10, identity));
+    });
+
+    test('uses trusted complete list identity until the final direct candidate read', async () => {
+        const getProcess = sinon.stub().callsFake(async (processId: number) =>
+            processId === 42 ? process(42, 10, '/target/api') : undefined);
+        const query: LaunchedChildProcessQuery = {
+            canTrustListedProcessIdentity: true,
+            listProcesses: async () => [
+                process(10, 1, '/tool/launcher'),
+                process(42, 10, '/target/api'),
+            ],
+            getProcess,
+        };
+        const directIdentity: LaunchedChildProcessIdentity = {
+            requiresDirectChild: true,
+            ...identity,
+        };
+        const resolver = new LaunchedChildProcessResolver(
+            query,
+            new TestClock(),
+            { timeoutMs: 20, retryDelayMs: 10 });
+
+        assert.strictEqual(await resolver.resolveProcessId(10, directIdentity), 42);
+        assert.deepStrictEqual(getProcess.getCalls().map(call => call.args[0]), [42]);
+    });
+
+    test('falls back to targeted identity queries for incomplete trusted list records', async () => {
+        const directIdentity: LaunchedChildProcessIdentity = {
+            requiresDirectChild: true,
+            ...identity,
+        };
+        const cases = [
+            {
+                processes: [
+                    process(10, 1, '/tool/launcher', ''),
+                    process(42, 10, '/target/api'),
+                ],
+                expectedProcessReads: [10, 10, 42],
+            },
+            {
+                processes: [
+                    process(10, 1, '/tool/launcher'),
+                    process(42, 10, '', '/target/api'),
+                ],
+                expectedProcessReads: [42, 42, 42],
+            },
+        ];
+
+        for (const testCase of cases) {
+            const getProcess = sinon.stub().callsFake(async (processId: number) =>
+                processId === 10
+                    ? process(10, 1, '/tool/launcher')
+                    : process(42, 10, '/target/api'));
+            const query: LaunchedChildProcessQuery = {
+                canTrustListedProcessIdentity: true,
+                listProcesses: async () => testCase.processes,
+                getProcess,
+            };
+            const resolver = new LaunchedChildProcessResolver(
+                query,
+                new TestClock(),
+                { timeoutMs: 20, retryDelayMs: 10 });
+
+            assert.strictEqual(await resolver.resolveProcessId(10, directIdentity), 42);
+            assert.deepStrictEqual(
+                getProcess.getCalls().map(call => call.args[0]),
+                testCase.expectedProcessReads);
+        }
+    });
+
+    test('rejects direct candidates that exit, change PID, or are reparented before return', async () => {
+        const directIdentity: LaunchedChildProcessIdentity = {
+            requiresDirectChild: true,
+            ...identity,
+        };
+        const finalCandidates = [
+            undefined,
+            process(43, 10, '/target/api'),
+            process(42, 99, '/target/api'),
+        ];
+
+        for (const finalCandidate of finalCandidates) {
+            const query: LaunchedChildProcessQuery = {
+                canTrustListedProcessIdentity: true,
+                listProcesses: async () => [
+                    process(10, 1, '/tool/launcher'),
+                    process(42, 10, '/target/api'),
+                ],
+                getProcess: async () => finalCandidate,
+            };
+            const resolver = new LaunchedChildProcessResolver(
+                query,
+                new TestClock(),
+                { timeoutMs: 20, retryDelayMs: 10 });
+
+            await assert.rejects(resolver.resolveProcessId(10, directIdentity));
+        }
+    });
+
+    test('freshly re-reads the full transitive candidate ancestry', async () => {
+        const getProcess = sinon.stub().callsFake(async (processId: number) => new Map([
+            [10, process(10, 1, '/tool/launcher')],
+            [22, process(22, 10, '/tool/intermediate')],
+            [42, process(42, 22, '/target/api')],
+        ]).get(processId));
+        const query: LaunchedChildProcessQuery = {
+            canTrustListedProcessIdentity: true,
+            listProcesses: async () => [
+                process(10, 1, '/tool/launcher'),
+                process(22, 10, '/tool/intermediate'),
+                process(42, 22, '/target/api'),
+            ],
+            getProcess,
+        };
+        const resolver = new LaunchedChildProcessResolver(
+            query,
+            new TestClock(),
+            { timeoutMs: 20, retryDelayMs: 10 });
+
+        assert.strictEqual(await resolver.resolveProcessId(10, identity), 42);
+        assert.deepStrictEqual(getProcess.getCalls().map(call => call.args[0]), [42, 22, 10]);
     });
 
     test('re-verifies selected PID ancestry before accepting a process-list candidate', async () => {
