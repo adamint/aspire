@@ -22,6 +22,7 @@ import {
     __resetAppHostIdentityRegistryForTests,
     getOrCreateIdentityForAbsolutePath,
 } from '../utils/appHostIdentity';
+import { type EditorResourceSessionSnapshot } from '../services/appHostLaunchContracts';
 
 suite('AspireExtensionContext', () => {
     test('extension deactivate returns the AspireExtensionContext shutdown promise', () => {
@@ -66,6 +67,30 @@ suite('AspireExtensionContext', () => {
             __resetLaunchFailureJournalForTests();
             __resetAppHostIdentityRegistryForTests();
         }
+    });
+
+    test('returns only safe editor resource session snapshots', () => {
+        const context = createContext([]);
+        const snapshots: readonly EditorResourceSessionSnapshot[] = [{
+            appHostPath: '/workspace/AppHost/AppHost.csproj',
+            projectPath: '/workspace/Api/Api.csproj',
+            state: 'running',
+            mode: 'debug',
+        }];
+        addSession(
+            context,
+            'session',
+            () => Promise.resolve(),
+            () => { },
+            undefined,
+            undefined,
+            undefined,
+            snapshots);
+
+        assert.deepStrictEqual(context.editorResourceSessions, snapshots);
+        assert.deepStrictEqual(
+            Object.keys(context.editorResourceSessions[0]).sort(),
+            ['appHostPath', 'mode', 'projectPath', 'state']);
     });
 
     test('deactivation waits for every CLI stop request before disposing transport', async () => {
@@ -776,9 +801,11 @@ function addSession(
     dispose: () => void,
     terminateCliProcessTree: (options?: { force?: boolean }) => void = () => { },
     stopDebugging: () => Promise<void> = () => Promise.resolve(),
-    finalizeForExtensionShutdown: () => void = dispose): void {
+    finalizeForExtensionShutdown: () => void = dispose,
+    editorResourceSessions: readonly EditorResourceSessionSnapshot[] = []): void {
     context.addAspireDebugSession({
         debugSessionId,
+        editorResourceSessions,
         onDidChangeState: () => ({ dispose: () => { } }),
         onDidSendDebugConsoleOutput: () => ({ dispose: () => { } }),
         stopDebugging,

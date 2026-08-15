@@ -10,6 +10,7 @@ import { AspireEditorCommandProvider } from './editor/AspireEditorCommandProvide
 import type { AspireDebugConsoleOutputEvent } from './types/extensionApi';
 import { extensionLogOutputChannel } from './utils/logging';
 import { resetEditorAssistanceWindowState } from './services/editorAssistanceWindowState';
+import { type EditorResourceSessionSnapshot } from './services/appHostLaunchContracts';
 
 export class AspireExtensionContext implements vscode.Disposable {
     private static readonly _cliStopTimeoutMs = 5_000;
@@ -78,6 +79,16 @@ export class AspireExtensionContext implements vscode.Disposable {
         // Disposed sessions can remain tracked only as CLI process owners. They must still be
         // visible to deactivation, but not to RPC lookups or extension-state snapshots.
         return this._aspireDebugSessions.filter(session => !session.isDisposed);
+    }
+
+    get editorResourceSessions(): readonly EditorResourceSessionSnapshot[] {
+        return this.aspireDebugSessions.flatMap(session =>
+            session.editorResourceSessions.map(resourceSession => ({
+                appHostPath: resourceSession.appHostPath,
+                projectPath: resourceSession.projectPath,
+                state: resourceSession.state,
+                mode: resourceSession.mode,
+            })));
     }
 
     addAspireDebugSession(debugSession: AspireDebugSession) {

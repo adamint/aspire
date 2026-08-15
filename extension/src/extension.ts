@@ -36,6 +36,11 @@ import { registerCliCommands } from './activation/registerCliCommands';
 import { registerTreeViewCommands } from './activation/registerTreeViewCommands';
 import { registerCodeLensCommands } from './activation/registerCodeLensCommands';
 import { resetEditorAssistanceWindowState } from './services/editorAssistanceWindowState';
+import { SafeAppHostTargetResolver } from './lm/safeAppHostTargetResolver';
+import { EditorStateSnapshotService } from './lm/editorStateSnapshotService';
+import { EditorAssistanceToolService } from './lm/editorAssistanceToolService';
+import { registerEditorAssistanceTools } from './lm/editorAssistanceToolAdapters';
+import { readLatestLaunchFailures } from './services/launchFailureJournal';
 
 let aspireExtensionContext = new AspireExtensionContext();
 
@@ -212,6 +217,22 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(appHostLifecycleToolService);
   const appHostLifecycleToolRegistration = registerAppHostLifecycleTools(appHostLifecycleToolService);
   context.subscriptions.push(appHostLifecycleToolRegistration);
+
+  // Read-only tools use the same safe AppHost registry and editor-owned session
+  // projections as lifecycle tools, but never expose confirmation or mutation hooks.
+  const editorAssistanceTargetResolver = new SafeAppHostTargetResolver(appHostDiscoveryService);
+  const editorStateSnapshotService = new EditorStateSnapshotService({
+    launchService: appHostLaunchService,
+    targetResolver: editorAssistanceTargetResolver,
+  });
+  const editorAssistanceToolService = new EditorAssistanceToolService({
+    targetResolver: editorAssistanceTargetResolver,
+    snapshotService: editorStateSnapshotService,
+    resourceRepository: dataRepository,
+    getEditorResourceSessions: () => aspireExtensionContext.editorResourceSessions,
+    readLatestLaunchFailures,
+  });
+  context.subscriptions.push(registerEditorAssistanceTools(editorAssistanceToolService));
 
   const getEnableSettingsFileCreationPromptOnStartup = () => vscode.workspace.getConfiguration('aspire').get<boolean>('enableSettingsFileCreationPromptOnStartup', true);
   const setEnableSettingsFileCreationPromptOnStartup = async (value: boolean) => await vscode.workspace.getConfiguration('aspire').update('enableSettingsFileCreationPromptOnStartup', value, vscode.ConfigurationTarget.Workspace);

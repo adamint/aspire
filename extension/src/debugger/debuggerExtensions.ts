@@ -84,6 +84,13 @@ export async function prepareDebugSession(debugSessionConfig: AspireExtendedDebu
         alreadyStartedSession = await debuggerExtension.createDebugSessionConfigurationCallback(launchConfig, args, env, launchOptions, configuration) ?? undefined;
     }
 
+    // Debugger-specific callbacks can replace `program` with an output binary,
+    // runtime executable, or package-manager command. Keep the CLI-provided
+    // project identity separately so editor assistance can correlate the child
+    // session with ResourceJson.properties["project.path"] without inspecting
+    // or exposing the final debug configuration.
+    configuration.projectFile = projectPath;
+
     return {
         debugConfiguration: configuration,
         alreadyStartedSession

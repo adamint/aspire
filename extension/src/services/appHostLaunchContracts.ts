@@ -53,6 +53,24 @@ export interface AppHostEditorSessionSnapshot {
     readonly isStopping: boolean;
 }
 
+export type EditorResourceSessionState = 'starting' | 'running' | 'stopping';
+export type EditorResourceSessionMode = 'run' | 'debug' | 'other';
+
+/**
+ * Safe child-session details exposed to editor-assistance services.
+ *
+ * AppHost and project paths are used only for exact internal correlation. The
+ * snapshot deliberately omits the VS Code session id, process id, full debug
+ * configuration, and resource metadata so callers cannot turn it into an
+ * ambient debug-session handle.
+ */
+export interface EditorResourceSessionSnapshot {
+    readonly appHostPath: string;
+    readonly projectPath: string;
+    readonly state: EditorResourceSessionState;
+    readonly mode: EditorResourceSessionMode;
+}
+
 export interface RunningAppHost {
     readonly appHostPath: string;
 }

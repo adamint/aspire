@@ -34,6 +34,7 @@ import { AppHostParentOutputFilter } from "./session/appHostParentOutputFilter";
 import { DashboardLauncher, type DashboardBrowserType, type DashboardLauncherHost } from "./session/dashboardLauncher";
 import { describeStopFailure, startStop, stopSessionInBackground } from "./session/stopHelpers";
 import { AppHostBuildFailureError } from "./appHostBuildFailureError";
+import type { EditorResourceSessionMode, EditorResourceSessionSnapshot, EditorResourceSessionState } from "../services/appHostLaunchContracts";
 
 export type AppHostDebugSessionTracker = (owner: AspireDebugSession, appHostPath: string, debugSession: AspireResourceDebugSession) => void;
 
@@ -109,6 +110,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
 
   private _appHostDebugSession?: AspireResourceDebugSession = undefined;
   private _resourceDebugSessions: AspireResourceDebugSession[] = [];
+  private readonly _editorResourceSessions = new Map<string, EditorResourceSessionSnapshot>();
   private _trackedDebugAdapters: string[] = [];
   private _rpcClient?: ICliRpcClient;
   private readonly _dashboardLauncher = new DashboardLauncher(this);
@@ -217,6 +219,10 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
     return this._extensionShutdownRequested;
   }
 
+  get editorResourceSessions(): readonly EditorResourceSessionSnapshot[] {
+    return [...this._editorResourceSessions.values()].map(session => ({ ...session }));
+  }
+
   get parentSession(): vscode.DebugSession {
     return this._session;
   }
@@ -294,6 +300,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
 
     this._stopAttemptInProgress = true;
     this._stopping = true;
+    this.markEditorResourceSessionsStopping();
     this.cancelPendingStartWork();
     let resolveAttempt!: () => void;
     let rejectAttempt!: (reason: unknown) => void;
@@ -492,6 +499,57 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
         }
       },
     };
+  }
+
+  private trackEditorResourceSession(debugConfig: AspireResourceExtendedDebugConfiguration, state: EditorResourceSessionState): void {
+    if (debugConfig.isApphost === true ||
+      typeof debugConfig.projectFile !== 'string' ||
+      debugConfig.projectFile.trim().length === 0) {
+      return;
+    }
+
+    const appHostPath = this.resolvedAppHostPath ?? this.appHostPath;
+    if (!appHostPath) {
+      return;
+    }
+
+    this._editorResourceSessions.set(debugConfig.runId, {
+      appHostPath,
+      projectPath: debugConfig.projectFile,
+      state,
+      mode: getEditorResourceSessionMode(debugConfig.noDebug),
+    });
+    this._onDidChangeState.fire();
+  }
+
+  private updateEditorResourceSessionState(runId: string, state: EditorResourceSessionState): void {
+    const current = this._editorResourceSessions.get(runId);
+    if (!current || current.state === state) {
+      return;
+    }
+
+    this._editorResourceSessions.set(runId, { ...current, state });
+    this._onDidChangeState.fire();
+  }
+
+  private removeEditorResourceSession(runId: string): void {
+    if (this._editorResourceSessions.delete(runId)) {
+      this._onDidChangeState.fire();
+    }
+  }
+
+  private markEditorResourceSessionsStopping(): void {
+    let changed = false;
+    for (const [runId, session] of this._editorResourceSessions) {
+      if (session.state !== 'stopping') {
+        this._editorResourceSessions.set(runId, { ...session, state: 'stopping' });
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      this._onDidChangeState.fire();
+    }
   }
 
   private stopLateResourceSession(session: AspireResourceDebugSession): void {
@@ -1444,7 +1502,9 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
       this._dcpServer.sendNotification(notification);
     }
 
+    this.trackEditorResourceSession(debugConfig, 'running');
     void resourceDebugSession.termination.then(exitCode => {
+      this.removeEditorResourceSession(debugConfig.runId);
       if (debugConfig.debugSessionId === null) {
         extensionLogOutputChannel.warn(`Unable to report termination for run ${debugConfig.runId} because the DCP session ID is missing.`);
         return;
@@ -1466,6 +1526,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
   }
 
   startAndGetDebugSession(debugConfig: AspireResourceExtendedDebugConfiguration): Promise<AspireResourceDebugSession | undefined> {
+    this.trackEditorResourceSession(debugConfig, 'starting');
     const pendingStart = this.beginPendingDebugSessionStart(debugConfig.name);
     const start = this.startAndGetDebugSessionCore(debugConfig);
     void start.then(() => pendingStart.dispose(), () => pendingStart.dispose());
@@ -1484,6 +1545,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
         if (session.configuration.runId === debugConfig.runId) {
           extensionLogOutputChannel.info(`Debug session started: ${session.name} (run id: ${session.configuration.runId})`);
           disposable.dispose();
+          this.updateEditorResourceSessionState(debugConfig.runId, 'running');
 
           let stopSessionPromise: Promise<void> | undefined;
           let runCleanedUp = false;
@@ -1509,6 +1571,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
             // stop that is still waiting for VS Code to confirm the same termination.
             terminated = true;
             this._resourceDebugSessions = this._resourceDebugSessions.filter(resourceSession => resourceSession.id !== session.id);
+            this.removeEditorResourceSession(debugConfig.runId);
             cleanupResource();
             resolveTermination();
             terminationDisposable.dispose();
@@ -1524,6 +1587,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
             }
 
             extensionLogOutputChannel.info(`Stopping debug session: ${session.name} (run id: ${session.configuration.runId})`);
+            this.updateEditorResourceSessionState(debugConfig.runId, 'stopping');
             const stop = Promise.race([
               Promise.resolve(vscode.debug.stopDebugging(session)),
               termination,
@@ -1593,6 +1657,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
       } catch (error) {
         disposable.dispose();
         cleanupRun(debugConfig.runId);
+        this.removeEditorResourceSession(debugConfig.runId);
         extensionLogOutputChannel.error(`Failed to start debug session: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
         if (!this.isShuttingDown) {
           this.recordLaunchFailure({
@@ -1611,6 +1676,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
       if (!started) {
         disposable.dispose();
         cleanupRun(debugConfig.runId);
+        this.removeEditorResourceSession(debugConfig.runId);
         if (!this.isShuttingDown) {
           this.recordLaunchFailure({
             stage: 'debugSession',
@@ -1628,6 +1694,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
         if (!resolved) {
           disposable.dispose();
           cleanupRun(debugConfig.runId);
+          this.removeEditorResourceSession(debugConfig.runId);
           if (!this.isShuttingDown) {
             this.recordLaunchFailure({
               stage: 'debugSession',
@@ -1746,6 +1813,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
       delete this.configuration[appHostRestartSourceSessionIdConfigKey];
     }
     extensionLogOutputChannel.info('Stopping the Aspire debug session');
+    this._editorResourceSessions.clear();
     this._onDidChangeState.fire();
 
     // Snapshot start-event metadata before we run disposables so the deferred
@@ -1863,6 +1931,14 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
     this._onDidChangeState.fire();
     extensionLogOutputChannel.info(`AppHost startup completed and dashboard is running.`);
   }
+}
+
+function getEditorResourceSessionMode(noDebug: unknown): EditorResourceSessionMode {
+  return noDebug === true
+    ? 'run'
+    : noDebug === false
+      ? 'debug'
+      : 'other';
 }
 
 function getLaunchFailureMode(operationKind: AspireOperationKind, noDebug: boolean): LaunchFailureMode {

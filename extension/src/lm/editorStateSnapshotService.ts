@@ -76,6 +76,30 @@ export class EditorStateSnapshotService {
         };
     }
 
+    /**
+     * Summarizes one already-resolved AppHost without applying the bounded list cap.
+     *
+     * The status tool resolves its exact target first, so looking it up through
+     * {@link createSnapshot} would make AppHosts beyond the first 20 appear to be
+     * unknown. Direct summarization keeps the list bound specific to the future list
+     * tool while preserving the same safe session projection and path identity rules.
+     */
+    async getAppHostSummary(target: ResolvedAppHostTarget, token: vscode.CancellationToken): Promise<EditorAppHostSummary> {
+        throwIfCanceled(token);
+        const sessions = this._dependencies.launchService.getEditorSessions().filter(session => {
+            if (session.operationKind !== 'run') {
+                return false;
+            }
+
+            const appHostPath = session.resolvedAppHostPath ?? session.appHostPath;
+            return appHostPath !== undefined &&
+                this._dependencies.targetResolver.getIdentityForAppHostPath(appHostPath) === target.identity;
+        });
+        throwIfCanceled(token);
+
+        return this.createSummary(target, sessions);
+    }
+
     private createSummary(target: ResolvedAppHostTarget, sessions: readonly AppHostEditorSessionSnapshot[]): EditorAppHostSummary {
         if (sessions.length > 1) {
             // Once more than one editor session could claim the AppHost there is no honest
@@ -158,4 +182,10 @@ function compareDisplayPath(left: string, right: string): number {
     }
 
     return 0;
+}
+
+function throwIfCanceled(token: vscode.CancellationToken): void {
+    if (token.isCancellationRequested) {
+        throw new vscode.CancellationError();
+    }
 }

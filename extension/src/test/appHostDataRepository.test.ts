@@ -1222,6 +1222,76 @@ suite('AppHostDataRepository', () => {
         }
     });
 
+    test('fetchAppHostResourcesOnce describes only the requested AppHost with cancellation support', async () => {
+        const describeProcess = new TestChildProcess();
+        spawnStub.returns(describeProcess);
+        const repository = new AppHostDataRepository(terminalProvider);
+        const cancellationSource = new vscode.CancellationTokenSource();
+
+        try {
+            const fetchPromise = repository.fetchAppHostResourcesOnce('/workspace/Exact/AppHost.csproj', cancellationSource.token);
+            await waitForMicrotasks();
+
+            assert.deepStrictEqual(spawnStub.firstCall.args[2], [
+                'describe',
+                '--format',
+                'json',
+                '--nologo',
+                '--apphost',
+                '/workspace/Exact/AppHost.csproj',
+            ]);
+            assert.strictEqual(spawnStub.firstCall.args[3].noExtensionVariables, true);
+
+            spawnStub.firstCall.args[3].stdoutCallback(JSON.stringify({
+                resources: [{
+                    name: 'api',
+                    displayName: 'api',
+                    resourceType: 'Project',
+                    state: 'Running',
+                    stateStyle: null,
+                    healthStatus: null,
+                    healthReports: null,
+                    exitCode: null,
+                    dashboardUrl: null,
+                    urls: [],
+                    commands: null,
+                    properties: {
+                        'project.path': '/workspace/Api/Api.csproj',
+                    },
+                }],
+            }));
+            spawnStub.firstCall.args[3].exitCallback(0);
+
+            const resources = await fetchPromise;
+            assert.deepStrictEqual(resources.map(resource => resource.name), ['api']);
+        }
+        finally {
+            cancellationSource.dispose();
+            repository.dispose();
+        }
+    });
+
+    test('fetchAppHostResourcesOnce cancels the exact describe process', async () => {
+        const describeProcess = new TestChildProcess(false);
+        spawnStub.returns(describeProcess);
+        const repository = new AppHostDataRepository(terminalProvider);
+        const cancellationSource = new vscode.CancellationTokenSource();
+
+        try {
+            const fetchPromise = repository.fetchAppHostResourcesOnce('/workspace/Exact/AppHost.csproj', cancellationSource.token);
+            await waitForMicrotasks();
+
+            cancellationSource.cancel();
+
+            await assert.rejects(fetchPromise, (error: unknown) => error instanceof vscode.CancellationError);
+            assert.strictEqual(describeProcess.killed, true);
+        }
+        finally {
+            cancellationSource.dispose();
+            repository.dispose();
+        }
+    });
+
     test('fetchAppHostsOnce retries without nologo when an older CLI rejects it', async () => {
         const rejectedPsProcess = new TestChildProcess();
         const psProcess = new TestChildProcess();

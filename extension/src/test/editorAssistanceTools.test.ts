@@ -11,6 +11,18 @@ import {
     type AppHostLifecycleDiscoveryService,
     type AppHostLifecycleEditorSessions,
 } from '../lm/appHostLifecycleToolContracts';
+import {
+    AspireDebugSessionStatusLanguageModelTool,
+    AspireExplainLaunchFailureLanguageModelTool,
+    registerEditorAssistanceTools,
+} from '../lm/editorAssistanceToolAdapters';
+import {
+    aspireDebugSessionStatusToolName,
+    aspireExplainLaunchFailureToolName,
+    type EditorAssistanceResourceRepository,
+    type EditorAssistanceToolResult,
+} from '../lm/editorAssistanceToolContracts';
+import { EditorAssistanceToolService } from '../lm/editorAssistanceToolService';
 import { EditorStateSnapshotService } from '../lm/editorStateSnapshotService';
 import {
     __resetLaunchFailureJournalForTests,
@@ -19,8 +31,11 @@ import {
     readLatestLaunchFailures,
     recordLaunchFailureForAppHostPath,
     type LaunchFailureInput,
+    type SanitizedLaunchFailure,
 } from '../services/launchFailureJournal';
 import { SafeAppHostTargetResolver } from '../lm/safeAppHostTargetResolver';
+import { type EditorResourceSessionSnapshot } from '../services/appHostLaunchContracts';
+import { type ResourceJson } from '../data/appHostCliContracts';
 import { type CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
 import {
     __resetAppHostIdentityRegistryForTests,
@@ -111,6 +126,25 @@ class FakeEditorStateLaunchService implements AppHostEditorStateLaunchService {
     }
 }
 
+class FakeEditorAssistanceResourceRepository implements EditorAssistanceResourceRepository {
+    readonly resourcesByAppHost = new Map<string, readonly ResourceJson[]>();
+    readonly requests: string[] = [];
+    error: unknown;
+
+    async fetchAppHostResourcesOnce(appHostPath: string, token: vscode.CancellationToken): Promise<readonly ResourceJson[]> {
+        this.requests.push(appHostPath);
+        if (token.isCancellationRequested) {
+            throw new vscode.CancellationError();
+        }
+
+        if (this.error) {
+            throw this.error;
+        }
+
+        return this.resourcesByAppHost.get(path.resolve(appHostPath)) ?? [];
+    }
+}
+
 const appHostProjectContents = `<Project Sdk="Microsoft.NET.Sdk">
   <Sdk Name="Aspire.AppHost.Sdk" Version="13.0.0" />
 </Project>`;
@@ -138,6 +172,32 @@ function addCandidate(discoveryService: FakeDiscoveryService, folderRoot: string
 
 function assertResolved<T extends { resolved: boolean }>(resolution: T): asserts resolution is T & { resolved: true; target: { absolutePath: string; relativePath: string; displayPath: string; identity: string } } {
     assert.strictEqual(resolution.resolved, true, `Expected a resolved target but got ${JSON.stringify(resolution)}`);
+}
+
+function createResource(name: string, projectPath?: string, extraProperties: Record<string, string | null> = {}): ResourceJson {
+    return {
+        name,
+        displayName: name,
+        resourceType: 'Project',
+        state: 'Running',
+        stateStyle: null,
+        healthStatus: null,
+        healthReports: null,
+        exitCode: null,
+        dashboardUrl: null,
+        urls: [],
+        commands: null,
+        properties: projectPath === undefined
+            ? Object.keys(extraProperties).length > 0 ? extraProperties : null
+            : { 'project.path': projectPath, ...extraProperties },
+    };
+}
+
+function readEditorAssistanceToolResult(result: vscode.LanguageModelToolResult): EditorAssistanceToolResult {
+    const parts = result.content as Array<{ value?: unknown }>;
+    assert.strictEqual(parts.length, 1);
+    assert.strictEqual(typeof parts[0]?.value, 'string');
+    return JSON.parse(parts[0].value as string) as EditorAssistanceToolResult;
 }
 
 suite('Editor assistance AppHost services', () => {
@@ -170,6 +230,735 @@ suite('Editor assistance AppHost services', () => {
         snapshotService = new EditorStateSnapshotService({
             launchService,
             targetResolver: resolver,
+        });
+    });
+
+    suite('Editor assistance language model tools', () => {
+        let workspaceRoot: string;
+        let secondWorkspaceRoot: string;
+        let appHostProjectPath: string;
+        let workspaceFoldersStub: sinon.SinonStub;
+        let isTrustedStub: sinon.SinonStub;
+        let discoveryService: FakeDiscoveryService;
+        let launchService: FakeEditorStateLaunchService;
+        let resolver: SafeAppHostTargetResolver;
+        let snapshotService: EditorStateSnapshotService;
+        let resourceRepository: FakeEditorAssistanceResourceRepository;
+        let resourceSessions: EditorResourceSessionSnapshot[];
+        let failuresByAppHost: Map<string, readonly SanitizedLaunchFailure[]>;
+        let failureReaderError: unknown;
+        let service: EditorAssistanceToolService;
+
+        setup(() => {
+            __resetAppHostIdentityRegistryForTests();
+            __resetLaunchFailureJournalForTests();
+            workspaceRoot = createFixtureDirectory('tool-workspace');
+            secondWorkspaceRoot = createFixtureDirectory('tool-second-workspace');
+            appHostProjectPath = path.join(workspaceRoot, 'AppHost', 'AppHost.csproj');
+            fs.mkdirSync(path.dirname(appHostProjectPath), { recursive: true });
+            fs.writeFileSync(appHostProjectPath, appHostProjectContents);
+
+            workspaceFoldersStub = sinon.stub(vscode.workspace, 'workspaceFolders').value([
+                createWorkspaceFolder(workspaceRoot, 'workspace', 0),
+            ]);
+            isTrustedStub = sinon.stub(vscode.workspace, 'isTrusted').value(true);
+            discoveryService = new FakeDiscoveryService();
+            addCandidate(discoveryService, workspaceRoot, appHostProjectPath);
+            launchService = new FakeEditorStateLaunchService();
+            resolver = new SafeAppHostTargetResolver(discoveryService);
+            snapshotService = new EditorStateSnapshotService({
+                launchService,
+                targetResolver: resolver,
+            });
+            resourceRepository = new FakeEditorAssistanceResourceRepository();
+            resourceSessions = [];
+            failuresByAppHost = new Map();
+            failureReaderError = undefined;
+            service = new EditorAssistanceToolService({
+                targetResolver: resolver,
+                snapshotService,
+                resourceRepository,
+                getEditorResourceSessions: () => resourceSessions,
+                readLatestLaunchFailures: appHostPath => {
+                    if (failureReaderError) {
+                        throw failureReaderError;
+                    }
+
+                    return failuresByAppHost.get(path.resolve(appHostPath)) ?? [];
+                },
+            });
+        });
+
+        teardown(() => {
+            isTrustedStub.restore();
+            workspaceFoldersStub.restore();
+            __resetLaunchFailureJournalForTests();
+            __resetAppHostIdentityRegistryForTests();
+            fs.rmSync(workspaceRoot, { recursive: true, force: true });
+            fs.rmSync(secondWorkspaceRoot, { recursive: true, force: true });
+        });
+
+        test('rejects malformed status and explanation inputs before consulting dependencies', async () => {
+            const token = new vscode.CancellationTokenSource().token;
+            const invalidStatusInputs: unknown[] = [
+                null,
+                [],
+                {},
+                { appHostPath: 'AppHost/AppHost.csproj', extra: true },
+                { appHostPath: 'AppHost/AppHost.csproj', resourceName: 42 },
+                { appHostPath: 'AppHost/AppHost.csproj', resourceName: '' },
+                { appHostPath: 'AppHost/AppHost.csproj', resourceName: '   ' },
+                { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'a'.repeat(257) },
+                { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api\nsecret' },
+                { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api\u200dsecret' },
+            ];
+            for (const input of invalidStatusInputs) {
+                assert.deepStrictEqual(await service.getDebugSessionStatus(input, token), {
+                    success: false,
+                    tool: aspireDebugSessionStatusToolName,
+                    outcome: 'invalidInput',
+                });
+            }
+
+            const invalidExplainInputs: unknown[] = [
+                null,
+                [],
+                {},
+                { appHostPath: 42 },
+                { appHostPath: 'AppHost/AppHost.csproj', extra: true },
+            ];
+            for (const input of invalidExplainInputs) {
+                assert.deepStrictEqual(await service.explainLaunchFailure(input, token), {
+                    success: false,
+                    tool: aspireExplainLaunchFailureToolName,
+                    outcome: 'invalidInput',
+                });
+            }
+
+            assert.strictEqual(discoveryService.discoverCalls, 0);
+            assert.deepStrictEqual(resourceRepository.requests, []);
+        });
+
+        test('rejects absolute AppHost selectors through the shared resolver', async () => {
+            const token = new vscode.CancellationTokenSource().token;
+
+            assert.deepStrictEqual(await service.getDebugSessionStatus({ appHostPath: appHostProjectPath }, token), {
+                success: false,
+                tool: aspireDebugSessionStatusToolName,
+                outcome: 'invalidInput',
+            });
+            assert.deepStrictEqual(await service.explainLaunchFailure({ appHostPath: appHostProjectPath }, token), {
+                success: false,
+                tool: aspireExplainLaunchFailureToolName,
+                outcome: 'invalidInput',
+            });
+            assert.strictEqual(discoveryService.discoverCalls, 0);
+        });
+
+        test('checks cancellation and workspace trust before doing work', async () => {
+            const canceledSource = new vscode.CancellationTokenSource();
+            canceledSource.cancel();
+
+            assert.deepStrictEqual(
+                await service.getDebugSessionStatus({ appHostPath: 'AppHost/AppHost.csproj' }, canceledSource.token),
+                {
+                    success: false,
+                    tool: aspireDebugSessionStatusToolName,
+                    outcome: 'canceled',
+                });
+            assert.deepStrictEqual(
+                await service.explainLaunchFailure({ appHostPath: 'AppHost/AppHost.csproj' }, canceledSource.token),
+                {
+                    success: false,
+                    tool: aspireExplainLaunchFailureToolName,
+                    outcome: 'canceled',
+                });
+
+            isTrustedStub.value(false);
+            const token = new vscode.CancellationTokenSource().token;
+            assert.deepStrictEqual(await service.getDebugSessionStatus({ appHostPath: 'AppHost/AppHost.csproj' }, token), {
+                success: false,
+                tool: aspireDebugSessionStatusToolName,
+                outcome: 'workspaceNotTrusted',
+            });
+            assert.deepStrictEqual(await service.explainLaunchFailure({ appHostPath: 'AppHost/AppHost.csproj' }, token), {
+                success: false,
+                tool: aspireExplainLaunchFailureToolName,
+                outcome: 'workspaceNotTrusted',
+            });
+
+            assert.strictEqual(discoveryService.discoverCalls, 0);
+            assert.deepStrictEqual(resourceRepository.requests, []);
+        });
+
+        test('maps missing and ambiguous AppHost resolution without returning known AppHosts', async () => {
+            const token = new vscode.CancellationTokenSource().token;
+            const missing = await service.getDebugSessionStatus({ appHostPath: 'Missing/AppHost.csproj' }, token);
+            assert.deepStrictEqual(missing, {
+                success: false,
+                tool: aspireDebugSessionStatusToolName,
+                outcome: 'appHostNotFound',
+            });
+
+            const secondAppHostPath = path.join(secondWorkspaceRoot, 'AppHost', 'AppHost.csproj');
+            fs.mkdirSync(path.dirname(secondAppHostPath), { recursive: true });
+            fs.writeFileSync(secondAppHostPath, appHostProjectContents);
+            addCandidate(discoveryService, secondWorkspaceRoot, secondAppHostPath);
+            workspaceFoldersStub.value([
+                createWorkspaceFolder(workspaceRoot, 'workspace', 0),
+                createWorkspaceFolder(secondWorkspaceRoot, 'second', 1),
+            ]);
+
+            const ambiguous = await service.explainLaunchFailure({ appHostPath: 'AppHost/AppHost.csproj' }, token);
+            assert.deepStrictEqual(ambiguous, {
+                success: false,
+                tool: aspireExplainLaunchFailureToolName,
+                outcome: 'ambiguousAppHost',
+            });
+            assert.strictEqual(JSON.stringify([missing, ambiguous]).includes('knownAppHosts'), false);
+        });
+
+        test('returns exact sanitized AppHost-level states', async () => {
+            const token = new vscode.CancellationTokenSource().token;
+            const cases: Array<{
+                sessions: TestEditorSession[];
+                expected: EditorAssistanceToolResult;
+            }> = [
+                {
+                    sessions: [],
+                    expected: {
+                        success: true,
+                        tool: aspireDebugSessionStatusToolName,
+                        outcome: 'notDebugging',
+                        scope: 'appHost',
+                        controller: 'editor',
+                        appHost: 'AppHost/AppHost.csproj',
+                    },
+                },
+                {
+                    sessions: [{
+                        appHostPath: appHostProjectPath,
+                        resolvedAppHostPath: appHostProjectPath,
+                        operationKind: 'run',
+                        startupCompleted: false,
+                        noDebug: true,
+                        isStopping: false,
+                    }],
+                    expected: {
+                        success: true,
+                        tool: aspireDebugSessionStatusToolName,
+                        outcome: 'starting',
+                        scope: 'appHost',
+                        controller: 'editor',
+                        mode: 'run',
+                        appHost: 'AppHost/AppHost.csproj',
+                    },
+                },
+                {
+                    sessions: [{
+                        appHostPath: appHostProjectPath,
+                        resolvedAppHostPath: appHostProjectPath,
+                        operationKind: 'run',
+                        startupCompleted: true,
+                        noDebug: false,
+                        isStopping: false,
+                    }],
+                    expected: {
+                        success: true,
+                        tool: aspireDebugSessionStatusToolName,
+                        outcome: 'running',
+                        scope: 'appHost',
+                        controller: 'editor',
+                        mode: 'debug',
+                        appHost: 'AppHost/AppHost.csproj',
+                    },
+                },
+                {
+                    sessions: [{
+                        appHostPath: appHostProjectPath,
+                        resolvedAppHostPath: appHostProjectPath,
+                        operationKind: 'run',
+                        startupCompleted: true,
+                        noDebug: true,
+                        isStopping: true,
+                    }],
+                    expected: {
+                        success: true,
+                        tool: aspireDebugSessionStatusToolName,
+                        outcome: 'stopping',
+                        scope: 'appHost',
+                        controller: 'editor',
+                        mode: 'run',
+                        appHost: 'AppHost/AppHost.csproj',
+                    },
+                },
+            ];
+
+            for (const testCase of cases) {
+                launchService.editorSessions.splice(0, launchService.editorSessions.length, ...testCase.sessions);
+                assert.deepStrictEqual(
+                    await service.getDebugSessionStatus({ appHostPath: 'AppHost/AppHost.csproj' }, token),
+                    testCase.expected);
+            }
+
+            launchService.editorSessions.push({ ...launchService.editorSessions[0] });
+            assert.deepStrictEqual(
+                await service.getDebugSessionStatus({ appHostPath: 'AppHost/AppHost.csproj' }, token),
+                {
+                    success: true,
+                    tool: aspireDebugSessionStatusToolName,
+                    outcome: 'multipleSessions',
+                    scope: 'appHost',
+                    controller: 'editor',
+                    appHost: 'AppHost/AppHost.csproj',
+                });
+        });
+
+        test('resolves the exact requested AppHost instead of inferring from the bounded list', async () => {
+            discoveryService.candidatesByFolder.set(workspaceRoot, []);
+            for (let index = 0; index < 20; index++) {
+                const candidatePath = path.join(workspaceRoot, `Project${index.toString().padStart(2, '0')}`, 'AppHost.csproj');
+                fs.mkdirSync(path.dirname(candidatePath), { recursive: true });
+                fs.writeFileSync(candidatePath, appHostProjectContents);
+                addCandidate(discoveryService, workspaceRoot, candidatePath);
+            }
+
+            const exactAppHostPath = path.join(workspaceRoot, 'ZExact', 'AppHost.csproj');
+            fs.mkdirSync(path.dirname(exactAppHostPath), { recursive: true });
+            fs.writeFileSync(exactAppHostPath, appHostProjectContents);
+            addCandidate(discoveryService, workspaceRoot, exactAppHostPath);
+            launchService.editorSessions.push({
+                appHostPath: exactAppHostPath,
+                resolvedAppHostPath: exactAppHostPath,
+                operationKind: 'run',
+                startupCompleted: true,
+                noDebug: false,
+                isStopping: false,
+            });
+
+            const result = await service.getDebugSessionStatus(
+                { appHostPath: 'ZExact/AppHost.csproj' },
+                new vscode.CancellationTokenSource().token);
+
+            assert.deepStrictEqual(result, {
+                success: true,
+                tool: aspireDebugSessionStatusToolName,
+                outcome: 'running',
+                scope: 'appHost',
+                controller: 'editor',
+                mode: 'debug',
+                appHost: 'ZExact/AppHost.csproj',
+            });
+        });
+
+        test('scopes a resource name and child session to the exact resolved AppHost', async () => {
+            const otherAppHostPath = path.join(workspaceRoot, 'OtherAppHost', 'AppHost.csproj');
+            const requestedProjectPath = path.join(workspaceRoot, 'Api', 'Api.csproj');
+            const otherProjectPath = path.join(workspaceRoot, 'OtherApi', 'Api.csproj');
+            fs.mkdirSync(path.dirname(otherAppHostPath), { recursive: true });
+            fs.writeFileSync(otherAppHostPath, appHostProjectContents);
+            addCandidate(discoveryService, workspaceRoot, otherAppHostPath);
+            resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [
+                createResource('api', requestedProjectPath),
+            ]);
+            resourceRepository.resourcesByAppHost.set(path.resolve(otherAppHostPath), [
+                createResource('api', otherProjectPath),
+            ]);
+            resourceSessions.push({
+                appHostPath: otherAppHostPath,
+                projectPath: otherProjectPath,
+                state: 'running',
+                mode: 'debug',
+            });
+
+            const noMatch = await service.getDebugSessionStatus(
+                { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api' },
+                new vscode.CancellationTokenSource().token);
+            assert.deepStrictEqual(noMatch, {
+                success: true,
+                tool: aspireDebugSessionStatusToolName,
+                outcome: 'notDebugging',
+                scope: 'resource',
+                controller: 'editor',
+                appHost: 'AppHost/AppHost.csproj',
+                resourceName: 'api',
+            });
+
+            resourceSessions.push({
+                appHostPath: appHostProjectPath,
+                projectPath: path.join(workspaceRoot, 'Api', '.', 'Api.csproj'),
+                state: 'running',
+                mode: 'debug',
+            });
+            const match = await service.getDebugSessionStatus(
+                { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api' },
+                new vscode.CancellationTokenSource().token);
+            assert.deepStrictEqual(match, {
+                success: true,
+                tool: aspireDebugSessionStatusToolName,
+                outcome: 'running',
+                scope: 'resource',
+                controller: 'editor',
+                mode: 'debug',
+                appHost: 'AppHost/AppHost.csproj',
+                resourceName: 'api',
+            });
+            assert.deepStrictEqual(resourceRepository.requests, [appHostProjectPath, appHostProjectPath]);
+        });
+
+        test('fails closed for missing or duplicate exact resource names', async () => {
+            const token = new vscode.CancellationTokenSource().token;
+            resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [
+                createResource('worker', path.join(workspaceRoot, 'Worker', 'Worker.csproj')),
+            ]);
+
+            assert.deepStrictEqual(
+                await service.getDebugSessionStatus(
+                    { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api' },
+                    token),
+                {
+                    success: false,
+                    tool: aspireDebugSessionStatusToolName,
+                    outcome: 'resourceNotFound',
+                    scope: 'resource',
+                    controller: 'editor',
+                    appHost: 'AppHost/AppHost.csproj',
+                    resourceName: 'api',
+                });
+
+            resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [
+                createResource('api', path.join(workspaceRoot, 'Api1', 'Api.csproj')),
+                createResource('api', path.join(workspaceRoot, 'Api2', 'Api.csproj')),
+            ]);
+            assert.deepStrictEqual(
+                await service.getDebugSessionStatus(
+                    { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api' },
+                    token),
+                {
+                    success: false,
+                    tool: aspireDebugSessionStatusToolName,
+                    outcome: 'resourceAmbiguous',
+                    scope: 'resource',
+                    controller: 'editor',
+                    appHost: 'AppHost/AppHost.csproj',
+                    resourceName: 'api',
+                });
+        });
+
+        test('returns notDebugging when a resource has no usable project path', async () => {
+            resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [
+                createResource('container'),
+            ]);
+            resourceSessions.push({
+                appHostPath: appHostProjectPath,
+                projectPath: path.join(workspaceRoot, 'Container', 'Container.csproj'),
+                state: 'running',
+                mode: 'debug',
+            });
+
+            const result = await service.getDebugSessionStatus(
+                { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'container' },
+                new vscode.CancellationTokenSource().token);
+
+            assert.deepStrictEqual(result, {
+                success: true,
+                tool: aspireDebugSessionStatusToolName,
+                outcome: 'notDebugging',
+                scope: 'resource',
+                controller: 'editor',
+                appHost: 'AppHost/AppHost.csproj',
+                resourceName: 'container',
+            });
+        });
+
+        test('reports resource starting, stopping, and multiple child sessions without exposing internals', async () => {
+            const projectPath = path.join(workspaceRoot, 'Api', 'Api.csproj');
+            resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [
+                createResource('api', projectPath, {
+                    connectionString: 'secret-connection',
+                    dashboardUrl: 'https://private.example',
+                }),
+            ]);
+            resourceSessions.push({
+                appHostPath: appHostProjectPath,
+                projectPath,
+                state: 'starting',
+                mode: 'other',
+                sessionId: 'secret-session',
+                pid: 4242,
+            } as EditorResourceSessionSnapshot & { sessionId?: string; pid?: number });
+
+            const starting = await service.getDebugSessionStatus(
+                { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api' },
+                new vscode.CancellationTokenSource().token);
+            assert.deepStrictEqual(starting, {
+                success: true,
+                tool: aspireDebugSessionStatusToolName,
+                outcome: 'starting',
+                scope: 'resource',
+                controller: 'editor',
+                mode: 'other',
+                appHost: 'AppHost/AppHost.csproj',
+                resourceName: 'api',
+            });
+
+            resourceSessions[0] = {
+                appHostPath: appHostProjectPath,
+                projectPath,
+                state: 'stopping',
+                mode: 'debug',
+            };
+            const stopping = await service.getDebugSessionStatus(
+                { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api' },
+                new vscode.CancellationTokenSource().token);
+            assert.deepStrictEqual(stopping, {
+                success: true,
+                tool: aspireDebugSessionStatusToolName,
+                outcome: 'stopping',
+                scope: 'resource',
+                controller: 'editor',
+                mode: 'debug',
+                appHost: 'AppHost/AppHost.csproj',
+                resourceName: 'api',
+            });
+
+            resourceSessions.push({ ...resourceSessions[0], state: 'running' });
+            const multiple = await service.getDebugSessionStatus(
+                { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api' },
+                new vscode.CancellationTokenSource().token);
+            assert.deepStrictEqual(multiple, {
+                success: true,
+                tool: aspireDebugSessionStatusToolName,
+                outcome: 'multipleSessions',
+                scope: 'resource',
+                controller: 'editor',
+                appHost: 'AppHost/AppHost.csproj',
+                resourceName: 'api',
+            });
+
+            const serialized = JSON.stringify([starting, stopping, multiple]);
+            assert.strictEqual(serialized.includes(workspaceRoot), false);
+            assert.strictEqual(serialized.includes('secret-connection'), false);
+            assert.strictEqual(serialized.includes('private.example'), false);
+            assert.strictEqual(serialized.includes('sessionId'), false);
+            assert.strictEqual(serialized.includes('pid'), false);
+        });
+
+        test('maps resource repository cancellation and errors to sanitized outcomes', async () => {
+            resourceRepository.error = new vscode.CancellationError();
+            const canceled = await service.getDebugSessionStatus(
+                { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api' },
+                new vscode.CancellationTokenSource().token);
+            assert.deepStrictEqual(canceled, {
+                success: false,
+                tool: aspireDebugSessionStatusToolName,
+                outcome: 'canceled',
+            });
+
+            resourceRepository.error = new Error(`secret ${workspaceRoot}`);
+            const failed = await service.getDebugSessionStatus(
+                { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api' },
+                new vscode.CancellationTokenSource().token);
+            assert.deepStrictEqual(failed, {
+                success: false,
+                tool: aspireDebugSessionStatusToolName,
+                outcome: 'error',
+            });
+            assert.strictEqual(JSON.stringify(failed).includes(workspaceRoot), false);
+        });
+
+        test('maps every launch failure category to finite recommended actions', async () => {
+            const expectedActions = new Map<SanitizedLaunchFailure['category'], readonly string[]>([
+                ['invalidConfiguration', ['checkAspireOutput']],
+                ['missingDependency', ['checkDependencies']],
+                ['cliUnavailable', ['installAspireCli']],
+                ['buildFailed', ['fixBuildErrors']],
+                ['processExited', ['checkAspireOutput']],
+                ['timeout', ['retryLaunch']],
+                ['portConflict', ['freeRequiredPort']],
+                ['permissionDenied', ['checkPermissions']],
+                ['unsupported', ['checkDependencies']],
+                ['canceled', ['retryLaunch']],
+                ['unknown', ['checkAspireOutput']],
+            ]);
+
+            for (const [category, recommendedActions] of expectedActions) {
+                failuresByAppHost.set(path.resolve(appHostProjectPath), [normalizeLaunchFailure({
+                    stage: 'debugSession',
+                    category,
+                    controller: 'editor',
+                    mode: 'debug',
+                    providerKind: 'dotnet',
+                    exitCode: 1,
+                })]);
+
+                const result = await service.explainLaunchFailure(
+                    { appHostPath: 'AppHost/AppHost.csproj' },
+                    new vscode.CancellationTokenSource().token);
+
+                assert.strictEqual(result.outcome, 'failureFound');
+                if (result.outcome !== 'failureFound') {
+                    assert.fail(`Expected failureFound for ${category}`);
+                }
+                assert.strictEqual(result.category, category);
+                assert.deepStrictEqual(result.recommendedActions, recommendedActions);
+            }
+        });
+
+        test('returns only the latest sanitized journal entry and no raw metadata', async () => {
+            const latest = {
+                ...normalizeLaunchFailure({
+                    stage: 'build',
+                    category: 'buildFailed',
+                    controller: 'cli',
+                    mode: 'run',
+                    providerKind: 'node',
+                    exitCode: 17,
+                }),
+                appHostIdentity: 'apphost-99',
+                recordedAt: 123456,
+                sequence: 42,
+                detail: `secret ${workspaceRoot}`,
+            };
+            const older = normalizeLaunchFailure({
+                stage: 'dashboard',
+                category: 'unknown',
+                controller: 'editor',
+                mode: 'debug',
+                providerKind: 'browser',
+            });
+            failuresByAppHost.set(path.resolve(appHostProjectPath), [latest, older]);
+
+            const result = await service.explainLaunchFailure(
+                { appHostPath: 'AppHost/AppHost.csproj' },
+                new vscode.CancellationTokenSource().token);
+
+            assert.deepStrictEqual(result, {
+                success: true,
+                tool: aspireExplainLaunchFailureToolName,
+                outcome: 'failureFound',
+                appHost: 'AppHost/AppHost.csproj',
+                stage: 'build',
+                category: 'buildFailed',
+                controller: 'cli',
+                mode: 'run',
+                providerKind: 'node',
+                exitCodeBucket: 'other',
+                recommendedActions: ['fixBuildErrors'],
+            });
+            const serialized = JSON.stringify(result);
+            assert.strictEqual(serialized.includes(workspaceRoot), false);
+            assert.strictEqual(serialized.includes('apphost-99'), false);
+            assert.strictEqual(serialized.includes('recordedAt'), false);
+            assert.strictEqual(serialized.includes('sequence'), false);
+            assert.strictEqual(serialized.includes('detail'), false);
+        });
+
+        test('reports noRecordedFailure when the unexpired journal has no entry', async () => {
+            const result = await service.explainLaunchFailure(
+                { appHostPath: 'AppHost/AppHost.csproj' },
+                new vscode.CancellationTokenSource().token);
+
+            assert.deepStrictEqual(result, {
+                success: true,
+                tool: aspireExplainLaunchFailureToolName,
+                outcome: 'noRecordedFailure',
+                appHost: 'AppHost/AppHost.csproj',
+            });
+        });
+
+        test('sanitizes launch failure reader errors and cancellation', async () => {
+            failureReaderError = new vscode.CancellationError();
+            assert.deepStrictEqual(
+                await service.explainLaunchFailure(
+                    { appHostPath: 'AppHost/AppHost.csproj' },
+                    new vscode.CancellationTokenSource().token),
+                {
+                    success: false,
+                    tool: aspireExplainLaunchFailureToolName,
+                    outcome: 'canceled',
+                });
+
+            failureReaderError = new Error(`secret ${workspaceRoot}`);
+            const failed = await service.explainLaunchFailure(
+                { appHostPath: 'AppHost/AppHost.csproj' },
+                new vscode.CancellationTokenSource().token);
+            assert.deepStrictEqual(failed, {
+                success: false,
+                tool: aspireExplainLaunchFailureToolName,
+                outcome: 'error',
+            });
+            assert.strictEqual(JSON.stringify(failed).includes(workspaceRoot), false);
+        });
+
+        test('registers invocation-only adapters and returns one JSON text part', async () => {
+            const disposed: string[] = [];
+            const registerToolStub = sinon.stub(vscode.lm, 'registerTool').callsFake((name: string) =>
+                new vscode.Disposable(() => disposed.push(name)));
+            try {
+                const registration = registerEditorAssistanceTools(service);
+                assert.strictEqual(registration.registered, true);
+                assert.deepStrictEqual(
+                    registerToolStub.getCalls().map(call => call.args[0]),
+                    [aspireDebugSessionStatusToolName, aspireExplainLaunchFailureToolName]);
+                assert.deepStrictEqual([...registration.tools.keys()], [
+                    aspireDebugSessionStatusToolName,
+                    aspireExplainLaunchFailureToolName,
+                ]);
+
+                const statusTool = registration.tools.get(aspireDebugSessionStatusToolName);
+                const explainTool = registration.tools.get(aspireExplainLaunchFailureToolName);
+                assert.ok(statusTool instanceof AspireDebugSessionStatusLanguageModelTool);
+                assert.ok(explainTool instanceof AspireExplainLaunchFailureLanguageModelTool);
+                assert.strictEqual((statusTool as any).prepareInvocation, undefined);
+                assert.strictEqual((explainTool as any).prepareInvocation, undefined);
+
+                const payload = readEditorAssistanceToolResult(await statusTool.invoke(
+                    { input: { appHostPath: 'AppHost/AppHost.csproj' }, toolInvocationToken: undefined },
+                    new vscode.CancellationTokenSource().token));
+                assert.deepStrictEqual(payload, {
+                    success: true,
+                    tool: aspireDebugSessionStatusToolName,
+                    outcome: 'notDebugging',
+                    scope: 'appHost',
+                    controller: 'editor',
+                    appHost: 'AppHost/AppHost.csproj',
+                });
+                const explanation = readEditorAssistanceToolResult(await explainTool.invoke(
+                    { input: { appHostPath: 'AppHost/AppHost.csproj' }, toolInvocationToken: undefined },
+                    new vscode.CancellationTokenSource().token));
+                assert.deepStrictEqual(explanation, {
+                    success: true,
+                    tool: aspireExplainLaunchFailureToolName,
+                    outcome: 'noRecordedFailure',
+                    appHost: 'AppHost/AppHost.csproj',
+                });
+
+                registration.dispose();
+                assert.deepStrictEqual(disposed, [
+                    aspireDebugSessionStatusToolName,
+                    aspireExplainLaunchFailureToolName,
+                ]);
+            }
+            finally {
+                registerToolStub.restore();
+            }
+        });
+
+        test('feature-detects the stable language model tool API', () => {
+            const registerToolStub = sinon.stub(vscode.lm, 'registerTool').value(undefined);
+            try {
+                const registration = registerEditorAssistanceTools(service);
+                assert.strictEqual(registration.registered, false);
+                assert.deepStrictEqual([...registration.tools.keys()], [
+                    aspireDebugSessionStatusToolName,
+                    aspireExplainLaunchFailureToolName,
+                ]);
+                registration.dispose();
+            }
+            finally {
+                registerToolStub.restore();
+            }
         });
     });
 
@@ -738,6 +1527,41 @@ suite('Editor assistance AppHost services', () => {
 
             assert.strictEqual(appHosts.length, 20);
             assert.deepStrictEqual(appHosts, Array.from({ length: 20 }, (_, index) => `Project${index.toString().padStart(2, '0')}/AppHost.csproj`));
+        });
+
+        test('gets the exact requested AppHost summary beyond the bounded list snapshot', async () => {
+            discoveryService.candidatesByFolder.set(workspaceRoot, []);
+            for (let index = 0; index < 20; index++) {
+                const candidatePath = path.join(workspaceRoot, `Project${index.toString().padStart(2, '0')}`, 'AppHost.csproj');
+                fs.mkdirSync(path.dirname(candidatePath), { recursive: true });
+                fs.writeFileSync(candidatePath, appHostProjectContents);
+                addCandidate(discoveryService, workspaceRoot, candidatePath);
+            }
+
+            const exactAppHostPath = path.join(workspaceRoot, 'ZExact', 'AppHost.csproj');
+            fs.mkdirSync(path.dirname(exactAppHostPath), { recursive: true });
+            fs.writeFileSync(exactAppHostPath, appHostProjectContents);
+            addCandidate(discoveryService, workspaceRoot, exactAppHostPath);
+            launchService.editorSessions.push({
+                appHostPath: exactAppHostPath,
+                resolvedAppHostPath: exactAppHostPath,
+                operationKind: 'run',
+                startupCompleted: true,
+                noDebug: false,
+                isStopping: false,
+            });
+
+            const resolution = await resolver.resolveTarget('ZExact/AppHost.csproj', new vscode.CancellationTokenSource().token);
+            assertResolved(resolution);
+
+            const summary = await snapshotService.getAppHostSummary(resolution.target, new vscode.CancellationTokenSource().token);
+
+            assert.deepStrictEqual(summary, {
+                appHost: 'ZExact/AppHost.csproj',
+                state: 'running',
+                mode: 'debug',
+                controller: 'editor',
+            });
         });
 
         test('returns summaries with only safe AppHost state fields', async () => {

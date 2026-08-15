@@ -2037,6 +2037,7 @@ suite('Dotnet Debugger Extension Tests', () => {
             extension);
 
         assert.deepStrictEqual(debugConfig.serverReadyAction, serverReadyAction);
+        assert.strictEqual(debugConfig.projectFile, projectPath);
 
         fs.rmSync(tempDir, { recursive: true, force: true });
     });

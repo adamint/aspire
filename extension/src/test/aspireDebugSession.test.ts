@@ -5216,6 +5216,102 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         aspireDebugSession.dispose();
     });
 
+    test('tracks only safe resource project lifecycle snapshots', async () => {
+        let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        let terminateSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        const startGate = createDeferred<boolean>();
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/AppHost/AppHost.csproj',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = {
+            isDebugConfigEnvironmentLoggingEnabled: () => false,
+        };
+        const debugConfig = {
+            runId: 'run-1',
+            debugSessionId: 'debug-1',
+            type: 'coreclr',
+            name: 'Project',
+            request: 'launch',
+            program: '/workspace/Api/bin/Debug/net10.0/Api.dll',
+            projectFile: '/workspace/Api/Api.csproj',
+            noDebug: false,
+        } as AspireResourceExtendedDebugConfiguration;
+        const resourceSession = {
+            id: 'resource-session',
+            type: 'coreclr',
+            name: 'Project',
+            configuration: {
+                ...debugConfig,
+                env: { PRIVATE_TOKEN: 'secret' },
+            },
+        } as unknown as vscode.DebugSession;
+        sinon.stub(vscode.workspace, 'getWorkspaceFolder').returns(undefined);
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            startSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(callback => {
+            terminateSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.debug, 'startDebugging').returns(startGate.promise);
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(
+            parentDebugSession as unknown as vscode.DebugSession,
+            {} as any,
+            {} as any,
+            terminalProvider as any,
+            () => { });
+        sinon.stub(aspireDebugSession as any, 'createDebugAdapterTrackerCore');
+
+        const resourcePromise = aspireDebugSession.startAndGetDebugSession(debugConfig);
+        await Promise.resolve();
+        assert.deepStrictEqual(aspireDebugSession.editorResourceSessions, [{
+            appHostPath: '/workspace/AppHost/AppHost.csproj',
+            projectPath: '/workspace/Api/Api.csproj',
+            state: 'starting',
+            mode: 'debug',
+        }]);
+
+        startSessionCallback?.(resourceSession);
+        startGate.resolve(true);
+        const resource = await resourcePromise;
+        assert.ok(resource);
+        assert.deepStrictEqual(aspireDebugSession.editorResourceSessions, [{
+            appHostPath: '/workspace/AppHost/AppHost.csproj',
+            projectPath: '/workspace/Api/Api.csproj',
+            state: 'running',
+            mode: 'debug',
+        }]);
+
+        const stop = resource.stopSession();
+        assert.deepStrictEqual(aspireDebugSession.editorResourceSessions, [{
+            appHostPath: '/workspace/AppHost/AppHost.csproj',
+            projectPath: '/workspace/Api/Api.csproj',
+            state: 'stopping',
+            mode: 'debug',
+        }]);
+
+        terminateSessionCallback?.(resourceSession);
+        await stop;
+        assert.deepStrictEqual(aspireDebugSession.editorResourceSessions, []);
+        assert.strictEqual(JSON.stringify(aspireDebugSession.editorResourceSessions).includes('secret'), false);
+
+        aspireDebugSession.dispose();
+    });
+
     test('stops MAUI resource debug sessions that start after Aspire session disposal', async () => {
         let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
         let resolveStart: ((value: boolean) => void) | undefined;
