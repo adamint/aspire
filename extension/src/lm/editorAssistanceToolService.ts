@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 
-import { AspireCliParseError, type ResourceJson } from '../data/appHostCliContracts';
+import { isResourceNameMatch, type ResourceJson } from '../data/appHostCliContracts';
 import { appHostLifecycleUnresolvedPath } from '../loc/strings';
 import { type EditorResourceSessionSnapshot } from '../services/appHostLaunchContracts';
 import { extensionLogOutputChannel } from '../utils/logging';
@@ -168,27 +168,22 @@ export class EditorAssistanceToolService {
 
             const resourceName = preflight.input.resourceName;
             const appHostSummary = await this._dependencies.snapshotService.getAppHostSummary(preflight.target, token);
-            let resources: readonly ResourceJson[];
-            try {
-                resources = await this._dependencies.resourceRepository.fetchAppHostResourcesOnce(
-                    preflight.target.absolutePath,
-                    token);
-            }
-            catch (error) {
-                throwIfCanceled(token);
-                if (appHostSummary.state === 'notDebugging' && isMissingStoppedAppHostSnapshot(error)) {
+            const resources: readonly ResourceJson[] = await this._dependencies.resourceRepository.getAppHostResources(
+                preflight.target.absolutePath,
+                resourceName,
+                appHostSummary.state !== 'notDebugging',
+                token);
+            throwIfCanceled(token);
+
+            const matches = resources.filter(resource => isResourceNameMatch(resource, resourceName));
+            if (matches.length === 0) {
+                if (appHostSummary.state === 'notDebugging' && resources.length === 0) {
                     return createResourceStatusResult(
                         'notDebugging',
                         preflight.target.displayPath,
                         resourceName);
                 }
 
-                throw error;
-            }
-            throwIfCanceled(token);
-
-            const matches = resources.filter(resource => resource.name === resourceName);
-            if (matches.length === 0) {
                 return createResourceFailure(
                     'resourceNotFound',
                     preflight.target.displayPath,
@@ -207,7 +202,7 @@ export class EditorAssistanceToolService {
                 return createResourceStatusResult(
                     'notDebugging',
                     preflight.target.displayPath,
-                    resource.name);
+                    resourceName);
             }
 
             // A Python module/executable launch can carry both the interpreter and
@@ -231,27 +226,27 @@ export class EditorAssistanceToolService {
                 return createResourceStatusResult(
                     'notDebugging',
                     preflight.target.displayPath,
-                    resource.name);
+                    resourceName);
             }
 
             if (matchingSessions.some(match => match.matchingResources.length > 1)) {
                 return createResourceFailure(
                     'resourceAmbiguous',
                     preflight.target.displayPath,
-                    resource.name);
+                    resourceName);
             }
             if (matchingSessions.length > 1) {
                 return createResourceStatusResult(
                     'multipleSessions',
                     preflight.target.displayPath,
-                    resource.name);
+                    resourceName);
             }
 
             const session = matchingSessions[0].session;
             return createResourceStatusResult(
                 session.state,
                 preflight.target.displayPath,
-                resource.name,
+                resourceName,
                 session.mode);
         }
         catch (error) {
@@ -533,10 +528,4 @@ function isSessionTargetMatch(
 
     const executablePaths = session.resourceExecutablePaths ?? [session.targetPath];
     return executablePaths.some(executablePath => isSamePath(executablePath, resourceTarget.path));
-}
-
-function isMissingStoppedAppHostSnapshot(error: unknown): boolean {
-    return error instanceof AspireCliParseError &&
-        error.command === 'aspire describe' &&
-        error.output === '';
 }

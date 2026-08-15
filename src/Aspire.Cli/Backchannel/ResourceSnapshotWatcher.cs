@@ -42,19 +42,19 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
     {
         try
         {
+            // Start the watch before fetching the initial snapshot so a resource transition cannot
+            // fall into the gap between those two backchannel calls. Changes win over the initial
+            // snapshot because the snapshot may already be stale by the time it is returned.
+            var watchTask = WatchChangesAsync(cancellationToken);
             var snapshots = await _connection.GetResourceSnapshotsAsync(includeHidden: true, cancellationToken).ConfigureAwait(false);
 
             foreach (var snapshot in snapshots)
             {
-                _resources[snapshot.Name] = snapshot;
+                _resources.TryAdd(snapshot.Name, snapshot);
             }
 
             _initialLoadTcs.TrySetResult();
-
-            await foreach (var snapshot in _connection.WatchResourceSnapshotsAsync(includeHidden: true, cancellationToken).ConfigureAwait(false))
-            {
-                _resources[snapshot.Name] = snapshot;
-            }
+            await watchTask.ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -67,6 +67,14 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
                 // Initial load already completed; store for callers to detect.
                 _watchException = ex;
             }
+        }
+    }
+
+    private async Task WatchChangesAsync(CancellationToken cancellationToken)
+    {
+        await foreach (var snapshot in _connection.WatchResourceSnapshotsAsync(includeHidden: true, cancellationToken).ConfigureAwait(false))
+        {
+            _resources[snapshot.Name] = snapshot;
         }
     }
 

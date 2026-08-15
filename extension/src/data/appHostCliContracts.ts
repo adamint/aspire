@@ -73,6 +73,13 @@ export interface ResourceJson {
     properties: Record<string, string | null> | null;
 }
 
+export function isResourceNameMatch(
+    resource: ResourceJson,
+    resourceName: string,
+    includeDisplayName = true): boolean {
+    return resource.name === resourceName || (includeDisplayName && resource.displayName === resourceName);
+}
+
 export interface AppHostDisplayInfo {
     appHostPath: string;
     appHostPid: number;

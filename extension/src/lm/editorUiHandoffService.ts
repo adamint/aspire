@@ -57,7 +57,12 @@ export class EditorUiHandoffService implements EditorUiHandoffOperations {
                 return { outcome: 'ambiguousAppHost' };
             }
 
-            const dashboardUrl = runningMatches[0].dashboardUrl;
+            const runningAppHost = runningMatches[0];
+            if (typeof runningAppHost.appHostPid === 'number' && !isProcessRunning(runningAppHost.appHostPid)) {
+                return { outcome: 'appHostNotRunning' };
+            }
+
+            const dashboardUrl = runningAppHost.dashboardUrl;
             if (!dashboardUrl || !isWebDashboardUrl(dashboardUrl)) {
                 return { outcome: 'dashboardUnavailable' };
             }
@@ -68,7 +73,7 @@ export class EditorUiHandoffService implements EditorUiHandoffOperations {
                 // Any editor session owns its Dashboard settings, shutdown state, and child cleanup.
                 // Falling back to an ownerless browser is safe only for a genuinely external AppHost,
                 // so a fresh CLI row must identify exactly one editor owner before UI is presented.
-                const cliPid = runningMatches[0].cliPid;
+                const cliPid = runningAppHost.cliPid;
                 if (typeof cliPid !== 'number') {
                     return { outcome: 'error' };
                 }
@@ -138,5 +143,17 @@ export class EditorUiHandoffService implements EditorUiHandoffOperations {
 function throwIfCanceled(token: vscode.CancellationToken): void {
     if (token.isCancellationRequested) {
         throw new vscode.CancellationError();
+    }
+}
+
+function isProcessRunning(pid: number): boolean {
+    try {
+        // Signal 0 performs an existence/permission check without sending a signal.
+        // https://nodejs.org/api/process.html#processkillpid-signal
+        process.kill(pid, 0);
+        return true;
+    }
+    catch (error) {
+        return error instanceof Error && 'code' in error && error.code === 'EPERM';
     }
 }

@@ -22,6 +22,7 @@ import { stripResourceSuffix } from '../utils/urlSchemes';
 import {
     AppHostDataRepository,
     AppHostDisplayInfo,
+    isResourceNameMatch,
     ResourceCommandArgumentInputJson,
     ResourceJson,
     ViewMode,
@@ -393,7 +394,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
     private _findResourceInTreeCore(elements: TreeElement[], resourceName: string, includeDisplayName: boolean): TreeElement | undefined {
         for (const element of elements) {
             if (element instanceof ResourceItem) {
-                if (resourceMatchesName(element.resource, resourceName, includeDisplayName)) {
+                if (isResourceNameMatch(element.resource, resourceName, includeDisplayName)) {
                     return element;
                 }
             }
@@ -1228,8 +1229,4 @@ function isProjectFileToSourceFileMatch(left: string, right: string): boolean {
     return isSamePath(path.dirname(normalizedLeft), path.dirname(normalizedRight)) &&
         ((isProjectFile(normalizedLeft) && isAppHostSourceFile(normalizedRight)) ||
             (isAppHostSourceFile(normalizedLeft) && isProjectFile(normalizedRight)));
-}
-
-function resourceMatchesName(resource: ResourceJson, resourceName: string, includeDisplayName: boolean): boolean {
-    return resource.name === resourceName || (includeDisplayName && resource.displayName === resourceName);
 }

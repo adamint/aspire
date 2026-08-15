@@ -242,7 +242,11 @@ export type EditorAssistanceToolResult =
     | ListDebugSessionsToolResult;
 
 export interface EditorAssistanceResourceRepository {
-    fetchAppHostResourcesOnce(appHostPath: string, token: vscode.CancellationToken): Promise<readonly ResourceJson[]>;
+    getAppHostResources(
+        appHostPath: string,
+        resourceName: string,
+        waitForResource: boolean,
+        token: vscode.CancellationToken): Promise<readonly ResourceJson[]>;
 }
 
 export interface EditorUiHandoffAppHostRepository {

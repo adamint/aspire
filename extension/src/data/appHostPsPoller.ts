@@ -75,10 +75,26 @@ export class AppHostPsPoller implements vscode.Disposable {
         this.stopPolling({ clearPostStopRefreshTimers: false });
         if (this._supportsPsFollow) {
             this._startPsFollow();
+            this._startPsFollowReconciliation();
             return;
         }
 
         this._startPsIntervalPolling();
+    }
+
+    private _startPsFollowReconciliation(): void {
+        if (this._pollingInterval) {
+            clearInterval(this._pollingInterval);
+        }
+
+        // The long-lived stream is the fast path, but an AppHost can start while the CLI is
+        // transitioning from its initial scan to the follow subscription. Periodic authoritative
+        // snapshots close that missed-delta window without restarting the stream.
+        this._pollingInterval = setInterval(() => {
+            if (!this._isDisposed()) {
+                this.refreshAppHostsFromAuthoritativeSnapshot();
+            }
+        }, this.getPollingIntervalMs());
     }
 
     private _startPsIntervalPolling(fetchImmediately = true): void {

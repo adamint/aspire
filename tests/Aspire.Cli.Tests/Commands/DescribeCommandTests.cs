@@ -262,15 +262,25 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var outputWriter = new TestOutputTextWriter(outputHelper);
-        using var provider = CreateDescribeTestServices(workspace, outputWriter, [
-            new ResourceSnapshot { Name = "redis", DisplayName = "redis", ResourceType = "Container", State = "Running" },
-            // Duplicate - identical to the first snapshot
-            new ResourceSnapshot { Name = "redis", DisplayName = "redis", ResourceType = "Container", State = "Running" },
-            // Changed state - should be emitted
-            new ResourceSnapshot { Name = "redis", DisplayName = "redis", ResourceType = "Container", State = "Stopping" },
-            // Duplicate of the changed state - should be suppressed
-            new ResourceSnapshot { Name = "redis", DisplayName = "redis", ResourceType = "Container", State = "Stopping" },
-        ]);
+        using var provider = CreateDescribeTestServices(
+            workspace,
+            outputWriter,
+            [
+                new ResourceSnapshot { Name = "redis", DisplayName = "redis", ResourceType = "Container", State = "Running" },
+            ],
+            configureConnection: connection =>
+            {
+                connection.WatchResourceSnapshotsHandler = (_, cancellationToken) => YieldResourceSnapshots(
+                    [
+                        // Duplicate of the initial snapshot - should be suppressed
+                        new ResourceSnapshot { Name = "redis", DisplayName = "redis", ResourceType = "Container", State = "Running" },
+                        // Changed state - should be emitted
+                        new ResourceSnapshot { Name = "redis", DisplayName = "redis", ResourceType = "Container", State = "Stopping" },
+                        // Duplicate of the changed state - should be suppressed
+                        new ResourceSnapshot { Name = "redis", DisplayName = "redis", ResourceType = "Container", State = "Stopping" },
+                    ],
+                    cancellationToken);
+            });
 
         var command = provider.GetRequiredService<RootCommand>();
         var result = command.Parse("describe --follow --format json");
@@ -302,19 +312,101 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task DescribeCommand_Follow_JsonFormat_EmitsInitialSnapshotWithoutResourceChanges()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var outputWriter = new TestOutputTextWriter(outputHelper);
+        using var provider = CreateDescribeTestServices(
+            workspace,
+            outputWriter,
+            [
+                new ResourceSnapshot { Name = "redis", DisplayName = "redis", ResourceType = "Container", State = "Running" },
+            ],
+            configureConnection: connection =>
+            {
+                connection.WatchResourceSnapshotsHandler = (_, cancellationToken) => EmptyResourceSnapshots(cancellationToken);
+            });
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("describe --follow --format json");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        var jsonLine = Assert.Single(outputWriter.Logs, l => l.TrimStart().StartsWith("{", StringComparison.Ordinal));
+        var resource = JsonSerializer.Deserialize(jsonLine, ResourcesCommandJsonContext.Ndjson.ResourceJson);
+        Assert.NotNull(resource);
+        Assert.Equal("redis", resource.Name);
+        Assert.Equal("Running", resource.State);
+    }
+
+    [Fact]
+    public async Task DescribeCommand_Follow_JsonFormat_DoesNotMissResourceCreatedDuringInitialLoad()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var outputWriter = new TestOutputTextWriter(outputHelper);
+        var watchStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var watchCallCount = 0;
+        using var provider = CreateDescribeTestServices(
+            workspace,
+            outputWriter,
+            [],
+            configureConnection: connection =>
+            {
+                connection.GetResourceSnapshotsHandler = async cancellationToken =>
+                {
+                    await watchStarted.Task.WaitAsync(cancellationToken);
+                    // The watch has already published Running by the time this stale
+                    // initial snapshot completes. The live change must win.
+                    return
+                    [
+                        new ResourceSnapshot { Name = "redis", DisplayName = "redis", ResourceType = "Container", State = "Starting" },
+                    ];
+                };
+                connection.WatchResourceSnapshotsHandler = (_, cancellationToken) =>
+                    Interlocked.Increment(ref watchCallCount) == 1
+                        ? YieldResourceAfterSignaling(watchStarted, cancellationToken)
+                        : EmptyResourceSnapshots(cancellationToken);
+            });
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("describe --follow --format json");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        var jsonLine = Assert.Single(outputWriter.Logs, l => l.TrimStart().StartsWith("{", StringComparison.Ordinal));
+        var resource = JsonSerializer.Deserialize(jsonLine, ResourcesCommandJsonContext.Ndjson.ResourceJson);
+        Assert.NotNull(resource);
+        Assert.Equal("redis", resource.Name);
+        Assert.Equal("Running", resource.State);
+    }
+
+    [Fact]
     public async Task DescribeCommand_Follow_TableFormat_DeduplicatesIdenticalSnapshots()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var outputWriter = new TestOutputTextWriter(outputHelper);
-        using var provider = CreateDescribeTestServices(workspace, outputWriter, [
-            new ResourceSnapshot { Name = "redis", DisplayName = "redis", ResourceType = "Container", State = "Running" },
-            // Duplicate - identical to the first snapshot
-            new ResourceSnapshot { Name = "redis", DisplayName = "redis", ResourceType = "Container", State = "Running" },
-            // Changed state - should be emitted
-            new ResourceSnapshot { Name = "redis", DisplayName = "redis", ResourceType = "Container", State = "Stopping" },
-            // Duplicate of the changed state - should be suppressed
-            new ResourceSnapshot { Name = "redis", DisplayName = "redis", ResourceType = "Container", State = "Stopping" },
-        ], disableAnsi: true);
+        using var provider = CreateDescribeTestServices(
+            workspace,
+            outputWriter,
+            [
+                new ResourceSnapshot { Name = "redis", DisplayName = "redis", ResourceType = "Container", State = "Running" },
+            ],
+            disableAnsi: true,
+            configureConnection: connection =>
+            {
+                connection.WatchResourceSnapshotsHandler = (_, cancellationToken) => YieldResourceSnapshots(
+                    [
+                        // Duplicate of the initial snapshot - should be suppressed
+                        new ResourceSnapshot { Name = "redis", DisplayName = "redis", ResourceType = "Container", State = "Running" },
+                        // Changed state - should be emitted
+                        new ResourceSnapshot { Name = "redis", DisplayName = "redis", ResourceType = "Container", State = "Stopping" },
+                        // Duplicate of the changed state - should be suppressed
+                        new ResourceSnapshot { Name = "redis", DisplayName = "redis", ResourceType = "Container", State = "Stopping" },
+                    ],
+                    cancellationToken);
+            });
 
         var command = provider.GetRequiredService<RootCommand>();
         var result = command.Parse("describe --follow");
@@ -710,6 +802,41 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
         cancellationToken.ThrowIfCancellationRequested();
 
         throw new ObjectDisposedException("StreamJsonRpc.JsonRpc");
+    }
+
+    private static async IAsyncEnumerable<ResourceSnapshot> EmptyResourceSnapshots([EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        await Task.Yield();
+        cancellationToken.ThrowIfCancellationRequested();
+        yield break;
+    }
+
+    private static async IAsyncEnumerable<ResourceSnapshot> YieldResourceSnapshots(
+        IEnumerable<ResourceSnapshot> snapshots,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        foreach (var snapshot in snapshots)
+        {
+            await Task.Yield();
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return snapshot;
+        }
+    }
+
+    private static async IAsyncEnumerable<ResourceSnapshot> YieldResourceAfterSignaling(
+        TaskCompletionSource watchStarted,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        watchStarted.TrySetResult();
+        await Task.Yield();
+        cancellationToken.ThrowIfCancellationRequested();
+        yield return new ResourceSnapshot
+        {
+            Name = "redis",
+            DisplayName = "redis",
+            ResourceType = "Container",
+            State = "Running",
+        };
     }
 
     private static async IAsyncEnumerable<ResourceSnapshot> ThrowObjectDisposedAfterCancellationAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)

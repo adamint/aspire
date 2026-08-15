@@ -61,10 +61,17 @@ class FakeEditorAssistanceResourceRepository implements EditorAssistanceResource
     readonly requests: string[] = [];
     error: unknown;
 
-    async fetchAppHostResourcesOnce(appHostPath: string, token: vscode.CancellationToken): Promise<readonly ResourceJson[]> {
+    async getAppHostResources(
+        appHostPath: string,
+        _resourceName: string,
+        waitForResource: boolean,
+        token: vscode.CancellationToken): Promise<readonly ResourceJson[]> {
         this.requests.push(appHostPath);
         if (token.isCancellationRequested) {
             throw new vscode.CancellationError();
+        }
+        if (!waitForResource) {
+            return this.resourcesByAppHost.get(path.resolve(appHostPath)) ?? [];
         }
 
         if (this.error) {
@@ -131,7 +138,7 @@ function createRunningAppHost(
     status = 'running'): AppHostDisplayInfo {
     return {
         appHostPath,
-        appHostPid: 1234,
+        appHostPid: process.pid,
         status,
         cliPid: null,
         dashboardUrl,
@@ -941,6 +948,52 @@ suite('Editor assistance AppHost services', () => {
                 });
         });
 
+        test('matches logical resource display names and rejects duplicate replicas', async () => {
+            const token = new vscode.CancellationTokenSource().token;
+            resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [{
+                ...createResource('api-abc123', path.join(workspaceRoot, 'Api', 'Api.csproj')),
+                displayName: 'api',
+            }]);
+
+            assert.deepStrictEqual(
+                await service.getDebugSessionStatus(
+                    { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api' },
+                    token),
+                {
+                    success: true,
+                    tool: aspireDebugSessionStatusToolName,
+                    outcome: 'notDebugging',
+                    scope: 'resource',
+                    controller: 'editor',
+                    appHost: 'AppHost/AppHost.csproj',
+                    resourceName: 'api',
+                });
+
+            resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [
+                {
+                    ...createResource('api-abc123', path.join(workspaceRoot, 'Api', 'Api.csproj')),
+                    displayName: 'api',
+                },
+                {
+                    ...createResource('api-def456', path.join(workspaceRoot, 'Api', 'Api.csproj')),
+                    displayName: 'api',
+                },
+            ]);
+            assert.deepStrictEqual(
+                await service.getDebugSessionStatus(
+                    { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api' },
+                    token),
+                {
+                    success: false,
+                    tool: aspireDebugSessionStatusToolName,
+                    outcome: 'resourceAmbiguous',
+                    scope: 'resource',
+                    controller: 'editor',
+                    appHost: 'AppHost/AppHost.csproj',
+                    resourceName: 'api',
+                });
+        });
+
         test('returns notDebugging when a resource has no usable target path', async () => {
             resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [
                 createResource('container'),
@@ -1045,7 +1098,7 @@ suite('Editor assistance AppHost services', () => {
             assert.strictEqual(serialized.includes('pid'), false);
         });
 
-        test('handles stopped AppHost fetch failures without swallowing cancellation or other errors', async () => {
+        test('returns stopped resource status without waiting and preserves active-session errors', async () => {
             resourceRepository.error = new AspireCliParseError(
                 'aspire describe',
                 '',
@@ -1062,7 +1115,16 @@ suite('Editor assistance AppHost services', () => {
                 appHost: 'AppHost/AppHost.csproj',
                 resourceName: 'api',
             });
+            assert.deepStrictEqual(resourceRepository.requests, [path.resolve(appHostProjectPath)]);
 
+            launchService.editorSessions.push({
+                appHostPath: appHostProjectPath,
+                resolvedAppHostPath: appHostProjectPath,
+                operationKind: 'run',
+                startupCompleted: true,
+                noDebug: false,
+                isStopping: false,
+            });
             resourceRepository.error = new vscode.CancellationError();
             const canceled = await service.getDebugSessionStatus(
                 { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api' },
@@ -1086,14 +1148,6 @@ suite('Editor assistance AppHost services', () => {
                 outcome: 'error',
             });
 
-            launchService.editorSessions.push({
-                appHostPath: appHostProjectPath,
-                resolvedAppHostPath: appHostProjectPath,
-                operationKind: 'run',
-                startupCompleted: true,
-                noDebug: false,
-                isStopping: false,
-            });
             resourceRepository.error = new AspireCliParseError(
                 'aspire describe',
                 '',
@@ -1107,7 +1161,6 @@ suite('Editor assistance AppHost services', () => {
                 outcome: 'error',
             });
 
-            launchService.editorSessions.length = 0;
             resourceRepository.error = new Error(`secret ${workspaceRoot}`);
             const failed = await service.getDebugSessionStatus(
                 { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api' },
@@ -1250,6 +1303,14 @@ suite('Editor assistance AppHost services', () => {
                 const errorLog = sandbox.stub(extensionLogOutputChannel, 'error');
                 const { error, sentinels } = createUnsafeModelTriggeredError(workspaceRoot);
 
+                launchService.editorSessions.push({
+                    appHostPath: appHostProjectPath,
+                    resolvedAppHostPath: appHostProjectPath,
+                    operationKind: 'run',
+                    startupCompleted: true,
+                    noDebug: false,
+                    isStopping: false,
+                });
                 resourceRepository.error = error;
                 const statusResult = await service.getDebugSessionStatus(
                     { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api' },
@@ -1614,6 +1675,14 @@ suite('Editor assistance AppHost services', () => {
                 const executeCommand = sandbox.stub(vscode.commands, 'executeCommand').resolves();
                 const openExternal = sandbox.stub(vscode.env, 'openExternal').resolves(true);
                 const startDebugging = sandbox.stub(vscode.debug, 'startDebugging').resolves(true);
+                sandbox.stub(process, 'kill').callsFake((pid, signal) => {
+                    assert.strictEqual(signal, 0);
+                    if (pid === 999999) {
+                        throw Object.assign(new Error('not found'), { code: 'ESRCH' });
+                    }
+
+                    return true;
+                });
                 const token = new vscode.CancellationTokenSource().token;
 
                 assert.deepStrictEqual(await service.openDashboard({ appHostPath: 'Missing/AppHost.csproj' }, token), {
@@ -1629,6 +1698,16 @@ suite('Editor assistance AppHost services', () => {
                 });
 
                 uiRepository.appHosts = [createRunningAppHost(appHostProjectPath, 'https://stopped.example.invalid', 'stopped')];
+                assert.deepStrictEqual(await service.openDashboard({ appHostPath: 'AppHost/AppHost.csproj' }, token), {
+                    success: false,
+                    tool: aspireOpenDashboardToolName,
+                    outcome: 'appHostNotRunning',
+                });
+
+                uiRepository.appHosts = [{
+                    ...createRunningAppHost(appHostProjectPath, 'https://stale.example.invalid'),
+                    appHostPid: 999999,
+                }];
                 assert.deepStrictEqual(await service.openDashboard({ appHostPath: 'AppHost/AppHost.csproj' }, token), {
                     success: false,
                     tool: aspireOpenDashboardToolName,

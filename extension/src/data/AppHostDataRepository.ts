@@ -12,7 +12,7 @@ import { nonInteractiveCliEnvironment } from '../utils/environment';
 import { getComparisonKey, isAppHostPathUnderFolder, isSameAppHostPath } from '../utils/paths/comparison';
 import { FileSystemEntryDescriptor, FileSystemEntryDescriptorIndex, getFileSystemEntryDescriptor } from '../utils/paths/fileSystemIdentity';
 import { shortenPath, shortenPaths } from '../utils/paths/shortening';
-import { AppHostDisplayInfo, AspireCliFailedError, AspireCliParseError, DescribeSnapshotJson, ResourceCommandExecutionOutput, ResourceJson, ViewMode } from './appHostCliContracts';
+import { AppHostDisplayInfo, AspireCliFailedError, AspireCliParseError, DescribeSnapshotJson, isResourceNameMatch, ResourceCommandExecutionOutput, ResourceJson, ViewMode } from './appHostCliContracts';
 import { AppHostCliRunner, isDescribeUnsupportedOutput, isIncludeDisabledCommandsUnsupportedOutput, oneShotOutputBufferLimit, parseCliJsonOutput, RunCliCommandOptions } from './appHostCliRunner';
 import { isMatchingAppHostInstance, isMatchingAppHostPath, isPathInWorkspace } from './appHostPathMatching';
 import { AppHostPsPoller } from './appHostPsPoller';
@@ -83,6 +83,7 @@ export class AppHostDataRepository {
     private static readonly _streamedCandidateUpdateDebounceMs = 50;
     private static readonly _streamedCandidateUpdateMaxWaitMs = 250;
     private static readonly _workspaceAppHostDiscoveryConcurrency = 4;
+    private static readonly _editorAssistanceResourceWaitMs = 10_000;
 
     private readonly _onDidChangeData = new vscode.EventEmitter<void>();
     readonly onDidChangeData = this._onDidChangeData.event;
@@ -91,6 +92,7 @@ export class AppHostDataRepository {
     private _viewMode: ViewMode = 'workspace';
     private _panelVisible = false;
     private _openAppHostPaths: readonly string[] = [];
+    private _editorAssistanceConsumers = 0;
     private _hasEverBeenDataActive = false;
 
     // ── Workspace mode state (describe --follow) ──
@@ -497,6 +499,35 @@ export class AppHostDataRepository {
         return snapshot.resources ?? [];
     }
 
+    async getAppHostResources(
+        appHostPath: string,
+        resourceName: string,
+        waitForResource: boolean,
+        cancellationToken: vscode.CancellationToken): Promise<ResourceJson[]> {
+        if (cancellationToken.isCancellationRequested) {
+            throw new vscode.CancellationError();
+        }
+
+        const currentResources = this._getAppHostResources(appHostPath);
+        if (currentResources.some(resource => isResourceNameMatch(resource, resourceName))) {
+            return currentResources;
+        }
+        if (!waitForResource) {
+            return currentResources;
+        }
+
+        this._editorAssistanceConsumers++;
+        this._syncPolling();
+        try {
+            this.refreshRuntimeState();
+            return await this._waitForAppHostResources(appHostPath, resourceName, cancellationToken);
+        }
+        finally {
+            this._editorAssistanceConsumers--;
+            this._syncPolling();
+        }
+    }
+
     /**
      * Executes a resource command (e.g. start/stop/restart or a custom command) by spawning a
      * hidden `aspire resource <name> <command>` child process rather than typing into the visible
@@ -577,7 +608,66 @@ export class AppHostDataRepository {
      * (visible or backgrounded).
      */
     private get _dataActive(): boolean {
-        return this._panelVisible || this._openAppHostPaths.length > 0;
+        return this._panelVisible || this._openAppHostPaths.length > 0 || this._editorAssistanceConsumers > 0;
+    }
+
+    private _getAppHostResources(appHostPath: string): ResourceJson[] {
+        const stream = Array.from(this._describeStreams.entries())
+            .find(([currentAppHostPath]) => isMatchingAppHostPath(currentAppHostPath, appHostPath))?.[1];
+        return stream ? Array.from(stream.resources.values()) : [];
+    }
+
+    private _waitForAppHostResources(
+        appHostPath: string,
+        resourceName: string,
+        cancellationToken: vscode.CancellationToken): Promise<ResourceJson[]> {
+        return new Promise((resolve, reject) => {
+            let completed = false;
+            let changeDisposable: vscode.Disposable | undefined;
+            let cancellationDisposable: vscode.Disposable | undefined;
+            let timeout: NodeJS.Timeout | undefined;
+
+            const finish = (resources?: ResourceJson[], error?: Error) => {
+                if (completed) {
+                    return;
+                }
+
+                completed = true;
+                changeDisposable?.dispose();
+                cancellationDisposable?.dispose();
+                if (timeout) {
+                    clearTimeout(timeout);
+                }
+
+                if (error) {
+                    reject(error);
+                }
+                else {
+                    resolve(resources ?? []);
+                }
+            };
+
+            const checkResources = () => {
+                if (cancellationToken.isCancellationRequested) {
+                    finish(undefined, new vscode.CancellationError());
+                    return;
+                }
+
+                const resources = this._getAppHostResources(appHostPath);
+                if (resources.some(resource => isResourceNameMatch(resource, resourceName))) {
+                    finish(resources);
+                }
+            };
+
+            changeDisposable = this.onDidChangeData(checkResources);
+            cancellationDisposable = cancellationToken.onCancellationRequested(
+                () => finish(undefined, new vscode.CancellationError()));
+            timeout = setTimeout(
+                () => finish(this._getAppHostResources(appHostPath)),
+                AppHostDataRepository._editorAssistanceResourceWaitMs);
+            timeout.unref();
+            checkResources();
+        });
     }
 
     private _syncPolling(refreshBeforeFollowOnResume = false): void {
