@@ -56,11 +56,45 @@ export async function invokeLanguageModelTool<T>(
     invocation.catch(() => undefined);
 
     const dialogs: AcceptedModalDialog[] = [];
+    let invocationSettled = false;
+    void invocation.finally(() => invocationSettled = true).catch(() => undefined);
     for (let index = 0; index < expectedConfirmations; index++) {
-        dialogs.push(await acceptModalDialog(
-            options.confirmationButtonTitle ?? 'Yes',
-            180000,
-            index === 0 ? options.screenshotName : undefined));
+        const buttonTitle = options.confirmationButtonTitle ?? 'Yes';
+        const screenshotName = index === 0 ? options.screenshotName : undefined;
+        if (options.cancelAfterMs === undefined) {
+            dialogs.push(await acceptModalDialog(buttonTitle, 180000, screenshotName));
+            continue;
+        }
+
+        // Cancellation can win before VS Code creates the confirmation dialog, or it can leave
+        // an already-open dialog waiting for acknowledgement. Probe while the invocation is
+        // pending so either ordering completes without leaving a modal for the next test.
+        const deadline = Date.now() + 180000;
+        let confirmationAccepted = false;
+        while (!invocationSettled) {
+            const remainingMs = deadline - Date.now();
+            if (remainingMs <= 0) {
+                throw new Error(`Timed out waiting for the cancelled language-model invocation or a '${buttonTitle}' confirmation.`);
+            }
+
+            try {
+                dialogs.push(await acceptModalDialog(buttonTitle, Math.min(1000, remainingMs), screenshotName));
+                confirmationAccepted = true;
+                break;
+            }
+            catch {
+                // A confirmation is optional once the invocation has observed cancellation.
+            }
+        }
+
+        if (!confirmationAccepted && invocationSettled) {
+            try {
+                dialogs.push(await acceptModalDialog(buttonTitle, 1000, screenshotName));
+            }
+            catch {
+                // The invocation completed before VS Code created a confirmation.
+            }
+        }
     }
 
     const result = await invocation;

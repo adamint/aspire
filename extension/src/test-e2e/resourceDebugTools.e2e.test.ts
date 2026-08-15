@@ -203,6 +203,13 @@ suite('Aspire resource debug language model tool E2E', function () {
             { cancelAfterMs: 0, expectedConfirmations: 1 });
         assert.strictEqual(cancelled.cancelled, true);
         assert.deepStrictEqual(cancelled.results, []);
+        assert.ok(cancelled.dialogs.length <= 1);
+        if (cancelled.dialogs.length === 1) {
+            assert.deepStrictEqual(cancelled.dialogs[0], {
+                message: 'Attach debugger to Aspire resource',
+                details: `Attach the debugger to resource ${worker.name} from Aspire AppHost ${relativeAppHostPath}?`,
+            });
+        }
 
         await executeE2eControlCommand({ name: 'stopResource', appHostPath, resourceName: worker.name });
         await waitForResourceState(worker.name, ['Exited', 'Finished', 'Stopped'], 90000);
