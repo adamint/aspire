@@ -64,6 +64,10 @@ interface LaunchedChildProcessResolver {
     ): Promise<number>;
 }
 
+interface DotNetAttachFileSystem {
+    realpath(path: string): Promise<string>;
+}
+
 const executableArgsPropertyName = 'executable.args';
 const executablePidPropertyName = 'executable.pid';
 const executablePathPropertyName = 'executable.path';
@@ -708,12 +712,18 @@ function isDotNetExecutable(resource: ResourceDebugResourceSnapshot): boolean {
     return executableName === 'dotnet' || executableName === 'dotnet.exe';
 }
 
-function createDotNetProcessIdentity(targetInfo: DotNetAttachTargetInfo): LaunchedChildProcessIdentity {
+async function createDotNetProcessIdentity(
+    targetInfo: DotNetAttachTargetInfo,
+    fileSystem: DotNetAttachFileSystem,
+): Promise<LaunchedChildProcessIdentity> {
+    const appHostPaths = targetInfo.useAppHost
+        ? await getCanonicalAppHostPaths(targetInfo.targetPath, fileSystem)
+        : undefined;
     return {
         requiresDirectChild: true,
         isLauncher: process => isDotNetProcess(process),
         isCandidate: process => targetInfo.useAppHost
-            ? isAppHostProcessForTarget(process, targetInfo.targetPath)
+            ? isAppHostProcessForTarget(process, appHostPaths!)
             : isFrameworkDependentProcessForTarget(process, targetInfo.targetPath),
     };
 }
@@ -723,8 +733,8 @@ function isDotNetProcess(process: LaunchedChildProcess): boolean {
     return executableName === 'dotnet' || executableName === 'dotnet.exe';
 }
 
-function isAppHostProcessForTarget(process: LaunchedChildProcess, targetPath: string): boolean {
-    return getAppHostPaths(targetPath).some(appHostPath => areProcessPathsEqual(process.executable, appHostPath));
+function isAppHostProcessForTarget(process: LaunchedChildProcess, appHostPaths: readonly string[]): boolean {
+    return appHostPaths.some(appHostPath => areProcessPathsEqual(process.executable, appHostPath));
 }
 
 function isFrameworkDependentProcessForTarget(process: LaunchedChildProcess, targetPath: string): boolean {
@@ -755,6 +765,26 @@ function getAppHostPaths(targetPath: string): readonly string[] {
 
     const appHostPath = targetPath.slice(0, -'.dll'.length);
     return [appHostPath, `${appHostPath}.exe`];
+}
+
+async function getCanonicalAppHostPaths(
+    targetPath: string,
+    fileSystem: DotNetAttachFileSystem,
+): Promise<readonly string[]> {
+    const appHostPaths = getAppHostPaths(targetPath);
+    const canonicalAppHostPaths = await Promise.all(appHostPaths.map(async appHostPath => {
+        try {
+            return await fileSystem.realpath(appHostPath);
+        }
+        catch {
+            // `/proc/<pid>/exe` resolves symlinked directories while MSBuild TargetPath preserves
+            // their spelling. The apphost can disappear after launch, so retain the raw candidate
+            // when realpath races process shutdown rather than failing attach discovery.
+            return appHostPath;
+        }
+    }));
+
+    return [...new Set([...appHostPaths, ...canonicalAppHostPaths])];
 }
 
 function commandLineArgumentsContainTargetPath(argumentsList: readonly string[], targetPath: string): boolean {
@@ -790,6 +820,7 @@ export async function createDotNetAttachDebugSessionConfiguration(
     dotNetService: IDotNetService,
     childProcessResolver: LaunchedChildProcessResolver,
     cancellationToken?: vscode.CancellationToken,
+    fileSystem: DotNetAttachFileSystem = systemDotNetAttachFileSystem,
 ): Promise<vscode.DebugConfiguration> {
     const attachInfo = getDotNetAttachDebuggerResourceInfo(resource);
     if (!attachInfo) {
@@ -810,7 +841,7 @@ export async function createDotNetAttachDebugSessionConfiguration(
     try {
         applicationPid = await childProcessResolver.resolveProcessId(
             attachInfo.launcherPid,
-            createDotNetProcessIdentity(targetInfo),
+            await createDotNetProcessIdentity(targetInfo, fileSystem),
             cancellationToken);
     }
     catch (error) {
@@ -1077,6 +1108,7 @@ export const projectDebuggerExtension: ResourceDebuggerExtension = createProject
 export function createProjectResourceAttachProvider(
     dotNetServiceProducer: () => IDotNetService,
     childProcessResolver: LaunchedChildProcessResolver = launchedChildProcessResolver,
+    fileSystem: DotNetAttachFileSystem = systemDotNetAttachFileSystem,
 ): ResourceAttachProvider {
     return {
         id: 'dotnet',
@@ -1088,9 +1120,13 @@ export function createProjectResourceAttachProvider(
         canRecognizeResource: resource => canRecognizeDotNetAttachDebuggerResource(resource),
         canAttachToResource: resource => getDotNetAttachDebuggerResourceInfo(resource) !== undefined,
         createDebugConfiguration: async (resource, cancellationToken) =>
-            await createDotNetAttachDebugSessionConfiguration(resource, dotNetServiceProducer(), childProcessResolver, cancellationToken),
+            await createDotNetAttachDebugSessionConfiguration(resource, dotNetServiceProducer(), childProcessResolver, cancellationToken, fileSystem),
     };
 }
+
+const systemDotNetAttachFileSystem: DotNetAttachFileSystem = {
+    realpath: path => fs.promises.realpath(path),
+};
 
 export const projectResourceAttachProvider: ResourceAttachProvider =
     createProjectResourceAttachProvider(() => new DotNetService(undefined));

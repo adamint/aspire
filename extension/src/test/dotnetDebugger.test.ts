@@ -389,6 +389,99 @@ suite('Dotnet Debugger Extension Tests', () => {
         }), false);
     });
 
+    test('matches a canonical apphost path from a symlinked TargetPath without accepting a same-name sibling', async () => {
+        const targetPath = '/workspace/link/bin/Debug/net10.0/Api.dll';
+        const appHostPath = '/workspace/link/bin/Debug/net10.0/Api';
+        const canonicalAppHostPath = '/workspace/physical/bin/Debug/net10.0/Api';
+        const { dotNetService } = createDebuggerExtension(targetPath, null, true, true);
+        const resolver = {
+            resolveProcessId: sinon.stub().resolves(4321),
+        };
+        const realpath = sinon.stub().callsFake(async (candidate: string) => {
+            if (candidate === appHostPath) {
+                return canonicalAppHostPath;
+            }
+
+            throw new Error('ENOENT');
+        });
+        const createAttachProvider = createProjectResourceAttachProvider as unknown as (
+            dotNetServiceProducer: () => TestDotNetService,
+            childProcessResolver: TestLaunchedChildProcessResolver,
+            fileSystem: { realpath(path: string): Promise<string> },
+        ) => ResourceAttachProvider;
+        const attachProvider = createAttachProvider(
+            () => dotNetService,
+            resolver,
+            { realpath });
+
+        await attachProvider.createDebugConfiguration({
+            name: 'api',
+            displayName: 'API',
+            resourceType: 'Project',
+            state: 'Running',
+            properties: {
+                'executable.pid': '1234',
+                'executable.path': 'dotnet',
+                'project.path': '/workspace/link/api/Api.csproj',
+            },
+        });
+
+        const appHostIdentity = resolver.resolveProcessId.firstCall.args[1] as TestLaunchedChildProcessIdentity;
+        assert.strictEqual(appHostIdentity.isCandidate({
+            pid: 4321,
+            parentPid: 1234,
+            executable: canonicalAppHostPath,
+            command: canonicalAppHostPath,
+        }), true);
+        assert.strictEqual(appHostIdentity.isCandidate({
+            pid: 4322,
+            parentPid: 1234,
+            executable: '/workspace/other/bin/Debug/net10.0/Api',
+            command: '/workspace/other/bin/Debug/net10.0/Api',
+        }), false);
+        assert.ok(realpath.calledWithExactly(appHostPath));
+    });
+
+    test('uses the TargetPath apphost candidate when canonicalization races with process discovery', async () => {
+        const targetPath = '/workspace/link/bin/Debug/net10.0/Api.dll';
+        const appHostPath = '/workspace/link/bin/Debug/net10.0/Api';
+        const { dotNetService } = createDebuggerExtension(targetPath, null, true, true);
+        const resolver = {
+            resolveProcessId: sinon.stub().resolves(4321),
+        };
+        const realpath = sinon.stub().rejects(new Error('ENOENT'));
+        const createAttachProvider = createProjectResourceAttachProvider as unknown as (
+            dotNetServiceProducer: () => TestDotNetService,
+            childProcessResolver: TestLaunchedChildProcessResolver,
+            fileSystem: { realpath(path: string): Promise<string> },
+        ) => ResourceAttachProvider;
+        const attachProvider = createAttachProvider(
+            () => dotNetService,
+            resolver,
+            { realpath });
+
+        await attachProvider.createDebugConfiguration({
+            name: 'api',
+            displayName: 'API',
+            resourceType: 'Project',
+            state: 'Running',
+            properties: {
+                'executable.pid': '1234',
+                'executable.path': 'dotnet',
+                'project.path': '/workspace/link/api/Api.csproj',
+            },
+        });
+
+        const appHostIdentity = resolver.resolveProcessId.firstCall.args[1] as TestLaunchedChildProcessIdentity;
+        assert.strictEqual(appHostIdentity.isCandidate({
+            pid: 4321,
+            parentPid: 1234,
+            executable: appHostPath,
+            command: appHostPath,
+        }), true);
+        assert.ok(realpath.calledWithExactly(appHostPath));
+    });
+
     test('normalizes Windows executable and command identities before matching', async () => {
         const targetPath = 'C:\\Repo\\My Attach Service.dll';
         const { dotNetService } = createDebuggerExtension(targetPath, null, true, true);

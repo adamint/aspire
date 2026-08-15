@@ -216,6 +216,76 @@ suite('Launched child process discovery', () => {
         ]);
     });
 
+    test('strips only the exact trailing Linux procfs deleted executable marker', async () => {
+        const deletedExecutable = '/repo/bin/Debug/net10.0/Api (deleted)';
+        const nonMarkerSuffix = `${deletedExecutable} after-restart`;
+        const commandRunner: LaunchedChildProcessCommandRunner = {
+            async run(): Promise<string> {
+                throw new Error('The process topology should not be queried.');
+            },
+        };
+        const fileSystem: LaunchedChildProcessFileSystem = {
+            async readlink(path): Promise<string> {
+                switch (path) {
+                    case '/proc/42/exe':
+                        return deletedExecutable;
+                    case '/proc/43/exe':
+                        return nonMarkerSuffix;
+                    default:
+                        throw new Error(`Unexpected procfs path: ${path}`);
+                }
+            },
+            async readFile(path): Promise<Buffer> {
+                switch (path) {
+                    case '/proc/42/cmdline':
+                    case '/proc/43/cmdline':
+                        return Buffer.from('/repo/bin/Debug/net10.0/Api\0');
+                    case '/proc/42/status':
+                    case '/proc/43/status':
+                        return Buffer.from('Name:\tApi\nPPid:\t10\n');
+                    default:
+                        throw new Error(`Unexpected procfs path: ${path}`);
+                }
+            },
+        };
+        const query = createLinuxProcessQuery(commandRunner, fileSystem);
+
+        assert.strictEqual((await query.getProcess(42))?.executable, '/repo/bin/Debug/net10.0/Api');
+        assert.strictEqual((await query.getProcess(43))?.executable, nonMarkerSuffix);
+    });
+
+    test('observes rejecting procfs reads before returning an already requested cancellation', async () => {
+        const cancellation = new vscode.CancellationTokenSource();
+        cancellation.cancel();
+        let unhandledRejection: unknown;
+        const captureUnhandledRejection = (reason: unknown) => {
+            unhandledRejection = reason;
+        };
+        globalThis.process.once('unhandledRejection', captureUnhandledRejection);
+        const commandRunner: LaunchedChildProcessCommandRunner = {
+            async run(): Promise<string> {
+                throw new Error('The process topology should not be queried.');
+            },
+        };
+        const fileSystem: LaunchedChildProcessFileSystem = {
+            readlink: () => Promise.reject(new Error('readlink failed')),
+            readFile: () => Promise.reject(new Error('readFile failed')),
+        };
+
+        try {
+            await assert.rejects(
+                createLinuxProcessQuery(commandRunner, fileSystem).getProcess(42, cancellation.token),
+                error => error instanceof vscode.CancellationError);
+            await new Promise<void>(resolve => setImmediate(resolve));
+
+            assert.strictEqual(unhandledRejection, undefined);
+        }
+        finally {
+            globalThis.process.removeListener('unhandledRejection', captureUnhandledRejection);
+            cancellation.dispose();
+        }
+    });
+
     test('resolves a macOS child with a spaced non-ASCII executable path from per-candidate ps details', async () => {
         const calls: Array<{ command: string; args: readonly string[] }> = [];
         const processDetails = new Map([

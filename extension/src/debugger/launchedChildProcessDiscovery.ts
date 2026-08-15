@@ -44,6 +44,7 @@ export type LaunchedChildProcessSpawner = (
 const maxProcessListingLength = 16 * 1024 * 1024;
 const windowsProcessProperties = 'ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine';
 const windowsProcessQuery = `$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); Get-CimInstance Win32_Process | Select-Object ${windowsProcessProperties} | ConvertTo-Json -Compress`;
+const linuxDeletedExecutableMarker = ' (deleted)';
 
 export function parsePosixProcessList(output: string): readonly LaunchedChildProcess[] {
     const processes: LaunchedChildProcess[] = [];
@@ -399,7 +400,7 @@ export class SystemLaunchedChildProcessQuery implements LaunchedChildProcessQuer
         return createProcessInfo(
             processId,
             parentPid,
-            executable,
+            normalizeLinuxExecutablePath(executable),
             commandLineArguments.join(' '),
             commandLineArguments);
     }
@@ -542,6 +543,15 @@ function parseLinuxParentPid(status: Buffer): number | undefined {
     return match ? parseParentPid(match[1]) : undefined;
 }
 
+function normalizeLinuxExecutablePath(executable: string): string {
+    // `/proc/<pid>/exe` reports an unlinked executable as `/path/app (deleted)`. Remove only
+    // the kernel's exact trailing marker so a filename that contains those characters elsewhere
+    // remains a distinct executable identity.
+    return executable.endsWith(linuxDeletedExecutableMarker)
+        ? executable.slice(0, -linuxDeletedExecutableMarker.length)
+        : executable;
+}
+
 function awaitProcessDetails<T>(
     details: Promise<T>,
     cancellationToken: vscode.CancellationToken | undefined,
@@ -564,16 +574,18 @@ function awaitProcessDetails<T>(
             action();
         };
 
+        // The procfs reads have already started. Observe both outcomes before checking
+        // cancellation so a cancelled caller cannot leave the aggregate promise unobserved.
+        details.then(
+            result => complete(() => resolve(result)),
+            error => complete(() => reject(error)));
+
         cancellationRegistration = cancellationToken?.onCancellationRequested(
             () => complete(() => reject(new vscode.CancellationError())));
         if (cancellationToken?.isCancellationRequested) {
             complete(() => reject(new vscode.CancellationError()));
             return;
         }
-
-        details.then(
-            result => complete(() => resolve(result)),
-            error => complete(() => reject(error)));
     });
 }
 
