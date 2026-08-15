@@ -14,6 +14,14 @@ import {
 } from './resourceDebugContracts';
 import { ResourceAttachProviderRegistry } from './resourceAttachProviders';
 import { ResourceDebugSessionRegistry } from './resourceDebugSessionRegistry';
+import {
+    ExtensionResourceDebugTelemetry,
+    type ResourceDebugAttachSessionMetadata,
+    type ResourceDebugDebuggerRequirement,
+    type ResourceDebugResourceState,
+    type ResourceDebugResourceType,
+    type ResourceDebugTelemetry,
+} from './resourceDebugTelemetry';
 
 export interface ResourceDebugAppHostRepository {
     fetchRunningAppHostsOnce(cancellationToken?: vscode.CancellationToken): Promise<readonly AppHostDisplayInfo[]>;
@@ -32,6 +40,7 @@ export interface ResourceDebugServiceDependencies {
     readonly sessionRegistry: ResourceDebugSessionRegistry;
     readonly startDebugging: ResourceDebugStartDebugging;
     readonly compareAppHostIdentity?: ResourceDebugAppHostIdentityComparer;
+    readonly telemetry?: ResourceDebugTelemetry;
 }
 
 /**
@@ -40,9 +49,11 @@ export interface ResourceDebugServiceDependencies {
  */
 export class ResourceDebugService implements vscode.Disposable, ResourceDebugger {
     private readonly _compareAppHostIdentity: ResourceDebugAppHostIdentityComparer;
+    private readonly _telemetry: ResourceDebugTelemetry;
 
     constructor(private readonly _dependencies: ResourceDebugServiceDependencies) {
         this._compareAppHostIdentity = _dependencies.compareAppHostIdentity ?? compareAppHostIdentity;
+        this._telemetry = _dependencies.telemetry ?? new ExtensionResourceDebugTelemetry();
     }
 
     dispose(): void {
@@ -62,25 +73,47 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
     }
 
     async debug(request: ResourceDebugRequest): Promise<ResourceDebugResult> {
-        if (request.cancellationToken?.isCancellationRequested) {
-            return { outcome: 'cancelled' };
-        }
+        const telemetry = new ResourceDebugOperationTelemetry(this._telemetry, request.source);
+        telemetry.recordStart();
+        let result: ResourceDebugResult = { outcome: 'error', errorKind: 'unexpected' };
 
-        const resolvedAppHost = await this._resolveAppHost(request);
-        if ('outcome' in resolvedAppHost) {
-            return resolvedAppHost;
-        }
+        try {
+            if (request.cancellationToken?.isCancellationRequested) {
+                result = { outcome: 'cancelled' };
+                return result;
+            }
 
-        const resolvedTarget: ResourceDebugAppHostTarget = {
-            absolutePath: resolvedAppHost.appHostPath,
-            displayPath: request.appHost.displayPath,
-        };
-        return await this._dependencies.sessionRegistry.runSerialized(
-            resolvedTarget,
-            request.resourceName,
-            request.cancellationToken,
-            async () => await this._debugSerialized(request, resolvedTarget),
-            () => ({ outcome: 'cancelled' }));
+            const resolvedAppHost = await this._resolveAppHost(request);
+            if ('outcome' in resolvedAppHost) {
+                result = resolvedAppHost;
+                return result;
+            }
+
+            const resolvedTarget: ResourceDebugAppHostTarget = {
+                absolutePath: resolvedAppHost.appHostPath,
+                displayPath: request.appHost.displayPath,
+            };
+            result = await this._dependencies.sessionRegistry.runSerialized(
+                resolvedTarget,
+                request.resourceName,
+                request.cancellationToken,
+                async () => await this._debugSerialized(request, resolvedTarget, telemetry),
+                () => ({ outcome: 'cancelled' }));
+            return result;
+        }
+        catch (error) {
+            if (isCommandCancellation(error) || request.cancellationToken?.isCancellationRequested) {
+                result = { outcome: 'cancelled' };
+                return result;
+            }
+
+            this._logFailure('debugging the resource', error);
+            result = { outcome: 'error', errorKind: 'unexpected' };
+            return result;
+        }
+        finally {
+            telemetry.recordResult(result);
+        }
     }
 
     private async _resolveAppHost(request: ResourceDebugRequest): Promise<AppHostDisplayInfo | ResourceDebugResult> {
@@ -122,6 +155,7 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
     private async _debugSerialized(
         request: ResourceDebugRequest,
         resolvedTarget: ResourceDebugAppHostTarget,
+        telemetry: ResourceDebugOperationTelemetry,
     ): Promise<ResourceDebugResult> {
         if (request.cancellationToken?.isCancellationRequested) {
             return { outcome: 'cancelled' };
@@ -152,6 +186,7 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
         }
 
         const resource = matchingResources[0];
+        telemetry.recordResource(resource);
         let provider: ResourceAttachProvider | undefined;
         try {
             provider = this._dependencies.attachProviders.getRecognizedProviderForResource(resource);
@@ -169,11 +204,12 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
             return { outcome: 'unsupportedResource' };
         }
 
+        telemetry.recordProvider(provider);
         if (resource.state !== 'Running') {
             return { outcome: 'resourceNotRunning' };
         }
 
-        return await this._attach(request, resolvedTarget, resource, provider);
+        return await this._attach(request, resolvedTarget, resource, provider, telemetry);
     }
 
     private async _attach(
@@ -181,6 +217,7 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
         appHost: ResourceDebugAppHostTarget,
         resource: ResourceJson,
         provider: ResourceAttachProvider,
+        telemetry: ResourceDebugOperationTelemetry,
     ): Promise<ResourceDebugResult> {
         if (request.cancellationToken?.isCancellationRequested) {
             return { outcome: 'cancelled' };
@@ -208,6 +245,7 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
         }
 
         if (missingDebuggerExtensions.length > 0) {
+            telemetry.recordDebuggerRequirement('missing');
             return {
                 outcome: 'debuggerExtensionMissing',
                 debuggerExtensions: missingDebuggerExtensions.map(requirement => requirement.installMessage
@@ -216,6 +254,7 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
             };
         }
 
+        telemetry.recordDebuggerRequirement('installed');
         let configuration: vscode.DebugConfiguration;
         try {
             configuration = await provider.createDebugConfiguration(resource, request.cancellationToken);
@@ -237,8 +276,13 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
             return { outcome: 'cancelled' };
         }
 
-        const attempt = this._dependencies.sessionRegistry.createAttempt(appHost, resource.name, configuration);
+        const attempt = this._dependencies.sessionRegistry.createAttempt(
+            appHost,
+            resource.name,
+            configuration,
+            telemetry.createSessionMetadata(provider.id));
         try {
+            telemetry.recordDebugStart();
             const started = await this._dependencies.startDebugging(undefined, attempt.configuration);
             if (!started) {
                 attempt.abandon();
@@ -261,5 +305,120 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
 
     private _logFailure(operation: string, error: unknown): void {
         extensionLogOutputChannel.error(`Resource debugger failed while ${operation}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+    }
+}
+
+class ResourceDebugOperationTelemetry {
+    private readonly _startedAt: number;
+    private _resourceType: ResourceDebugResourceType | undefined;
+    private _provider: ResourceAttachProvider['id'] | 'none' = 'none';
+    private _state: ResourceDebugResourceState = 'unknown';
+    private _debuggerRequirement: ResourceDebugDebuggerRequirement = 'none';
+    private _debugStartAt: number | undefined;
+
+    constructor(
+        private readonly _telemetry: ResourceDebugTelemetry,
+        private readonly _source: ResourceDebugRequest['source'],
+    ) {
+        this._startedAt = this._getTimestamp();
+    }
+
+    recordStart(): void {
+        this._record(() => this._telemetry.recordStart({
+            source: this._source,
+            requested_strategy: 'attach',
+            controller: 'editor',
+        }));
+    }
+
+    recordResource(resource: ResourceJson): void {
+        this._resourceType = getResourceTypeBucket(resource.resourceType);
+        this._state = resource.state === 'Running'
+            ? 'running'
+            : resource.state === null
+                ? 'unknown'
+                : 'notRunning';
+    }
+
+    recordProvider(provider: ResourceAttachProvider): void {
+        this._provider = provider.id;
+    }
+
+    recordDebuggerRequirement(requirement: ResourceDebugDebuggerRequirement): void {
+        this._debuggerRequirement = requirement;
+    }
+
+    recordDebugStart(): void {
+        this._debugStartAt = this._getTimestamp();
+    }
+
+    createSessionMetadata(provider: ResourceAttachProvider['id']): ResourceDebugAttachSessionMetadata {
+        return {
+            source: this._source,
+            provider,
+            resource_type: this._resourceType ?? 'other',
+        };
+    }
+
+    recordResult(result: ResourceDebugResult): void {
+        const endedAt = this._getTimestamp();
+        const resolutionEndedAt = this._debugStartAt ?? endedAt;
+        this._record(() => this._telemetry.recordResult({
+            source: this._source,
+            provider: this._provider,
+            ...(this._resourceType === undefined ? {} : { resource_type: this._resourceType }),
+            requested_strategy: 'attach',
+            effective_strategy: result.outcome === 'started' || result.outcome === 'alreadyDebugging'
+                ? 'attach'
+                : 'none',
+            outcome: result.outcome,
+            controller: 'editor',
+            state: this._state,
+            debugger_requirement: this._debuggerRequirement,
+            error_kind: result.outcome === 'error' ? result.errorKind : 'none',
+        }, {
+            resolution_duration_ms: this._getDuration(this._startedAt, resolutionEndedAt),
+            debug_start_duration_ms: this._debugStartAt === undefined
+                ? 0
+                : this._getDuration(this._debugStartAt, endedAt),
+            total_duration_ms: this._getDuration(this._startedAt, endedAt),
+        }));
+    }
+
+    private _getTimestamp(): number {
+        try {
+            const timestamp = this._telemetry.now();
+            return Number.isFinite(timestamp) ? timestamp : 0;
+        }
+        catch {
+            return 0;
+        }
+    }
+
+    private _getDuration(start: number, end: number): number {
+        const duration = end - start;
+        return Number.isFinite(duration) && duration >= 0 ? duration : 0;
+    }
+
+    private _record(record: () => void): void {
+        try {
+            record();
+        }
+        catch {
+            // Telemetry is observational. A telemetry sink must not change debug behavior.
+        }
+    }
+}
+
+function getResourceTypeBucket(resourceType: string): ResourceDebugResourceType {
+    switch (resourceType.toLowerCase()) {
+        case 'project':
+            return 'project';
+        case 'executable':
+            return 'executable';
+        case 'container':
+            return 'container';
+        default:
+            return 'other';
     }
 }

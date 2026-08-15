@@ -5,9 +5,9 @@ import type { AppHostDisplayInfo, ResourceJson } from '../data/AppHostDataReposi
 import { createProjectResourceAttachProvider, projectDebuggerExtension, projectResourceAttachProvider } from '../debugger/languages/dotnet';
 import { createGoResourceAttachProvider } from '../debugger/languages/go';
 import { ResourceAttachProviderRegistry } from '../debugger/resourceAttachProviders';
-import { ResourceDebugAppHostIdentityComparer, ResourceDebugAppHostRepository, ResourceDebugService } from '../debugger/resourceDebugService';
-import { ResourceDebugSessionEvents, ResourceDebugSessionRegistry } from '../debugger/resourceDebugSessionRegistry';
-import { ResourceAttachConfigurationError, type ResourceAttachProvider, type ResourceDebugAppHostTarget, type ResourceDebugRequest, type ResourceDebugResourceSnapshot } from '../debugger/resourceDebugContracts';
+import { ResourceDebugAppHostIdentityComparer, ResourceDebugAppHostRepository, ResourceDebugService, ResourceDebugServiceDependencies } from '../debugger/resourceDebugService';
+import { ResourceDebugSessionEvents, ResourceDebugSessionRegistry, ResourceDebugSessionRegistryOptions } from '../debugger/resourceDebugSessionRegistry';
+import { ResourceAttachConfigurationError, type ResourceAttachProvider, type ResourceDebugAppHostTarget, type ResourceDebugRequest, type ResourceDebugResourceSnapshot, type ResourceDebugResult } from '../debugger/resourceDebugContracts';
 import { extensionLogOutputChannel } from '../utils/logging';
 
 const target: ResourceDebugAppHostTarget = {
@@ -68,6 +68,37 @@ function createRequest(overrides: Partial<ResourceDebugRequest> = {}): ResourceD
     };
 }
 
+interface RecordedResourceDebugTelemetryEvent {
+    readonly name: string;
+    readonly properties: Record<string, string>;
+    readonly measurements: Record<string, number> | undefined;
+}
+
+class TestResourceDebugTelemetry {
+    public readonly events: RecordedResourceDebugTelemetryEvent[] = [];
+    public currentTime = 0;
+
+    now(): number {
+        return this.currentTime;
+    }
+
+    recordStart(properties: Record<string, string>): void {
+        this._record('aspire/vscode/resourceDebug/start', properties);
+    }
+
+    recordResult(properties: Record<string, string>, measurements: Record<string, number>): void {
+        this._record('aspire/vscode/resourceDebug/result', properties, measurements);
+    }
+
+    recordSessionEnd(properties: Record<string, string>, measurements: Record<string, number>): void {
+        this._record('aspire/vscode/resourceDebug/session/end', properties, measurements);
+    }
+
+    private _record(name: string, properties: Record<string, string>, measurements?: Record<string, number>): void {
+        this.events.push({ name, properties, measurements });
+    }
+}
+
 function createProvider(overrides: Partial<ResourceAttachProvider> = {}): ResourceAttachProvider {
     return {
         id: 'dotnet',
@@ -89,6 +120,7 @@ function createProvider(overrides: Partial<ResourceAttachProvider> = {}): Resour
 class TestDebugSessionEvents implements ResourceDebugSessionEvents {
     private _startListener: ((session: vscode.DebugSession) => void) | undefined;
     private _terminateListener: ((session: vscode.DebugSession) => void) | undefined;
+    public startedConfiguration: vscode.DebugConfiguration | undefined;
 
     onDidStartDebugSession(listener: (session: vscode.DebugSession) => void): vscode.Disposable {
         this._startListener = listener;
@@ -105,6 +137,7 @@ class TestDebugSessionEvents implements ResourceDebugSessionEvents {
     }
 
     start(configuration: vscode.DebugConfiguration): void {
+        this.startedConfiguration = configuration;
         this._startListener?.({
             id: 'resource-attach-session',
             configuration,
@@ -126,11 +159,14 @@ function createService(options: {
     isExtensionInstalled?: (extensionId: string) => boolean;
     startDebugging?: (folder: vscode.WorkspaceFolder | undefined, configuration: vscode.DebugConfiguration) => Thenable<boolean>;
     compareAppHostIdentity?: ResourceDebugAppHostIdentityComparer;
+    telemetry?: TestResourceDebugTelemetry;
+    pendingStartTimeoutMs?: number;
 } = {}): {
     service: ResourceDebugService;
     repository: ResourceDebugAppHostRepository;
     sessions: ResourceDebugSessionRegistry;
     events: TestDebugSessionEvents;
+    telemetry: TestResourceDebugTelemetry;
 } {
     const repository: ResourceDebugAppHostRepository = {
         fetchRunningAppHostsOnce: async () => options.appHosts ?? [createAppHost()],
@@ -138,7 +174,11 @@ function createService(options: {
             (options.appHosts ?? [createAppHost()]).find(appHost => appHost.appHostPath === appHostPath)?.resources ?? [],
     };
     const events = new TestDebugSessionEvents();
-    const sessions = new ResourceDebugSessionRegistry(events);
+    const telemetry = options.telemetry ?? new TestResourceDebugTelemetry();
+    const sessions = new ResourceDebugSessionRegistry(events, {
+        pendingStartTimeoutMs: options.pendingStartTimeoutMs,
+        telemetry,
+    } as unknown as ResourceDebugSessionRegistryOptions);
     const providers = new ResourceAttachProviderRegistry(
         options.providers ?? [options.provider ?? createProvider()],
         options.isExtensionInstalled ?? (() => true));
@@ -148,9 +188,10 @@ function createService(options: {
         sessionRegistry: sessions,
         startDebugging: options.startDebugging ?? (async () => true),
         compareAppHostIdentity: options.compareAppHostIdentity,
-    });
+        telemetry,
+    } as unknown as ResourceDebugServiceDependencies);
 
-    return { service, repository, sessions, events };
+    return { service, repository, sessions, events, telemetry };
 }
 
 suite('Resource debug service', () => {
@@ -829,6 +870,10 @@ suite('Resource debug service', () => {
             type: 'coreclr',
             request: 'attach',
             name: 'Attach debugger: API',
+        }, {
+            source: 'tree',
+            provider: 'dotnet',
+            resource_type: 'project',
         });
 
         try {
@@ -970,5 +1015,386 @@ suite('Resource debug service', () => {
 
         assert.strictEqual(sessions.hasActiveSession(target, 'api'), false);
         sessions.dispose();
+    });
+
+    test('emits a bounded start and success result with deterministic durations', async () => {
+        const telemetry = new TestResourceDebugTelemetry();
+        telemetry.currentTime = 100;
+        const { service, sessions } = createService({
+            telemetry,
+            provider: createProvider({
+                createDebugConfiguration: async () => {
+                    telemetry.currentTime = 105;
+                    return { type: 'coreclr', request: 'attach', name: 'Attach debugger: API' };
+                },
+            }),
+            startDebugging: async () => {
+                telemetry.currentTime = 108;
+                return true;
+            },
+        });
+
+        try {
+            assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
+            assert.deepStrictEqual(telemetry.events, [
+                {
+                    name: 'aspire/vscode/resourceDebug/start',
+                    properties: {
+                        source: 'tree',
+                        requested_strategy: 'attach',
+                        controller: 'editor',
+                    },
+                    measurements: undefined,
+                },
+                {
+                    name: 'aspire/vscode/resourceDebug/result',
+                    properties: {
+                        source: 'tree',
+                        provider: 'dotnet',
+                        resource_type: 'project',
+                        requested_strategy: 'attach',
+                        effective_strategy: 'attach',
+                        outcome: 'started',
+                        controller: 'editor',
+                        state: 'running',
+                        debugger_requirement: 'installed',
+                        error_kind: 'none',
+                    },
+                    measurements: {
+                        resolution_duration_ms: 5,
+                        debug_start_duration_ms: 3,
+                        total_duration_ms: 8,
+                    },
+                },
+            ]);
+        }
+        finally {
+            sessions.dispose();
+        }
+    });
+
+    test('emits exactly one bounded result for every resource debug outcome', async () => {
+        const run = async (
+            create: () => {
+                service: ResourceDebugService;
+                sessions: ResourceDebugSessionRegistry;
+                telemetry: TestResourceDebugTelemetry;
+            },
+            expectedOutcome: ResourceDebugResult['outcome'],
+            expectedErrorKind = 'none',
+        ) => {
+            const { service, sessions, telemetry } = create();
+            try {
+                const result = await service.debug(createRequest());
+                assert.strictEqual(result.outcome, expectedOutcome);
+
+                const startEvents = telemetry.events.filter(event => event.name === 'aspire/vscode/resourceDebug/start');
+                const resultEvents = telemetry.events.filter(event => event.name === 'aspire/vscode/resourceDebug/result');
+                assert.strictEqual(startEvents.length, 1);
+                assert.strictEqual(resultEvents.length, 1);
+                assert.strictEqual(resultEvents[0].properties.outcome, expectedOutcome);
+                assert.strictEqual(resultEvents[0].properties.error_kind, expectedErrorKind);
+            }
+            finally {
+                sessions.dispose();
+            }
+        };
+
+        const cancelled = new vscode.CancellationTokenSource();
+        cancelled.cancel();
+        await run(
+            () => createService(),
+            'started');
+        await run(
+            () => createService({
+                appHosts: [],
+            }),
+            'appHostNotFound');
+        await run(
+            () => createService({
+                appHosts: [createAppHost({ resources: [] })],
+            }),
+            'resourceNotFound');
+        await run(
+            () => createService({
+                provider: createProvider({ canAttachToResource: () => false }),
+            }),
+            'unsupportedResource');
+        await run(
+            () => createService({
+                appHosts: [createAppHost({ resources: [createResource({ state: 'Finished' })] })],
+            }),
+            'resourceNotRunning');
+        await run(
+            () => createService({
+                isExtensionInstalled: () => false,
+            }),
+            'debuggerExtensionMissing');
+        await run(
+            () => createService({
+                provider: createProvider({
+                    createDebugConfiguration: async () => {
+                        throw new Error('raw configuration error');
+                    },
+                }),
+            }),
+            'error',
+            'configurationFailed');
+        await run(
+            () => createService({
+                startDebugging: async () => false,
+            }),
+            'error',
+            'debuggerStartDeclined');
+        await run(
+            () => createService({
+                startDebugging: async () => {
+                    throw new Error('raw debugger failure');
+                },
+            }),
+            'error',
+            'debuggerStartFailed');
+        await run(
+            () => {
+                const fixture = createService();
+                fixture.repository.fetchRunningAppHostsOnce = async () => {
+                    throw new Error('raw AppHost snapshot failure');
+                };
+                return fixture;
+            },
+            'error',
+            'resourceSnapshotFailed');
+        await run(
+            () => createService({
+                provider: createProvider({
+                    canRecognizeResource: () => {
+                        throw new Error('raw provider resolution failure');
+                    },
+                }),
+            }),
+            'error',
+            'providerResolutionFailed');
+        await run(
+            () => createService({
+                compareAppHostIdentity: () => {
+                    throw new Error('raw unexpected comparison failure');
+                },
+            }),
+            'error',
+            'unexpected');
+
+        const cancelledFixture = createService();
+        try {
+            const result = await cancelledFixture.service.debug(createRequest({ cancellationToken: cancelled.token }));
+            assert.deepStrictEqual(result, { outcome: 'cancelled' });
+            assert.strictEqual(cancelledFixture.telemetry.events.filter(event => event.name === 'aspire/vscode/resourceDebug/start').length, 1);
+            assert.strictEqual(cancelledFixture.telemetry.events.filter(event => event.name === 'aspire/vscode/resourceDebug/result').length, 1);
+            assert.strictEqual(
+                cancelledFixture.telemetry.events.find(event => event.name === 'aspire/vscode/resourceDebug/result')?.properties.error_kind,
+                'none');
+        }
+        finally {
+            cancelled.dispose();
+            cancelledFixture.sessions.dispose();
+        }
+
+        const duplicate = createService();
+        try {
+            assert.deepStrictEqual(await duplicate.service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
+            assert.deepStrictEqual(await duplicate.service.debug(createRequest()), { outcome: 'alreadyDebugging' });
+            const resultEvents = duplicate.telemetry.events.filter(event => event.name === 'aspire/vscode/resourceDebug/result');
+            assert.strictEqual(resultEvents.length, 2);
+            assert.deepStrictEqual(resultEvents.map(event => event.properties.outcome), ['started', 'alreadyDebugging']);
+        }
+        finally {
+            duplicate.sessions.dispose();
+        }
+    });
+
+    test('emits an exact private-data-free result payload', async () => {
+        const telemetry = new TestResourceDebugTelemetry();
+        telemetry.currentTime = 50;
+        const secrets = [
+            '/Users/example/Private Workspace/Secret AppHost.csproj',
+            'Secret AppHost.csproj',
+            'private-resource-name',
+            'Private Resource Display Name',
+            '54321',
+            'session-secret-marker',
+            '/opt/private/bin/secret-process --api-key very-secret',
+            'https://private.example.test/dashboard?token=very-secret',
+            'PRIVATE_ENVIRONMENT_VARIABLE',
+            '--private-argument',
+            'private-property-value',
+            'private.debugger.extension',
+            'raw configuration error with stack trace',
+        ];
+        const privateTarget: ResourceDebugAppHostTarget = {
+            absolutePath: secrets[0],
+            displayPath: secrets[1],
+        };
+        const { service, sessions } = createService({
+            telemetry,
+            appHosts: [createAppHost({
+                appHostPath: privateTarget.absolutePath,
+                appHostPid: Number(secrets[4]),
+                dashboardUrl: secrets[7],
+                resources: [createResource({
+                    name: secrets[2],
+                    displayName: secrets[3],
+                    resourceType: 'Container',
+                    properties: {
+                        pid: secrets[4],
+                        marker: secrets[5],
+                        executable: secrets[6],
+                        url: secrets[7],
+                        environment: secrets[8],
+                        args: secrets[9],
+                        property: secrets[10],
+                    },
+                })],
+            })],
+            provider: createProvider({
+                requiredDebuggerExtensions: [{ id: secrets[11], label: secrets[11] }],
+                createDebugConfiguration: async () => {
+                    telemetry.currentTime = 70;
+                    throw new Error(secrets[12]);
+                },
+            }),
+        });
+
+        try {
+            assert.deepStrictEqual(await service.debug(createRequest({
+                source: 'languageModelTool',
+                appHost: privateTarget,
+                resourceName: secrets[2],
+            })), {
+                outcome: 'error',
+                errorKind: 'configurationFailed',
+            });
+
+            const serializedEvents = JSON.stringify(telemetry.events);
+            assert.deepStrictEqual(telemetry.events, [
+                {
+                    name: 'aspire/vscode/resourceDebug/start',
+                    properties: {
+                        source: 'languageModelTool',
+                        requested_strategy: 'attach',
+                        controller: 'editor',
+                    },
+                    measurements: undefined,
+                },
+                {
+                    name: 'aspire/vscode/resourceDebug/result',
+                    properties: {
+                        source: 'languageModelTool',
+                        provider: 'dotnet',
+                        resource_type: 'container',
+                        requested_strategy: 'attach',
+                        effective_strategy: 'none',
+                        outcome: 'error',
+                        controller: 'editor',
+                        state: 'running',
+                        debugger_requirement: 'installed',
+                        error_kind: 'configurationFailed',
+                    },
+                    measurements: {
+                        resolution_duration_ms: 20,
+                        debug_start_duration_ms: 0,
+                        total_duration_ms: 20,
+                    },
+                },
+            ]);
+            assert.strictEqual(secrets.every(secret => !serializedEvents.includes(secret)), true);
+        }
+        finally {
+            sessions.dispose();
+        }
+    });
+
+    test('emits one session-end only after a correlated attach session starts and terminates', async () => {
+        const telemetry = new TestResourceDebugTelemetry();
+        telemetry.currentTime = 100;
+        let events: TestDebugSessionEvents | undefined;
+        const fixture = createService({
+            telemetry,
+            provider: createProvider({
+                createDebugConfiguration: async () => {
+                    telemetry.currentTime = 110;
+                    return { type: 'coreclr', request: 'attach', name: 'Attach debugger: API' };
+                },
+            }),
+            startDebugging: async (_folder, configuration) => {
+                events!.start(configuration);
+                telemetry.currentTime = 115;
+                return true;
+            },
+        });
+        events = fixture.events;
+
+        try {
+            assert.deepStrictEqual(await fixture.service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
+            telemetry.currentTime = 140;
+            assert.ok(events.startedConfiguration);
+            events.terminate(events.startedConfiguration);
+
+            assert.deepStrictEqual(telemetry.events.at(-1), {
+                name: 'aspire/vscode/resourceDebug/session/end',
+                properties: {
+                    source: 'tree',
+                    provider: 'dotnet',
+                    resource_type: 'project',
+                    requested_strategy: 'attach',
+                    effective_strategy: 'attach',
+                    controller: 'editor',
+                    session_end_reason: 'terminated',
+                },
+                measurements: {
+                    session_duration_ms: 30,
+                },
+            });
+            assert.strictEqual(telemetry.events.filter(event => event.name === 'aspire/vscode/resourceDebug/session/end').length, 1);
+        }
+        finally {
+            fixture.sessions.dispose();
+        }
+    });
+
+    test('does not emit a session-end for a pending attach that expires before a session starts', async () => {
+        const clock = sinon.useFakeTimers();
+        const telemetry = new TestResourceDebugTelemetry();
+        const fixture = createService({
+            telemetry,
+            pendingStartTimeoutMs: 10,
+        });
+
+        try {
+            assert.deepStrictEqual(await fixture.service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
+            await clock.tickAsync(10);
+
+            assert.strictEqual(telemetry.events.filter(event => event.name === 'aspire/vscode/resourceDebug/start').length, 1);
+            assert.strictEqual(telemetry.events.filter(event => event.name === 'aspire/vscode/resourceDebug/result').length, 1);
+            assert.strictEqual(telemetry.events.filter(event => event.name === 'aspire/vscode/resourceDebug/session/end').length, 0);
+        }
+        finally {
+            fixture.sessions.dispose();
+            clock.restore();
+        }
+    });
+
+    test('ignores telemetry sink failures when debugging a resource', async () => {
+        const telemetry = new TestResourceDebugTelemetry();
+        sinon.stub(telemetry, 'recordStart').throws(new Error('raw telemetry start failure'));
+        sinon.stub(telemetry, 'recordResult').throws(new Error('raw telemetry result failure'));
+        const { service, sessions } = createService({ telemetry });
+
+        try {
+            assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
+            assert.strictEqual((telemetry.recordStart as sinon.SinonStub).callCount, 1);
+            assert.strictEqual((telemetry.recordResult as sinon.SinonStub).callCount, 1);
+        }
+        finally {
+            sessions.dispose();
+        }
     });
 });

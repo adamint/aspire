@@ -75,7 +75,8 @@ export type ResourceDebugErrorKind =
     | 'providerResolutionFailed'
     | 'configurationFailed'
     | 'debuggerStartDeclined'
-    | 'debuggerStartFailed';
+    | 'debuggerStartFailed'
+    | 'unexpected';
 
 export type ResourceDebugResult =
     | { readonly outcome: 'started'; readonly providerId: ResourceAttachProviderId }
