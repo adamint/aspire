@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 
 import { type AppHostEditorSessionSnapshot } from '../services/AppHostLaunchService';
-import { type AppHostEditorStateLaunchService, type AppHostLifecycleEditorSession } from './appHostLifecycleToolContracts';
+import { type AppHostEditorStateLaunchService } from './appHostLifecycleToolContracts';
 import { type AppHostTargetIdentity, type ResolvedAppHostTarget, SafeAppHostTargetResolver } from './safeAppHostTargetResolver';
 
 const maxSummaries = 20;
@@ -47,6 +47,10 @@ export class EditorStateSnapshotService {
         const sessionsByIdentity = new Map<AppHostTargetIdentity, AppHostEditorSessionSnapshot[]>();
 
         for (const session of this._dependencies.launchService.getEditorSessions()) {
+            if (session.operationKind !== 'run') {
+                continue;
+            }
+
             const appHostPath = session.resolvedAppHostPath ?? session.appHostPath;
             if (!appHostPath) {
                 continue;
@@ -73,10 +77,7 @@ export class EditorStateSnapshotService {
     }
 
     private createSummary(target: ResolvedAppHostTarget, sessions: readonly AppHostEditorSessionSnapshot[]): EditorAppHostSummary {
-        const runSessions = this._dependencies.launchService.getEditorRunSessions(target.absolutePath);
-        const hasResolvedRunSession = sessions.some(session => session.operationKind === 'run');
-        const inferredRunSessions = runSessions.sessions.length === 1 && !hasResolvedRunSession ? 1 : 0;
-        if (runSessions.ambiguous || runSessions.sessions.length > 1 || sessions.length + inferredRunSessions > 1) {
+        if (sessions.length > 1) {
             // Once more than one editor session could claim the AppHost there is no honest
             // single-session summary to return. Report that multiplicity instead of
             // inventing a run/debug answer from whichever session we happened to inspect
@@ -87,11 +88,6 @@ export class EditorStateSnapshotService {
         const resolvedSession = sessions[0];
         if (resolvedSession) {
             return describeTrackedSession(target.displayPath, resolvedSession);
-        }
-
-        const runSession = runSessions.sessions[0];
-        if (runSession) {
-            return describeRunSession(target.displayPath, runSession);
         }
 
         return createSummary(
@@ -112,19 +108,16 @@ function describeTrackedSession(displayPath: string, session: AppHostEditorSessi
         getSessionMode(session));
 }
 
-function describeRunSession(displayPath: string, session: AppHostLifecycleEditorSession): EditorAppHostSummary {
-    return createSummary(
-        displayPath,
-        session.startupCompleted ? 'running' : 'starting',
-        session.configuration.noDebug === true ? 'run' : 'debug');
+function getSessionMode(session: AppHostEditorSessionSnapshot): EditorAppHostMode {
+    return getNoDebugMode(session.noDebug);
 }
 
-function getSessionMode(session: AppHostEditorSessionSnapshot): EditorAppHostMode {
-    if (session.operationKind !== 'run') {
-        return 'other';
-    }
-
-    return session.noDebug ? 'run' : 'debug';
+function getNoDebugMode(noDebug: unknown): EditorAppHostMode {
+    return noDebug === true
+        ? 'run'
+        : noDebug === false
+            ? 'debug'
+            : 'other';
 }
 
 function createSummary(appHost: string, state: EditorAppHostState, mode: EditorAppHostMode): EditorAppHostSummary {

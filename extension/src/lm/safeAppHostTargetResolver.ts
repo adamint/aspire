@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 
 import { extensionLogOutputChannel } from '../utils/logging';
-import { getAppHostIdentityKey, getAppHostPathComparisonKey, isAppHostPathWithinDirectory } from '../utils/appHostIdentity';
+import { getLexicalAppHostIdentityKey, isAppHostPathWithinDirectory } from '../utils/appHostIdentity';
 import { isCommandCancellation } from '../utils/telemetry';
 import { type AppHostLifecycleDiscoveryService } from './appHostLifecycleToolContracts';
 
@@ -95,11 +95,11 @@ export class SafeAppHostTargetResolver {
     /**
      * Returns the window-scoped opaque identity for an AppHost path.
      *
-     * Session snapshots use this so they can correlate with known AppHosts without
-     * carrying absolute paths into any model-facing shape.
+     * Session snapshots use the lexical path recorded at launch so a later symlink
+     * retarget cannot move an active session to another list item.
      */
     getIdentityForAppHostPath(appHostPath: string): AppHostTargetIdentity {
-        return this.getOrCreateIdentity(getAppHostIdentityKey(appHostPath));
+        return this.getOrCreateIdentity(getLexicalAppHostIdentityKey(appHostPath));
     }
 
     /**
@@ -191,13 +191,15 @@ export class SafeAppHostTargetResolver {
      */
     async enumerateKnownAppHosts(token: vscode.CancellationToken): Promise<readonly ResolvedAppHostTarget[]> {
         const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
-        const candidatesByFolder = await Promise.all(workspaceFolders.map(async folder => ({
+        const folderQualifiers = createWorkspaceFolderQualifiers(workspaceFolders);
+        const candidatesByFolder = await Promise.all(workspaceFolders.map(async (folder, index) => ({
             folder,
+            folderQualifier: folderQualifiers[index],
             candidates: await this._discoveryService.discover(folder, false, token),
         })));
 
         const targets = new Map<string, ResolvedAppHostTarget>();
-        for (const { folder, candidates } of candidatesByFolder) {
+        for (const { folder, folderQualifier, candidates } of candidatesByFolder) {
             for (const candidate of candidates) {
                 const relativePath = toContainedPosixRelativePath(folder.uri.fsPath, candidate.path);
                 if (relativePath === undefined) {
@@ -213,13 +215,12 @@ export class SafeAppHostTargetResolver {
                 }
 
                 const displayPath = workspaceFolders.length > 1
-                    ? `${folder.name}/${relativePath}`
+                    ? `${folderQualifier}/${relativePath}`
                     : relativePath;
-                // Nested workspace folders enumerate the same file twice. Keying by the
-                // canonical path collapses those into one target so a selector matching
-                // both is not reported as ambiguous against itself. The deepest folder
-                // wins, so the displayed path matches the folder the user sees.
-                const key = getAppHostPathComparisonKey(candidate.path);
+                // Nested workspace folders enumerate the same lexical candidate twice.
+                // Collapse only that duplicate; distinct symlink aliases must remain
+                // independently selectable even when they currently reach one real file.
+                const key = toSelectorKey(candidate.path);
                 const existing = targets.get(key);
                 if (existing && existing.relativePath.length <= relativePath.length) {
                     continue;
@@ -251,6 +252,32 @@ export class SafeAppHostTargetResolver {
         this._identityRegistry.set(identityKey, created);
         return created;
     }
+}
+
+function createWorkspaceFolderQualifiers(workspaceFolders: readonly vscode.WorkspaceFolder[]): readonly string[] {
+    const nameCounts = new Map<string, number>();
+    for (const folder of workspaceFolders) {
+        nameCounts.set(folder.name, (nameCounts.get(folder.name) ?? 0) + 1);
+    }
+
+    const nameOrdinals = new Map<string, number>();
+    const qualifiers = workspaceFolders.map(folder => {
+        if (nameCounts.get(folder.name) === 1) {
+            return folder.name;
+        }
+
+        const ordinal = (nameOrdinals.get(folder.name) ?? 0) + 1;
+        nameOrdinals.set(folder.name, ordinal);
+        return `${folder.name} (${ordinal})`;
+    });
+    if (new Set(qualifiers).size === qualifiers.length) {
+        return qualifiers;
+    }
+
+    // A literal folder name can equal a qualifier generated for another folder. Adding
+    // the workspace position to every name keeps the fallback deterministic and unique
+    // without incorporating an absolute path or another machine-specific value.
+    return workspaceFolders.map((folder, index) => `${folder.name} (${index + 1})`);
 }
 
 /**

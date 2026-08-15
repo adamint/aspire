@@ -21,7 +21,7 @@ interface TestEditorSession {
     readonly resolvedAppHostPath: string | undefined;
     readonly operationKind: AspireOperationKind;
     readonly startupCompleted: boolean;
-    readonly noDebug: boolean;
+    readonly noDebug: boolean | undefined;
     readonly isStopping: boolean;
 }
 
@@ -229,6 +229,33 @@ suite('Editor assistance AppHost services', () => {
             }
         });
 
+        test('resolves duplicate workspace folder names with deterministic qualifiers', async () => {
+            const secondRoot = createFixtureDirectory('second-workspace');
+            try {
+                const secondAppHost = path.join(secondRoot, 'AppHost', 'AppHost.csproj');
+                fs.mkdirSync(path.dirname(secondAppHost), { recursive: true });
+                fs.writeFileSync(secondAppHost, appHostProjectContents);
+                addCandidate(discoveryService, secondRoot, secondAppHost);
+                workspaceFoldersStub.value([
+                    createWorkspaceFolder(workspaceRoot, 'workspace', 0),
+                    createWorkspaceFolder(secondRoot, 'workspace', 1),
+                ]);
+
+                const firstResolution = await resolver.resolveTarget('workspace (1)/AppHost/AppHost.csproj', new vscode.CancellationTokenSource().token);
+                const secondResolution = await resolver.resolveTarget('workspace (2)/AppHost/AppHost.csproj', new vscode.CancellationTokenSource().token);
+
+                assertResolved(firstResolution);
+                assertResolved(secondResolution);
+                assert.strictEqual(firstResolution.target.absolutePath, appHostProjectPath);
+                assert.strictEqual(firstResolution.target.displayPath, 'workspace (1)/AppHost/AppHost.csproj');
+                assert.strictEqual(secondResolution.target.absolutePath, secondAppHost);
+                assert.strictEqual(secondResolution.target.displayPath, 'workspace (2)/AppHost/AppHost.csproj');
+            }
+            finally {
+                fs.rmSync(secondRoot, { recursive: true, force: true });
+            }
+        });
+
         test('reports canceled when discovery is canceled', async () => {
             discoveryService.discoverError = new vscode.CancellationError();
 
@@ -288,7 +315,29 @@ suite('Editor assistance AppHost services', () => {
             });
         });
 
-        test('keeps identities stable for the same target and changes them when the resolved file changes', async function () {
+        test('keeps lexical symlink aliases independently selectable', async function () {
+            const linkedTarget = path.join(workspaceRoot, 'Linked', 'AppHost.csproj');
+            fs.mkdirSync(path.dirname(linkedTarget), { recursive: true });
+            try {
+                fs.symlinkSync(appHostProjectPath, linkedTarget);
+            }
+            catch {
+                this.skip();
+                return;
+            }
+
+            addCandidate(discoveryService, workspaceRoot, linkedTarget);
+
+            const realResolution = await resolver.resolveTarget('AppHost/AppHost.csproj', new vscode.CancellationTokenSource().token);
+            const linkedResolution = await resolver.resolveTarget('Linked/AppHost.csproj', new vscode.CancellationTokenSource().token);
+
+            assertResolved(realResolution);
+            assertResolved(linkedResolution);
+            assert.strictEqual(realResolution.target.absolutePath, appHostProjectPath);
+            assert.strictEqual(linkedResolution.target.absolutePath, linkedTarget);
+        });
+
+        test('keeps lexical identities stable when a symlink retargets', async function () {
             const firstRealTarget = path.join(workspaceRoot, 'First', 'AppHost.csproj');
             const secondRealTarget = path.join(workspaceRoot, 'Second', 'AppHost.csproj');
             const linkedTarget = path.join(workspaceRoot, 'Linked', 'AppHost.csproj');
@@ -316,7 +365,7 @@ suite('Editor assistance AppHost services', () => {
             fs.symlinkSync(secondRealTarget, linkedTarget);
             const thirdResolution = await resolver.resolveTarget('Linked/AppHost.csproj', new vscode.CancellationTokenSource().token);
             assertResolved(thirdResolution);
-            assert.notStrictEqual(firstResolution.target.identity, thirdResolution.target.identity);
+            assert.strictEqual(firstResolution.target.identity, thirdResolution.target.identity);
         });
 
         test('bounds known AppHosts on not-found results', async () => {
@@ -408,7 +457,27 @@ suite('Editor assistance AppHost services', () => {
             }]);
         });
 
-        test('reports other-mode sessions without leaking debug configuration details', async () => {
+        test('uses other mode for a run session with malformed debug configuration', async () => {
+            launchService.editorSessions.push({
+                appHostPath: appHostProjectPath,
+                resolvedAppHostPath: appHostProjectPath,
+                operationKind: 'run',
+                startupCompleted: true,
+                noDebug: undefined,
+                isStopping: false,
+            });
+
+            const snapshot = await snapshotService.createSnapshot(new vscode.CancellationTokenSource().token);
+
+            assert.deepStrictEqual(snapshot.appHosts, [{
+                appHost: 'AppHost/AppHost.csproj',
+                state: 'running',
+                mode: 'other',
+                controller: 'editor',
+            }]);
+        });
+
+        test('ignores non-run editor sessions', async () => {
             launchService.editorSessions.push({
                 appHostPath: appHostProjectPath,
                 resolvedAppHostPath: appHostProjectPath,
@@ -422,7 +491,7 @@ suite('Editor assistance AppHost services', () => {
 
             assert.deepStrictEqual(snapshot.appHosts, [{
                 appHost: 'AppHost/AppHost.csproj',
-                state: 'running',
+                state: 'notDebugging',
                 mode: 'other',
                 controller: 'editor',
             }]);
@@ -448,7 +517,7 @@ suite('Editor assistance AppHost services', () => {
             }]);
         });
 
-        test('reports multipleSessions when more than one editor session maps to the same AppHost', async () => {
+        test('reports multipleSessions when more than one run session maps to the same AppHost', async () => {
             launchService.editorSessions.push(
                 {
                     appHostPath: appHostProjectPath,
@@ -461,7 +530,7 @@ suite('Editor assistance AppHost services', () => {
                 {
                     appHostPath: appHostProjectPath,
                     resolvedAppHostPath: appHostProjectPath,
-                    operationKind: 'publish',
+                    operationKind: 'run',
                     startupCompleted: true,
                     noDebug: false,
                     isStopping: false,
@@ -498,6 +567,93 @@ suite('Editor assistance AppHost services', () => {
                 mode: 'other',
                 controller: 'editor',
             }]);
+        });
+
+        test('does not attribute an ambiguous run session to a known AppHost', async () => {
+            const ambiguousDirectory = path.join(workspaceRoot, 'Ambiguous');
+            const firstProject = path.join(ambiguousDirectory, 'First.csproj');
+            const secondProject = path.join(ambiguousDirectory, 'Second.csproj');
+            const appHostSource = path.join(ambiguousDirectory, 'Program.cs');
+            fs.mkdirSync(ambiguousDirectory, { recursive: true });
+            fs.writeFileSync(firstProject, appHostProjectContents);
+            fs.writeFileSync(secondProject, appHostProjectContents);
+            fs.writeFileSync(appHostSource, 'var builder = DistributedApplication.CreateBuilder(args);');
+            discoveryService.candidatesByFolder.set(workspaceRoot, []);
+            addCandidate(discoveryService, workspaceRoot, appHostSource);
+            launchService.editorSessions.push({
+                appHostPath: firstProject,
+                resolvedAppHostPath: undefined,
+                operationKind: 'run',
+                startupCompleted: true,
+                noDebug: false,
+                isStopping: false,
+            });
+
+            const snapshot = await snapshotService.createSnapshot(new vscode.CancellationTokenSource().token);
+
+            assert.deepStrictEqual(snapshot.appHosts, [{
+                appHost: 'Ambiguous/Program.cs',
+                state: 'notDebugging',
+                mode: 'other',
+                controller: 'editor',
+            }]);
+        });
+
+        test('keeps an active session attributed to its lexical launch path after a symlink retargets', async function () {
+            const firstTarget = path.join(workspaceRoot, 'First', 'AppHost.csproj');
+            const secondTarget = path.join(workspaceRoot, 'Second', 'AppHost.csproj');
+            const linkedTarget = path.join(workspaceRoot, 'ZLinked', 'AppHost.csproj');
+            fs.mkdirSync(path.dirname(firstTarget), { recursive: true });
+            fs.mkdirSync(path.dirname(secondTarget), { recursive: true });
+            fs.mkdirSync(path.dirname(linkedTarget), { recursive: true });
+            fs.writeFileSync(firstTarget, appHostProjectContents);
+            fs.writeFileSync(secondTarget, appHostProjectContents);
+            try {
+                fs.symlinkSync(firstTarget, linkedTarget);
+            }
+            catch {
+                this.skip();
+                return;
+            }
+
+            discoveryService.candidatesByFolder.set(workspaceRoot, []);
+            addCandidate(discoveryService, workspaceRoot, firstTarget);
+            addCandidate(discoveryService, workspaceRoot, secondTarget);
+            addCandidate(discoveryService, workspaceRoot, linkedTarget);
+            launchService.editorSessions.push({
+                appHostPath: linkedTarget,
+                resolvedAppHostPath: linkedTarget,
+                operationKind: 'run',
+                startupCompleted: true,
+                noDebug: false,
+                isStopping: false,
+            });
+
+            fs.rmSync(linkedTarget);
+            fs.symlinkSync(secondTarget, linkedTarget);
+
+            const snapshot = await snapshotService.createSnapshot(new vscode.CancellationTokenSource().token);
+
+            assert.deepStrictEqual(snapshot.appHosts, [
+                {
+                    appHost: 'First/AppHost.csproj',
+                    state: 'notDebugging',
+                    mode: 'other',
+                    controller: 'editor',
+                },
+                {
+                    appHost: 'Second/AppHost.csproj',
+                    state: 'notDebugging',
+                    mode: 'other',
+                    controller: 'editor',
+                },
+                {
+                    appHost: 'ZLinked/AppHost.csproj',
+                    state: 'running',
+                    mode: 'debug',
+                    controller: 'editor',
+                },
+            ]);
         });
 
         test('returns at most 20 AppHosts sorted by safe display path', async () => {

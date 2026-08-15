@@ -206,7 +206,9 @@ export class AppHostLaunchService implements vscode.Disposable {
             resolvedAppHostPath: session.resolvedAppHostPath,
             operationKind: session.operationKind,
             startupCompleted: session.startupCompleted,
-            noDebug: session.configuration.noDebug === true,
+            noDebug: typeof session.configuration.noDebug === 'boolean'
+                ? session.configuration.noDebug
+                : undefined,
             isStopping: isTrackedSessionStopping(session),
         }));
     }

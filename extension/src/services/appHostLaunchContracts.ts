@@ -49,7 +49,7 @@ export interface AppHostEditorSessionSnapshot {
     readonly resolvedAppHostPath: string | undefined;
     readonly operationKind: AspireOperationKind;
     readonly startupCompleted: boolean;
-    readonly noDebug: boolean;
+    readonly noDebug: boolean | undefined;
     readonly isStopping: boolean;
 }
 

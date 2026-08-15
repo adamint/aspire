@@ -64,6 +64,34 @@ export function getAppHostIdentityKey(appHostPath: string): string {
     return getAppHostIdentityKeyInfo(appHostPath).key;
 }
 
+/**
+ * Returns an AppHost identity that never follows filesystem aliases.
+ *
+ * Editor state uses the path recorded when a session launched. Following a symlink again
+ * while producing a later snapshot would let retargeting that link move the active
+ * session to a different AppHost. Project/source pairs still share one identity when the
+ * lexical directory proves there is exactly one candidate of each shape.
+ */
+export function getLexicalAppHostIdentityKey(appHostPath: string): string {
+    const resolvedPath = path.normalize(path.resolve(appHostPath));
+    const resolvedKey = getLexicalPathComparisonKey(resolvedPath);
+    if (!isAppHostProjectFile(resolvedPath) && !isAppHostSourceFile(resolvedPath)) {
+        return resolvedKey;
+    }
+
+    const directory = path.dirname(resolvedPath);
+    const shapes = readDirectoryAppHostShapes(directory);
+    const isAliasedPair = shapes.enumerated &&
+        shapes.projectFiles.length === 1 &&
+        shapes.sourceFiles.length === 1 &&
+        [...shapes.projectFiles, ...shapes.sourceFiles]
+            .some(candidate => getLexicalPathComparisonKey(candidate) === resolvedKey);
+
+    return isAliasedPair
+        ? `${getLexicalPathComparisonKey(directory)}${appHostAliasKeySuffix}`
+        : resolvedKey;
+}
+
 export function getAppHostIdentityKeyInfo(appHostPath: string): AppHostIdentityKeyInfo {
     const resolvedPath = canonicalize(path.normalize(path.resolve(appHostPath)));
     if (!isAppHostProjectFile(resolvedPath) && !isAppHostSourceFile(resolvedPath)) {
@@ -132,6 +160,11 @@ function readDirectoryAppHostShapes(directoryPath: string): DirectoryAppHostShap
 
 function containsPath(paths: readonly string[], candidate: string): boolean {
     return paths.some(value => isSameFileSystemEntry(value, candidate));
+}
+
+function getLexicalPathComparisonKey(value: string): string {
+    const resolvedPath = path.normalize(path.resolve(value));
+    return process.platform === 'win32' ? resolvedPath.toLowerCase() : resolvedPath;
 }
 
 export function canonicalizeAppHostPath(resolvedPath: string): string {
