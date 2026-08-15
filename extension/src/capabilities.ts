@@ -90,8 +90,17 @@ export function isBunInstalled() {
     return isExtensionInstalled("oven.bun-vscode");
 }
 
-export function isJavaInstalled() {
-    return isExtensionInstalled("vscjava.vscode-java-debug");
+// The Java debug adapter cannot launch anything on its own: it resolves main classes, the
+// classpath and project metadata through the redhat.java language server, which is why
+// vscjava.vscode-java-debug declares redhat.java as an extension dependency and both ship together
+// in the "Extension Pack for Java". java.ts also calls the redhat.java API directly to refresh the
+// project configuration, so advertise Java support only when both are present.
+// https://github.com/microsoft/vscode-java-debug#requirements
+export const javaLanguageExtensionId = 'redhat.java';
+export const javaDebugExtensionId = 'vscjava.vscode-java-debug';
+
+export function isJavaInstalled(extensionInstalled: (extensionId: string) => boolean = isExtensionInstalled) {
+    return extensionInstalled(javaLanguageExtensionId) && extensionInstalled(javaDebugExtensionId);
 }
 
 export function getSupportedCapabilities(platform: NodeJS.Platform = process.platform): Capabilities {
@@ -146,7 +155,7 @@ export function getSupportedCapabilities(platform: NodeJS.Platform = process.pla
 
     if (isJavaInstalled()) {
         capabilities.push("java");
-        capabilities.push("vscjava.vscode-java-debug");
+        capabilities.push(javaDebugExtensionId);
     }
 
     return capabilities;

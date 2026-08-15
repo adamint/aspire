@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+#pragma warning disable ASPIREDOCKERFILEBUILDER001
+
 #pragma warning disable ASPIRECERTIFICATES001
 #pragma warning disable ASPIREEXTENSION001 // WithDebugSupport and WithLaunchToolArgs are experimental but used internally for debug support.
 
@@ -84,7 +86,21 @@ public static class JavaHostingExtensions
             .WithLaunchToolArgs(ctx => AddLaunchArgs(resource, ctx), ownedByLaunchConfigurationType: "java")
             .WithOtlpExporter()
             .WithCertificateTrustConfiguration(JavaCertificateTrustCallback)
-            .WithVSCodeDebugging();
+            .WithVSCodeDebugging()
+            .PublishAsDockerFile(containerBuilder =>
+            {
+                // An authored Dockerfile in the application directory is the author's deployment contract.
+                // Generating over it would silently discard base image pins, extra runtime packages, and
+                // anything else the project depends on.
+                if (File.Exists(Path.Combine(workingDirectory, "Dockerfile")))
+                {
+                    return;
+                }
+
+                containerBuilder.WithDockerfileBuilder(
+                    workingDirectory,
+                    ctx => JavaDockerfileGenerator.Write(resource, workingDirectory, ctx));
+            });
     }
 
     /// <summary>
@@ -290,20 +306,54 @@ public static class JavaHostingExtensions
         where T : JavaAppResource
         where TBuildResource : ExecutableResource
     {
+        // Building with both tools would produce two artifacts and leave the container build with no way
+        // to choose between them, so it is rejected the same way conflicting launch modes are.
+        if (builder.Resource.TryGetLastAnnotation<JavaBuildStepAnnotation>(out var existing) && existing.Tool != tool)
+        {
+            throw new InvalidOperationException(
+                $"Resource '{builder.Resource.Name}' is already configured to build with {existing.Tool}. " +
+                $"Call either WithMavenBuild or WithGradleBuild, not both.");
+        }
+
+        // Recorded in every execution context: in publish mode there is no build-step resource, but the
+        // generated Dockerfile still runs this tool and these arguments to produce the deployable JAR.
+        builder.WithAnnotation(
+            new JavaBuildStepAnnotation(
+                builder.ApplicationBuilder.ExecutionContext.IsRunMode ? buildResourceName : null,
+                tool,
+                buildArgs),
+            ResourceAnnotationMutationBehavior.Replace);
+
         if (!builder.ApplicationBuilder.ExecutionContext.IsRunMode)
         {
             return builder;
         }
 
-        var buildResource = createResource(buildResourceName, ResolveWrapperPath(builder.Resource, tool), builder.Resource.WorkingDirectory);
+        // Calling the same method twice must not add a second resource under the same name. The
+        // annotation was just replaced, and the arguments are read from it on every run, so the existing
+        // resource already reflects the new arguments.
+        if (existing is not null)
+        {
+            return builder;
+        }
+
+        var resource = builder.Resource;
+        var buildResource = createResource(buildResourceName, ResolveWrapperPath(resource, tool), resource.WorkingDirectory);
 
         var buildBuilder = builder.ApplicationBuilder.AddResource(buildResource)
-            .WithArgs(buildArgs)
+            .WithArgs(ctx =>
+            {
+                if (resource.TryGetLastAnnotation<JavaBuildStepAnnotation>(out var buildStep))
+                {
+                    foreach (var arg in buildStep.Args)
+                    {
+                        ctx.Args.Add(arg);
+                    }
+                }
+            })
             .WithIconName(JavaIconName)
-            .WithParentRelationship(builder.Resource)
+            .WithParentRelationship(resource)
             .ExcludeFromManifest();
-
-        builder.WithAnnotation(new JavaBuildStepAnnotation(buildResourceName), ResourceAnnotationMutationBehavior.Append);
 
         return builder.WaitForCompletion(buildBuilder);
     }
@@ -344,9 +394,15 @@ public static class JavaHostingExtensions
 
         foreach (var buildStep in builder.Resource.Annotations.OfType<JavaBuildStepAnnotation>())
         {
+            // Null outside run mode, where no build-step resource is created.
+            if (buildStep.ResourceName is not { } buildStepName)
+            {
+                continue;
+            }
+
             var buildResource = builder.ApplicationBuilder.Resources
                 .OfType<ExecutableResource>()
-                .FirstOrDefault(r => string.Equals(r.Name, buildStep.ResourceName, StringComparisons.ResourceName));
+                .FirstOrDefault(r => string.Equals(r.Name, buildStepName, StringComparisons.ResourceName));
 
             if (buildResource is not null)
             {
@@ -689,3 +745,5 @@ public static class JavaHostingExtensions
             : null;
     }
 }
+
+#pragma warning restore ASPIREDOCKERFILEBUILDER001

@@ -1,0 +1,12 @@
+﻿FROM docker.io/library/maven:3-eclipse-temurin-21 AS build
+WORKDIR /app
+COPY . .
+RUN --mount=type=cache,id=aspire-java-maven-api,target=/root/.m2,sharing=locked \
+    mkdir -p /build && mvn -B -ntp -DskipTests package && jars=$(ls target/*.jar 2>/dev/null | grep -Ev '(-plain|-sources|-javadoc)\.jar$' || true) && count=$(printf '%s\n' "$jars" | grep -c . || true) && if [ "$count" != "1" ]; then echo "Aspire: expected exactly one application JAR from the build of 'api' matching target/*.jar, found $count:" >&2; echo "$jars" >&2; echo "Use WithJarArtifact(\"<relative path>\") to select one." >&2; exit 1; fi && cp $jars /build/app.jar
+
+FROM docker.io/library/eclipse-temurin:21-jre
+RUN groupadd --system --gid 999 app && useradd --system --gid 999 --uid 999 --no-create-home app
+WORKDIR /app
+COPY --from=build /build/app.jar /app/app.jar
+USER app
+ENTRYPOINT ["java","-jar","/app/app.jar"]

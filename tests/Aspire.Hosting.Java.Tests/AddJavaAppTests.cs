@@ -11,59 +11,32 @@ namespace Aspire.Hosting.Java.Tests;
 
 public class AddJavaAppTests
 {
-    // ---- Manifest: baseline ------------------------------------------------
-
-    // The wrapper is an absolute host path, so escape it the same way the manifest writer does.
-    private static string JsonEscape(string value) => System.Text.Json.JsonSerializer.Serialize(value).Trim('"');
+    // ---- Launch mode -------------------------------------------------------
 
     [Fact]
-    public async Task VerifyManifest_AddJavaApp_MavenGoal()
+    public async Task AddJavaApp_MavenGoal_LaunchesThroughTheWrapper()
     {
-        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish).WithResourceCleanUp(true);
+        using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
         using var tempDir = new TempJavaAppDirectory();
 
         var app = builder.AddJavaApp("api", tempDir.Path).WithMavenGoal("spring-boot:run");
 
-        // The manifest directory is the application directory so paths in the manifest are relative to it.
-        var manifest = await ManifestUtils.GetManifest(app.Resource, tempDir.Path);
-
-        // The wrapper has to be the command in publish mode too. Emitting "java" here while the goal was
-        // still contributed as an argument produced the uninvokable command line "java spring-boot:run".
-        var expected = $$"""
-            {
-              "type": "executable.v0",
-              "workingDirectory": ".",
-              "command": "{{JsonEscape(Path.Combine(tempDir.Path, JavaHostingExtensions.s_defaultMavenWrapper))}}",
-              "args": [
-                "spring-boot:run"
-              ]
-            }
-            """;
-        Assert.Equal(expected, manifest.ToString());
+        // The command has to become the wrapper. Leaving it as "java" while the goal was still contributed
+        // as an argument produced the uninvokable command line "java spring-boot:run".
+        Assert.Equal(Path.Combine(tempDir.Path, JavaHostingExtensions.s_defaultMavenWrapper), app.Resource.Command);
+        Assert.Equal(["spring-boot:run"], await ArgumentEvaluator.GetArgumentListAsync(app.Resource));
     }
 
     [Fact]
-    public async Task VerifyManifest_AddJavaApp_GradleTask()
+    public async Task AddJavaApp_GradleTask_LaunchesThroughTheWrapper()
     {
-        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish).WithResourceCleanUp(true);
+        using var builder = TestDistributedApplicationBuilder.Create().WithResourceCleanUp(true);
         using var tempDir = new TempJavaAppDirectory();
 
         var app = builder.AddJavaApp("api", tempDir.Path).WithGradleTask("bootRun", "--no-daemon");
 
-        var manifest = await ManifestUtils.GetManifest(app.Resource, tempDir.Path);
-
-        var expected = $$"""
-            {
-              "type": "executable.v0",
-              "workingDirectory": ".",
-              "command": "{{JsonEscape(Path.Combine(tempDir.Path, JavaHostingExtensions.s_defaultGradleWrapper))}}",
-              "args": [
-                "bootRun",
-                "--no-daemon"
-              ]
-            }
-            """;
-        Assert.Equal(expected, manifest.ToString());
+        Assert.Equal(Path.Combine(tempDir.Path, JavaHostingExtensions.s_defaultGradleWrapper), app.Resource.Command);
+        Assert.Equal(["bootRun", "--no-daemon"], await ArgumentEvaluator.GetArgumentListAsync(app.Resource));
     }
 
     [Fact]

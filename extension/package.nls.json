@@ -302,6 +302,8 @@
   "aspire-vscode.strings.rustLaunchConfigurationMissingExecutable": "The Aspire app host did not report which executable the Rust app in {0} produces, so there is nothing to debug.",
   "aspire-vscode.strings.rustWindowsGnuDebuggerUnsupported": "The cppvsdbg debugger cannot debug Rust target {0} because GNU Windows targets use DWARF symbols. Install CodeLLDB or build an MSVC Rust target such as x86_64-pc-windows-msvc.",
   "aspire-vscode.strings.rustDebuggerExtensionNotInstalled": "Rust AppHosts are launched through a native debugger extension. Install {0} from the Extensions view, then start the AppHost again.",
+  "aspire-vscode.strings.javaDisplayName": "Java: {0}",
+  "aspire-vscode.strings.javaLabel": "Java",
   "aspire-vscode.strings.appHostLifecycleStartConfirmationTitle": "Start Aspire AppHost",
   "aspire-vscode.strings.appHostLifecycleStopConfirmationTitle": "Stop Aspire AppHost",
   "aspire-vscode.strings.appHostLifecycleStartConfirmationMessage": "Start the Aspire AppHost {0} in {1} mode?",

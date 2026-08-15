@@ -80,6 +80,27 @@ suite('utils/strings tests', () => {
         const missingFromXlf = names.filter(name => !xlf.includes(`<trans-unit id="aspire-vscode.strings.${name}">`));
         assert.deepStrictEqual(missingFromXlf, [], 'Regenerate loc/xlf/aspire-vscode.xlf with "yarn run localize" after adding package.nls.json entries.');
     });
+
+    test('Java loc strings are present in package.nls.json and the generated XLF catalog', () => {
+        // Same guard as the Rust strings above: package.nls.json is the only input to the XLF
+        // catalog (see gulpfile.js), so a Java string that only exists in strings.ts ships
+        // untranslated.
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const stringsSource = fs.readFileSync(path.join(extensionRoot, 'src', 'loc', 'strings.ts'), 'utf8');
+        const packageNls = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.nls.json'), 'utf8')) as Record<string, string>;
+        const xlf = fs.readFileSync(path.join(extensionRoot, 'loc', 'xlf', 'aspire-vscode.xlf'), 'utf8');
+
+        const declarationPattern = /export\s+const\s+(java[A-Za-z0-9_]*)\s*=\s*(?:\([^)]*\)\s*=>\s*)?vscode\.l10n\.t\(/g;
+        const names = [...stringsSource.matchAll(declarationPattern)].map(match => match[1]);
+        assert.ok(names.includes('javaDisplayName'), 'Expected javaDisplayName to be declared in strings.ts.');
+        assert.ok(names.includes('javaLabel'), 'Expected javaLabel to be declared in strings.ts.');
+
+        const missingFromNls = names.filter(name => packageNls[`aspire-vscode.strings.${name}`] === undefined);
+        assert.deepStrictEqual(missingFromNls, [], 'Every java* loc string needs an aspire-vscode.strings.* entry in package.nls.json.');
+
+        const missingFromXlf = names.filter(name => !xlf.includes(`<trans-unit id="aspire-vscode.strings.${name}">`));
+        assert.deepStrictEqual(missingFromXlf, [], 'Regenerate loc/xlf/aspire-vscode.xlf with "yarn run localize" after adding package.nls.json entries.');
+    });
 });
 
 suite('loc/strings tests', () => {

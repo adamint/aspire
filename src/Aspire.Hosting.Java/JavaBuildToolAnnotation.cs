@@ -36,11 +36,16 @@ internal sealed class JavaBuildToolAnnotation(JavaBuildTool tool, string[] args)
 }
 
 /// <summary>
-/// Records the name of a build-step resource created for a <see cref="JavaAppResource"/>.
+/// Records how a <see cref="JavaAppResource"/> is built before it runs.
 /// </summary>
 /// <remarks>
-/// Kept on the application resource so <c>WithWrapperPath</c> can re-point build steps that were created
-/// before the override was supplied, making the builder calls order-independent.
+/// Recorded in every execution context, not only where the build actually runs. In run mode the
+/// <see cref="ResourceName"/> lets <c>WithWrapperPath</c> re-point a build step that was created before
+/// the override was supplied, which is what makes the builder calls order-independent. In publish mode
+/// there is no build-step resource, but the tool and arguments still describe how to produce a deployable
+/// JAR and are what the generated Dockerfile runs.
 /// </remarks>
-/// <param name="ResourceName">The name of the build-step resource.</param>
-internal sealed record JavaBuildStepAnnotation(string ResourceName) : IResourceAnnotation;
+/// <param name="ResourceName">The name of the build-step resource, or <see langword="null"/> outside run mode.</param>
+/// <param name="Tool">The build tool that produces the artifact.</param>
+/// <param name="Args">The arguments passed to the build tool.</param>
+internal sealed record JavaBuildStepAnnotation(string? ResourceName, JavaBuildTool Tool, string[] Args) : IResourceAnnotation;

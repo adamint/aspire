@@ -138,6 +138,13 @@ export interface JavaLaunchConfiguration extends ExecutableLaunchConfiguration {
     type: "java";
     request?: "launch" | "attach";
     working_directory?: string;
+    // Either a fully qualified class name (com.example.Api), or the absolute path to an executable
+    // JAR whose manifest declares Main-Class. Absent when the IDE should resolve the entry point
+    // from the project's build files. See src/Aspire.Hosting.Java/JavaLaunchConfiguration.cs.
+    main_class?: string;
+    // "maven" or "gradle", or absent when the resource runs a prebuilt JAR and therefore has no
+    // build files whose classpath the Java language server could refresh.
+    build_tool?: string;
 }
 
 export function isJavaLaunchConfiguration(obj: any): obj is JavaLaunchConfiguration {
