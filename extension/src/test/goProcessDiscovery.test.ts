@@ -1,16 +1,17 @@
 import * as assert from 'assert';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
+import { createGoRunProcessIdentity } from '../debugger/languages/go';
 import {
-    GoRunApplicationProcessResolver,
+    LaunchedChildProcessResolver,
     parsePosixProcessList,
     parseWindowsProcessList,
-    SystemGoProcessQuery,
-    type GoProcessCommandRunner,
-    type GoProcessDiscoveryClock,
-    type GoProcessInfo,
-    type GoProcessQuery,
-} from '../debugger/languages/goProcessDiscovery';
+    SystemLaunchedChildProcessQuery,
+    type LaunchedChildProcess as GoProcessInfo,
+    type LaunchedChildProcessClock as GoProcessDiscoveryClock,
+    type LaunchedChildProcessCommandRunner as GoProcessCommandRunner,
+    type LaunchedChildProcessQuery as GoProcessQuery,
+} from '../debugger/launchedChildProcessDiscovery';
 
 class TestClock implements GoProcessDiscoveryClock {
     private _now = 0;
@@ -56,6 +57,19 @@ function goRunProcessTree(applicationPid = 42): readonly GoProcessInfo[] {
         process(33, 22, '/usr/local/go/pkg/tool/darwin_arm64/link'),
         process(applicationPid, 33, `/private/var/folders/x/go-build123/b001/exe/api`, `/private/var/folders/x/go-build123/b001/exe/api --port 8080`),
     ];
+}
+
+function createGoRunApplicationProcessResolver(
+    processQuery: GoProcessQuery,
+    clock?: GoProcessDiscoveryClock,
+    options?: { readonly timeoutMs?: number; readonly retryDelayMs?: number },
+): { resolveApplicationPid(goProcessId: number, cancellationToken?: vscode.CancellationToken): Promise<number> } {
+    const resolver = new LaunchedChildProcessResolver(processQuery, clock, options);
+    const identity = createGoRunProcessIdentity();
+    return {
+        resolveApplicationPid: async (goProcessId, cancellationToken) =>
+            await resolver.resolveProcessId(goProcessId, identity, cancellationToken),
+    };
 }
 
 suite('Go process discovery', () => {
@@ -111,8 +125,8 @@ suite('Go process discovery', () => {
             },
         };
 
-        await new SystemGoProcessQuery('linux', commandRunner).listProcesses();
-        await new SystemGoProcessQuery('win32', commandRunner).listProcesses();
+        await new SystemLaunchedChildProcessQuery('linux', commandRunner).listProcesses();
+        await new SystemLaunchedChildProcessQuery('win32', commandRunner).listProcesses();
 
         assert.deepStrictEqual(calls, [
             {
@@ -133,7 +147,7 @@ suite('Go process discovery', () => {
     });
 
     test('traverses nested children and ignores Go toolchain processes', async () => {
-        const resolver = new GoRunApplicationProcessResolver(
+        const resolver = createGoRunApplicationProcessResolver(
             new SequenceProcessQuery([goRunProcessTree(), goRunProcessTree()]),
             new TestClock(),
             { timeoutMs: 100, retryDelayMs: 10 });
@@ -141,8 +155,42 @@ suite('Go process discovery', () => {
         assert.strictEqual(await resolver.resolveApplicationPid(10), 42);
     });
 
+    test('resolves a cached Go run application and ignores linker output paths', async () => {
+        const cachedApplication = process(
+            42,
+            10,
+            '/Users/me/Library/Caches/go-build/8a/8a26e5d38d9d4f6e7c8b0a1d2e3f4c5b6a7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f-d/api',
+            '/Users/me/Library/Caches/go-build/8a/8a26e5d38d9d4f6e7c8b0a1d2e3f4c5b6a7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f-d/api --port 8080');
+        const linker = process(
+            33,
+            10,
+            '/usr/local/go/pkg/tool/darwin_arm64/link',
+            '/usr/local/go/pkg/tool/darwin_arm64/link -o /private/var/folders/x/go-build123/b001/exe/api');
+        const processTree = [
+            process(10, 1, '/usr/local/go/bin/go', 'go run ./cmd/api'),
+            linker,
+            cachedApplication,
+        ];
+        const resolver = createGoRunApplicationProcessResolver(
+            new SequenceProcessQuery([processTree, processTree]),
+            new TestClock(),
+            { timeoutMs: 100, retryDelayMs: 10 });
+
+        assert.strictEqual(await resolver.resolveApplicationPid(10), 42);
+    });
+
+    test('recognizes a Go launcher from its command when macOS truncates comm', () => {
+        const identity = createGoRunProcessIdentity();
+
+        assert.strictEqual(identity.isLauncher(process(
+            10,
+            1,
+            '/Users/me/Very',
+            '/Users/me/Very Long Go Installation/bin/go run ./cmd/api')), true);
+    });
+
     test('waits for the same Go build application candidate twice', async () => {
-        const resolver = new GoRunApplicationProcessResolver(
+        const resolver = createGoRunApplicationProcessResolver(
             new SequenceProcessQuery([
                 goRunProcessTree(42),
                 goRunProcessTree(43),
@@ -155,7 +203,7 @@ suite('Go process discovery', () => {
     });
 
     test('fails closed when no Go build application process exists', async () => {
-        const resolver = new GoRunApplicationProcessResolver(
+        const resolver = createGoRunApplicationProcessResolver(
             new SequenceProcessQuery([
                 [process(10, 1, '/usr/local/go/bin/go', 'go run ./cmd/api')],
             ]),
@@ -166,7 +214,7 @@ suite('Go process discovery', () => {
     });
 
     test('fails closed when Go build application candidates are ambiguous', async () => {
-        const resolver = new GoRunApplicationProcessResolver(
+        const resolver = createGoRunApplicationProcessResolver(
             new SequenceProcessQuery([
                 [
                     ...goRunProcessTree(42),
@@ -180,7 +228,7 @@ suite('Go process discovery', () => {
     });
 
     test('fails closed when the reported Go parent process was reused', async () => {
-        const resolver = new GoRunApplicationProcessResolver(
+        const resolver = createGoRunApplicationProcessResolver(
             new SequenceProcessQuery([
                 [
                     process(10, 1, '/bin/bash', 'bash build.sh'),
@@ -194,7 +242,7 @@ suite('Go process discovery', () => {
     });
 
     test('fails within its bounded timeout without a stable candidate', async () => {
-        const resolver = new GoRunApplicationProcessResolver(
+        const resolver = createGoRunApplicationProcessResolver(
             new SequenceProcessQuery([
                 goRunProcessTree(42),
                 goRunProcessTree(43),
@@ -208,11 +256,11 @@ suite('Go process discovery', () => {
 
     test('propagates cancellation and process-query failures without process details', async () => {
         const cancellation = new vscode.CancellationTokenSource();
-        const failedResolver = new GoRunApplicationProcessResolver(
+        const failedResolver = createGoRunApplicationProcessResolver(
             new SequenceProcessQuery([new Error('/private/go-build123/b001/exe/api 4242')]),
             new TestClock(),
             { timeoutMs: 20, retryDelayMs: 10 });
-        const cancelledResolver = new GoRunApplicationProcessResolver(
+        const cancelledResolver = createGoRunApplicationProcessResolver(
             new SequenceProcessQuery([goRunProcessTree()]),
             new TestClock(),
             { timeoutMs: 20, retryDelayMs: 10 });

@@ -4,15 +4,26 @@ import { attachDebuggerConfigurationName, attachDebuggerUnavailable, goDisplayNa
 import { extensionLogOutputChannel } from "../../utils/logging";
 import { ResourceDebuggerExtension } from "../debuggerExtensions";
 import { ResourceAttachConfigurationError, type ResourceAttachProvider, type ResourceDebugResourceSnapshot } from '../resourceDebugContracts';
-import { goRunApplicationProcessResolver, type GoApplicationProcessResolver } from './goProcessDiscovery';
+import {
+    getProcessCommandProgram,
+    launchedChildProcessResolver,
+    type LaunchedChildProcess,
+    type LaunchedChildProcessIdentity,
+} from '../launchedChildProcessDiscovery';
 
 const executablePidPropertyName = 'executable.pid';
 const executablePathPropertyName = 'executable.path';
 const resourceLaunchConfigurationTypePropertyName = 'resource.launchConfigurationType';
+const goBuildExecutablePattern = /(?:^|[\\/])go-build[^\\/\s]*(?:[\\/][^\\/\s]+)*[\\/]exe[\\/][^\\/\s]+(?:\.exe)?$/i;
+const cachedGoRunExecutablePattern = /(?:^|[\\/])[0-9a-f]{2}[\\/][0-9a-f]{16,}-d[\\/][^\\/\s]+(?:\.exe)?$/i;
 
 interface GoAttachDebuggerResourceInfo {
     readonly parentPid: number;
     readonly resourceLabel: string;
+}
+
+interface GoApplicationProcessResolver {
+    resolveApplicationPid(goProcessId: number, cancellationToken?: vscode.CancellationToken): Promise<number>;
 }
 
 function getProjectFile(launchConfig: ExecutableLaunchConfiguration): string {
@@ -81,7 +92,20 @@ export function createGoResourceAttachProvider(processResolver: GoApplicationPro
 }
 
 export const goResourceAttachProvider: ResourceAttachProvider =
-    createGoResourceAttachProvider(goRunApplicationProcessResolver);
+    createGoResourceAttachProvider({
+        resolveApplicationPid: async (goProcessId, cancellationToken) =>
+            await launchedChildProcessResolver.resolveProcessId(
+                goProcessId,
+                createGoRunProcessIdentity(),
+                cancellationToken),
+    });
+
+export function createGoRunProcessIdentity(): LaunchedChildProcessIdentity {
+    return {
+        isLauncher: process => isGoToolProcess(process),
+        isCandidate: process => isGoBuildApplication(process),
+    };
+}
 
 function canRecognizeGoAttachDebuggerResource(resource: ResourceDebugResourceSnapshot): boolean {
     return getLaunchConfigurationType(resource) === 'go' && isGoExecutable(resource);
@@ -166,4 +190,22 @@ function getProcessId(resource: ResourceDebugResourceSnapshot): number | undefin
 
     const processId = Number(value);
     return Number.isInteger(processId) && processId > 0 ? processId : undefined;
+}
+
+function isGoBuildApplication(process: LaunchedChildProcess): boolean {
+    return isGoRunApplicationPath(process.executable) ||
+        isGoRunApplicationPath(getProcessCommandProgram(process.command));
+}
+
+function isGoToolProcess(process: LaunchedChildProcess): boolean {
+    const executableName = getProcessCommandProgram(process.command)?.split(/[\\/]/).pop()?.toLowerCase()
+        ?? process.executable.split(/[\\/]/).pop()?.toLowerCase();
+    return executableName === 'go' ||
+        executableName === 'go.exe' ||
+        /(?:^|[\\/\s])go(?:\.exe)?\s+run(?:\s|$)/i.test(process.command);
+}
+
+function isGoRunApplicationPath(path: string | undefined): boolean {
+    return path !== undefined &&
+        (goBuildExecutablePattern.test(path) || cachedGoRunExecutablePattern.test(path));
 }

@@ -1,40 +1,40 @@
 import * as childProcess from 'child_process';
 import * as vscode from 'vscode';
 
-export interface GoProcessInfo {
+export interface LaunchedChildProcess {
     readonly pid: number;
     readonly parentPid: number;
     readonly executable: string;
     readonly command: string;
 }
 
-export interface GoProcessQuery {
-    listProcesses(cancellationToken?: vscode.CancellationToken, timeoutMs?: number): Promise<readonly GoProcessInfo[]>;
+export interface LaunchedChildProcessQuery {
+    listProcesses(cancellationToken?: vscode.CancellationToken, timeoutMs?: number): Promise<readonly LaunchedChildProcess[]>;
 }
 
-export interface GoProcessDiscoveryClock {
+export interface LaunchedChildProcessClock {
     now(): number;
     sleep(milliseconds: number, cancellationToken?: vscode.CancellationToken): Promise<void>;
 }
 
-export interface GoApplicationProcessResolver {
-    resolveApplicationPid(goProcessId: number, cancellationToken?: vscode.CancellationToken): Promise<number>;
+export interface LaunchedChildProcessIdentity {
+    isLauncher(process: LaunchedChildProcess): boolean;
+    isCandidate(process: LaunchedChildProcess): boolean;
 }
 
-export interface GoProcessCommandRunner {
+export interface LaunchedChildProcessCommandRunner {
     run(command: string, args: readonly string[], cancellationToken?: vscode.CancellationToken, timeoutMs?: number): Promise<string>;
 }
 
-const goBuildExecutablePattern = /(?:^|[\\/])go-build[^\\/\s]*(?:[\\/][^\\/\s]+)*[\\/]exe[\\/][^\\/\s]+(?:\.exe)?(?:\s|$)/i;
 const maxProcessListingLength = 1024 * 1024;
 const windowsProcessQuery = 'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress';
 
-export function parsePosixProcessList(output: string): readonly GoProcessInfo[] {
-    const processes: GoProcessInfo[] = [];
+export function parsePosixProcessList(output: string): readonly LaunchedChildProcess[] {
+    const processes: LaunchedChildProcess[] = [];
 
     for (const line of output.split(/\r?\n/)) {
         // `ps -axo pid=,ppid=,comm=,args=` produces rows such as:
-        //   42 10 /private/.../go-build123/b001/exe/api /private/.../go-build123/b001/exe/api --port 8080
+        //   42 10 /private/.../app /private/.../app --port 8080
         // The command can contain spaces, so only split the first three fixed fields.
         const match = /^\s*(\d+)\s+(\d+)\s+(\S+)(?:\s+(.*))?\s*$/.exec(line);
         if (!match) {
@@ -50,7 +50,7 @@ export function parsePosixProcessList(output: string): readonly GoProcessInfo[] 
     return processes;
 }
 
-export function parseWindowsProcessList(output: string): readonly GoProcessInfo[] {
+export function parseWindowsProcessList(output: string): readonly LaunchedChildProcess[] {
     let parsed: unknown;
     try {
         parsed = JSON.parse(output);
@@ -60,7 +60,7 @@ export function parseWindowsProcessList(output: string): readonly GoProcessInfo[
     }
 
     const rows = Array.isArray(parsed) ? parsed : [parsed];
-    const processes: GoProcessInfo[] = [];
+    const processes: LaunchedChildProcess[] = [];
     for (const row of rows) {
         if (typeof row !== 'object' || row === null) {
             continue;
@@ -82,24 +82,33 @@ export function parseWindowsProcessList(output: string): readonly GoProcessInfo[
     return processes;
 }
 
-export class GoRunApplicationProcessResolver implements GoApplicationProcessResolver {
+export function getProcessCommandProgram(command: string): string | undefined {
+    const match = /^\s*(?:"([^"]+)"|'([^']+)'|(\S+))/.exec(command);
+    return match?.[1] ?? match?.[2] ?? match?.[3];
+}
+
+export class LaunchedChildProcessResolver {
     private static readonly _defaultTimeoutMs = 5_000;
     private static readonly _defaultRetryDelayMs = 100;
 
     constructor(
-        private readonly _processQuery: GoProcessQuery,
-        private readonly _clock: GoProcessDiscoveryClock = systemGoProcessDiscoveryClock,
+        private readonly _processQuery: LaunchedChildProcessQuery,
+        private readonly _clock: LaunchedChildProcessClock = systemLaunchedChildProcessClock,
         options: { readonly timeoutMs?: number; readonly retryDelayMs?: number } = {},
     ) {
-        this._timeoutMs = options.timeoutMs ?? GoRunApplicationProcessResolver._defaultTimeoutMs;
-        this._retryDelayMs = options.retryDelayMs ?? GoRunApplicationProcessResolver._defaultRetryDelayMs;
+        this._timeoutMs = options.timeoutMs ?? LaunchedChildProcessResolver._defaultTimeoutMs;
+        this._retryDelayMs = options.retryDelayMs ?? LaunchedChildProcessResolver._defaultRetryDelayMs;
     }
 
     private readonly _timeoutMs: number;
     private readonly _retryDelayMs: number;
 
-    async resolveApplicationPid(goProcessId: number, cancellationToken?: vscode.CancellationToken): Promise<number> {
-        if (!isValidPid(goProcessId)) {
+    async resolveProcessId(
+        launcherPid: number,
+        identity: LaunchedChildProcessIdentity,
+        cancellationToken?: vscode.CancellationToken,
+    ): Promise<number> {
+        if (!isValidPid(launcherPid)) {
             throw createProcessDiscoveryError();
         }
 
@@ -112,7 +121,7 @@ export class GoRunApplicationProcessResolver implements GoApplicationProcessReso
         for (let attempt = 0; attempt < maximumAttempts; attempt++) {
             throwIfCancelled(cancellationToken);
 
-            let processes: readonly GoProcessInfo[];
+            let processes: readonly LaunchedChildProcess[];
             try {
                 processes = await this._processQuery.listProcesses(
                     cancellationToken,
@@ -128,7 +137,14 @@ export class GoRunApplicationProcessResolver implements GoApplicationProcessReso
 
             throwIfCancelled(cancellationToken);
 
-            const candidate = findGoBuildApplicationDescendant(goProcessId, processes);
+            let candidate: number | undefined;
+            try {
+                candidate = findMatchingDescendant(launcherPid, identity, processes);
+            }
+            catch {
+                throw createProcessDiscoveryError();
+            }
+
             if (candidate !== undefined && candidate === previousCandidate) {
                 return candidate;
             }
@@ -155,14 +171,14 @@ export class GoRunApplicationProcessResolver implements GoApplicationProcessReso
     }
 }
 
-export class SystemGoProcessQuery implements GoProcessQuery {
+export class SystemLaunchedChildProcessQuery implements LaunchedChildProcessQuery {
     constructor(
         private readonly _platform: NodeJS.Platform = process.platform,
-        private readonly _commandRunner: GoProcessCommandRunner = new SystemGoProcessCommandRunner(),
+        private readonly _commandRunner: LaunchedChildProcessCommandRunner = new SystemLaunchedChildProcessCommandRunner(),
     ) {
     }
 
-    async listProcesses(cancellationToken?: vscode.CancellationToken, timeoutMs?: number): Promise<readonly GoProcessInfo[]> {
+    async listProcesses(cancellationToken?: vscode.CancellationToken, timeoutMs?: number): Promise<readonly LaunchedChildProcess[]> {
         const output = this._platform === 'win32'
             ? await this._commandRunner.run(
                 'powershell.exe',
@@ -181,7 +197,7 @@ export class SystemGoProcessQuery implements GoProcessQuery {
     }
 }
 
-class SystemGoProcessCommandRunner implements GoProcessCommandRunner {
+class SystemLaunchedChildProcessCommandRunner implements LaunchedChildProcessCommandRunner {
     run(command: string, args: readonly string[], cancellationToken?: vscode.CancellationToken, timeoutMs = 1_000): Promise<string> {
         return new Promise((resolve, reject) => {
             let completed = false;
@@ -205,15 +221,12 @@ class SystemGoProcessCommandRunner implements GoProcessCommandRunner {
                 cancellationRegistration?.dispose();
                 action();
             };
-            const stop = () => {
+            const fail = () => {
                 // Discovery owns this short-lived `ps` or PowerShell child only. Never signal the
-                // resource's `go run` process or any descendant while resolving an attach target.
+                // launched workload or any descendant while resolving an attach target.
                 if (!process.killed) {
                     process.kill();
                 }
-            };
-            const fail = () => {
-                stop();
                 complete(() => reject(createProcessDiscoveryError()));
             };
 
@@ -248,7 +261,7 @@ class SystemGoProcessCommandRunner implements GoProcessCommandRunner {
     }
 }
 
-const systemGoProcessDiscoveryClock: GoProcessDiscoveryClock = {
+const systemLaunchedChildProcessClock: LaunchedChildProcessClock = {
     now: () => Date.now(),
     sleep: (milliseconds, cancellationToken) => new Promise<void>((resolve, reject) => {
         if (cancellationToken?.isCancellationRequested) {
@@ -269,10 +282,10 @@ const systemGoProcessDiscoveryClock: GoProcessDiscoveryClock = {
     }),
 };
 
-export const goRunApplicationProcessResolver: GoApplicationProcessResolver =
-    new GoRunApplicationProcessResolver(new SystemGoProcessQuery());
+export const launchedChildProcessResolver = new LaunchedChildProcessResolver(
+    new SystemLaunchedChildProcessQuery());
 
-function createProcessInfo(pidValue: unknown, parentPidValue: unknown, executableValue: unknown, commandValue: unknown): GoProcessInfo | undefined {
+function createProcessInfo(pidValue: unknown, parentPidValue: unknown, executableValue: unknown, commandValue: unknown): LaunchedChildProcess | undefined {
     const pid = parsePid(pidValue);
     const parentPid = parseParentPid(parentPidValue);
     const executable = typeof executableValue === 'string' ? executableValue.trim() : '';
@@ -289,9 +302,13 @@ function createProcessInfo(pidValue: unknown, parentPidValue: unknown, executabl
     };
 }
 
-function findGoBuildApplicationDescendant(goProcessId: number, processes: readonly GoProcessInfo[]): number | undefined {
-    const processById = new Map<number, GoProcessInfo>();
-    const childrenByParentId = new Map<number, GoProcessInfo[]>();
+function findMatchingDescendant(
+    launcherPid: number,
+    identity: LaunchedChildProcessIdentity,
+    processes: readonly LaunchedChildProcess[],
+): number | undefined {
+    const processById = new Map<number, LaunchedChildProcess>();
+    const childrenByParentId = new Map<number, LaunchedChildProcess[]>();
     for (const process of processes) {
         if (!isValidPid(process.pid) || !Number.isInteger(process.parentPid) || process.parentPid < 0 || processById.has(process.pid)) {
             return undefined;
@@ -303,16 +320,22 @@ function findGoBuildApplicationDescendant(goProcessId: number, processes: readon
         childrenByParentId.set(process.parentPid, children);
     }
 
-    const goProcess = processById.get(goProcessId);
-    if (!goProcess || !isGoToolProcess(goProcess)) {
+    const launcher = processById.get(launcherPid);
+    if (!launcher || !identity.isLauncher(launcher)) {
         return undefined;
     }
 
     const candidates: number[] = [];
-    const descendants = [...(childrenByParentId.get(goProcessId) ?? [])];
+    const descendants = [...(childrenByParentId.get(launcherPid) ?? [])];
+    const visitedProcessIds = new Set([launcherPid]);
     for (let index = 0; index < descendants.length; index++) {
         const descendant = descendants[index];
-        if (isGoBuildApplication(descendant)) {
+        if (visitedProcessIds.has(descendant.pid)) {
+            return undefined;
+        }
+
+        visitedProcessIds.add(descendant.pid);
+        if (identity.isCandidate(descendant)) {
             candidates.push(descendant.pid);
         }
 
@@ -320,15 +343,6 @@ function findGoBuildApplicationDescendant(goProcessId: number, processes: readon
     }
 
     return candidates.length === 1 ? candidates[0] : undefined;
-}
-
-function isGoBuildApplication(process: GoProcessInfo): boolean {
-    return goBuildExecutablePattern.test(process.executable) || goBuildExecutablePattern.test(process.command);
-}
-
-function isGoToolProcess(process: GoProcessInfo): boolean {
-    const executableName = process.executable.split(/[\\/]/).pop()?.toLowerCase();
-    return executableName === 'go' || executableName === 'go.exe';
 }
 
 function parsePid(value: unknown): number | undefined {
@@ -368,5 +382,5 @@ function throwIfCancelled(cancellationToken?: vscode.CancellationToken): void {
 }
 
 function createProcessDiscoveryError(): Error {
-    return new Error('Unable to resolve the running Go application process.');
+    return new Error('Unable to resolve the running application process.');
 }

@@ -394,6 +394,9 @@
     <trans-unit id="aspire-vscode.strings.attachDebuggerCsharpExtensionRequired">
       <source xml:lang="en">Install the C# extension to attach the debugger to .NET project resources.</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.attachDebuggerExtensionsRequired">
+      <source xml:lang="en">Install {0} to attach the debugger to this resource.</source>
+    </trans-unit>
     <trans-unit id="aspire-vscode.strings.invalidLaunchConfiguration">
       <source xml:lang="en">Invalid launch configuration for {0}.</source>
     </trans-unit>
@@ -833,7 +836,7 @@
       <source xml:lang="en">This field is required.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.attachDebuggerUnavailable">
-      <source xml:lang="en">This resource is not a running .NET project resource that can be attached with the C# debugger.</source>
+      <source xml:lang="en">This resource cannot be attached to a debugger.</source>
     </trans-unit>
     <trans-unit id="configuration.aspire.globalAppHostsPollingInterval.deprecated">
       <source xml:lang="en">This setting has been renamed to aspire.appHostsPollingInterval.</source>

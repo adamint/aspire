@@ -12,6 +12,12 @@ import type { ResourceAttachProvider } from '../debugger/resourceDebugContracts'
 import { AppHostParentOutputFilter, AspireDebugSession } from '../debugger/AspireDebugSession';
 import * as hotReload from '../debugger/hotReload';
 import * as cliProcess from '../utils/process/cliProcess';
+import {
+    LaunchedChildProcessResolver,
+    type LaunchedChildProcess,
+    type LaunchedChildProcessClock,
+    type LaunchedChildProcessQuery,
+} from '../debugger/launchedChildProcessDiscovery';
 
 class TestDotNetService {
     private _hasDevKit: boolean;
@@ -97,6 +103,44 @@ function createMsbuildProcess(): {
     return { process, stdout, stderr, kill };
 }
 
+interface TestLaunchedChildProcess {
+    readonly pid: number;
+    readonly parentPid: number;
+    readonly executable: string;
+    readonly command: string;
+}
+
+interface TestLaunchedChildProcessIdentity {
+    isLauncher(process: TestLaunchedChildProcess): boolean;
+    isCandidate(process: TestLaunchedChildProcess): boolean;
+}
+
+interface TestLaunchedChildProcessResolver {
+    resolveProcessId(
+        launcherPid: number,
+        identity: TestLaunchedChildProcessIdentity,
+        cancellationToken?: vscode.CancellationToken,
+    ): Promise<number>;
+}
+
+class StaticLaunchedChildProcessQuery implements LaunchedChildProcessQuery {
+    constructor(private readonly _processes: readonly LaunchedChildProcess[]) {
+    }
+
+    async listProcesses(): Promise<readonly LaunchedChildProcess[]> {
+        return this._processes;
+    }
+}
+
+const immediateProcessClock: LaunchedChildProcessClock = {
+    now: () => 0,
+    sleep: async () => { },
+};
+
+function createLaunchedProcess(pid: number, parentPid: number, executable: string, command = executable): LaunchedChildProcess {
+    return { pid, parentPid, executable, command };
+}
+
 suite('Dotnet Debugger Extension Tests', () => {
     let getHotReloadDiagnostics: sinon.SinonStub;
     let logHotReloadDiagnostics: sinon.SinonStub;
@@ -118,15 +162,256 @@ suite('Dotnet Debugger Extension Tests', () => {
 
     function createDebuggerExtension(outputPath: string, rejectBuild: Error | null, hasDevKit: boolean, doesOutputFileExist: boolean): { dotNetService: TestDotNetService, extension: ResourceDebuggerExtension, attachProvider: ResourceAttachProvider, doesFileExistStub: sinon.SinonStub } {
         const fakeDotNetService = new TestDotNetService(outputPath, rejectBuild, hasDevKit);
+        const childProcessResolver: TestLaunchedChildProcessResolver = {
+            resolveProcessId: sinon.stub().resolves(4321),
+        };
         return {
             dotNetService: fakeDotNetService,
             extension: createProjectDebuggerExtension(() => fakeDotNetService),
-            attachProvider: createProjectResourceAttachProvider(() => fakeDotNetService),
+            attachProvider: createProjectResourceAttachProvider(() => fakeDotNetService, childProcessResolver),
             doesFileExistStub: sinon.stub(io, 'doesFileExist').resolves(doesOutputFileExist),
         };
     }
 
-    test('attach configuration uses the project TargetPath process name instead of the launcher process ID', async () => {
+    test('attach configuration resolves the evaluated framework-dependent TargetPath child PID', async () => {
+        const { dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/EvaluatedAssemblyName.dll', null, true, true);
+        dotNetService.getDotNetAttachTargetInfoStub.resolves({
+            targetPath: '/repo/bin/Debug/net10.0/EvaluatedAssemblyName.dll',
+            useAppHost: false,
+        });
+        const resolver = {
+            resolveProcessId: sinon.stub().resolves(4321),
+        };
+        const createAttachProvider = createProjectResourceAttachProvider as unknown as (
+            dotNetServiceProducer: () => TestDotNetService,
+            childProcessResolver: TestLaunchedChildProcessResolver,
+        ) => ResourceAttachProvider;
+        const attachProvider = createAttachProvider(() => dotNetService, resolver);
+
+        const configuration = await attachProvider.createDebugConfiguration({
+            name: 'api',
+            displayName: 'API',
+            resourceType: 'Project',
+            state: 'Running',
+            properties: {
+                'executable.pid': '1234',
+                'executable.path': 'dotnet',
+                'project.path': '/repo/api/Api.csproj',
+            },
+        });
+
+        assert.deepStrictEqual(configuration, {
+            type: 'coreclr',
+            request: 'attach',
+            name: 'Attach debugger: API',
+            processId: 4321,
+        });
+        assert.strictEqual(resolver.resolveProcessId.firstCall.args[0], 1234);
+        const processIdentity = resolver.resolveProcessId.firstCall.args[1] as TestLaunchedChildProcessIdentity;
+        assert.strictEqual(processIdentity.isLauncher({
+            pid: 1234,
+            parentPid: 1,
+            executable: '/usr/local/share/dotnet/dotnet',
+            command: 'dotnet run --project /repo/api/Api.csproj',
+        }), true);
+        assert.strictEqual(processIdentity.isLauncher({
+            pid: 1234,
+            parentPid: 1,
+            executable: '/usr/local/share',
+            command: '/usr/local/share/dotnet/dotnet run --project /repo/api/Api.csproj',
+        }), true);
+        assert.strictEqual(processIdentity.isCandidate({
+            pid: 4321,
+            parentPid: 1234,
+            executable: '/usr/local/share/dotnet/dotnet',
+            command: 'dotnet exec /repo/bin/Debug/net10.0/EvaluatedAssemblyName.dll',
+        }), true);
+        assert.strictEqual(processIdentity.isCandidate({
+            pid: 4322,
+            parentPid: 1234,
+            executable: '/usr/local/share/dotnet/dotnet',
+            command: 'dotnet exec /repo/bin/Debug/net10.0/Api.dll',
+        }), false);
+    });
+
+    test('attach configuration resolves an apphost child by its evaluated executable identity', async () => {
+        const { dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/EvaluatedAppHost', null, true, true);
+        const resolver = {
+            resolveProcessId: sinon.stub().resolves(4321),
+        };
+        const createAttachProvider = createProjectResourceAttachProvider as unknown as (
+            dotNetServiceProducer: () => TestDotNetService,
+            childProcessResolver: TestLaunchedChildProcessResolver,
+        ) => ResourceAttachProvider;
+        const attachProvider = createAttachProvider(() => dotNetService, resolver);
+
+        const configuration = await attachProvider.createDebugConfiguration({
+            name: 'api',
+            displayName: 'API',
+            resourceType: 'Project',
+            state: 'Running',
+            properties: {
+                'executable.pid': 1234,
+                'executable.path': 'dotnet',
+                'project.path': '/repo/api/Api.csproj',
+            },
+        });
+
+        assert.strictEqual(configuration.processId, 4321);
+        assert.strictEqual(configuration.processName, undefined);
+        const processIdentity = resolver.resolveProcessId.firstCall.args[1] as TestLaunchedChildProcessIdentity;
+        assert.strictEqual(processIdentity.isCandidate({
+            pid: 4321,
+            parentPid: 1234,
+            executable: '/repo/bin/Debug/net10.0/EvaluatedAppHost',
+            command: '/repo/bin/Debug/net10.0/EvaluatedAppHost --urls http://localhost:5000',
+        }), true);
+        assert.strictEqual(processIdentity.isCandidate({
+            pid: 4322,
+            parentPid: 1234,
+            executable: '/repo/bin/Debug/net10.0/EvaluatedAppHostWorker',
+            command: '/repo/bin/Debug/net10.0/EvaluatedAppHostWorker',
+        }), false);
+    });
+
+    test('attach configuration derives the default apphost identity from TargetPath', async () => {
+        const { dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/Api.dll', null, true, true);
+        const resolver = {
+            resolveProcessId: sinon.stub().resolves(4321),
+        };
+        const createAttachProvider = createProjectResourceAttachProvider as unknown as (
+            dotNetServiceProducer: () => TestDotNetService,
+            childProcessResolver: TestLaunchedChildProcessResolver,
+        ) => ResourceAttachProvider;
+        const attachProvider = createAttachProvider(() => dotNetService, resolver);
+
+        await attachProvider.createDebugConfiguration({
+            name: 'api',
+            displayName: 'API',
+            resourceType: 'Project',
+            state: 'Running',
+            properties: {
+                'executable.pid': 1234,
+                'executable.path': 'dotnet',
+                'project.path': '/repo/api/Api.csproj',
+            },
+        });
+
+        const processIdentity = resolver.resolveProcessId.firstCall.args[1] as TestLaunchedChildProcessIdentity;
+        assert.strictEqual(processIdentity.isCandidate({
+            pid: 4321,
+            parentPid: 1234,
+            executable: '/repo/bin/Debug/net10.0/Api',
+            command: '/repo/bin/Debug/net10.0/Api --urls http://localhost:5000',
+        }), true);
+        assert.strictEqual(processIdentity.isCandidate({
+            pid: 4322,
+            parentPid: 1234,
+            executable: '/repo/bin/Debug/net10.0/Api.dll',
+            command: '/repo/bin/Debug/net10.0/Api.dll',
+        }), false);
+    });
+
+    test('attach configuration scopes replicas with the same TargetPath to their launcher PIDs', async () => {
+        const { dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/Replica.dll', null, true, true);
+        const resolver = {
+            resolveProcessId: sinon.stub()
+                .onFirstCall().resolves(4321)
+                .onSecondCall().resolves(4322),
+        };
+        const createAttachProvider = createProjectResourceAttachProvider as unknown as (
+            dotNetServiceProducer: () => TestDotNetService,
+            childProcessResolver: TestLaunchedChildProcessResolver,
+        ) => ResourceAttachProvider;
+        const attachProvider = createAttachProvider(() => dotNetService, resolver);
+        const createResource = (pid: number): Parameters<ResourceAttachProvider['createDebugConfiguration']>[0] => ({
+            name: `api-${pid}`,
+            displayName: 'API',
+            resourceType: 'Project',
+            state: 'Running',
+            properties: {
+                'executable.pid': pid,
+                'executable.path': 'dotnet',
+                'project.path': '/repo/api/Api.csproj',
+            },
+        });
+
+        const firstConfiguration = await attachProvider.createDebugConfiguration(createResource(1234));
+        const secondConfiguration = await attachProvider.createDebugConfiguration(createResource(5678));
+
+        assert.strictEqual(firstConfiguration.processId, 4321);
+        assert.strictEqual(secondConfiguration.processId, 4322);
+        assert.deepStrictEqual(resolver.resolveProcessId.firstCall.args.slice(0, 1), [1234]);
+        assert.deepStrictEqual(resolver.resolveProcessId.secondCall.args.slice(0, 1), [5678]);
+    });
+
+    test('attach configuration fails closed for missing and ambiguous framework-dependent children', async () => {
+        const targetPath = '/repo/bin/Debug/net10.0/Api.dll';
+        const createProvider = (processes: readonly LaunchedChildProcess[]) => {
+            const dotNetService = new TestDotNetService(targetPath, null, true);
+            dotNetService.getDotNetAttachTargetInfoStub.resolves({ targetPath, useAppHost: false });
+            const resolver = new LaunchedChildProcessResolver(
+                new StaticLaunchedChildProcessQuery(processes),
+                immediateProcessClock,
+                { timeoutMs: 20, retryDelayMs: 10 });
+            return createProjectResourceAttachProvider(() => dotNetService, resolver);
+        };
+        const resource = {
+            name: 'api',
+            displayName: 'API',
+            resourceType: 'Project',
+            state: 'Running',
+            properties: {
+                'executable.pid': '1234',
+                'executable.path': 'dotnet',
+                'project.path': '/repo/api/Api.csproj',
+            },
+        };
+        const noChild = createProvider([
+            createLaunchedProcess(1234, 1, '/usr/local/share/dotnet/dotnet', 'dotnet run --project /repo/api/Api.csproj'),
+            createLaunchedProcess(4321, 1234, '/usr/local/share/dotnet/dotnet', 'dotnet exec /repo/bin/Debug/net10.0/Other.dll'),
+        ]);
+        const ambiguousChildren = createProvider([
+            createLaunchedProcess(1234, 1, '/usr/local/share/dotnet/dotnet', 'dotnet run --project /repo/api/Api.csproj'),
+            createLaunchedProcess(4321, 1234, '/usr/local/share/dotnet/dotnet', `dotnet exec ${targetPath}`),
+            createLaunchedProcess(4322, 1234, '/usr/local/share/dotnet/dotnet', `dotnet exec ${targetPath}`),
+        ]);
+
+        await assert.rejects(noChild.createDebugConfiguration(resource));
+        await assert.rejects(ambiguousChildren.createDebugConfiguration(resource));
+    });
+
+    test('attach configuration resolves same-name framework-dependent replicas within each launcher tree', async () => {
+        const targetPath = '/repo/bin/Debug/net10.0/Api.dll';
+        const { dotNetService } = createDebuggerExtension(targetPath, null, true, true);
+        dotNetService.getDotNetAttachTargetInfoStub.resolves({ targetPath, useAppHost: false });
+        const resolver = new LaunchedChildProcessResolver(
+            new StaticLaunchedChildProcessQuery([
+                createLaunchedProcess(1234, 1, '/usr/local/share/dotnet/dotnet', 'dotnet run --project /repo/api/Api.csproj'),
+                createLaunchedProcess(4321, 1234, '/usr/local/share/dotnet/dotnet', `dotnet exec ${targetPath}`),
+                createLaunchedProcess(5678, 1, '/usr/local/share/dotnet/dotnet', 'dotnet run --project /repo/api/Api.csproj'),
+                createLaunchedProcess(8765, 5678, '/usr/local/share/dotnet/dotnet', `dotnet exec ${targetPath}`),
+            ]),
+            immediateProcessClock,
+            { timeoutMs: 20, retryDelayMs: 10 });
+        const attachProvider = createProjectResourceAttachProvider(() => dotNetService, resolver);
+        const createResource = (pid: number): Parameters<ResourceAttachProvider['createDebugConfiguration']>[0] => ({
+            name: `api-${pid}`,
+            displayName: 'API',
+            resourceType: 'Project',
+            state: 'Running',
+            properties: {
+                'executable.pid': pid,
+                'executable.path': 'dotnet',
+                'project.path': '/repo/api/Api.csproj',
+            },
+        });
+
+        assert.strictEqual((await attachProvider.createDebugConfiguration(createResource(1234))).processId, 4321);
+        assert.strictEqual((await attachProvider.createDebugConfiguration(createResource(5678))).processId, 8765);
+    });
+
+    test('attach configuration uses the resolved project TargetPath child process ID', async () => {
         const { attachProvider, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/FromTargetPath.dll', null, true, true);
 
         const configuration = await attachProvider.createDebugConfiguration({
@@ -144,8 +429,8 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(configuration.type, 'coreclr');
         assert.strictEqual(configuration.request, 'attach');
         assert.strictEqual(configuration.name, 'Attach debugger: API');
-        assert.strictEqual(configuration.processId, undefined);
-        assert.strictEqual(configuration.processName, 'FromTargetPath');
+        assert.strictEqual(configuration.processId, 4321);
+        assert.strictEqual(configuration.processName, undefined);
         assert.ok(dotNetService.getDotNetAttachTargetInfoStub.calledOnceWithExactly('/repo/api/Api.csproj', undefined));
         assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
     });
@@ -166,7 +451,8 @@ suite('Dotnet Debugger Extension Tests', () => {
             },
         });
 
-        assert.strictEqual(configuration.processName, 'ReleaseApi');
+        assert.strictEqual(configuration.processId, 4321);
+        assert.strictEqual(configuration.processName, undefined);
         assert.ok(dotNetService.getDotNetAttachTargetInfoStub.calledOnceWithExactly('/repo/api/Api.csproj', 'Release'));
         assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
     });
@@ -303,7 +589,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         }
     });
 
-    test('attach configuration rejects projects launched without an apphost', async () => {
+    test('attach configuration supports framework-dependent projects', async () => {
         const dotNetService = new DotNetService(undefined);
         const msbuildProcess = createMsbuildProcess();
         const spawn = sinon.stub(childProcess, 'spawn').callsFake(() => {
@@ -318,25 +604,24 @@ suite('Dotnet Debugger Extension Tests', () => {
             });
             return msbuildProcess.process;
         });
-        const attachProvider = createProjectResourceAttachProvider(() => dotNetService);
+        const attachProvider = createProjectResourceAttachProvider(() => dotNetService, {
+            resolveProcessId: async () => 4321,
+        });
 
-        await assert.rejects(
-            attachProvider.createDebugConfiguration({
-                name: 'api',
-                displayName: 'API',
-                resourceType: 'Project',
-                state: 'Running',
-                properties: {
-                    'executable.pid': '1234',
-                    'executable.path': 'dotnet',
-                    'executable.args': ['run', '--project', '/repo/api/Api.csproj', '--configuration', 'Release', '--no-launch-profile'],
-                    'project.path': '/repo/api/Api.csproj',
-                },
-            }),
-            (error: unknown) => error instanceof Error
-                && error.name === 'ResourceAttachConfigurationError'
-                && (error as Error & { errorKind?: string }).errorKind === 'resourceNotAttachable');
+        const configuration = await attachProvider.createDebugConfiguration({
+            name: 'api',
+            displayName: 'API',
+            resourceType: 'Project',
+            state: 'Running',
+            properties: {
+                'executable.pid': '1234',
+                'executable.path': 'dotnet',
+                'executable.args': ['run', '--project', '/repo/api/Api.csproj', '--configuration', 'Release', '--no-launch-profile'],
+                'project.path': '/repo/api/Api.csproj',
+            },
+        });
 
+        assert.strictEqual(configuration.processId, 4321);
         assert.deepStrictEqual(spawn.firstCall.args[1], [
             'msbuild',
             '/repo/api/Api.csproj',
@@ -388,7 +673,8 @@ suite('Dotnet Debugger Extension Tests', () => {
             },
         });
 
-        assert.strictEqual(configuration.processName, 'FromTargetPath');
+        assert.strictEqual(configuration.processId, 4321);
+        assert.strictEqual(configuration.processName, undefined);
         assert.ok(dotNetService.getDotNetAttachTargetInfoStub.calledOnceWithExactly('/repo/api/Api.csproj', undefined));
         assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
     });

@@ -29,6 +29,12 @@ import { AspireDebugSession } from '../AspireDebugSession';
 import { createAspireCliPathProcessEnvironment } from '../../utils/cliPathEnvironment';
 import { getHotReloadDiagnostics, logHotReloadDiagnostics, showHotReloadDisabledAdvisoryIfNeeded } from '../hotReload';
 import { terminateCliProcess } from '../../utils/process/cliProcess';
+import {
+    getProcessCommandProgram,
+    launchedChildProcessResolver,
+    type LaunchedChildProcess,
+    type LaunchedChildProcessIdentity,
+} from '../launchedChildProcessDiscovery';
 
 interface IDotNetService {
     getAndActivateDevKit(): Promise<boolean>
@@ -45,8 +51,17 @@ interface DotNetAttachTargetInfo {
 
 interface DotNetAttachDebuggerResourceInfo {
     configuration?: string;
+    launcherPid: number;
     projectPath: string;
     resourceLabel: string;
+}
+
+interface LaunchedChildProcessResolver {
+    resolveProcessId(
+        launcherPid: number,
+        identity: LaunchedChildProcessIdentity,
+        cancellationToken?: vscode.CancellationToken,
+    ): Promise<number>;
 }
 
 const executableArgsPropertyName = 'executable.args';
@@ -559,13 +574,15 @@ function getDotNetAttachDebuggerResourceInfo(resource: ResourceDebugResourceSnap
         return undefined;
     }
 
-    if (getAttachDebuggerProcessId(resource) === undefined) {
+    const launcherPid = getAttachDebuggerProcessId(resource);
+    if (launcherPid === undefined) {
         return undefined;
     }
 
     const projectPath = resource.properties?.[projectPathPropertyName] as string;
     return {
         configuration: getDotNetLaunchConfiguration(resource),
+        launcherPid,
         projectPath,
         resourceLabel: resource.displayName ?? resource.name,
     };
@@ -670,9 +687,94 @@ function isDotNetExecutable(resource: ResourceDebugResourceSnapshot): boolean {
     return executableName === 'dotnet' || executableName === 'dotnet.exe';
 }
 
+function createDotNetProcessIdentity(targetInfo: DotNetAttachTargetInfo): LaunchedChildProcessIdentity {
+    return {
+        isLauncher: process => isDotNetProcess(process),
+        isCandidate: process => targetInfo.useAppHost
+            ? isAppHostProcessForTarget(process, targetInfo.targetPath)
+            : isFrameworkDependentProcessForTarget(process, targetInfo.targetPath),
+    };
+}
+
+function isDotNetProcess(process: LaunchedChildProcess): boolean {
+    const executableName = getProcessCommandProgram(process.command)?.split(/[\\/]/).pop()?.toLowerCase()
+        ?? process.executable.split(/[\\/]/).pop()?.toLowerCase();
+    return executableName === 'dotnet' || executableName === 'dotnet.exe';
+}
+
+function isAppHostProcessForTarget(process: LaunchedChildProcess, targetPath: string): boolean {
+    const [program] = parseProcessCommandArguments(process.command);
+    return getAppHostPaths(targetPath).some(appHostPath =>
+        areProcessPathsEqual(process.executable, appHostPath) ||
+        (program !== undefined && areProcessPathsEqual(program, appHostPath)));
+}
+
+function isFrameworkDependentProcessForTarget(process: LaunchedChildProcess, targetPath: string): boolean {
+    return isDotNetProcess(process) &&
+        parseProcessCommandArguments(process.command).some(argument => areProcessPathsEqual(argument, targetPath));
+}
+
+function areProcessPathsEqual(left: string, right: string): boolean {
+    const normalizedLeft = left.replace(/\\/g, '/');
+    const normalizedRight = right.replace(/\\/g, '/');
+    const isWindowsPath = /^[a-z]:\//i.test(normalizedLeft) || /^[a-z]:\//i.test(normalizedRight);
+    return isWindowsPath
+        ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+        : normalizedLeft === normalizedRight;
+}
+
+function getAppHostPaths(targetPath: string): readonly string[] {
+    if (path.extname(targetPath).toLowerCase() !== '.dll') {
+        return [targetPath];
+    }
+
+    const appHostPath = targetPath.slice(0, -'.dll'.length);
+    return [appHostPath, `${appHostPath}.exe`];
+}
+
+function parseProcessCommandArguments(command: string): readonly string[] {
+    const arguments_: string[] = [];
+    let currentArgument = '';
+    let quote: '"' | "'" | undefined;
+
+    // `ps` and CIM report command lines such as:
+    //   dotnet exec "/repo/bin/Debug/net10.0/Api.dll" --urls http://localhost:5000
+    // Keep only argument boundaries and quotes needed to identify the launched target; callers never
+    // receive this command text, which may contain application arguments.
+    for (const character of command) {
+        if (quote !== undefined) {
+            if (character === quote) {
+                quote = undefined;
+            }
+            else {
+                currentArgument += character;
+            }
+        }
+        else if (character === '"' || character === "'") {
+            quote = character;
+        }
+        else if (/\s/.test(character)) {
+            if (currentArgument.length > 0) {
+                arguments_.push(currentArgument);
+                currentArgument = '';
+            }
+        }
+        else {
+            currentArgument += character;
+        }
+    }
+
+    if (currentArgument.length > 0) {
+        arguments_.push(currentArgument);
+    }
+
+    return arguments_;
+}
+
 export async function createDotNetAttachDebugSessionConfiguration(
     resource: ResourceDebugResourceSnapshot,
     dotNetService: IDotNetService,
+    childProcessResolver: LaunchedChildProcessResolver,
     cancellationToken?: vscode.CancellationToken,
 ): Promise<vscode.DebugConfiguration> {
     const attachInfo = getDotNetAttachDebuggerResourceInfo(resource);
@@ -690,26 +792,30 @@ export async function createDotNetAttachDebugSessionConfiguration(
             error instanceof Error ? error.message : String(error));
     }
 
-    // Without an apphost, dotnet run starts the target DLL under another process named "dotnet".
-    // That name is not unique enough to identify this resource without introducing process-tree discovery.
-    if (!targetInfo.useAppHost) {
+    let applicationPid: number;
+    try {
+        applicationPid = await childProcessResolver.resolveProcessId(
+            attachInfo.launcherPid,
+            createDotNetProcessIdentity(targetInfo),
+            cancellationToken);
+    }
+    catch (error) {
+        if (error instanceof vscode.CancellationError || cancellationToken?.isCancellationRequested) {
+            throw new vscode.CancellationError();
+        }
+
         throw new ResourceAttachConfigurationError('resourceNotAttachable', attachDebuggerUnavailable);
     }
 
-    // `executable.pid` is the DCP launcher (`dotnet run`), not necessarily the managed
-    // application process. Apphost-backed projects have a unique process name derived from
-    // TargetPath, which the C# debugger can select without a second process-discovery subsystem.
-    const fileName = targetInfo.targetPath.split(/[\\/]/).pop() ?? '';
-    const processName = fileName.replace(/\.(dll|exe)$/i, '');
-    if (processName.length === 0) {
-        throw new ResourceAttachConfigurationError('resourceNotAttachable', noOutputFromMsbuild);
+    if (!Number.isInteger(applicationPid) || applicationPid <= 0) {
+        throw new ResourceAttachConfigurationError('resourceNotAttachable', attachDebuggerUnavailable);
     }
 
     return {
         type: 'coreclr',
         request: 'attach',
         name: attachDebuggerConfigurationName(attachInfo.resourceLabel),
-        processName,
+        processId: applicationPid,
     };
 }
 
@@ -954,7 +1060,10 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
 
 export const projectDebuggerExtension: ResourceDebuggerExtension = createProjectDebuggerExtension(debugSession => new DotNetService(debugSession));
 
-export function createProjectResourceAttachProvider(dotNetServiceProducer: () => IDotNetService): ResourceAttachProvider {
+export function createProjectResourceAttachProvider(
+    dotNetServiceProducer: () => IDotNetService,
+    childProcessResolver: LaunchedChildProcessResolver = launchedChildProcessResolver,
+): ResourceAttachProvider {
     return {
         id: 'dotnet',
         requiredDebuggerExtensions: [{
@@ -964,7 +1073,7 @@ export function createProjectResourceAttachProvider(dotNetServiceProducer: () =>
         canRecognizeResource: resource => canRecognizeDotNetAttachDebuggerResource(resource),
         canAttachToResource: resource => getDotNetAttachDebuggerResourceInfo(resource) !== undefined,
         createDebugConfiguration: async (resource, cancellationToken) =>
-            await createDotNetAttachDebugSessionConfiguration(resource, dotNetServiceProducer(), cancellationToken),
+            await createDotNetAttachDebugSessionConfiguration(resource, dotNetServiceProducer(), childProcessResolver, cancellationToken),
     };
 }
 
