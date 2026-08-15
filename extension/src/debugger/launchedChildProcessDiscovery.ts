@@ -8,7 +8,6 @@ export interface LaunchedChildProcess {
     readonly executable: string;
     readonly command: string;
     readonly commandLineArguments?: readonly string[];
-    readonly hasCompleteIdentity?: boolean;
 }
 
 export interface LaunchedChildProcessQuery {
@@ -88,14 +87,11 @@ export function parseWindowsProcessList(output: string): readonly LaunchedChildP
 
         const values = row as Record<string, unknown>;
         const executablePath = getNonEmptyString(values.ExecutablePath);
-        const commandLine = getNonEmptyString(values.CommandLine);
         const process = createProcessInfo(
             values.ProcessId,
             values.ParentProcessId,
             executablePath ?? values.Name,
-            commandLine,
-            undefined,
-            executablePath !== undefined && commandLine !== undefined);
+            values.CommandLine);
         if (process) {
             processes.push(process);
         }
@@ -325,7 +321,8 @@ export class LaunchedChildProcessResolver {
             (!requireFresh &&
                 this._processQuery.canTrustListedProcessIdentity === true &&
                 topologyProcess !== undefined &&
-                topologyProcess.hasCompleteIdentity === true)) {
+                topologyProcess.executable.length > 0 &&
+                topologyProcess.command.length > 0)) {
             return topologyProcess;
         }
 
@@ -551,7 +548,6 @@ function createProcessInfo(
     executableValue: unknown,
     commandValue: unknown,
     commandLineArguments?: readonly string[],
-    hasCompleteIdentity?: boolean,
 ): LaunchedChildProcess | undefined {
     const pid = parsePid(pidValue);
     const parentPid = parseParentPid(parentPidValue);
@@ -561,22 +557,13 @@ function createProcessInfo(
         return undefined;
     }
 
-    const process: LaunchedChildProcess = {
+    return {
         pid,
         parentPid,
         executable,
-        command: command.length > 0 ? command : executable,
+        command,
         ...(commandLineArguments ? { commandLineArguments } : {}),
     };
-    if (hasCompleteIdentity !== undefined) {
-        // This is resolver bookkeeping rather than process identity exposed to callers. Keep it
-        // non-enumerable so adding the marker does not change the parsed process value shape.
-        Object.defineProperty(process, 'hasCompleteIdentity', {
-            value: hasCompleteIdentity,
-        });
-    }
-
-    return process;
 }
 
 function parseLinuxCommandLine(commandLine: Buffer): readonly string[] {

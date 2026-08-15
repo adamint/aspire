@@ -66,18 +66,6 @@ function process(
     };
 }
 
-function listedProcess(
-    pid: number,
-    parentPid: number,
-    executable: string,
-    command = executable,
-): LaunchedChildProcess {
-    return {
-        ...process(pid, parentPid, executable, command),
-        hasCompleteIdentity: executable.trim().length > 0 && command.trim().length > 0,
-    };
-}
-
 function createCommandProcess(): childProcess.ChildProcessWithoutNullStreams {
     const child = new EventEmitter() as childProcess.ChildProcessWithoutNullStreams;
     const stdout = Object.assign(new EventEmitter(), { setEncoding: () => { } });
@@ -132,10 +120,24 @@ suite('Launched child process discovery', () => {
         assert.deepStrictEqual(processes, [
             process(42, 10, 'C:\\target\\api.exe', 'C:\\target\\api.exe'),
         ]);
-        assert.strictEqual(processes.length, 1);
-        const parsedProcess = processes[0];
-        assert.strictEqual(parsedProcess.hasCompleteIdentity, true);
-        assert.strictEqual(Object.keys(parsedProcess).includes('hasCompleteIdentity'), false);
+        assert.deepStrictEqual(Object.keys(processes[0]), [
+            'pid',
+            'parentPid',
+            'executable',
+            'command',
+        ]);
+    });
+
+    test('preserves an empty command for incomplete Windows CIM process listings', () => {
+        assert.deepStrictEqual(parseWindowsProcessList(JSON.stringify({
+            ProcessId: 42,
+            ParentProcessId: 10,
+            Name: 'api.exe',
+            ExecutablePath: 'C:\\target\\api.exe',
+            CommandLine: null,
+        })), [
+            process(42, 10, 'C:\\target\\api.exe', ''),
+        ]);
     });
 
     test('trusts listed process identity only on Windows', () => {
@@ -175,7 +177,7 @@ suite('Launched child process discovery', () => {
                         ProcessId: 10,
                         ParentProcessId: 1,
                         Name: 'launcher.exe',
-                        ExecutablePath: null,
+                        ExecutablePath: 'C:\\tool\\launcher.exe',
                         CommandLine: '"C:\\tool\\launcher.exe" --run',
                     },
                     {
@@ -203,7 +205,7 @@ suite('Launched child process discovery', () => {
         };
 
         assert.strictEqual(await resolver.resolveProcessId(10, windowsIdentity), 42);
-        assert.deepStrictEqual(targetedProcessReads, [10, 42, 10, 42, 42]);
+        assert.deepStrictEqual(targetedProcessReads, [42, 42, 42]);
     });
 
     test('parses UTF-8 BOM-prefixed Windows CIM output with non-ASCII command text', () => {
@@ -652,8 +654,8 @@ suite('Launched child process discovery', () => {
         const query: LaunchedChildProcessQuery = {
             canTrustListedProcessIdentity: true,
             listProcesses: async () => [
-                listedProcess(10, 1, '/tool/launcher'),
-                listedProcess(42, 10, '/target/api'),
+                process(10, 1, '/tool/launcher', '/tool/launcher'),
+                process(42, 10, '/target/api', '/target/api'),
             ],
             getProcess,
         };
@@ -678,15 +680,15 @@ suite('Launched child process discovery', () => {
         const cases = [
             {
                 processes: [
-                    listedProcess(10, 1, '/tool/launcher', ''),
-                    listedProcess(42, 10, '/target/api'),
+                    process(10, 1, '/tool/launcher', ''),
+                    process(42, 10, '/target/api', '/target/api'),
                 ],
                 expectedProcessReads: [10, 10, 42],
             },
             {
                 processes: [
-                    listedProcess(10, 1, '/tool/launcher'),
-                    listedProcess(42, 10, '', '/target/api'),
+                    process(10, 1, '/tool/launcher', '/tool/launcher'),
+                    process(42, 10, '', '/target/api'),
                 ],
                 expectedProcessReads: [42, 42, 42],
             },
@@ -729,8 +731,8 @@ suite('Launched child process discovery', () => {
             const query: LaunchedChildProcessQuery = {
                 canTrustListedProcessIdentity: true,
                 listProcesses: async () => [
-                    listedProcess(10, 1, '/tool/launcher'),
-                    listedProcess(42, 10, '/target/api'),
+                    process(10, 1, '/tool/launcher', '/tool/launcher'),
+                    process(42, 10, '/target/api', '/target/api'),
                 ],
                 getProcess: async () => finalCandidate,
             };
@@ -754,8 +756,8 @@ suite('Launched child process discovery', () => {
         const query: LaunchedChildProcessQuery = {
             canTrustListedProcessIdentity: true,
             listProcesses: async () => [
-                listedProcess(10, 1, '/tool/launcher'),
-                listedProcess(42, 10, '/target/api'),
+                process(10, 1, '/tool/launcher', '/tool/launcher'),
+                process(42, 10, '/target/api', '/target/api'),
             ],
             getProcess: async () => {
                 now = 21;
@@ -783,9 +785,9 @@ suite('Launched child process discovery', () => {
         const query: LaunchedChildProcessQuery = {
             canTrustListedProcessIdentity: true,
             listProcesses: async () => [
-                listedProcess(10, 1, '/tool/launcher'),
-                listedProcess(22, 10, '/tool/intermediate'),
-                listedProcess(42, 22, '/target/api'),
+                process(10, 1, '/tool/launcher', '/tool/launcher'),
+                process(22, 10, '/tool/intermediate', '/tool/intermediate'),
+                process(42, 22, '/target/api', '/target/api'),
             ],
             getProcess,
         };
@@ -802,9 +804,9 @@ suite('Launched child process discovery', () => {
         const query: LaunchedChildProcessQuery = {
             canTrustListedProcessIdentity: true,
             listProcesses: async () => [
-                listedProcess(10, 1, '/tool/launcher'),
-                listedProcess(22, 10, '/tool/intermediate'),
-                listedProcess(42, 22, '/target/api'),
+                process(10, 1, '/tool/launcher', '/tool/launcher'),
+                process(22, 10, '/tool/intermediate', '/tool/intermediate'),
+                process(42, 22, '/target/api', '/target/api'),
             ],
             getProcess: async processId => new Map([
                 [10, process(10, 1, '/tool/other')],
@@ -824,9 +826,9 @@ suite('Launched child process discovery', () => {
         const query: LaunchedChildProcessQuery = {
             canTrustListedProcessIdentity: true,
             listProcesses: async () => [
-                listedProcess(10, 1, '/tool/launcher'),
-                listedProcess(22, 10, '/tool/intermediate'),
-                listedProcess(42, 22, '/target/api'),
+                process(10, 1, '/tool/launcher', '/tool/launcher'),
+                process(22, 10, '/tool/intermediate', '/tool/intermediate'),
+                process(42, 22, '/target/api', '/target/api'),
             ],
             getProcess: async processId => new Map([
                 [10, process(10, 1, '/tool/launcher')],
