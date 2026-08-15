@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Collections.Concurrent;
+using System.Threading.Channels;
 
 namespace Aspire.Cli.Backchannel;
 
@@ -13,6 +14,8 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
 {
     private readonly IAppHostAuxiliaryBackchannel _connection;
     private readonly ConcurrentDictionary<string, ResourceSnapshot> _resources = new(StringComparers.ResourceName);
+    private readonly Channel<ResourceSnapshot> _updates = Channel.CreateUnbounded<ResourceSnapshot>(
+        new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
     private readonly CancellationTokenSource _cts = new();
     private readonly TaskCompletionSource _initialLoadTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Task _watchTask;
@@ -55,10 +58,12 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
 
             _initialLoadTcs.TrySetResult();
             await watchTask.ConfigureAwait(false);
+            _updates.Writer.TryComplete();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             _initialLoadTcs.TrySetCanceled(cancellationToken);
+            _updates.Writer.TryComplete();
         }
         catch (Exception ex)
         {
@@ -67,6 +72,7 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
                 // Initial load already completed; store for callers to detect.
                 _watchException = ex;
             }
+            _updates.Writer.TryComplete(ex);
         }
     }
 
@@ -75,7 +81,19 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
         await foreach (var snapshot in _connection.WatchResourceSnapshotsAsync(includeHidden: true, cancellationToken).ConfigureAwait(false))
         {
             _resources[snapshot.Name] = snapshot;
+            _updates.Writer.TryWrite(snapshot);
         }
+    }
+
+    /// <summary>
+    /// Streams updates from the same subscription that maintains the current resource collection.
+    /// Callers should emit <see cref="GetAllResources"/> after the initial load before consuming
+    /// updates. Any update already represented by that snapshot can be deduplicated by the caller.
+    /// </summary>
+    public IAsyncEnumerable<ResourceSnapshot> WatchResourceSnapshotsAsync(CancellationToken cancellationToken = default)
+    {
+        EnsureInitialLoadComplete();
+        return _updates.Reader.ReadAllAsync(cancellationToken);
     }
 
     /// <summary>

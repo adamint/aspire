@@ -161,7 +161,7 @@ internal sealed class DescribeCommand : BaseCommand
         {
             try
             {
-                return CommandResult.FromExitCode(await ExecuteWatchAsync(connection, resourceWatcher, dashboardBaseUrl, resourceName, format, includeDisabledCommands, cancellationToken));
+                return CommandResult.FromExitCode(await ExecuteWatchAsync(resourceWatcher, dashboardBaseUrl, resourceName, format, includeDisabledCommands, cancellationToken));
             }
             catch (OperationCanceledException ex) when (ex.CancellationToken == cancellationToken || cancellationToken.IsCancellationRequested)
             {
@@ -221,7 +221,7 @@ internal sealed class DescribeCommand : BaseCommand
         return CliExitCodes.Success;
     }
 
-    private async Task<int> ExecuteWatchAsync(IAppHostAuxiliaryBackchannel connection, ResourceSnapshotWatcher resourceWatcher, string? dashboardBaseUrl, string? resourceName, OutputFormat format, bool includeDisabledCommands, CancellationToken cancellationToken)
+    private async Task<int> ExecuteWatchAsync(ResourceSnapshotWatcher resourceWatcher, string? dashboardBaseUrl, string? resourceName, OutputFormat format, bool includeDisabledCommands, CancellationToken cancellationToken)
     {
         // Cache the last displayed content per resource to avoid duplicate output.
         // Values are either a string (JSON mode) or a ResourceDisplayState (non-JSON mode).
@@ -283,7 +283,7 @@ internal sealed class DescribeCommand : BaseCommand
 
         // Stream resource snapshots. The watcher keeps its dictionary up to date in the
         // background, so we use it for relationship resolution and display name deduplication.
-        await foreach (var snapshot in connection.WatchResourceSnapshotsAsync(includeHidden: true, cancellationToken).ConfigureAwait(false))
+        await foreach (var snapshot in resourceWatcher.WatchResourceSnapshotsAsync(cancellationToken).ConfigureAwait(false))
         {
             var currentSnapshots = resourceWatcher.GetAllResources().ToList();
             DisplaySnapshot(snapshot, currentSnapshots);
