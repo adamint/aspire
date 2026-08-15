@@ -107,13 +107,12 @@ export interface DebugSessionStatusToolInput {
     readonly resourceName?: string;
 }
 
-export interface ExplainLaunchFailureToolInput {
+interface AppHostPathOnlyInput {
     readonly appHostPath: string;
 }
 
-export interface OpenDashboardToolInput {
-    readonly appHostPath: string;
-}
+export type ExplainLaunchFailureToolInput = AppHostPathOnlyInput;
+export type OpenDashboardToolInput = AppHostPathOnlyInput;
 
 export type OpenOutputToolInput = Record<string, never>;
 export type ListDebugSessionsToolInput = Record<string, never>;
@@ -307,12 +306,7 @@ export function isValidDebugSessionStatusInput(value: unknown): value is DebugSe
         !identityChangingCharacters.test(value.resourceName);
 }
 
-export function isValidExplainLaunchFailureInput(value: unknown): value is ExplainLaunchFailureToolInput {
-    return hasOnlyAllowedProperties(value, ['appHostPath']) &&
-        typeof value.appHostPath === 'string';
-}
-
-export function isValidOpenDashboardInput(value: unknown): value is OpenDashboardToolInput {
+export function isValidAppHostPathOnlyInput(value: unknown): value is AppHostPathOnlyInput {
     return hasOnlyAllowedProperties(value, ['appHostPath']) &&
         typeof value.appHostPath === 'string';
 }

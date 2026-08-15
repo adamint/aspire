@@ -12,8 +12,133 @@ import {
     EditorAssistanceTelemetry,
     type EditorAssistanceTelemetryEvent,
 } from '../lm/editorAssistanceTelemetry';
+import {
+    launchFailureCategories,
+    launchFailureControllers,
+    launchFailureExitCodeBuckets,
+    launchFailureModes,
+    launchFailureProviderKinds,
+    launchFailureStages,
+    normalizeLaunchFailure,
+    type LaunchFailureExitCodeBucket,
+    type LaunchFailureInput,
+    type SanitizedLaunchFailure,
+} from '../services/launchFailureJournal';
 
 suite('editor assistance telemetry', () => {
+    test('accepts every normalized bounded launch failure value and bounds unknown values', async () => {
+        const events: EditorAssistanceTelemetryEvent[] = [];
+        let now = 0;
+        const telemetry = new EditorAssistanceTelemetry({
+            clock: { now: () => now++ },
+            sendEvent: (eventName, properties, measurements) => {
+                events.push({ eventName, properties, measurements });
+            },
+        });
+        const baseInput = {
+            stage: 'debugSession',
+            category: 'unknown',
+            controller: 'editor',
+            mode: 'other',
+            providerKind: 'other',
+        } satisfies LaunchFailureInput;
+
+        for (const stage of launchFailureStages) {
+            await assertNormalizedFailureIsProjected(telemetry, events, normalizeLaunchFailure({
+                ...baseInput,
+                stage,
+            }));
+        }
+        for (const category of launchFailureCategories) {
+            await assertNormalizedFailureIsProjected(telemetry, events, normalizeLaunchFailure({
+                ...baseInput,
+                category,
+            }));
+        }
+        for (const controller of launchFailureControllers) {
+            await assertNormalizedFailureIsProjected(telemetry, events, normalizeLaunchFailure({
+                ...baseInput,
+                controller,
+            }));
+        }
+        for (const mode of launchFailureModes) {
+            await assertNormalizedFailureIsProjected(telemetry, events, normalizeLaunchFailure({
+                ...baseInput,
+                mode,
+            }));
+        }
+        for (const providerKind of launchFailureProviderKinds) {
+            await assertNormalizedFailureIsProjected(telemetry, events, normalizeLaunchFailure({
+                ...baseInput,
+                providerKind,
+            }));
+        }
+
+        const exitCodeInputs: Record<LaunchFailureExitCodeBucket, Partial<LaunchFailureInput>> = {
+            none: {},
+            zero: { exitCode: 0 },
+            one: { exitCode: 1 },
+            signal: { signal: 'SIGTERM' },
+            other: { exitCode: 2 },
+        };
+        for (const exitCodeBucket of launchFailureExitCodeBuckets) {
+            await assertNormalizedFailureIsProjected(telemetry, events, normalizeLaunchFailure({
+                ...baseInput,
+                ...exitCodeInputs[exitCodeBucket],
+            }));
+        }
+
+        const unknownValues = [
+            'private-stage',
+            'private-category',
+            'private-controller',
+            'private-mode',
+            'private-provider',
+            'private-exit-code',
+            'private-outcome',
+        ];
+        await telemetry.capture(aspireExplainLaunchFailureToolName, async () => ({
+            success: true,
+            tool: aspireExplainLaunchFailureToolName,
+            outcome: 'failureFound',
+            appHost: 'AppHost/AppHost.csproj',
+            stage: unknownValues[0],
+            category: unknownValues[1],
+            controller: unknownValues[2],
+            mode: unknownValues[3],
+            providerKind: unknownValues[4],
+            exitCodeBucket: unknownValues[5],
+            recommendedActions: [],
+        } as unknown as EditorAssistanceToolResult));
+        await telemetry.capture(aspireExplainLaunchFailureToolName, async () => ({
+            success: false,
+            tool: aspireExplainLaunchFailureToolName,
+            outcome: unknownValues[6],
+        } as unknown as EditorAssistanceToolResult));
+
+        assert.deepStrictEqual(events.slice(-2), [
+            {
+                eventName: 'aspire/vscode/editorassistance/result',
+                properties: {
+                    tool: aspireExplainLaunchFailureToolName,
+                    outcome: 'failureFound',
+                    source: 'languageModelTool',
+                },
+                measurements: { duration_ms: 1 },
+            },
+            {
+                eventName: 'aspire/vscode/editorassistance/result',
+                properties: {
+                    tool: aspireExplainLaunchFailureToolName,
+                    outcome: 'error',
+                    source: 'languageModelTool',
+                },
+                measurements: { duration_ms: 1 },
+            },
+        ]);
+        assertTelemetryOmits(events.slice(-2), unknownValues);
+    });
+
     test('records bounded status fields without AppHost or resource input', async () => {
         const events: EditorAssistanceTelemetryEvent[] = [];
         const telemetry = createTelemetry([100, 137], events);
@@ -273,6 +398,36 @@ function createTelemetry(
         sendEvent: (eventName, properties, measurements) => {
             events.push({ eventName, properties, measurements });
         },
+    });
+}
+
+async function assertNormalizedFailureIsProjected(
+    telemetry: EditorAssistanceTelemetry,
+    events: EditorAssistanceTelemetryEvent[],
+    failure: SanitizedLaunchFailure): Promise<void> {
+    await telemetry.capture(aspireExplainLaunchFailureToolName, async () => ({
+        success: true,
+        tool: aspireExplainLaunchFailureToolName,
+        outcome: 'failureFound',
+        appHost: 'AppHost/AppHost.csproj',
+        ...failure,
+        recommendedActions: [],
+    }));
+
+    assert.deepStrictEqual(events.at(-1), {
+        eventName: 'aspire/vscode/editorassistance/result',
+        properties: {
+            tool: aspireExplainLaunchFailureToolName,
+            outcome: 'failureFound',
+            source: 'languageModelTool',
+            controller: failure.controller,
+            mode: failure.mode,
+            stage: failure.stage,
+            category: failure.category,
+            provider_kind: failure.providerKind,
+            exit_code_bucket: failure.exitCodeBucket,
+        },
+        measurements: { duration_ms: 1 },
     });
 }
 

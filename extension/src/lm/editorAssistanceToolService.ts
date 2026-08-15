@@ -12,10 +12,9 @@ import {
     aspireListDebugSessionsToolName,
     aspireOpenDashboardToolName,
     aspireOpenOutputToolName,
+    isValidAppHostPathOnlyInput,
     isValidEmptyObjectInput,
     isValidDebugSessionStatusInput,
-    isValidExplainLaunchFailureInput,
-    isValidOpenDashboardInput,
     type DebugSessionStatusFailureResult,
     type DebugSessionStatusResourceFailureResult,
     type DebugSessionStatusResult,
@@ -68,7 +67,7 @@ export class EditorAssistanceToolService {
         const preflight = await this.preflight(
             input,
             token,
-            isValidOpenDashboardInput,
+            isValidAppHostPathOnlyInput,
             aspireOpenDashboardToolName);
         if (!preflight.resolved) {
             return createOpenDashboardFailure(preflight.outcome);
@@ -264,7 +263,7 @@ export class EditorAssistanceToolService {
         const preflight = await this.preflight(
             input,
             token,
-            isValidExplainLaunchFailureInput,
+            isValidAppHostPathOnlyInput,
             aspireExplainLaunchFailureToolName);
         if (!preflight.resolved) {
             return createExplainFailure(preflight.outcome);

@@ -6,43 +6,55 @@ import {
     type EventProperties,
 } from '../utils/telemetry';
 
-export type LaunchFailureStage =
-    | 'discovery'
-    | 'validation'
-    | 'cliLaunch'
-    | 'build'
-    | 'dcpStartup'
-    | 'debugSession'
-    | 'dashboard';
+export const launchFailureStages = [
+    'discovery',
+    'validation',
+    'cliLaunch',
+    'build',
+    'dcpStartup',
+    'debugSession',
+    'dashboard',
+] as const;
+export type LaunchFailureStage = typeof launchFailureStages[number];
 
-export type LaunchFailureCategory =
-    | 'invalidConfiguration'
-    | 'missingDependency'
-    | 'cliUnavailable'
-    | 'buildFailed'
-    | 'processExited'
-    | 'timeout'
-    | 'portConflict'
-    | 'permissionDenied'
-    | 'unsupported'
-    | 'canceled'
-    | 'unknown';
+export const launchFailureCategories = [
+    'invalidConfiguration',
+    'missingDependency',
+    'cliUnavailable',
+    'buildFailed',
+    'processExited',
+    'timeout',
+    'portConflict',
+    'permissionDenied',
+    'unsupported',
+    'canceled',
+    'unknown',
+] as const;
+export type LaunchFailureCategory = typeof launchFailureCategories[number];
 
-export type LaunchFailureController = 'editor' | 'cli';
-export type LaunchFailureMode = 'run' | 'debug' | 'deploy' | 'publish' | 'other';
-export type LaunchFailureProviderKind =
-    | 'dotnet'
-    | 'node'
-    | 'python'
-    | 'java'
-    | 'go'
-    | 'rust'
-    | 'maui'
-    | 'azureFunctions'
-    | 'browser'
-    | 'bun'
-    | 'other';
-export type LaunchFailureExitCodeBucket = 'none' | 'zero' | 'one' | 'signal' | 'other';
+export const launchFailureControllers = ['editor', 'cli'] as const;
+export type LaunchFailureController = typeof launchFailureControllers[number];
+
+export const launchFailureModes = ['run', 'debug', 'deploy', 'publish', 'other'] as const;
+export type LaunchFailureMode = typeof launchFailureModes[number];
+
+export const launchFailureProviderKinds = [
+    'dotnet',
+    'node',
+    'python',
+    'java',
+    'go',
+    'rust',
+    'maui',
+    'azureFunctions',
+    'browser',
+    'bun',
+    'other',
+] as const;
+export type LaunchFailureProviderKind = typeof launchFailureProviderKinds[number];
+
+export const launchFailureExitCodeBuckets = ['none', 'zero', 'one', 'signal', 'other'] as const;
+export type LaunchFailureExitCodeBucket = typeof launchFailureExitCodeBuckets[number];
 
 export interface SanitizedLaunchFailure {
     readonly stage: LaunchFailureStage;
@@ -99,56 +111,30 @@ const maxFailuresPerAppHost = 5;
 const maxFailuresGlobally = 50;
 const opaqueAppHostIdentityPattern = /^apphost-[1-9]\d*$/;
 
-const stages = new Set<LaunchFailureStage>([
-    'discovery',
-    'validation',
-    'cliLaunch',
-    'build',
-    'dcpStartup',
-    'debugSession',
-    'dashboard',
-]);
-const categories = new Set<LaunchFailureCategory>([
-    'invalidConfiguration',
-    'missingDependency',
-    'cliUnavailable',
-    'buildFailed',
-    'processExited',
-    'timeout',
-    'portConflict',
-    'permissionDenied',
-    'unsupported',
-    'canceled',
-    'unknown',
-]);
-const controllers = new Set<LaunchFailureController>(['editor', 'cli']);
-const modes = new Set<LaunchFailureMode>(['run', 'debug', 'deploy', 'publish', 'other']);
-const exitCodeBuckets = new Set<LaunchFailureExitCodeBucket>(['none', 'zero', 'one', 'signal', 'other']);
+const stages = new Set<LaunchFailureStage>(launchFailureStages);
+const categories = new Set<LaunchFailureCategory>(launchFailureCategories);
+const controllers = new Set<LaunchFailureController>(launchFailureControllers);
+const modes = new Set<LaunchFailureMode>(launchFailureModes);
+const exitCodeBuckets = new Set<LaunchFailureExitCodeBucket>(launchFailureExitCodeBuckets);
 
-const providerKindByAlias = new Map<string, LaunchFailureProviderKind>([
-    ['dotnet', 'dotnet'],
+const providerKindAliases: readonly (readonly [string, LaunchFailureProviderKind])[] = [
     ['project', 'dotnet'],
     ['coreclr', 'dotnet'],
     ['clr', 'dotnet'],
-    ['node', 'node'],
     ['pwa-node', 'node'],
-    ['python', 'python'],
     ['debugpy', 'python'],
-    ['java', 'java'],
-    ['go', 'go'],
-    ['rust', 'rust'],
     ['lldb', 'rust'],
     ['cppdbg', 'rust'],
     ['cppvsdbg', 'rust'],
-    ['maui', 'maui'],
     ['azure-functions', 'azureFunctions'],
-    ['azurefunctions', 'azureFunctions'],
-    ['browser', 'browser'],
     ['pwa-chrome', 'browser'],
     ['pwa-msedge', 'browser'],
     ['firefox', 'browser'],
-    ['bun', 'bun'],
-    ['other', 'other'],
+];
+const providerKindByAlias = new Map<string, LaunchFailureProviderKind>([
+    ...launchFailureProviderKinds.map(providerKind =>
+        [providerKind.toLowerCase(), providerKind] as const),
+    ...providerKindAliases,
 ]);
 
 /**

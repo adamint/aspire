@@ -26,6 +26,7 @@ import {
     aspireListDebugSessionsToolName,
     aspireOpenDashboardToolName,
     aspireOpenOutputToolName,
+    isValidAppHostPathOnlyInput,
     type EditorAssistanceResourceRepository,
     type EditorAssistanceToolResult,
     type EditorUiHandoffDebugSession,
@@ -348,6 +349,25 @@ suite('Editor assistance AppHost services', () => {
             launchService,
             targetResolver: resolver,
         });
+    });
+
+    test('strictly validates shared AppHost-path-only inputs', () => {
+        assert.strictEqual(isValidAppHostPathOnlyInput({
+            appHostPath: 'AppHost/AppHost.csproj',
+        }), true);
+        assert.strictEqual(isValidAppHostPathOnlyInput({
+            appHostPath: '',
+        }), true);
+
+        for (const input of [
+            {},
+            { appHostPath: undefined },
+            null,
+            [],
+            { appHostPath: 'AppHost/AppHost.csproj', extra: true },
+        ]) {
+            assert.strictEqual(isValidAppHostPathOnlyInput(input), false);
+        }
     });
 
     suite('Editor assistance language model tools', () => {

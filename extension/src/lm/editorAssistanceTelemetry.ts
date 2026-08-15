@@ -10,6 +10,14 @@ import {
     type EventMeasurements,
     type EventProperties,
 } from '../utils/telemetry';
+import {
+    launchFailureCategories,
+    launchFailureControllers,
+    launchFailureExitCodeBuckets,
+    launchFailureModes,
+    launchFailureProviderKinds,
+    launchFailureStages,
+} from '../services/launchFailureJournal';
 
 const editorAssistanceResultEventName = 'aspire/vscode/editorassistance/result' as const;
 
@@ -96,44 +104,12 @@ const statusStateBuckets = new Set([
     'multipleSessions',
 ]);
 const scopes = new Set(['appHost', 'resource']);
-const controllers = new Set(['editor', 'cli']);
-const modes = new Set(['run', 'debug', 'deploy', 'publish', 'other']);
-const launchFailureStages = new Set([
-    'discovery',
-    'validation',
-    'cliLaunch',
-    'build',
-    'dcpStartup',
-    'debugSession',
-    'dashboard',
-]);
-const launchFailureCategories = new Set([
-    'invalidConfiguration',
-    'missingDependency',
-    'cliUnavailable',
-    'buildFailed',
-    'processExited',
-    'timeout',
-    'portConflict',
-    'permissionDenied',
-    'unsupported',
-    'canceled',
-    'unknown',
-]);
-const providerKinds = new Set([
-    'dotnet',
-    'node',
-    'python',
-    'java',
-    'go',
-    'rust',
-    'maui',
-    'azureFunctions',
-    'browser',
-    'bun',
-    'other',
-]);
-const exitCodeBuckets = new Set(['none', 'zero', 'one', 'signal', 'other']);
+const controllers = new Set(launchFailureControllers);
+const modes = new Set(launchFailureModes);
+const launchFailureStageSet = new Set(launchFailureStages);
+const launchFailureCategorySet = new Set(launchFailureCategories);
+const providerKinds = new Set(launchFailureProviderKinds);
+const exitCodeBuckets = new Set(launchFailureExitCodeBuckets);
 const dashboardPresentations = new Set([
     'integratedBrowser',
     'externalBrowser',
@@ -194,8 +170,8 @@ export class EditorAssistanceTelemetry {
         else if (tool === aspireExplainLaunchFailureToolName && result?.outcome === 'failureFound') {
             copyIfBounded(properties, 'controller', result, 'controller', controllers);
             copyIfBounded(properties, 'mode', result, 'mode', modes);
-            copyIfBounded(properties, 'stage', result, 'stage', launchFailureStages);
-            copyIfBounded(properties, 'category', result, 'category', launchFailureCategories);
+            copyIfBounded(properties, 'stage', result, 'stage', launchFailureStageSet);
+            copyIfBounded(properties, 'category', result, 'category', launchFailureCategorySet);
             copyIfBounded(properties, 'provider_kind', result, 'providerKind', providerKinds);
             copyIfBounded(properties, 'exit_code_bucket', result, 'exitCodeBucket', exitCodeBuckets);
         }
