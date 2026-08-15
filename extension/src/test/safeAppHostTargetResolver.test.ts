@@ -256,6 +256,25 @@ suite('Editor assistance AppHost services', () => {
             assert.deepStrictEqual(knownTargets.map(target => target.displayPath), ['AppHost/AppHost.csproj']);
         });
 
+        test('enumerates and resolves workspace child paths whose names begin with two dots', async () => {
+            const dottedAppHost = path.join(workspaceRoot, '..app', 'AppHost.csproj');
+            fs.mkdirSync(path.dirname(dottedAppHost), { recursive: true });
+            fs.writeFileSync(dottedAppHost, appHostProjectContents);
+            addCandidate(discoveryService, workspaceRoot, dottedAppHost);
+
+            const token = new vscode.CancellationTokenSource().token;
+            const knownTargets = await resolver.enumerateKnownAppHosts(token);
+            const resolution = await resolver.resolveTarget('..app/AppHost.csproj', token);
+
+            assert.deepStrictEqual(
+                knownTargets.map(target => target.displayPath),
+                ['AppHost/AppHost.csproj', '..app/AppHost.csproj']);
+            assertResolved(resolution);
+            assert.strictEqual(resolution.target.absolutePath, dottedAppHost);
+            assert.strictEqual(resolution.target.relativePath, '..app/AppHost.csproj');
+            assert.strictEqual(resolution.target.displayPath, '..app/AppHost.csproj');
+        });
+
         test('drops candidates whose real target escapes the workspace', async function () {
             const outsideAppHost = path.join(outsideRoot, 'External.csproj');
             fs.writeFileSync(outsideAppHost, appHostProjectContents);

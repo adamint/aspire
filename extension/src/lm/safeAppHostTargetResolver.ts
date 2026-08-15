@@ -308,7 +308,10 @@ function describeKnownAppHosts(targets: readonly ResolvedAppHostTarget[]): reado
 
 function toContainedPosixRelativePath(folderPath: string, candidate: string): string | undefined {
     const relative = path.relative(folderPath, candidate);
-    if (relative.length === 0 || relative.startsWith('..') || path.isAbsolute(relative)) {
+    if (relative.length === 0 ||
+        relative === '..' ||
+        relative.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(relative)) {
         return undefined;
     }
 
