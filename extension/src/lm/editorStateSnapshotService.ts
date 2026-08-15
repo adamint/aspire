@@ -46,18 +46,16 @@ export class EditorStateSnapshotService {
     }
 
     async createSnapshot(token: vscode.CancellationToken): Promise<EditorStateSnapshot> {
-        const { representativeTargets, sessionsByIdentity } = await this.collectSnapshotState(token, maxSummaries);
+        const representativeTargets = await this.enumerateRepresentativeTargets(token, maxSummaries);
 
         return {
-            appHosts: representativeTargets.map(target =>
-                this.createSummary(target, sessionsByIdentity.get(target.identity) ?? [])),
+            appHosts: this.projectSummaries(representativeTargets, token),
         };
     }
 
     async createActiveSessionSnapshot(token: vscode.CancellationToken): Promise<ActiveEditorStateSnapshot> {
-        const { representativeTargets, sessionsByIdentity } = await this.collectSnapshotState(token);
-        const activeSummaries = representativeTargets
-            .map(target => this.createSummary(target, sessionsByIdentity.get(target.identity) ?? []))
+        const representativeTargets = await this.enumerateRepresentativeTargets(token);
+        const activeSummaries = this.projectSummaries(representativeTargets, token)
             .filter(summary => summary.state !== 'notDebugging');
         const appHosts = activeSummaries.slice(0, maxSummaries);
 
@@ -66,18 +64,22 @@ export class EditorStateSnapshotService {
             : { appHosts };
     }
 
-    private async collectSnapshotState(
+    private async enumerateRepresentativeTargets(
         token: vscode.CancellationToken,
-        limit?: number): Promise<{
-            readonly representativeTargets: readonly ResolvedAppHostTarget[];
-            readonly sessionsByIdentity: ReadonlyMap<AppHostTargetIdentity, AppHostEditorSessionSnapshot[]>;
-        }> {
+        limit?: number): Promise<readonly ResolvedAppHostTarget[]> {
         throwIfCanceled(token);
         const representativeTargets = selectRepresentativeTargets(
             await this._dependencies.targetResolver.enumerateKnownAppHosts(token),
             limit);
         throwIfCanceled(token);
-        const knownIdentities = new Set(representativeTargets.map(target => target.identity));
+
+        return representativeTargets;
+    }
+
+    private projectSummaries(
+        targets: readonly ResolvedAppHostTarget[],
+        token: vscode.CancellationToken): readonly EditorAppHostSummary[] {
+        const knownIdentities = new Set(targets.map(target => target.identity));
         const sessionsByIdentity = new Map<AppHostTargetIdentity, AppHostEditorSessionSnapshot[]>();
 
         for (const session of this._dependencies.launchService.getEditorSessions()) {
@@ -105,10 +107,8 @@ export class EditorStateSnapshotService {
         }
         throwIfCanceled(token);
 
-        return {
-            representativeTargets,
-            sessionsByIdentity,
-        };
+        return targets.map(target =>
+            this.createSummary(target, sessionsByIdentity.get(target.identity) ?? []));
     }
 
     /**
@@ -121,18 +121,7 @@ export class EditorStateSnapshotService {
      */
     async getAppHostSummary(target: ResolvedAppHostTarget, token: vscode.CancellationToken): Promise<EditorAppHostSummary> {
         throwIfCanceled(token);
-        const sessions = this._dependencies.launchService.getEditorSessions().filter(session => {
-            if (session.operationKind !== 'run') {
-                return false;
-            }
-
-            const appHostPath = session.resolvedAppHostPath ?? session.appHostPath;
-            return appHostPath !== undefined &&
-                this._dependencies.targetResolver.getIdentityForAppHostPath(appHostPath) === target.identity;
-        });
-        throwIfCanceled(token);
-
-        return this.createSummary(target, sessions);
+        return this.projectSummaries([target], token)[0];
     }
 
     private createSummary(target: ResolvedAppHostTarget, sessions: readonly AppHostEditorSessionSnapshot[]): EditorAppHostSummary {

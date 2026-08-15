@@ -2936,6 +2936,34 @@ suite('Editor assistance AppHost services', () => {
     });
 
     suite('EditorStateSnapshotService', () => {
+        test('uses the same projection for full, active, and exact summaries', async () => {
+            const activeAppHostPath = path.join(workspaceRoot, 'ActiveAppHost', 'AppHost.csproj');
+            fs.mkdirSync(path.dirname(activeAppHostPath), { recursive: true });
+            fs.writeFileSync(activeAppHostPath, appHostProjectContents);
+            addCandidate(discoveryService, workspaceRoot, activeAppHostPath);
+            launchService.editorSessions.push({
+                appHostPath: activeAppHostPath,
+                resolvedAppHostPath: activeAppHostPath,
+                operationKind: 'run',
+                startupCompleted: true,
+                noDebug: false,
+                isStopping: false,
+            });
+
+            const token = new vscode.CancellationTokenSource().token;
+            const resolution = await resolver.resolveTarget('ActiveAppHost/AppHost.csproj', token);
+            assertResolved(resolution);
+
+            const snapshot = await snapshotService.createSnapshot(token);
+            const activeSnapshot = await snapshotService.createActiveSessionSnapshot(token);
+            const exactSummary = await snapshotService.getAppHostSummary(resolution.target, token);
+            const snapshotSummary = snapshot.appHosts.find(summary => summary.appHost === resolution.target.displayPath);
+            const activeSummary = activeSnapshot.appHosts.find(summary => summary.appHost === resolution.target.displayPath);
+
+            assert.deepStrictEqual(snapshotSummary, exactSummary);
+            assert.deepStrictEqual(activeSummary, exactSummary);
+        });
+
         test('reports notDebugging when a known AppHost has no active editor session', async () => {
             const snapshot = await snapshotService.createSnapshot(new vscode.CancellationTokenSource().token);
 
