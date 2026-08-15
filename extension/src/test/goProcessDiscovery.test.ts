@@ -75,14 +75,14 @@ function createGoRunApplicationProcessResolver(
 suite('Go process discovery', () => {
     teardown(() => sinon.restore());
 
-    test('parses POSIX process listings without retaining incomplete rows', () => {
+    test('parses POSIX process topology without retaining incomplete rows', () => {
         assert.deepStrictEqual(parsePosixProcessList([
-            '  10     1 /usr/local/go/bin/go go run ./cmd/api',
-            '  42    10 /private/var/folders/x/go-build123/b001/exe/api /private/var/folders/x/go-build123/b001/exe/api --port 8080',
+            '  10     1',
+            '  42    10',
             'not a process row',
         ].join('\n')), [
-            process(10, 1, '/usr/local/go/bin/go', 'go run ./cmd/api'),
-            process(42, 10, '/private/var/folders/x/go-build123/b001/exe/api', '/private/var/folders/x/go-build123/b001/exe/api --port 8080'),
+            process(10, 1, '', ''),
+            process(42, 10, '', ''),
         ]);
     });
 
@@ -131,7 +131,7 @@ suite('Go process discovery', () => {
         assert.deepStrictEqual(calls, [
             {
                 command: 'ps',
-                args: ['-axo', 'pid=,ppid=,comm=,args='],
+                args: ['-axo', 'pid=,ppid='],
             },
             {
                 command: 'powershell.exe',

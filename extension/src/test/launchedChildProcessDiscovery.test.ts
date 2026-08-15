@@ -77,14 +77,14 @@ const identity: LaunchedChildProcessIdentity = {
 suite('Launched child process discovery', () => {
     teardown(() => sinon.restore());
 
-    test('parses POSIX process listings without retaining incomplete rows', () => {
+    test('parses POSIX topology listings without process identity fields', () => {
         assert.deepStrictEqual(parsePosixProcessList([
-            '  10     1 /tool/launcher launcher --run',
-            '  42    10 /target/api /target/api --port 8080',
+            '  10     1',
+            '  42    10',
             'not a process row',
         ].join('\n')), [
-            process(10, 1, '/tool/launcher', 'launcher --run'),
-            process(42, 10, '/target/api', '/target/api --port 8080'),
+            process(10, 1, '', ''),
+            process(42, 10, '', ''),
         ]);
     });
 
@@ -112,31 +112,66 @@ suite('Launched child process discovery', () => {
         ]);
     });
 
-    test('uses fixed platform-specific process discovery commands', async () => {
+    test('uses an identity-free POSIX topology query and fixed per-process identity queries', async () => {
         const calls: Array<{ command: string; args: readonly string[] }> = [];
         const commandRunner: LaunchedChildProcessCommandRunner = {
             async run(command, args): Promise<string> {
                 calls.push({ command, args });
-                return command === 'ps'
-                    ? '10 1 /tool/launcher launcher --run'
-                    : JSON.stringify({
-                        ProcessId: 10,
-                        ParentProcessId: 1,
-                        Name: 'launcher.exe',
-                        ExecutablePath: 'C:\\tool\\launcher.exe',
-                        CommandLine: 'launcher --run',
-                    });
+                if (command === 'ps') {
+                    if (args.join(' ') === '-axo pid=,ppid=') {
+                        return '10 1\n42 10';
+                    }
 
+                    switch (args[args.length - 1]) {
+                        case 'ppid=':
+                            return '10';
+                        case 'comm=':
+                            return '/repo/OneDrive - Microsoft/über-long-path/My Attach Service';
+                        case 'args=':
+                            return '"/repo/OneDrive - Microsoft/über-long-path/My Attach Service" --urls http://localhost:5000';
+                        default:
+                            throw new Error(`Unexpected ps query: ${args.join(' ')}`);
+                    }
+                }
+
+                return JSON.stringify({
+                    ProcessId: 10,
+                    ParentProcessId: 1,
+                    Name: 'launcher.exe',
+                    ExecutablePath: 'C:\\tool\\launcher.exe',
+                    CommandLine: 'launcher --run',
+                });
             },
         };
 
-        await new SystemLaunchedChildProcessQuery('linux', commandRunner).listProcesses();
+        const query = new SystemLaunchedChildProcessQuery('linux', commandRunner);
+        assert.deepStrictEqual(await query.listProcesses(), [
+            process(10, 1, '', ''),
+            process(42, 10, '', ''),
+        ]);
+        assert.deepStrictEqual(await query.getProcess(42), process(
+            42,
+            10,
+            '/repo/OneDrive - Microsoft/über-long-path/My Attach Service',
+            '"/repo/OneDrive - Microsoft/über-long-path/My Attach Service" --urls http://localhost:5000'));
         await new SystemLaunchedChildProcessQuery('win32', commandRunner).listProcesses();
 
         assert.deepStrictEqual(calls, [
             {
                 command: 'ps',
-                args: ['-axo', 'pid=,ppid=,comm=,args='],
+                args: ['-axo', 'pid=,ppid='],
+            },
+            {
+                command: 'ps',
+                args: ['-p', '42', '-o', 'ppid='],
+            },
+            {
+                command: 'ps',
+                args: ['-p', '42', '-o', 'comm='],
+            },
+            {
+                command: 'ps',
+                args: ['-p', '42', '-o', 'args='],
             },
             {
                 command: 'powershell.exe',
@@ -149,6 +184,57 @@ suite('Launched child process discovery', () => {
                 ],
             },
         ]);
+    });
+
+    test('resolves a POSIX child with a spaced non-ASCII executable path from separately queried details', async () => {
+        const calls: Array<{ command: string; args: readonly string[] }> = [];
+        const processDetails = new Map([
+            [10, { parentPid: 1, executable: '/tool/launcher', command: '/tool/launcher --run' }],
+            [42, {
+                parentPid: 10,
+                executable: '/repo/OneDrive - Microsoft/über-long-path/My Attach Service',
+                command: '"/repo/OneDrive - Microsoft/über-long-path/My Attach Service" --urls http://localhost:5000',
+            }],
+        ]);
+        const commandRunner: LaunchedChildProcessCommandRunner = {
+            async run(command, args): Promise<string> {
+                calls.push({ command, args });
+                assert.strictEqual(command, 'ps');
+                if (args.join(' ') === '-axo pid=,ppid=') {
+                    return '10 1\n42 10';
+                }
+
+                const processId = Number(args[1]);
+                const details = processDetails.get(processId);
+                if (!details) {
+                    throw new Error(`Unexpected process ID: ${processId}`);
+                }
+
+                switch (args[args.length - 1]) {
+                    case 'ppid=':
+                        return String(details.parentPid);
+                    case 'comm=':
+                        return details.executable;
+                    case 'args=':
+                        return details.command;
+                    default:
+                        throw new Error(`Unexpected ps query: ${args.join(' ')}`);
+                }
+            },
+        };
+        const resolver = new LaunchedChildProcessResolver(
+            new SystemLaunchedChildProcessQuery('linux', commandRunner),
+            new TestClock(),
+            { timeoutMs: 100, retryDelayMs: 10 });
+        const spacedTargetPath = '/repo/OneDrive - Microsoft/über-long-path/My Attach Service';
+        const exactPathIdentity: LaunchedChildProcessIdentity = {
+            requiresDirectChild: true,
+            isLauncher: candidate => candidate.executable === '/tool/launcher',
+            isCandidate: candidate => candidate.executable === spacedTargetPath,
+        };
+
+        assert.strictEqual(await resolver.resolveProcessId(10, exactPathIdentity), 42);
+        assert.ok(calls.every(call => call.args.join(' ') !== '-axo pid=,ppid=,comm=,args='));
     });
 
     test('command runner returns UTF-8/BOM output after draining stderr', async () => {
@@ -247,6 +333,24 @@ suite('Launched child process discovery', () => {
         await assert.rejects(ambiguous.resolveProcessId(10, identity));
     });
 
+    test('fails closed when scoped direct dotnet children are ambiguous', async () => {
+        const directDotnetIdentity: LaunchedChildProcessIdentity = {
+            requiresDirectChild: true,
+            isLauncher: candidate => candidate.executable === '/tool/launcher',
+            isCandidate: candidate => candidate.executable === '/usr/local/share/dotnet/dotnet',
+        };
+        const resolver = new LaunchedChildProcessResolver(
+            new SequenceProcessQuery([[
+                process(10, 1, '/tool/launcher'),
+                process(42, 10, '/usr/local/share/dotnet/dotnet', 'dotnet exec malformed-posix-command'),
+                process(43, 10, '/usr/local/share/dotnet/dotnet', 'dotnet exec another-malformed-posix-command'),
+            ]]),
+            new TestClock(),
+            { timeoutMs: 20, retryDelayMs: 10 });
+
+        await assert.rejects(resolver.resolveProcessId(10, directDotnetIdentity));
+    });
+
     test('fails closed for a cyclic process listing', async () => {
         const cyclic = new LaunchedChildProcessResolver(
             new SequenceProcessQuery([[
@@ -303,5 +407,23 @@ suite('Launched child process discovery', () => {
         finally {
             cancellation.dispose();
         }
+    });
+
+    test('propagates cancellation from a per-process identity query', async () => {
+        const query: LaunchedChildProcessQuery = {
+            listProcesses: async () => [
+                process(10, 1, '/tool/launcher'),
+                process(42, 10, '/target/api'),
+            ],
+            getProcess: async () => {
+                throw new vscode.CancellationError();
+            },
+        };
+        const resolver = new LaunchedChildProcessResolver(
+            query,
+            new TestClock(),
+            { timeoutMs: 20, retryDelayMs: 10 });
+
+        await assert.rejects(resolver.resolveProcessId(10, identity), vscode.CancellationError);
     });
 });

@@ -19,6 +19,7 @@ export interface LaunchedChildProcessClock {
 }
 
 export interface LaunchedChildProcessIdentity {
+    readonly requiresDirectChild?: boolean;
     isLauncher(process: LaunchedChildProcess): boolean;
     isCandidate(process: LaunchedChildProcess): boolean;
 }
@@ -41,18 +42,17 @@ export function parsePosixProcessList(output: string): readonly LaunchedChildPro
     const processes: LaunchedChildProcess[] = [];
 
     for (const line of output.split(/\r?\n/)) {
-        // `ps -axo pid=,ppid=,comm=,args=` produces rows such as:
-        //   42 10 /private/.../app /private/.../app --port 8080
-        // The command can contain spaces, so only split the first three fixed fields.
-        const match = /^\s*(\d+)\s+(\d+)\s+(\S+)(?:\s+(.*))?\s*$/.exec(line);
+        const match = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
         if (!match) {
             continue;
         }
 
-        const process = createProcessInfo(match[1], match[2], match[3], match[4] ?? match[3]);
-        if (process) {
-            processes.push(process);
-        }
+        processes.push({
+            pid: Number(match[1]),
+            parentPid: Number(match[2]),
+            executable: '',
+            command: '',
+        });
     }
 
     return processes;
@@ -151,9 +151,18 @@ export class LaunchedChildProcessResolver {
 
             let candidate: number | undefined;
             try {
-                candidate = findMatchingDescendant(launcherPid, identity, processes);
+                candidate = await this._findMatchingCandidate(
+                    launcherPid,
+                    identity,
+                    processes,
+                    cancellationToken,
+                    deadline);
             }
-            catch {
+            catch (error) {
+                if (error instanceof vscode.CancellationError || cancellationToken?.isCancellationRequested) {
+                    throw new vscode.CancellationError();
+                }
+
                 throw createProcessDiscoveryError();
             }
 
@@ -186,6 +195,47 @@ export class LaunchedChildProcessResolver {
         throw createProcessDiscoveryError();
     }
 
+    private async _findMatchingCandidate(
+        launcherPid: number,
+        identity: LaunchedChildProcessIdentity,
+        processes: readonly LaunchedChildProcess[],
+        cancellationToken: vscode.CancellationToken | undefined,
+        deadline: number,
+    ): Promise<number | undefined> {
+        const candidatePids = findDescendantProcessIds(launcherPid, identity.requiresDirectChild === true, processes);
+        if (!candidatePids) {
+            return undefined;
+        }
+
+        const launcher = await this._getProcess(
+            launcherPid,
+            processes.find(process => process.pid === launcherPid),
+            cancellationToken,
+            deadline);
+        if (!launcher || !identity.isLauncher(launcher)) {
+            return undefined;
+        }
+
+        const candidates: number[] = [];
+        for (const candidatePid of candidatePids) {
+            const candidate = await this._getProcess(
+                candidatePid,
+                processes.find(process => process.pid === candidatePid),
+                cancellationToken,
+                deadline);
+            if (!candidate ||
+                (identity.requiresDirectChild === true && candidate.parentPid !== launcherPid)) {
+                continue;
+            }
+
+            if (identity.isCandidate(candidate)) {
+                candidates.push(candidate.pid);
+            }
+        }
+
+        return candidates.length === 1 ? candidates[0] : undefined;
+    }
+
     private async _verifyCandidateLineage(
         candidatePid: number,
         launcherPid: number,
@@ -210,26 +260,14 @@ export class LaunchedChildProcessResolver {
             }
 
             visited.add(processId);
-            let process: LaunchedChildProcess | undefined;
-            try {
-                process = await this._processQuery.getProcess(
-                    processId,
-                    cancellationToken,
-                    Math.max(1, deadline - this._clock.now()));
-            }
-            catch (error) {
-                if (error instanceof vscode.CancellationError || cancellationToken?.isCancellationRequested) {
-                    throw new vscode.CancellationError();
-                }
-
+            const process = await this._getProcess(processId, undefined, cancellationToken, deadline);
+            if (!process) {
                 return false;
             }
 
-            if (!process || process.pid !== processId) {
-                return false;
-            }
-
-            if (processId === candidatePid && !identity.isCandidate(process)) {
+            if (processId === candidatePid &&
+                (!identity.isCandidate(process) ||
+                    (identity.requiresDirectChild === true && process.parentPid !== launcherPid))) {
                 return false;
             }
 
@@ -242,6 +280,32 @@ export class LaunchedChildProcessResolver {
             }
 
             processId = process.parentPid;
+        }
+    }
+
+    private async _getProcess(
+        processId: number,
+        topologyProcess: LaunchedChildProcess | undefined,
+        cancellationToken: vscode.CancellationToken | undefined,
+        deadline: number,
+    ): Promise<LaunchedChildProcess | undefined> {
+        if (!this._processQuery.getProcess) {
+            return topologyProcess;
+        }
+
+        try {
+            const process = await this._processQuery.getProcess(
+                processId,
+                cancellationToken,
+                Math.max(1, deadline - this._clock.now()));
+            return process?.pid === processId ? process : undefined;
+        }
+        catch (error) {
+            if (error instanceof vscode.CancellationError || cancellationToken?.isCancellationRequested) {
+                throw new vscode.CancellationError();
+            }
+
+            return undefined;
         }
     }
 }
@@ -262,7 +326,7 @@ export class SystemLaunchedChildProcessQuery implements LaunchedChildProcessQuer
                 timeoutMs)
             : await this._commandRunner.run(
                 'ps',
-                ['-axo', 'pid=,ppid=,comm=,args='],
+                ['-axo', 'pid=,ppid='],
                 cancellationToken,
                 timeoutMs);
 
@@ -276,23 +340,26 @@ export class SystemLaunchedChildProcessQuery implements LaunchedChildProcessQuer
             return undefined;
         }
 
-        const output = this._platform === 'win32'
-            ? await this._commandRunner.run(
+        if (this._platform === 'win32') {
+            const output = await this._commandRunner.run(
                 'powershell.exe',
                 ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
                     `$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); Get-CimInstance Win32_Process -Filter "ProcessId = ${processId}" | Select-Object ${windowsProcessProperties} | ConvertTo-Json -Compress`],
                 cancellationToken,
-                timeoutMs)
-            : await this._commandRunner.run(
-                'ps',
-                ['-p', String(processId), '-o', 'pid=,ppid=,comm=,args='],
-                cancellationToken,
                 timeoutMs);
+            return parseWindowsProcessList(output).find(process => process.pid === processId);
+        }
 
-        const processes = this._platform === 'win32'
-            ? parseWindowsProcessList(output)
-            : parsePosixProcessList(output);
-        return processes.find(process => process.pid === processId);
+        const [parentPidOutput, executableOutput, commandOutput] = await Promise.all([
+            this._commandRunner.run('ps', ['-p', String(processId), '-o', 'ppid='], cancellationToken, timeoutMs),
+            this._commandRunner.run('ps', ['-p', String(processId), '-o', 'comm='], cancellationToken, timeoutMs),
+            this._commandRunner.run('ps', ['-p', String(processId), '-o', 'args='], cancellationToken, timeoutMs),
+        ]);
+        return createProcessInfo(
+            processId,
+            parentPidOutput.trim(),
+            executableOutput.trim(),
+            commandOutput.trim());
     }
 }
 
@@ -407,11 +474,11 @@ function createProcessInfo(pidValue: unknown, parentPidValue: unknown, executabl
     };
 }
 
-function findMatchingDescendant(
+function findDescendantProcessIds(
     launcherPid: number,
-    identity: LaunchedChildProcessIdentity,
+    requiresDirectChild: boolean,
     processes: readonly LaunchedChildProcess[],
-): number | undefined {
+): readonly number[] | undefined {
     const processById = new Map<number, LaunchedChildProcess>();
     const childrenByParentId = new Map<number, LaunchedChildProcess[]>();
     for (const process of processes) {
@@ -425,13 +492,16 @@ function findMatchingDescendant(
         childrenByParentId.set(process.parentPid, children);
     }
 
-    const launcher = processById.get(launcherPid);
-    if (!launcher || !identity.isLauncher(launcher)) {
+    if (!processById.has(launcherPid)) {
         return undefined;
     }
 
-    const candidates: number[] = [];
     const descendants = [...(childrenByParentId.get(launcherPid) ?? [])];
+    if (requiresDirectChild) {
+        return descendants.map(descendant => descendant.pid);
+    }
+
+    const descendantsIds: number[] = [];
     const visitedProcessIds = new Set([launcherPid]);
     for (let index = 0; index < descendants.length; index++) {
         const descendant = descendants[index];
@@ -440,14 +510,11 @@ function findMatchingDescendant(
         }
 
         visitedProcessIds.add(descendant.pid);
-        if (identity.isCandidate(descendant)) {
-            candidates.push(descendant.pid);
-        }
-
+        descendantsIds.push(descendant.pid);
         descendants.push(...(childrenByParentId.get(descendant.pid) ?? []));
     }
 
-    return candidates.length === 1 ? candidates[0] : undefined;
+    return descendantsIds;
 }
 
 function parsePid(value: unknown): number | undefined {

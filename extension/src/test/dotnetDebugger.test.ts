@@ -113,6 +113,7 @@ interface TestLaunchedChildProcess {
 }
 
 interface TestLaunchedChildProcessIdentity {
+    readonly requiresDirectChild?: boolean;
     isLauncher(process: TestLaunchedChildProcess): boolean;
     isCandidate(process: TestLaunchedChildProcess): boolean;
 }
@@ -221,7 +222,8 @@ suite('Dotnet Debugger Extension Tests', () => {
             parentPid: 1,
             executable: '/usr/local/share',
             command: '/usr/local/share/dotnet/dotnet run --project /repo/api/Api.csproj',
-        }), true);
+        }), false);
+        assert.strictEqual(processIdentity.requiresDirectChild, true);
         assert.strictEqual(processIdentity.isCandidate({
             pid: 4321,
             parentPid: 1234,
@@ -277,7 +279,39 @@ suite('Dotnet Debugger Extension Tests', () => {
             parentPid: 1234,
             executable: '/usr/local/share/dotnet/dotnet',
             command: `dotnet exec ${targetPath}.bak`,
-        }), false);
+        }), true);
+    });
+
+    test('matches a uniquely scoped dotnet child when a spaced DLL path cannot be reconstructed from POSIX command text', async () => {
+        const targetPath = '/repo/OneDrive - Microsoft/über-long-path/My Attach Service.dll';
+        const { dotNetService } = createDebuggerExtension(targetPath, null, true, true);
+        dotNetService.getDotNetAttachTargetInfoStub.resolves({ targetPath, useAppHost: false });
+        const resolver = {
+            resolveProcessId: sinon.stub().resolves(4321),
+        };
+        const attachProvider = createProjectResourceAttachProvider(
+            () => dotNetService,
+            resolver as unknown as LaunchedChildProcessResolver);
+
+        await attachProvider.createDebugConfiguration({
+            name: 'api',
+            displayName: 'API',
+            resourceType: 'Project',
+            state: 'Running',
+            properties: {
+                'executable.pid': '1234',
+                'executable.path': 'dotnet',
+                'project.path': '/repo/api/Api.csproj',
+            },
+        });
+
+        const processIdentity = resolver.resolveProcessId.firstCall.args[1] as TestLaunchedChildProcessIdentity;
+        assert.strictEqual(processIdentity.isCandidate({
+            pid: 4321,
+            parentPid: 1234,
+            executable: '/usr/local/share/dotnet/dotnet',
+            command: 'dotnet exec malformed-posix-command',
+        }), true);
     });
 
     test('attach configuration resolves an apphost child by its evaluated executable identity', async () => {
@@ -311,7 +345,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(processIdentity.isCandidate({
             pid: 4321,
             parentPid: 1234,
-            executable: '/repo/OneDrive',
+            executable: targetPath,
             command: `"${targetPath}" "" --urls http://localhost:5000`,
         }), true);
         assert.strictEqual(processIdentity.isCandidate({
@@ -320,6 +354,71 @@ suite('Dotnet Debugger Extension Tests', () => {
             executable: '/repo/OneDrive',
             command: `"${targetPath} Worker"`,
         }), false);
+        assert.strictEqual(processIdentity.isCandidate({
+            pid: 4323,
+            parentPid: 1234,
+            executable: '/repo/OneDrive',
+            command: `${targetPath} Worker`,
+        }), false);
+        assert.strictEqual(processIdentity.isCandidate({
+            pid: 4324,
+            parentPid: 1234,
+            executable: '/repo/OneDrive',
+            command: `"${targetPath}"`,
+        }), false);
+    });
+
+    test('normalizes Windows executable and command identities before matching', async () => {
+        const targetPath = 'C:\\Repo\\My Attach Service.dll';
+        const { dotNetService } = createDebuggerExtension(targetPath, null, true, true);
+        dotNetService.getDotNetAttachTargetInfoStub.resolves({ targetPath, useAppHost: true });
+        const resolver = {
+            resolveProcessId: sinon.stub().resolves(4321),
+        };
+        const attachProvider = createProjectResourceAttachProvider(
+            () => dotNetService,
+            resolver as unknown as LaunchedChildProcessResolver);
+
+        await attachProvider.createDebugConfiguration({
+            name: 'api',
+            displayName: 'API',
+            resourceType: 'Project',
+            state: 'Running',
+            properties: {
+                'executable.pid': '1234',
+                'executable.path': 'dotnet',
+                'project.path': '/repo/api/Api.csproj',
+            },
+        });
+
+        const appHostIdentity = resolver.resolveProcessId.firstCall.args[1] as TestLaunchedChildProcessIdentity;
+        assert.strictEqual(appHostIdentity.isCandidate({
+            pid: 4321,
+            parentPid: 1234,
+            executable: 'c:/repo/MY ATTACH SERVICE.EXE',
+            command: 'not-used-for-apphost',
+        }), true);
+
+        dotNetService.getDotNetAttachTargetInfoStub.resolves({ targetPath: 'C:\\Repo\\Api.dll', useAppHost: false });
+        await attachProvider.createDebugConfiguration({
+            name: 'api',
+            displayName: 'API',
+            resourceType: 'Project',
+            state: 'Running',
+            properties: {
+                'executable.pid': '1234',
+                'executable.path': 'dotnet',
+                'project.path': '/repo/api/Api.csproj',
+            },
+        });
+
+        const frameworkDependentIdentity = resolver.resolveProcessId.secondCall.args[1] as TestLaunchedChildProcessIdentity;
+        assert.strictEqual(frameworkDependentIdentity.isCandidate({
+            pid: 4322,
+            parentPid: 1234,
+            executable: 'c:/Program Files/dotnet/DOTNET.EXE',
+            command: 'dotnet exec c:/REPO\\api.DLL',
+        }), true);
     });
 
     test('attach configuration derives the default apphost identity from TargetPath', async () => {

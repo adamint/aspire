@@ -30,7 +30,6 @@ import { createAspireCliPathProcessEnvironment } from '../../utils/cliPathEnviro
 import { getHotReloadDiagnostics, logHotReloadDiagnostics, showHotReloadDisabledAdvisoryIfNeeded } from '../hotReload';
 import { terminateCliProcess } from '../../utils/process/cliProcess';
 import {
-    getProcessCommandProgram,
     launchedChildProcessResolver,
     type LaunchedChildProcess,
     type LaunchedChildProcessIdentity,
@@ -711,6 +710,7 @@ function isDotNetExecutable(resource: ResourceDebugResourceSnapshot): boolean {
 
 function createDotNetProcessIdentity(targetInfo: DotNetAttachTargetInfo): LaunchedChildProcessIdentity {
     return {
+        requiresDirectChild: true,
         isLauncher: process => isDotNetProcess(process),
         isCandidate: process => targetInfo.useAppHost
             ? isAppHostProcessForTarget(process, targetInfo.targetPath)
@@ -719,21 +719,24 @@ function createDotNetProcessIdentity(targetInfo: DotNetAttachTargetInfo): Launch
 }
 
 function isDotNetProcess(process: LaunchedChildProcess): boolean {
-    return [getProcessCommandProgram(process.command), process.executable].some(value => {
-        const executableName = value?.split(/[\\/]/).pop()?.toLowerCase();
-        return executableName === 'dotnet' || executableName === 'dotnet.exe';
-    });
+    const executableName = process.executable.split(/[\\/]/).pop()?.toLowerCase();
+    return executableName === 'dotnet' || executableName === 'dotnet.exe';
 }
 
 function isAppHostProcessForTarget(process: LaunchedChildProcess, targetPath: string): boolean {
-    return getAppHostPaths(targetPath).some(appHostPath =>
-        areProcessPathsEqual(process.executable, appHostPath) ||
-        commandStartsWithPath(process.command, appHostPath));
+    return getAppHostPaths(targetPath).some(appHostPath => areProcessPathsEqual(process.executable, appHostPath));
 }
 
 function isFrameworkDependentProcessForTarget(process: LaunchedChildProcess, targetPath: string): boolean {
-    return isDotNetProcess(process) &&
-        commandContainsPathArgument(process.command, targetPath);
+    if (!isDotNetProcess(process)) {
+        return false;
+    }
+
+    // `ps` exposes a flattened command string, not argv. An unquoted TargetPath such as
+    // "/repo/My Attach Service.dll" cannot be reconstructed safely because the boundaries of its
+    // whitespace-containing argument are lost. The resolver scopes these children directly to the
+    // launcher and rejects ambiguity, so use the structured executable identity in that case.
+    return /\s/.test(targetPath) || commandContainsPathArgument(process.command, targetPath);
 }
 
 function areProcessPathsEqual(left: string, right: string): boolean {
@@ -754,18 +757,13 @@ function getAppHostPaths(targetPath: string): readonly string[] {
     return [appHostPath, `${appHostPath}.exe`];
 }
 
-function commandStartsWithPath(command: string, targetPath: string): boolean {
-    const escapedPath = escapeRegularExpression(targetPath);
-    // A quoted program path must close with the same quote. Without that constraint,
-    // `"My Attach Service Worker"` would be mistaken for the apphost `"My Attach Service"`.
-    return new RegExp(`^\\s*(?:"${escapedPath}"|'${escapedPath}'|${escapedPath})(?=\\s|$)`).test(command);
-}
-
 function commandContainsPathArgument(command: string, targetPath: string): boolean {
-    // Do not tokenize command text: POSIX `ps` flattens argv, and valid paths can contain
-    // whitespace (for example, "/repo/OneDrive - Microsoft/Api.dll"). Match the exact evaluated
-    // TargetPath in the original command with argument boundaries instead.
-    return new RegExp(`(?:^|\\s|["'])${escapeRegularExpression(targetPath)}(?=$|\\s|["'])`).test(command);
+    const normalizedCommand = command.replace(/\\/g, '/');
+    const normalizedTargetPath = targetPath.replace(/\\/g, '/');
+    const isWindowsPath = /^[a-z]:\//i.test(normalizedCommand) || /^[a-z]:\//i.test(normalizedTargetPath);
+    return new RegExp(
+        `(?:^|\\s|["'])${escapeRegularExpression(normalizedTargetPath)}(?=$|\\s|["'])`,
+        isWindowsPath ? 'i' : undefined).test(normalizedCommand);
 }
 
 function escapeRegularExpression(value: string): string {
