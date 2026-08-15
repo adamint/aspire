@@ -101,7 +101,7 @@ const appHostProjectContents = `<Project Sdk="Microsoft.NET.Sdk">
 </Project>`;
 
 function createFixtureDirectory(prefix: string): string {
-    const fixtureRoot = path.resolve(__dirname, '..', '..', '.test-workspace', 'editor-assistance');
+    const fixtureRoot = path.resolve(__dirname, '..', '..', '..', '.test-workspace', 'editor-assistance');
     const directory = path.join(fixtureRoot, `${prefix}-${crypto.randomBytes(6).toString('hex')}`);
     fs.mkdirSync(directory, { recursive: true });
     return directory;

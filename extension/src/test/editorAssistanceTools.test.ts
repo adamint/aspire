@@ -247,6 +247,18 @@ suite('Editor assistance AppHost services', () => {
         });
     });
 
+    test('creates fixture directories directly under the extension test workspace', () => {
+        const fixtureDirectory = createFixtureDirectory('support-root');
+
+        try {
+            const expectedRoot = path.resolve(__dirname, '..', '..', '.test-workspace', 'editor-assistance');
+            assert.strictEqual(path.dirname(fixtureDirectory), expectedRoot);
+        }
+        finally {
+            fs.rmSync(fixtureDirectory, { recursive: true, force: true });
+        }
+    });
+
     test('strictly validates shared AppHost-path-only inputs', () => {
         assert.strictEqual(isValidAppHostPathOnlyInput({
             appHostPath: 'AppHost/AppHost.csproj',
