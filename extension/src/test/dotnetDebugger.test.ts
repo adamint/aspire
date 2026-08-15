@@ -389,10 +389,12 @@ suite('Dotnet Debugger Extension Tests', () => {
         }), false);
     });
 
-    test('matches a canonical apphost path from a symlinked TargetPath without accepting a same-name sibling', async () => {
+    test('preserves raw and full-realpath apphost candidates', async () => {
         const targetPath = '/workspace/link/bin/Debug/net10.0/Api.dll';
         const appHostPath = '/workspace/link/bin/Debug/net10.0/Api';
+        const appHostExePath = `${appHostPath}.exe`;
         const canonicalAppHostPath = '/workspace/physical/bin/Debug/net10.0/Api';
+        const canonicalAppHostExePath = `${canonicalAppHostPath}.exe`;
         const { dotNetService } = createDebuggerExtension(targetPath, null, true, true);
         const resolver = {
             resolveProcessId: sinon.stub().resolves(4321),
@@ -400,6 +402,9 @@ suite('Dotnet Debugger Extension Tests', () => {
         const realpath = sinon.stub().callsFake(async (candidate: string) => {
             if (candidate === appHostPath) {
                 return canonicalAppHostPath;
+            }
+            if (candidate === appHostExePath) {
+                return canonicalAppHostExePath;
             }
 
             throw new Error('ENOENT');
@@ -436,15 +441,147 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(appHostIdentity.isCandidate({
             pid: 4322,
             parentPid: 1234,
+            executable: appHostPath,
+            command: appHostPath,
+        }), true);
+        assert.strictEqual(appHostIdentity.isCandidate({
+            pid: 4323,
+            parentPid: 1234,
+            executable: canonicalAppHostExePath,
+            command: canonicalAppHostExePath,
+        }), true);
+        assert.strictEqual(appHostIdentity.isCandidate({
+            pid: 4324,
+            parentPid: 1234,
+            executable: appHostExePath,
+            command: appHostExePath,
+        }), true);
+        assert.strictEqual(appHostIdentity.isCandidate({
+            pid: 4325,
+            parentPid: 1234,
             executable: '/workspace/other/bin/Debug/net10.0/Api',
             command: '/workspace/other/bin/Debug/net10.0/Api',
         }), false);
         assert.ok(realpath.calledWithExactly(appHostPath));
+        assert.ok(realpath.calledWithExactly(appHostExePath));
     });
 
-    test('uses the TargetPath apphost candidate when canonicalization races with process discovery', async () => {
+    test('matches a deleted apphost from a symlinked TargetPath directory', async () => {
         const targetPath = '/workspace/link/bin/Debug/net10.0/Api.dll';
         const appHostPath = '/workspace/link/bin/Debug/net10.0/Api';
+        const appHostExePath = `${appHostPath}.exe`;
+        const targetDirectory = nodePath.dirname(targetPath);
+        const canonicalTargetDirectory = '/workspace/physical/bin/Debug/net10.0';
+        const canonicalAppHostPath = nodePath.join(canonicalTargetDirectory, nodePath.basename(appHostPath));
+        const canonicalAppHostExePath = nodePath.join(canonicalTargetDirectory, nodePath.basename(appHostExePath));
+        const { dotNetService } = createDebuggerExtension(targetPath, null, true, true);
+        const resolver = {
+            resolveProcessId: sinon.stub().resolves(4321),
+        };
+        const realpath = sinon.stub().callsFake(async (candidate: string) => {
+            if (candidate === targetDirectory) {
+                return canonicalTargetDirectory;
+            }
+
+            throw new Error('ENOENT');
+        });
+        const createAttachProvider = createProjectResourceAttachProvider as unknown as (
+            dotNetServiceProducer: () => TestDotNetService,
+            childProcessResolver: TestLaunchedChildProcessResolver,
+            fileSystem: { realpath(path: string): Promise<string> },
+        ) => ResourceAttachProvider;
+        const attachProvider = createAttachProvider(
+            () => dotNetService,
+            resolver,
+            { realpath });
+
+        await attachProvider.createDebugConfiguration({
+            name: 'api',
+            displayName: 'API',
+            resourceType: 'Project',
+            state: 'Running',
+            properties: {
+                'executable.pid': '1234',
+                'executable.path': 'dotnet',
+                'project.path': '/workspace/link/api/Api.csproj',
+            },
+        });
+
+        const appHostIdentity = resolver.resolveProcessId.firstCall.args[1] as TestLaunchedChildProcessIdentity;
+        assert.strictEqual(appHostIdentity.isCandidate({
+            pid: 4321,
+            parentPid: 1234,
+            executable: canonicalAppHostPath,
+            command: canonicalAppHostPath,
+        }), true);
+        assert.strictEqual(appHostIdentity.isCandidate({
+            pid: 4322,
+            parentPid: 1234,
+            executable: canonicalAppHostExePath,
+            command: canonicalAppHostExePath,
+        }), true);
+        assert.ok(realpath.calledWithExactly(appHostPath));
+        assert.ok(realpath.calledWithExactly(targetDirectory));
+    });
+
+    test('does not match a same-named apphost outside the canonical TargetPath directory', async () => {
+        const targetPath = '/workspace/link/bin/Debug/net10.0/Api.dll';
+        const targetDirectory = nodePath.dirname(targetPath);
+        const canonicalTargetDirectory = '/workspace/physical/bin/Debug/net10.0';
+        const unrelatedAppHostPath = '/workspace/other/bin/Debug/net10.0/Api';
+        const { dotNetService } = createDebuggerExtension(targetPath, null, true, true);
+        const resolver = {
+            resolveProcessId: sinon.stub().resolves(4321),
+        };
+        const realpath = sinon.stub().callsFake(async (candidate: string) => {
+            if (candidate === targetDirectory) {
+                return canonicalTargetDirectory;
+            }
+
+            throw new Error('ENOENT');
+        });
+        const createAttachProvider = createProjectResourceAttachProvider as unknown as (
+            dotNetServiceProducer: () => TestDotNetService,
+            childProcessResolver: TestLaunchedChildProcessResolver,
+            fileSystem: { realpath(path: string): Promise<string> },
+        ) => ResourceAttachProvider;
+        const attachProvider = createAttachProvider(
+            () => dotNetService,
+            resolver,
+            { realpath });
+
+        await attachProvider.createDebugConfiguration({
+            name: 'api',
+            displayName: 'API',
+            resourceType: 'Project',
+            state: 'Running',
+            properties: {
+                'executable.pid': '1234',
+                'executable.path': 'dotnet',
+                'project.path': '/workspace/link/api/Api.csproj',
+            },
+        });
+
+        const appHostIdentity = resolver.resolveProcessId.firstCall.args[1] as TestLaunchedChildProcessIdentity;
+        assert.strictEqual(appHostIdentity.isCandidate({
+            pid: 4321,
+            parentPid: 1234,
+            executable: unrelatedAppHostPath,
+            command: unrelatedAppHostPath,
+        }), false);
+        assert.strictEqual(appHostIdentity.isCandidate({
+            pid: 4322,
+            parentPid: 1234,
+            executable: '/workspace/physical/bin/Debug/net10.0/Api Replica',
+            command: '/workspace/physical/bin/Debug/net10.0/Api Replica',
+        }), false);
+    });
+
+    test('falls back to raw apphost candidates when canonical TargetPath directory lookup fails', async () => {
+        const targetPath = '/workspace/link/bin/Debug/net10.0/Api.dll';
+        const appHostPath = '/workspace/link/bin/Debug/net10.0/Api';
+        const appHostExePath = `${appHostPath}.exe`;
+        const targetDirectory = nodePath.dirname(targetPath);
         const { dotNetService } = createDebuggerExtension(targetPath, null, true, true);
         const resolver = {
             resolveProcessId: sinon.stub().resolves(4321),
@@ -479,7 +616,15 @@ suite('Dotnet Debugger Extension Tests', () => {
             executable: appHostPath,
             command: appHostPath,
         }), true);
+        assert.strictEqual(appHostIdentity.isCandidate({
+            pid: 4322,
+            parentPid: 1234,
+            executable: appHostExePath,
+            command: appHostExePath,
+        }), true);
         assert.ok(realpath.calledWithExactly(appHostPath));
+        assert.ok(realpath.calledWithExactly(appHostExePath));
+        assert.ok(realpath.calledWithExactly(targetDirectory));
     });
 
     test('normalizes Windows executable and command identities before matching', async () => {

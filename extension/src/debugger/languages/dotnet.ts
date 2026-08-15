@@ -777,14 +777,26 @@ async function getCanonicalAppHostPaths(
             return await fileSystem.realpath(appHostPath);
         }
         catch {
-            // `/proc/<pid>/exe` resolves symlinked directories while MSBuild TargetPath preserves
-            // their spelling. The apphost can disappear after launch, so retain the raw candidate
-            // when realpath races process shutdown rather than failing attach discovery.
-            return appHostPath;
+            return undefined;
         }
     }));
 
-    return [...new Set([...appHostPaths, ...canonicalAppHostPaths])];
+    let canonicalTargetDirectory: string | undefined;
+    if (canonicalAppHostPaths.some(appHostPath => appHostPath === undefined)) {
+        try {
+            canonicalTargetDirectory = await fileSystem.realpath(path.dirname(targetPath));
+        }
+        catch {
+            // `/proc/<pid>/exe` resolves symlinked directories even after its final executable was
+            // unlinked. Retain the raw path if neither the file nor its parent directory survives.
+        }
+    }
+
+    const directoryCanonicalizedAppHostPaths = canonicalAppHostPaths.map((appHostPath, index) =>
+        appHostPath ?? (canonicalTargetDirectory
+            ? path.join(canonicalTargetDirectory, path.basename(appHostPaths[index]))
+            : appHostPaths[index]));
+    return [...new Set([...appHostPaths, ...directoryCanonicalizedAppHostPaths])];
 }
 
 function commandLineArgumentsContainTargetPath(argumentsList: readonly string[], targetPath: string): boolean {
