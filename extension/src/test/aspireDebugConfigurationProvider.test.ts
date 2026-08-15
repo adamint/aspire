@@ -243,7 +243,29 @@ suite('AspireDebugConfigurationProvider', () => {
         }]);
     });
 
-    test('cancels a launch.json run when a lifecycle-owned launch already claimed the AppHost', async () => {
+    test('does not journal a directory-scoped reservation denial', async () => {
+        const folder = createWorkspaceFolder(path.join(tempDir, 'workspace'));
+        launchReservation.claimedByLifecycle = true;
+        const message = sandbox.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+        const provider = new AspireDebugConfigurationProvider(
+            createAppHostDiscoveryService(folder.uri.fsPath, null),
+            launchReservation);
+
+        const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, {
+            name: 'Debug AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: folder.uri.fsPath,
+        });
+
+        assert.strictEqual(config, undefined);
+        assert.strictEqual(message.calledOnce, true);
+        assert.deepStrictEqual(launchReservation.reserved, [folder.uri.fsPath]);
+        assert.deepStrictEqual(launchReservation.directoryScoped, [folder.uri.fsPath]);
+        assert.deepStrictEqual(readLatestLaunchFailures(), []);
+    });
+
+    test('records validation when a lifecycle-owned launch already claimed the project file', async () => {
         // The lifecycle caller has already passed its own check by this point and cannot be
         // called back, so letting this session proceed would start a second AppHost for the
         // same project.

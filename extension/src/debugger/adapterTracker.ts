@@ -36,11 +36,13 @@ export function createDebugAdapterTracker(
             const debugSessionId = configuration.debugSessionId;
 
             let debuggeeExitCode: number | undefined;
+            let appHostExitObserved = false;
 
             return {
                 onWillReceiveMessage: message => {
                     if (configuration.isApphost &&
                         (message.command === 'disconnect' || message.command === 'terminate') &&
+                        !appHostExitObserved &&
                         debugSessionId) {
                         // A client-to-adapter disconnect/terminate request identifies deliberate
                         // child-session termination before VS Code raises the termination event.
@@ -58,6 +60,15 @@ export function createDebugAdapterTracker(
                     }
                 },
                 onDidSendMessage: message => {
+                    if (configuration.isApphost &&
+                        message.type === 'event' &&
+                        (message.event === 'terminated' || message.event === 'exited')) {
+                        // After a natural exit or crash, VS Code cleans up by sending
+                        // disconnect({ terminateDebuggee: false }). The adapter has already
+                        // reported the outcome, so that later request is not user intent.
+                        appHostExitObserved = true;
+                    }
+
                     if (message.type === 'event' && message.event === 'output') {
                         const { category, output } = message.body;
                         if (typeof output === 'string' && category !== 'telemetry') {
@@ -80,10 +91,11 @@ export function createDebugAdapterTracker(
 
                     // Listen for process event with isRestart (if supported by adapter)
                     if (message.type === 'event' && message.event === 'process') {
-                        // A new debuggee process invalidates any exit code captured from a prior run.
+                        // A new debuggee process invalidates exit state captured from a prior run.
                         // Reset before the PID guard: `systemProcessId` is optional in DAP, so a
-                        // restart reported without it must still clear the stale exit code.
+                        // restart reported without it must still clear the stale state.
                         debuggeeExitCode = undefined;
+                        appHostExitObserved = false;
 
                         if (typeof message.body?.systemProcessId !== 'number') {
                             extensionLogOutputChannel.warn(`Debug session ${session.id} does not have a valid system process ID.`);

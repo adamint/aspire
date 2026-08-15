@@ -188,13 +188,17 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
                     // Another launch or run session already owns this AppHost, so proceeding
                     // would produce two AppHosts for one project.
                     // Abort this session and tell the user why rather than starting a second.
-                    recordLaunchFailureForAppHostPath(claimedPath, {
-                        stage: 'validation',
-                        category: 'invalidConfiguration',
-                        controller: 'editor',
-                        mode: getLaunchFailureMode(aspireConfig),
-                        providerKind: getAppHostProviderKind(claimedPath),
-                    });
+                    // A directory-scoped reservation does not identify which AppHost the user
+                    // intended to launch, so it cannot safely be attributed in the journal.
+                    if (isConcreteAppHostTarget(claimedPath)) {
+                        recordLaunchFailureForAppHostPath(claimedPath, {
+                            stage: 'validation',
+                            category: 'invalidConfiguration',
+                            controller: 'editor',
+                            mode: getLaunchFailureMode(aspireConfig),
+                            providerKind: getAppHostProviderKind(claimedPath),
+                        });
+                    }
                     void vscode.window.showInformationMessage(appHostLifecycleLaunchAlreadyClaimed);
                     return undefined;
                 }

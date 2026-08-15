@@ -3650,7 +3650,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(trackAppHostDebugSession.calledOnceWithExactly(aspireDebugSession, appHostPath, childDebugSession), true);
     });
 
-    test('records AppHost termination before startup completion at the DCP startup boundary', async () => {
+    test('records a pre-start process exit when VS Code disconnects after adapter termination', async () => {
         const appHostPath = join(makeTempDir(), 'apphost.mts');
         writeFileSync(appHostPath, '');
         const parentDebugSession = {
@@ -3663,35 +3663,55 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
                 command: 'run',
             },
         } as unknown as vscode.DebugSession;
+        let terminateCallback: ((session: vscode.DebugSession) => Promise<void>) | undefined;
+        let adapterTrackerFactory: vscode.DebugAdapterTrackerFactory | undefined;
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(callback => {
+            terminateCallback = callback as (session: vscode.DebugSession) => Promise<void>;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.debug, 'registerDebugAdapterTrackerFactory').callsFake((_debugType, factory) => {
+            adapterTrackerFactory = factory;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+        const appHostConfiguration = {
+            type: 'pwa-node',
+            name: 'AppHost',
+            request: 'launch',
+            runId: 'apphost-run',
+            debugSessionId: aspireDebugSession.debugSessionId,
+            isApphost: true,
+            noDebug: false,
+        } as AspireResourceExtendedDebugConfiguration;
         const appHostVsCodeSession = {
             id: 'apphost-session',
             type: 'pwa-node',
             name: 'AppHost',
-            configuration: { noDebug: false },
+            configuration: appHostConfiguration,
         } as unknown as vscode.DebugSession;
         const appHostDebugSession = {
             id: appHostVsCodeSession.id,
             session: appHostVsCodeSession,
             stopSession: sinon.stub().resolves(),
         };
-        let terminateCallback: ((session: vscode.DebugSession) => Promise<void>) | undefined;
-        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(callback => {
-            terminateCallback = callback as (session: vscode.DebugSession) => Promise<void>;
-            return { dispose: sinon.stub() };
-        });
-        sinon.stub(debuggerExtensionsModule, 'createDebugSessionConfiguration').resolves({
-            type: 'pwa-node',
-            name: 'AppHost',
-            request: 'launch',
-            runId: '',
-        } as AspireResourceExtendedDebugConfiguration);
-        sinon.stub(vscode.debug, 'stopDebugging').resolves();
-        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
-        sinon.stub(aspireDebugSession, 'createDebugAdapterTrackerCore');
+        sinon.stub(debuggerExtensionsModule, 'createDebugSessionConfiguration').resolves(appHostConfiguration);
         sinon.stub(aspireDebugSession, 'startAndGetDebugSession').resolves(appHostDebugSession);
         sinon.stub(aspireDebugSession as any, 'stopDebuggingInBackground');
         await aspireDebugSession.startAppHost(appHostPath, [], [], true, { forceBuild: false });
 
+        const adapterTracker = adapterTrackerFactory!.createDebugAdapterTracker(appHostVsCodeSession) as vscode.DebugAdapterTracker;
+        adapterTracker.onDidSendMessage!({
+            type: 'event',
+            event: 'terminated',
+            body: {},
+        });
+        adapterTracker.onWillReceiveMessage!({
+            type: 'request',
+            seq: 1,
+            command: 'disconnect',
+            arguments: { terminateDebuggee: false },
+        });
         await terminateCallback!(appHostVsCodeSession);
 
         assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
@@ -3761,7 +3781,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.deepStrictEqual(readLatestLaunchFailures(workspacePath), []);
     });
 
-    test('does not record DCP startup failure when the user stops the AppHost child', async () => {
+    test('does not record a pre-start process exit when an explicit disconnect precedes adapter termination', async () => {
         const appHostPath = join(makeTempDir(), 'apphost.mts');
         writeFileSync(appHostPath, '');
         const parentDebugSession = {
@@ -3774,40 +3794,55 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
                 command: 'run',
             },
         } as unknown as vscode.DebugSession;
+        let terminateCallback: ((session: vscode.DebugSession) => Promise<void>) | undefined;
+        let adapterTrackerFactory: vscode.DebugAdapterTrackerFactory | undefined;
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(callback => {
+            terminateCallback = callback as (session: vscode.DebugSession) => Promise<void>;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.debug, 'registerDebugAdapterTrackerFactory').callsFake((_debugType, factory) => {
+            adapterTrackerFactory = factory;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+        const appHostConfiguration = {
+            type: 'pwa-node',
+            name: 'AppHost',
+            request: 'launch',
+            runId: 'apphost-run',
+            debugSessionId: aspireDebugSession.debugSessionId,
+            isApphost: true,
+            noDebug: false,
+        } as AspireResourceExtendedDebugConfiguration;
         const appHostVsCodeSession = {
             id: 'apphost-session',
             type: 'pwa-node',
             name: 'AppHost',
-            configuration: { noDebug: false },
+            configuration: appHostConfiguration,
         } as unknown as vscode.DebugSession;
         const appHostDebugSession = {
             id: appHostVsCodeSession.id,
             session: appHostVsCodeSession,
             stopSession: sinon.stub().resolves(),
         };
-        let terminateCallback: ((session: vscode.DebugSession) => Promise<void>) | undefined;
-        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(callback => {
-            terminateCallback = callback as (session: vscode.DebugSession) => Promise<void>;
-            return { dispose: sinon.stub() };
-        });
-        sinon.stub(debuggerExtensionsModule, 'createDebugSessionConfiguration').resolves({
-            type: 'pwa-node',
-            name: 'AppHost',
-            request: 'launch',
-            runId: '',
-        } as AspireResourceExtendedDebugConfiguration);
-        sinon.stub(vscode.debug, 'stopDebugging').resolves();
-        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
-        let appHostTerminationRequested: ((debugSessionId: string) => void) | undefined;
-        sinon.stub(aspireDebugSession, 'createDebugAdapterTrackerCore').callsFake((...args: any[]) => {
-            appHostTerminationRequested = args[3];
-        });
+        sinon.stub(debuggerExtensionsModule, 'createDebugSessionConfiguration').resolves(appHostConfiguration);
         sinon.stub(aspireDebugSession, 'startAndGetDebugSession').resolves(appHostDebugSession);
         sinon.stub(aspireDebugSession as any, 'stopDebuggingInBackground');
         await aspireDebugSession.startAppHost(appHostPath, [], [], true, { forceBuild: false });
 
-        assert.ok(appHostTerminationRequested);
-        appHostTerminationRequested(aspireDebugSession.debugSessionId);
+        const adapterTracker = adapterTrackerFactory!.createDebugAdapterTracker(appHostVsCodeSession) as vscode.DebugAdapterTracker;
+        adapterTracker.onWillReceiveMessage!({
+            type: 'request',
+            seq: 1,
+            command: 'disconnect',
+            arguments: { terminateDebuggee: true },
+        });
+        adapterTracker.onDidSendMessage!({
+            type: 'event',
+            event: 'terminated',
+            body: {},
+        });
         await terminateCallback!(appHostVsCodeSession);
 
         assert.deepStrictEqual(readLatestLaunchFailures(appHostPath), []);
