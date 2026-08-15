@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import { extensionLogOutputChannel } from '../../utils/logging';
 import { noCsharpBuildTask, buildFailedWithExitCode, noOutputFromMsbuild, failedToGetTargetPath, invalidLaunchConfiguration, buildFailedForProjectWithError, processExitedWithCode, lookingForDevkitBuildTask, csharpDevKitNotInstalled, failedToInspectRuntimeConfig, dotNetRunFallbackDisablesDebugger, dotNetRunFileBasedExecutableProfileFallback, executableLaunchProfileMissingExecutablePath, attachDebuggerConfigurationName, attachDebuggerUnavailable } from '../../loc/strings';
-import { ChildProcessWithoutNullStreams, execFile, spawn } from 'child_process';
+import { ChildProcessWithoutNullStreams } from 'child_process';
+import * as childProcess from 'child_process';
 import * as util from 'util';
 import * as path from 'path';
 import * as readline from 'readline';
@@ -26,11 +27,12 @@ import {
 import { AspireDebugSession } from '../AspireDebugSession';
 import { createAspireCliPathProcessEnvironment } from '../../utils/cliPathEnvironment';
 import { getHotReloadDiagnostics, logHotReloadDiagnostics, showHotReloadDisabledAdvisoryIfNeeded } from '../hotReload';
+import { terminateCliProcess } from '../../utils/process/cliProcess';
 
 interface IDotNetService {
     getAndActivateDevKit(): Promise<boolean>
     buildDotNetProject(projectFile: string): Promise<void>;
-    getDotNetAttachTargetInfo(projectFile: string, configuration?: string): Promise<DotNetAttachTargetInfo>;
+    getDotNetAttachTargetInfo(projectFile: string, configuration?: string, cancellationToken?: vscode.CancellationToken): Promise<DotNetAttachTargetInfo>;
     getDotNetTargetPath(projectFile: string): Promise<string>;
     getDotNetRunApiOutput(projectFile: string, environment?: NodeJS.ProcessEnv): Promise<string>;
 }
@@ -61,7 +63,7 @@ export class DotNetService implements IDotNetService {
         this._debugSession = debugSession;
     }
 
-    execFileAsync = util.promisify(execFile);
+    execFileAsync = util.promisify(childProcess.execFile);
 
     writeToDebugConsole(message: string, category: 'stdout' | 'stderr', addNewLine: boolean = false): void {
         this._debugSession?.sendMessage(message, addNewLine, category);
@@ -88,7 +90,7 @@ export class DotNetService implements IDotNetService {
             extensionLogOutputChannel.info(`Building .NET project: ${projectFile} using dotnet CLI`);
 
             const args = ['build', projectFile];
-            const buildProcess = spawn('dotnet', args, {
+            const buildProcess = childProcess.spawn('dotnet', args, {
                 // The .NET SDK searches for global.json from the process working directory, not the
                 // project argument. Run from the project directory so extension and CLI builds select
                 // the same SDK and repository configuration.
@@ -133,7 +135,7 @@ export class DotNetService implements IDotNetService {
         });
     }
 
-    async getDotNetAttachTargetInfo(projectFile: string, configuration?: string): Promise<DotNetAttachTargetInfo> {
+    async getDotNetAttachTargetInfo(projectFile: string, configuration?: string, cancellationToken?: vscode.CancellationToken): Promise<DotNetAttachTargetInfo> {
         const args = [
             'msbuild',
             projectFile,
@@ -148,11 +150,7 @@ export class DotNetService implements IDotNetService {
         }
 
         try {
-            const { stdout } = await this.execFileAsync('dotnet', args, {
-                cwd: path.dirname(projectFile),
-                encoding: 'utf8',
-                env: createAspireCliPathProcessEnvironment()
-            });
+            const stdout = await this._runDotNetMsbuild(args, path.dirname(projectFile), cancellationToken);
             // Multiple -getProperty switches return:
             //   { "Properties": { "TargetPath": "/repo/bin/Release/net10.0/Api.dll", "UseAppHost": "false" } }
             const payload: unknown = JSON.parse(stdout);
@@ -174,6 +172,10 @@ export class DotNetService implements IDotNetService {
                 useAppHost: typeof useAppHost === 'string' && useAppHost.trim().toLowerCase() === 'true',
             };
         } catch (err) {
+            if (cancellationToken?.isCancellationRequested) {
+                throw new vscode.CancellationError();
+            }
+
             throw new Error(failedToGetTargetPath(String(err)));
         }
     }
@@ -205,32 +207,32 @@ export class DotNetService implements IDotNetService {
     }
 
     async getDotNetRunApiOutput(projectPath: string, environment?: NodeJS.ProcessEnv): Promise<string> {
-        let childProcess: ChildProcessWithoutNullStreams;
+        let runApiProcess: ChildProcessWithoutNullStreams;
 
         return new Promise<string>(async (resolve, reject) => {
             try {
                 const timeout = setTimeout(() => {
-                    childProcess?.kill();
+                    runApiProcess?.kill();
                     reject(new Error('Timeout while waiting for dotnet run-api response'));
                 }, 10_000);
 
                 extensionLogOutputChannel.info('dotnet run-api - starting process');
 
-                childProcess = spawn('dotnet', ['run-api'], {
+                runApiProcess = childProcess.spawn('dotnet', ['run-api'], {
                     cwd: path.dirname(projectPath),
                     env: createAspireCliPathProcessEnvironment({ ...process.env, ...environment }),
                     stdio: ['pipe', 'pipe', 'pipe']
                 });
 
-                childProcess.on('error', reject);
-                childProcess.on('exit', (code, signal) => {
+                runApiProcess.on('error', reject);
+                runApiProcess.on('exit', (code, signal) => {
                     clearTimeout(timeout);
                     if (code !== 0) {
                         reject(new Error(processExitedWithCode(code?.toString() ?? "unknown")));
                     }
                 });
 
-                const rl = readline.createInterface(childProcess.stdout);
+                const rl = readline.createInterface(runApiProcess.stdout);
                 rl.on('line', line => {
                     clearTimeout(timeout);
                     extensionLogOutputChannel.info(`dotnet run-api - received: ${line}`);
@@ -239,12 +241,66 @@ export class DotNetService implements IDotNetService {
 
                 const message = JSON.stringify({ ['$type']: 'GetRunCommand', ['EntryPointFileFullPath']: projectPath });
                 extensionLogOutputChannel.info(`dotnet run-api - sending: ${message}`);
-                childProcess.stdin.write(message + os.EOL);
-                childProcess.stdin.end();
+                runApiProcess.stdin.write(message + os.EOL);
+                runApiProcess.stdin.end();
             } catch (e) {
                 reject(e);
             }
-        }).finally(() => childProcess.removeAllListeners());
+        }).finally(() => runApiProcess.removeAllListeners());
+    }
+
+    private _runDotNetMsbuild(args: string[], workingDirectory: string, cancellationToken: vscode.CancellationToken | undefined): Promise<string> {
+        return new Promise((resolve, reject) => {
+            let completed = false;
+            let cancellationRegistration: vscode.Disposable | undefined;
+            const complete = (action: () => void) => {
+                if (completed) {
+                    return;
+                }
+
+                completed = true;
+                cancellationRegistration?.dispose();
+                action();
+            };
+            const msbuildProcess = childProcess.spawn('dotnet', args, {
+                cwd: workingDirectory,
+                env: createAspireCliPathProcessEnvironment(),
+                stdio: 'pipe',
+            });
+            let stdout = '';
+
+            msbuildProcess.stdout.setEncoding('utf8');
+            msbuildProcess.stdout.on('data', (data: string) => {
+                stdout += data;
+            });
+
+            msbuildProcess.on('error', error => {
+                complete(() => reject(error));
+            });
+            msbuildProcess.on('close', code => {
+                if (cancellationToken?.isCancellationRequested) {
+                    complete(() => reject(new vscode.CancellationError()));
+                } else if (code === 0) {
+                    complete(() => resolve(stdout));
+                } else {
+                    complete(() => reject(new Error(`dotnet msbuild exited with code ${code ?? 'unknown'}`)));
+                }
+            });
+
+            const cancel = () => {
+                // This child is a short-lived metadata probe, not the resource or AppHost. Stop only
+                // its known process handle so cancellation cannot affect the workload being attached.
+                void terminateCliProcess(msbuildProcess, 'dotnet msbuild target discovery', {
+                    force: true,
+                    suppressTimeoutWarning: true,
+                });
+                complete(() => reject(new vscode.CancellationError()));
+            };
+            cancellationRegistration = cancellationToken?.onCancellationRequested(cancel);
+            if (cancellationToken?.isCancellationRequested) {
+                cancel();
+            }
+        });
     }
 }
 
@@ -459,8 +515,25 @@ function configureDotNetRunDebugConfiguration(
 }
 
 function getDotNetAttachDebuggerResourceInfo(resource: ResourceDebugResourceSnapshot): DotNetAttachDebuggerResourceInfo | undefined {
-    if (resource.resourceType !== 'Project' || resource.state !== 'Running') {
+    if (resource.state !== 'Running' || !canRecognizeDotNetAttachDebuggerResource(resource)) {
         return undefined;
+    }
+
+    if (getAttachDebuggerProcessId(resource) === undefined) {
+        return undefined;
+    }
+
+    const projectPath = resource.properties?.[projectPathPropertyName] as string;
+    return {
+        configuration: getDotNetLaunchConfiguration(resource),
+        projectPath,
+        resourceLabel: resource.displayName ?? resource.name,
+    };
+}
+
+function canRecognizeDotNetAttachDebuggerResource(resource: ResourceDebugResourceSnapshot): boolean {
+    if (resource.resourceType !== 'Project') {
+        return false;
     }
 
     const launchConfigurationType = getLaunchConfigurationType(resource);
@@ -469,31 +542,23 @@ function getDotNetAttachDebuggerResourceInfo(resource: ResourceDebugResourceSnap
     // or simulator process. Ordinary grouped projects from newer AppHosts remain attachable.
     if (launchConfigurationType === 'maui' ||
         (launchConfigurationType === null && getResourceParentName(resource) !== null)) {
-        return undefined;
-    }
-
-    if (getAttachDebuggerProcessId(resource) === undefined) {
-        return undefined;
+        return false;
     }
 
     if (!isDotNetExecutable(resource)) {
-        return undefined;
+        return false;
     }
 
     const projectPath: unknown = resource.properties?.[projectPathPropertyName];
     if (typeof projectPath !== 'string' || projectPath.trim().length === 0) {
-        return undefined;
+        return false;
     }
 
     if (!dotNetProjectFileExtensions.has(path.extname(projectPath).toLowerCase())) {
-        return undefined;
+        return false;
     }
 
-    return {
-        configuration: getDotNetLaunchConfiguration(resource),
-        projectPath,
-        resourceLabel: resource.displayName ?? resource.name,
-    };
+    return true;
 }
 
 function getDotNetLaunchConfiguration(resource: ResourceDebugResourceSnapshot): string | undefined {
@@ -565,7 +630,11 @@ function isDotNetExecutable(resource: ResourceDebugResourceSnapshot): boolean {
     return executableName === 'dotnet' || executableName === 'dotnet.exe';
 }
 
-export async function createDotNetAttachDebugSessionConfiguration(resource: ResourceDebugResourceSnapshot, dotNetService: IDotNetService): Promise<vscode.DebugConfiguration> {
+export async function createDotNetAttachDebugSessionConfiguration(
+    resource: ResourceDebugResourceSnapshot,
+    dotNetService: IDotNetService,
+    cancellationToken?: vscode.CancellationToken,
+): Promise<vscode.DebugConfiguration> {
     const attachInfo = getDotNetAttachDebuggerResourceInfo(resource);
     if (!attachInfo) {
         throw new ResourceAttachConfigurationError('resourceNotAttachable', invalidLaunchConfiguration(JSON.stringify(resource)));
@@ -573,7 +642,7 @@ export async function createDotNetAttachDebugSessionConfiguration(resource: Reso
 
     let targetInfo: DotNetAttachTargetInfo;
     try {
-        targetInfo = await dotNetService.getDotNetAttachTargetInfo(attachInfo.projectPath, attachInfo.configuration);
+        targetInfo = await dotNetService.getDotNetAttachTargetInfo(attachInfo.projectPath, attachInfo.configuration, cancellationToken);
     }
     catch (error) {
         throw new ResourceAttachConfigurationError(
@@ -852,9 +921,10 @@ export function createProjectResourceAttachProvider(dotNetServiceProducer: () =>
             id: 'ms-dotnettools.csharp',
             label: 'C#',
         }],
+        canRecognizeResource: resource => canRecognizeDotNetAttachDebuggerResource(resource),
         canAttachToResource: resource => getDotNetAttachDebuggerResourceInfo(resource) !== undefined,
-        createDebugConfiguration: async resource =>
-            await createDotNetAttachDebugSessionConfiguration(resource, dotNetServiceProducer()),
+        createDebugConfiguration: async (resource, cancellationToken) =>
+            await createDotNetAttachDebugSessionConfiguration(resource, dotNetServiceProducer(), cancellationToken),
     };
 }
 

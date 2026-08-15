@@ -12,14 +12,19 @@ export class ResourceAttachProviderRegistry {
     ) {
     }
 
-    getKnownProviderForResource(resource: ResourceDebugResourceSnapshot): ResourceAttachProvider | undefined {
+    getRecognizedProviderForResource(resource: ResourceDebugResourceSnapshot): ResourceAttachProvider | undefined {
+        return this._knownProviders.find(provider => provider.canRecognizeResource(resource));
+    }
+
+    getAttachableProviderForResource(resource: ResourceDebugResourceSnapshot): ResourceAttachProvider | undefined {
         return this._knownProviders.find(provider => provider.canAttachToResource(resource));
     }
 
     getInstalledProviderForResource(resource: ResourceDebugResourceSnapshot): ResourceAttachProvider | undefined {
-        return this._knownProviders.find(provider =>
-            provider.canAttachToResource(resource) &&
-            this.getMissingDebuggerExtensions(provider).length === 0);
+        const provider = this.getAttachableProviderForResource(resource);
+        return provider && this.getMissingDebuggerExtensions(provider).length === 0
+            ? provider
+            : undefined;
     }
 
     getMissingDebuggerExtensions(provider: ResourceAttachProvider): readonly ResourceDebugExtensionRequirement[] {

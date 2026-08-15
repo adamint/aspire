@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { getAppHostIdentityKey } from '../utils/appHostIdentity';
+import { extensionLogOutputChannel } from '../utils/logging';
 import type { ResourceDebugAppHostTarget } from './resourceDebugContracts';
 
 const resourceDebugSessionMarkerConfigKey = '__aspireResourceDebugSessionMarker';
@@ -82,9 +83,14 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
         const resourceKey = this._getResourceKey(appHost.absolutePath, resourceName);
         const precedingOperation = this._resourceLocks.get(resourceKey);
         let releaseCurrentOperation: (() => void) | undefined;
-        const currentOperation = new Promise<void>(resolve => {
+        const currentOperationGate = new Promise<void>(resolve => {
             releaseCurrentOperation = resolve;
         });
+        // The map stores a canonical tail, not merely this caller's completion signal. A canceled
+        // waiter releases its gate promptly, but its tail still waits for the predecessor so later
+        // callers cannot overtake an active operation.
+        const currentOperation = (precedingOperation?.catch(() => undefined) ?? Promise.resolve())
+            .then(() => currentOperationGate);
         this._resourceLocks.set(resourceKey, currentOperation);
 
         try {
@@ -182,6 +188,11 @@ export class ResourceDebugSessionRegistry implements vscode.Disposable {
         attempt.pendingStartTimeout = setTimeout(() => {
             attempt.pendingStartTimeout = undefined;
             if (this._attempts.get(attempt.marker) === attempt && attempt.sessionIds.size === 0) {
+                // Debug adapters can strip private configuration properties. Do not fall back to
+                // matching sessions by process or configuration: that could claim an unrelated
+                // debugger session. Expire this bounded entry and make the residual recovery risk
+                // diagnosable instead.
+                extensionLogOutputChannel.warn('Resource debugger session tracking expired before its debug session reported the private marker. A later attach may start another session.');
                 this._removeAttempt(attempt);
             }
         }, this._pendingStartTimeoutMs);

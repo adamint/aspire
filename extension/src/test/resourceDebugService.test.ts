@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import type { AppHostDisplayInfo, ResourceJson } from '../data/AppHostDataRepository';
-import { projectDebuggerExtension, projectResourceAttachProvider } from '../debugger/languages/dotnet';
+import { createProjectResourceAttachProvider, projectDebuggerExtension, projectResourceAttachProvider } from '../debugger/languages/dotnet';
 import { ResourceAttachProviderRegistry } from '../debugger/resourceAttachProviders';
 import { ResourceDebugAppHostIdentityComparer, ResourceDebugAppHostRepository, ResourceDebugService } from '../debugger/resourceDebugService';
 import { ResourceDebugSessionEvents, ResourceDebugSessionRegistry } from '../debugger/resourceDebugSessionRegistry';
@@ -62,6 +62,7 @@ function createProvider(overrides: Partial<ResourceAttachProvider> = {}): Resour
             id: 'ms-dotnettools.csharp',
             label: 'C#',
         }],
+        canRecognizeResource: () => true,
         canAttachToResource: () => true,
         createDebugConfiguration: async () => ({
             type: 'coreclr',
@@ -158,7 +159,7 @@ suite('Resource debug service', () => {
     test('registers .NET attach behavior independently from the launch provider', () => {
         const providers = new ResourceAttachProviderRegistry([projectResourceAttachProvider], () => true);
 
-        assert.strictEqual(providers.getKnownProviderForResource(createResource({
+        assert.strictEqual(providers.getRecognizedProviderForResource(createResource({
             properties: {
                 'project.path': '/repo/api/Api.csproj',
                 'executable.path': 'dotnet',
@@ -372,23 +373,38 @@ suite('Resource debug service', () => {
         sessions.dispose();
     });
 
+    test('checks attach eligibility before reporting a missing debugger extension', async () => {
+        const { service, sessions } = createService({
+            provider: createProvider({ canAttachToResource: () => false }),
+            isExtensionInstalled: () => false,
+        });
+
+        assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'unsupportedResource' });
+        sessions.dispose();
+    });
+
     test('returns typed outcomes for unsupported and stopped resources', async () => {
         const unsupported = createService({
             provider: createProvider({ canAttachToResource: () => false }),
         });
-        const unsupportedStopped = createService({
+        const stopped = createService({
             appHosts: [createAppHost({ resources: [createResource({ state: 'Finished' })] })],
             provider: createProvider({ canAttachToResource: () => false }),
         });
-        const stopped = createService({
-            appHosts: [createAppHost({ resources: [createResource({ state: 'Finished' })] })],
-        });
 
         assert.deepStrictEqual(await unsupported.service.debug(createRequest()), { outcome: 'unsupportedResource' });
-        assert.deepStrictEqual(await unsupportedStopped.service.debug(createRequest()), { outcome: 'unsupportedResource' });
         assert.deepStrictEqual(await stopped.service.debug(createRequest()), { outcome: 'resourceNotRunning' });
         unsupported.sessions.dispose();
-        unsupportedStopped.sessions.dispose();
+        stopped.sessions.dispose();
+    });
+
+    test('recognizes stopped .NET resources before checking attach readiness', async () => {
+        const stopped = createService({
+            appHosts: [createAppHost({ resources: [createResource({ state: 'Finished' })] })],
+            provider: projectResourceAttachProvider,
+        });
+
+        assert.deepStrictEqual(await stopped.service.debug(createRequest()), { outcome: 'resourceNotRunning' });
         stopped.sessions.dispose();
     });
 
@@ -494,6 +510,67 @@ suite('Resource debug service', () => {
         }
     });
 
+    test('keeps a later request blocked when a canceled waiter is between it and the active request', async () => {
+        const sessions = new ResourceDebugSessionRegistry();
+        let releaseFirst: (() => void) | undefined;
+        let firstEntered: (() => void) | undefined;
+        let firstCompleted = false;
+        const firstCanComplete = new Promise<void>(resolve => {
+            releaseFirst = resolve;
+        });
+        const firstHasEntered = new Promise<void>(resolve => {
+            firstEntered = resolve;
+        });
+        const cancellation = new vscode.CancellationTokenSource();
+        let laterWaiterStarted = false;
+
+        try {
+            const first = sessions.runSerialized(
+                target,
+                'api',
+                undefined,
+                async () => {
+                    firstEntered!();
+                    await firstCanComplete;
+                    firstCompleted = true;
+                    return 'first';
+                },
+                () => 'cancelled');
+            await firstHasEntered;
+
+            const canceledWaiter = sessions.runSerialized(
+                target,
+                'api',
+                cancellation.token,
+                async () => 'second',
+                () => 'cancelled');
+            const laterWaiter = sessions.runSerialized(
+                target,
+                'api',
+                undefined,
+                async () => {
+                    laterWaiterStarted = true;
+                    return 'third';
+                },
+                () => 'cancelled');
+
+            cancellation.cancel();
+
+            assert.strictEqual(await canceledWaiter, 'cancelled');
+            assert.strictEqual(firstCompleted, false);
+            await new Promise<void>(resolve => setImmediate(resolve));
+            assert.strictEqual(laterWaiterStarted, false);
+
+            releaseFirst!();
+            assert.strictEqual(await first, 'first');
+            assert.strictEqual(await laterWaiter, 'third');
+        }
+        finally {
+            cancellation.dispose();
+            sessions.dispose();
+        }
+    });
+
     test('passes the request cancellation token to providers that support cancellation', async () => {
         const cancellation = new vscode.CancellationTokenSource();
         let receivedToken: vscode.CancellationToken | undefined;
@@ -519,6 +596,63 @@ suite('Resource debug service', () => {
         }
     });
 
+    test('returns cancelled when .NET target discovery observes request cancellation', async () => {
+        let receivedToken: vscode.CancellationToken | undefined;
+        let signalTargetDiscoveryStarted: (() => void) | undefined;
+        const targetDiscoveryStarted = new Promise<void>(resolve => {
+            signalTargetDiscoveryStarted = resolve;
+        });
+        const provider = createProjectResourceAttachProvider(() => ({
+            getAndActivateDevKit: async () => false,
+            buildDotNetProject: async () => { },
+            getDotNetAttachTargetInfo: async (
+                _projectFile: string,
+                _configuration: string | undefined,
+                cancellationToken: vscode.CancellationToken | undefined) => {
+                receivedToken = cancellationToken;
+                signalTargetDiscoveryStarted!();
+                return await new Promise<never>((_resolve, reject) => {
+                    cancellationToken?.onCancellationRequested(() => reject(new vscode.CancellationError()));
+                });
+            },
+            getDotNetTargetPath: async () => '',
+            getDotNetRunApiOutput: async () => '',
+        } as never));
+        const cancellation = new vscode.CancellationTokenSource();
+        const startDebugging = sinon.stub().resolves(true);
+        const { service, sessions } = createService({
+            appHosts: [createAppHost({
+                resources: [createResource({
+                    properties: {
+                        'project.path': '/repo/api/Api.csproj',
+                        'executable.path': 'dotnet',
+                        'executable.pid': '42',
+                    },
+                })],
+            })],
+            provider,
+            startDebugging,
+        });
+
+        try {
+            const operation = service.debug(createRequest({ cancellationToken: cancellation.token }));
+            await targetDiscoveryStarted;
+            cancellation.cancel();
+
+            const result = await Promise.race([
+                operation,
+                new Promise<'timedOut'>(resolve => setTimeout(() => resolve('timedOut'), 100)),
+            ]);
+            assert.deepStrictEqual(result, { outcome: 'cancelled' });
+            assert.strictEqual(receivedToken, cancellation.token);
+            assert.strictEqual(startDebugging.callCount, 0);
+        }
+        finally {
+            cancellation.dispose();
+            sessions.dispose();
+        }
+    });
+
     test('returns alreadyDebugging while an independent attach session is active', async () => {
         const { service, sessions } = createService();
 
@@ -527,8 +661,9 @@ suite('Resource debug service', () => {
         sessions.dispose();
     });
 
-    test('expires an accepted start when the debugger session loses the private marker', async () => {
+    test('logs marker-loss expiry before allowing a recovery attach attempt', async () => {
         const clock = sinon.useFakeTimers();
+        const logWarning = sinon.stub(extensionLogOutputChannel, 'warn');
         const events = new TestDebugSessionEvents();
         const sessions = new ResourceDebugSessionRegistry(events, { pendingStartTimeoutMs: 100 });
         const service = new ResourceDebugService({
@@ -550,6 +685,8 @@ suite('Resource debug service', () => {
             await clock.tickAsync(100);
 
             assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
+            assert.ok(logWarning.calledOnceWithExactly(
+                'Resource debugger session tracking expired before its debug session reported the private marker. A later attach may start another session.'));
         }
         finally {
             sessions.dispose();

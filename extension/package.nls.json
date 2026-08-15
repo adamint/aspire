@@ -288,6 +288,8 @@
   "aspire-vscode.strings.appHostPathLabel": "Path",
   "aspire-vscode.strings.appHostStartingDescription": "Starting...",
   "aspire-vscode.strings.attachDebuggerConfigurationName": "Attach debugger: {0}",
+  "aspire-vscode.strings.attachingDebugger": "Attaching debugger to {0}...",
+  "aspire-vscode.strings.attachDebuggerAlreadyDebugging": "A debugger is already attached to {0}.",
   "aspire-vscode.strings.attachDebuggerUnavailable": "This resource is not a running .NET project resource that can be attached with the C# debugger.",
   "aspire-vscode.strings.attachDebuggerResourceNotFound": "The selected resource is no longer available. Refresh the Aspire pane and try again.",
   "aspire-vscode.strings.attachDebuggerCsharpExtensionRequired": "Install the C# extension to attach the debugger to .NET project resources.",

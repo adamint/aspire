@@ -152,7 +152,7 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
         const resource = matchingResources[0];
         let provider: ResourceAttachProvider | undefined;
         try {
-            provider = this._dependencies.attachProviders.getKnownProviderForResource(resource);
+            provider = this._dependencies.attachProviders.getRecognizedProviderForResource(resource);
         }
         catch (error) {
             if (isCommandCancellation(error) || request.cancellationToken?.isCancellationRequested) {
@@ -171,37 +171,13 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
             return { outcome: 'resourceNotRunning' };
         }
 
-        let missingDebuggerExtensions: readonly ResourceDebugExtensionRequirement[];
-        try {
-            missingDebuggerExtensions = this._dependencies.attachProviders.getMissingDebuggerExtensions(provider);
-        }
-        catch (error) {
-            if (isCommandCancellation(error) || request.cancellationToken?.isCancellationRequested) {
-                return { outcome: 'cancelled' };
-            }
-
-            this._logFailure('checking required debugger extensions', error);
-            return { outcome: 'error', errorKind: 'providerResolutionFailed' };
-        }
-
-        if (missingDebuggerExtensions.length > 0) {
-            return {
-                outcome: 'debuggerExtensionMissing',
-                debuggerExtensions: missingDebuggerExtensions.map(requirement => ({
-                    id: requirement.id,
-                    label: requirement.label,
-                })),
-            };
-        }
-
-        return await this._attach(request, resolvedTarget, resource, provider);
+        return await this._attach(request, resolvedTarget, resource);
     }
 
     private async _attach(
         request: ResourceDebugRequest,
         appHost: ResourceDebugAppHostTarget,
         resource: ResourceJson,
-        knownProvider: ResourceAttachProvider,
     ): Promise<ResourceDebugResult> {
         if (request.cancellationToken?.isCancellationRequested) {
             return { outcome: 'cancelled' };
@@ -214,8 +190,10 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
         let provider: ResourceAttachProvider | undefined;
         let missingDebuggerExtensions: readonly ResourceDebugExtensionRequirement[];
         try {
-            provider = this._dependencies.attachProviders.getInstalledProviderForResource(resource);
-            missingDebuggerExtensions = this._dependencies.attachProviders.getMissingDebuggerExtensions(knownProvider);
+            provider = this._dependencies.attachProviders.getAttachableProviderForResource(resource);
+            missingDebuggerExtensions = provider
+                ? this._dependencies.attachProviders.getMissingDebuggerExtensions(provider)
+                : [];
         }
         catch (error) {
             if (isCommandCancellation(error) || request.cancellationToken?.isCancellationRequested) {
@@ -227,17 +205,17 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
         }
 
         if (!provider) {
-            if (missingDebuggerExtensions.length > 0) {
-                return {
-                    outcome: 'debuggerExtensionMissing',
-                    debuggerExtensions: missingDebuggerExtensions.map(requirement => ({
-                        id: requirement.id,
-                        label: requirement.label,
-                    })),
-                };
-            }
-
             return { outcome: 'unsupportedResource' };
+        }
+
+        if (missingDebuggerExtensions.length > 0) {
+            return {
+                outcome: 'debuggerExtensionMissing',
+                debuggerExtensions: missingDebuggerExtensions.map(requirement => ({
+                    id: requirement.id,
+                    label: requirement.label,
+                })),
+            };
         }
 
         let configuration: vscode.DebugConfiguration;

@@ -46,6 +46,16 @@ export interface ResourceDebugExtensionRequirement {
 export interface ResourceAttachProvider {
     readonly id: ResourceAttachProviderId;
     readonly requiredDebuggerExtensions: readonly ResourceDebugExtensionRequirement[];
+    /**
+     * Identifies resources this provider supports independently of their current state. The service
+     * uses this before checking whether a resource is running so stopped supported resources get a
+     * bounded resourceNotRunning result instead of being reported as unsupported.
+     */
+    canRecognizeResource(resource: ResourceDebugResourceSnapshot): boolean;
+    /**
+     * Determines whether a recognized resource is ready to attach now, including runtime metadata
+     * and any provider-specific attach prerequisites.
+     */
     canAttachToResource(resource: ResourceDebugResourceSnapshot): boolean;
     createDebugConfiguration(resource: ResourceDebugResourceSnapshot, cancellationToken?: vscode.CancellationToken): Promise<vscode.DebugConfiguration>;
 }

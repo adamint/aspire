@@ -41,8 +41,10 @@ class TestDotNetService {
         this._hasDevKit = hasDevKit;
     }
 
-    getDotNetAttachTargetInfo(projectFile: string, configuration?: string): Promise<{ targetPath: string, useAppHost: boolean }> {
-        return this.getDotNetAttachTargetInfoStub(projectFile, configuration);
+    getDotNetAttachTargetInfo(projectFile: string, configuration?: string, cancellationToken?: vscode.CancellationToken): Promise<{ targetPath: string, useAppHost: boolean }> {
+        return cancellationToken
+            ? this.getDotNetAttachTargetInfoStub(projectFile, configuration, cancellationToken)
+            : this.getDotNetAttachTargetInfoStub(projectFile, configuration);
     }
 
     getDotNetTargetPath(projectFile: string): Promise<string> {
@@ -61,6 +63,33 @@ class TestDotNetService {
         this.runApiEnvironment = environment;
         return Promise.resolve(this.runApiOutput);
     }
+}
+
+function createMsbuildProcess(): {
+    process: childProcess.ChildProcessWithoutNullStreams;
+    stdout: EventEmitter & { setEncoding(encoding: string): void };
+    kill: sinon.SinonStub;
+} {
+    const process = new EventEmitter() as unknown as childProcess.ChildProcessWithoutNullStreams;
+    const stdout = Object.assign(new EventEmitter(), {
+        setEncoding: (_encoding: string) => { },
+    });
+    const kill = sinon.stub().callsFake((signal?: NodeJS.Signals | number) => {
+        (process as unknown as { killed: boolean }).killed = true;
+        process.emit('close', null, signal);
+        return true;
+    });
+    Object.assign(process, {
+        exitCode: null,
+        signalCode: null,
+        killed: false,
+        pid: 1234,
+        kill,
+        stdout,
+        stderr: new EventEmitter(),
+    });
+
+    return { process, stdout, kill };
 }
 
 suite('Dotnet Debugger Extension Tests', () => {
@@ -137,16 +166,72 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
     });
 
+    test('attach configuration passes cancellation to target discovery', async () => {
+        const { attachProvider, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/Api.dll', null, true, true);
+        const cancellation = new vscode.CancellationTokenSource();
+
+        try {
+            await attachProvider.createDebugConfiguration({
+                name: 'api',
+                displayName: 'API',
+                resourceType: 'Project',
+                state: 'Running',
+                properties: {
+                    'executable.pid': '1234',
+                    'executable.path': 'dotnet',
+                    'project.path': '/repo/api/Api.csproj',
+                },
+            }, cancellation.token);
+
+            assert.ok(dotNetService.getDotNetAttachTargetInfoStub.calledOnceWithExactly(
+                '/repo/api/Api.csproj',
+                undefined,
+                cancellation.token));
+        }
+        finally {
+            cancellation.dispose();
+        }
+    });
+
+    test('target discovery cancels and terminates its specific msbuild process', async () => {
+        const dotNetService = new DotNetService(undefined);
+        const msbuildProcess = createMsbuildProcess();
+        sinon.stub(childProcess, 'spawn').returns(msbuildProcess.process);
+        const cancellation = new vscode.CancellationTokenSource();
+
+        try {
+            const targetDiscovery = dotNetService.getDotNetAttachTargetInfo('/repo/api/Api.csproj', undefined, cancellation.token);
+            cancellation.cancel();
+            const outcome = await Promise.race([
+                targetDiscovery.then(
+                    () => 'completed',
+                    error => error instanceof vscode.CancellationError ? 'cancelled' : 'failed'),
+                new Promise<'timedOut'>(resolve => setTimeout(() => resolve('timedOut'), 100)),
+            ]);
+
+            assert.strictEqual(outcome, 'cancelled');
+            assert.ok(msbuildProcess.kill.calledOnce);
+            assert.deepStrictEqual(msbuildProcess.kill.firstCall.args, ['SIGKILL']);
+        }
+        finally {
+            cancellation.dispose();
+        }
+    });
+
     test('attach configuration rejects projects launched without an apphost', async () => {
         const dotNetService = new DotNetService(undefined);
-        const execFileAsync = sinon.stub(dotNetService, 'execFileAsync').resolves({
-            stdout: JSON.stringify({
-                Properties: {
-                    TargetPath: '/repo/bin/Release/net10.0/ReleaseApi.dll',
-                    UseAppHost: 'false',
-                },
-            }),
-            stderr: '',
+        const msbuildProcess = createMsbuildProcess();
+        const spawn = sinon.stub(childProcess, 'spawn').callsFake(() => {
+            queueMicrotask(() => {
+                msbuildProcess.stdout.emit('data', JSON.stringify({
+                    Properties: {
+                        TargetPath: '/repo/bin/Release/net10.0/ReleaseApi.dll',
+                        UseAppHost: 'false',
+                    },
+                }));
+                msbuildProcess.process.emit('close', 0);
+            });
+            return msbuildProcess.process;
         });
         const attachProvider = createProjectResourceAttachProvider(() => dotNetService);
 
@@ -167,7 +252,7 @@ suite('Dotnet Debugger Extension Tests', () => {
                 && error.name === 'ResourceAttachConfigurationError'
                 && (error as Error & { errorKind?: string }).errorKind === 'resourceNotAttachable');
 
-        assert.deepStrictEqual(execFileAsync.firstCall.args[1], [
+        assert.deepStrictEqual(spawn.firstCall.args[1], [
             'msbuild',
             '/repo/api/Api.csproj',
             '-nologo',

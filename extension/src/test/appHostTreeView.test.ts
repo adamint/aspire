@@ -1802,12 +1802,32 @@ suite('getResourceContextValue', () => {
         assert.strictEqual(result, 'resource:canAttachDebugger');
     });
 
-    test('project without a process ID does not include attach debugger context', () => {
+    test('running resource with a numeric process ID includes provider-approved attach debugger context', () => {
+        const result = getResourceContextValue(makeResource({
+            resourceType: 'Project',
+            state: ResourceState.Running,
+            properties: {
+                ...makeAttachableProjectProperties(),
+                'executable.pid': 4242,
+            } as unknown as ResourceJson['properties'],
+        }), true);
+        assert.strictEqual(result, 'resource:canAttachDebugger');
+    });
+
+    test('running non-Project resource includes provider-approved attach debugger context', () => {
+        const result = getResourceContextValue(makeResource({
+            resourceType: 'GoExecutable',
+            state: ResourceState.Running,
+        }), true);
+        assert.strictEqual(result, 'resource:canAttachDebugger');
+    });
+
+    test('project without provider approval does not include attach debugger context', () => {
         const result = getResourceContextValue(makeResource({
             resourceType: 'Project',
             state: ResourceState.Running,
             properties: makeAttachableProjectProperties({ 'executable.pid': null }),
-        }), true);
+        }), false);
         assert.strictEqual(result, 'resource');
     });
 

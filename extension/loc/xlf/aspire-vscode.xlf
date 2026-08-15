@@ -10,6 +10,9 @@
     <trans-unit id="aspire-vscode.strings.debugSessionAlreadyExists">
       <source xml:lang="en">A debug session is already active for id {0}.</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.attachDebuggerAlreadyDebugging">
+      <source xml:lang="en">A debugger is already attached to {0}.</source>
+    </trans-unit>
     <trans-unit id="command.add">
       <source xml:lang="en">Add an integration</source>
     </trans-unit>
@@ -87,6 +90,9 @@
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.attachDebuggerConfigurationName">
       <source xml:lang="en">Attach debugger: {0}</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.attachingDebugger">
+      <source xml:lang="en">Attaching debugger to {0}...</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.unsupportedResourceType">
       <source xml:lang="en">Attempted to start unsupported resource type: {0}.</source>
