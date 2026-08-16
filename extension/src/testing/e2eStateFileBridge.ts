@@ -848,6 +848,7 @@ async function invokeRegisteredLanguageModelTool(
   input: Record<string, unknown>): Promise<vscode.LanguageModelToolResult> {
   const cancellation = new vscode.CancellationTokenSource();
   try {
+    await registration.tool.prepareInvocation?.({ input }, cancellation.token);
     const result = await registration.tool.invoke(
       { input, toolInvocationToken: undefined },
       cancellation.token);
@@ -874,8 +875,9 @@ async function invokeCanceledLanguageModelTools(
 
   return await Promise.all(Array.from({ length: invocationCount }, async () => {
     const cancellation = new vscode.CancellationTokenSource();
-    cancellation.cancel();
     try {
+      await registration.tool.prepareInvocation?.({ input }, cancellation.token);
+      cancellation.cancel();
       const result = await registration.tool.invoke(
         { input, toolInvocationToken: undefined },
         cancellation.token);

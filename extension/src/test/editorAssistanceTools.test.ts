@@ -1534,7 +1534,7 @@ suite('Editor assistance AppHost services', () => {
             assert.strictEqual(uiRepository.requests.length, 0);
         });
 
-        test('re-resolves the Dashboard target after confirmation before opening anything', async () => {
+        test('rejects a Dashboard target that resolves to a different identity after confirmation', async () => {
             const sandbox = sinon.createSandbox();
             try {
                 sandbox.stub(vscode.workspace, 'getConfiguration').returns(createAspireConfiguration({
@@ -1566,19 +1566,205 @@ suite('Editor assistance AppHost services', () => {
                     new vscode.CancellationTokenSource().token));
 
                 assert.deepStrictEqual(result, {
-                    success: true,
+                    success: false,
                     tool: aspireOpenDashboardToolName,
-                    outcome: 'opened',
-                    presentation: 'externalBrowser',
+                    outcome: 'appHostNotFound',
                 });
-                assert.strictEqual(openExternal.callCount, 1);
-                assert.strictEqual(
-                    (openExternal.firstCall.args[0] as vscode.Uri).toString(true),
-                    'https://replacement.example.invalid/login?t=private');
+                assert.strictEqual(openExternal.callCount, 0);
+
+                await tool.prepareInvocation(
+                    { input },
+                    new vscode.CancellationTokenSource().token);
+                const retry = readEditorAssistanceToolResult(await tool.invoke(
+                    { input, toolInvocationToken: undefined },
+                    new vscode.CancellationTokenSource().token));
+
+                assert.deepStrictEqual(retry, {
+                    success: false,
+                    tool: aspireOpenDashboardToolName,
+                    outcome: 'appHostNotFound',
+                });
+                assert.strictEqual(openExternal.callCount, 0);
             }
             finally {
                 sandbox.restore();
             }
+        });
+
+        test('fails closed when Dashboard invocation has no matching preparation', async () => {
+            const sandbox = sinon.createSandbox();
+            try {
+                sandbox.stub(vscode.workspace, 'getConfiguration').returns(createAspireConfiguration({
+                    dashboardBrowser: 'openExternalBrowser',
+                }));
+                const openExternal = sandbox.stub(vscode.env, 'openExternal').resolves(true);
+                const tool = new AspireOpenDashboardLanguageModelTool(service);
+                uiRepository.appHosts = [
+                    createRunningAppHost(appHostProjectPath, 'https://dashboard.example.invalid/login?t=private'),
+                ];
+
+                const result = readEditorAssistanceToolResult(await tool.invoke(
+                    {
+                        input: { appHostPath: 'AppHost/AppHost.csproj' },
+                        toolInvocationToken: undefined,
+                    },
+                    new vscode.CancellationTokenSource().token));
+
+                assert.deepStrictEqual(result, {
+                    success: false,
+                    tool: aspireOpenDashboardToolName,
+                    outcome: 'appHostNotFound',
+                });
+                assert.strictEqual(openExternal.callCount, 0);
+            }
+            finally {
+                sandbox.restore();
+            }
+        });
+
+        test('opens a prepared Dashboard identity once and rejects duplicate invocation', async () => {
+            const sandbox = sinon.createSandbox();
+            try {
+                sandbox.stub(vscode.workspace, 'getConfiguration').returns(createAspireConfiguration({
+                    dashboardBrowser: 'openExternalBrowser',
+                }));
+                const openExternal = sandbox.stub(vscode.env, 'openExternal').resolves(true);
+                const tool = new AspireOpenDashboardLanguageModelTool(service);
+                const input = { appHostPath: 'AppHost/AppHost.csproj' };
+                uiRepository.appHosts = [
+                    createRunningAppHost(appHostProjectPath, 'https://dashboard.example.invalid/login?t=private'),
+                ];
+                await tool.prepareInvocation(
+                    { input },
+                    new vscode.CancellationTokenSource().token);
+
+                const first = readEditorAssistanceToolResult(await tool.invoke(
+                    { input, toolInvocationToken: undefined },
+                    new vscode.CancellationTokenSource().token));
+                const second = readEditorAssistanceToolResult(await tool.invoke(
+                    { input, toolInvocationToken: undefined },
+                    new vscode.CancellationTokenSource().token));
+
+                assert.strictEqual(first.outcome, 'opened');
+                assert.strictEqual(second.outcome, 'appHostNotFound');
+                assert.strictEqual(openExternal.callCount, 1);
+            }
+            finally {
+                sandbox.restore();
+            }
+        });
+
+        test('allows a valid Dashboard preparation after an unresolved preparation', async () => {
+            const sandbox = sinon.createSandbox();
+            try {
+                sandbox.stub(vscode.workspace, 'getConfiguration').returns(createAspireConfiguration({
+                    dashboardBrowser: 'openExternalBrowser',
+                }));
+                const openExternal = sandbox.stub(vscode.env, 'openExternal').resolves(true);
+                const tool = new AspireOpenDashboardLanguageModelTool(service);
+                const input = { appHostPath: 'Later/AppHost.csproj' };
+
+                await tool.prepareInvocation(
+                    { input },
+                    new vscode.CancellationTokenSource().token);
+                const unresolved = readEditorAssistanceToolResult(await tool.invoke(
+                    { input, toolInvocationToken: undefined },
+                    new vscode.CancellationTokenSource().token));
+                assert.strictEqual(unresolved.outcome, 'appHostNotFound');
+
+                const laterPath = path.join(workspaceRoot, 'Later', 'AppHost.csproj');
+                fs.mkdirSync(path.dirname(laterPath), { recursive: true });
+                fs.writeFileSync(laterPath, appHostProjectContents);
+                addCandidate(discoveryService, workspaceRoot, laterPath);
+                uiRepository.appHosts = [
+                    createRunningAppHost(laterPath, 'https://dashboard.example.invalid/login?t=private'),
+                ];
+                await tool.prepareInvocation(
+                    { input },
+                    new vscode.CancellationTokenSource().token);
+                const resolved = readEditorAssistanceToolResult(await tool.invoke(
+                    { input, toolInvocationToken: undefined },
+                    new vscode.CancellationTokenSource().token));
+
+                assert.strictEqual(resolved.outcome, 'opened');
+                assert.strictEqual(openExternal.callCount, 1);
+            }
+            finally {
+                sandbox.restore();
+            }
+        });
+
+        test('invalidates an unconsumed Dashboard preparation when a later preparation is unresolved', async () => {
+            const sandbox = sinon.createSandbox();
+            try {
+                sandbox.stub(vscode.workspace, 'getConfiguration').returns(createAspireConfiguration({
+                    dashboardBrowser: 'openExternalBrowser',
+                }));
+                const openExternal = sandbox.stub(vscode.env, 'openExternal').resolves(true);
+                const tool = new AspireOpenDashboardLanguageModelTool(service);
+                const input = { appHostPath: 'AppHost/AppHost.csproj' };
+                uiRepository.appHosts = [
+                    createRunningAppHost(appHostProjectPath, 'https://dashboard.example.invalid/login?t=private'),
+                ];
+                await tool.prepareInvocation(
+                    { input },
+                    new vscode.CancellationTokenSource().token);
+
+                isTrustedStub.value(false);
+                await tool.prepareInvocation(
+                    { input },
+                    new vscode.CancellationTokenSource().token);
+                isTrustedStub.value(true);
+                const invalidated = readEditorAssistanceToolResult(await tool.invoke(
+                    { input, toolInvocationToken: undefined },
+                    new vscode.CancellationTokenSource().token));
+
+                assert.strictEqual(invalidated.outcome, 'appHostNotFound');
+                assert.strictEqual(openExternal.callCount, 0);
+
+                await tool.prepareInvocation(
+                    { input },
+                    new vscode.CancellationTokenSource().token);
+                const recovered = readEditorAssistanceToolResult(await tool.invoke(
+                    { input, toolInvocationToken: undefined },
+                    new vscode.CancellationTokenSource().token));
+
+                assert.strictEqual(recovered.outcome, 'opened');
+                assert.strictEqual(openExternal.callCount, 1);
+            }
+            finally {
+                sandbox.restore();
+            }
+        });
+
+        test('fails closed when overlapping Dashboard preparations resolve different identities', async () => {
+            const tool = new AspireOpenDashboardLanguageModelTool(service);
+            const input = { appHostPath: 'AppHost/AppHost.csproj' };
+            await tool.prepareInvocation(
+                { input },
+                new vscode.CancellationTokenSource().token);
+
+            const replacementPath = path.join(secondWorkspaceRoot, 'AppHost', 'AppHost.csproj');
+            fs.mkdirSync(path.dirname(replacementPath), { recursive: true });
+            fs.writeFileSync(replacementPath, appHostProjectContents);
+            addCandidate(discoveryService, secondWorkspaceRoot, replacementPath);
+            workspaceFoldersStub.value([
+                createWorkspaceFolder(secondWorkspaceRoot, 'second', 0),
+            ]);
+            await tool.prepareInvocation(
+                { input },
+                new vscode.CancellationTokenSource().token);
+
+            const first = readEditorAssistanceToolResult(await tool.invoke(
+                { input, toolInvocationToken: undefined },
+                new vscode.CancellationTokenSource().token));
+            const second = readEditorAssistanceToolResult(await tool.invoke(
+                { input, toolInvocationToken: undefined },
+                new vscode.CancellationTokenSource().token));
+
+            assert.strictEqual(first.outcome, 'appHostNotFound');
+            assert.strictEqual(second.outcome, 'appHostNotFound');
+            assert.strictEqual(uiRepository.requests.length, 0);
         });
 
         test('opens only the exact current running AppHost and never returns its URL', async () => {

@@ -26,6 +26,7 @@ import {
 import { EditorAssistanceToolService } from './editorAssistanceToolService';
 import { EditorAssistanceTelemetry } from './editorAssistanceTelemetry';
 import { escapeMarkdown } from './languageModelToolUi';
+import { type AppHostTargetIdentity } from './safeAppHostTargetResolver';
 
 export class AspireDebugSessionStatusLanguageModelTool implements vscode.LanguageModelTool<DebugSessionStatusToolInput> {
     constructor(
@@ -58,6 +59,9 @@ export class AspireExplainLaunchFailureLanguageModelTool implements vscode.Langu
 }
 
 export class AspireOpenDashboardLanguageModelTool implements vscode.LanguageModelTool<OpenDashboardToolInput> {
+    private static readonly _maxPreparedSelectors = 32;
+    private readonly _preparedIdentities = new Map<string, PreparedDashboardIdentity>();
+
     constructor(
         private readonly _service: EditorAssistanceToolService,
         private readonly _telemetry: EditorAssistanceTelemetry = new EditorAssistanceTelemetry()) {
@@ -66,8 +70,14 @@ export class AspireOpenDashboardLanguageModelTool implements vscode.LanguageMode
     async prepareInvocation(
         options: vscode.LanguageModelToolInvocationPrepareOptions<OpenDashboardToolInput>,
         token: vscode.CancellationToken): Promise<vscode.PreparedToolInvocation> {
-        const displayPath = escapeMarkdown(
-            await this._service.describeDashboardTarget(options.input?.appHostPath, token));
+        const preparedTarget = await this._service.prepareDashboardTarget(options.input?.appHostPath, token);
+        if (preparedTarget.identity !== null) {
+            this.recordPreparedIdentity(options.input?.appHostPath, preparedTarget.identity);
+        }
+        else {
+            this.invalidatePreparedIdentity(options.input?.appHostPath);
+        }
+        const displayPath = escapeMarkdown(preparedTarget.displayPath);
         return {
             invocationMessage: editorAssistanceOpenDashboardInvocationMessage(displayPath),
             confirmationMessages: {
@@ -80,9 +90,56 @@ export class AspireOpenDashboardLanguageModelTool implements vscode.LanguageMode
     async invoke(
         options: vscode.LanguageModelToolInvocationOptions<OpenDashboardToolInput>,
         token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
+        const confirmedIdentity = this.consumePreparedIdentity(options.input?.appHostPath);
         return createToolResult(await this._telemetry.capture(
             aspireOpenDashboardToolName,
-            () => this._service.openDashboard(options.input, token)));
+            () => this._service.openDashboard(options.input, token, confirmedIdentity)));
+    }
+
+    private recordPreparedIdentity(rawAppHostPath: unknown, identity: AppHostTargetIdentity): void {
+        const selectorKey = getPreparedSelectorKey(rawAppHostPath);
+        const existing = this._preparedIdentities.get(selectorKey);
+        if (!existing) {
+            if (this._preparedIdentities.size >= AspireOpenDashboardLanguageModelTool._maxPreparedSelectors) {
+                // The API does not provide a token that correlates prepareInvocation with invoke.
+                // Evicting confirmation history could therefore let a delayed invocation consume a
+                // newer target's preparation. Missing state fails closed instead.
+                return;
+            }
+
+            this._preparedIdentities.set(selectorKey, {
+                identity,
+                conflicted: false,
+                available: true,
+            });
+            return;
+        }
+
+        if (existing.identity !== identity) {
+            existing.conflicted = true;
+            existing.available = false;
+        }
+        else if (!existing.conflicted) {
+            existing.available = true;
+        }
+    }
+
+    private invalidatePreparedIdentity(rawAppHostPath: unknown): void {
+        const prepared = this._preparedIdentities.get(getPreparedSelectorKey(rawAppHostPath));
+        if (prepared) {
+            prepared.available = false;
+        }
+    }
+
+    private consumePreparedIdentity(rawAppHostPath: unknown): AppHostTargetIdentity | null {
+        const selectorKey = getPreparedSelectorKey(rawAppHostPath);
+        const prepared = this._preparedIdentities.get(selectorKey);
+        if (!prepared || prepared.conflicted || !prepared.available) {
+            return null;
+        }
+
+        prepared.available = false;
+        return prepared.identity;
     }
 }
 
@@ -181,4 +238,16 @@ function createToolResult(result: EditorAssistanceToolResult): vscode.LanguageMo
     return new vscode.LanguageModelToolResult([
         new vscode.LanguageModelTextPart(JSON.stringify(result)),
     ]);
+}
+
+function getPreparedSelectorKey(rawAppHostPath: unknown): string {
+    return typeof rawAppHostPath === 'string'
+        ? `path:${rawAppHostPath}`
+        : `invalid:${typeof rawAppHostPath}`;
+}
+
+interface PreparedDashboardIdentity {
+    readonly identity: AppHostTargetIdentity;
+    conflicted: boolean;
+    available: boolean;
 }

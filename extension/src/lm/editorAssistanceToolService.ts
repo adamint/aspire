@@ -32,7 +32,11 @@ import {
     type OpenOutputToolResult,
 } from './editorAssistanceToolContracts';
 import { type EditorAppHostSummary } from './editorStateSnapshotService';
-import { type ResolvedAppHostTarget, type SafeAppHostTargetResolution } from './safeAppHostTargetResolver';
+import {
+    type AppHostTargetIdentity,
+    type ResolvedAppHostTarget,
+    type SafeAppHostTargetResolution,
+} from './safeAppHostTargetResolver';
 
 type ResolvedPreflight<T> =
     | { readonly resolved: true; readonly target: ResolvedAppHostTarget; readonly input: T }
@@ -52,18 +56,23 @@ export class EditorAssistanceToolService {
     constructor(private readonly _dependencies: EditorAssistanceToolDependencies) {
     }
 
-    async describeDashboardTarget(rawAppHost: unknown, token: vscode.CancellationToken): Promise<string> {
+    async prepareDashboardTarget(
+        rawAppHost: unknown,
+        token: vscode.CancellationToken): Promise<{ readonly displayPath: string; readonly identity: AppHostTargetIdentity | null }> {
         if (!vscode.workspace.isTrusted) {
-            return appHostLifecycleUnresolvedPath;
+            return { displayPath: appHostLifecycleUnresolvedPath, identity: null };
         }
 
         const resolution = await this._dependencies.targetResolver.resolveTarget(rawAppHost, token);
         return resolution.resolved
-            ? resolution.target.displayPath
-            : appHostLifecycleUnresolvedPath;
+            ? { displayPath: resolution.target.displayPath, identity: resolution.target.identity }
+            : { displayPath: appHostLifecycleUnresolvedPath, identity: null };
     }
 
-    async openDashboard(input: unknown, token: vscode.CancellationToken): Promise<OpenDashboardToolResult> {
+    async openDashboard(
+        input: unknown,
+        token: vscode.CancellationToken,
+        confirmedIdentity?: AppHostTargetIdentity | null): Promise<OpenDashboardToolResult> {
         const preflight = await this.preflight(
             input,
             token,
@@ -71,6 +80,9 @@ export class EditorAssistanceToolService {
             aspireOpenDashboardToolName);
         if (!preflight.resolved) {
             return createOpenDashboardFailure(preflight.outcome);
+        }
+        if (confirmedIdentity !== undefined && preflight.target.identity !== confirmedIdentity) {
+            return createOpenDashboardFailure('appHostNotFound');
         }
 
         try {
