@@ -5,6 +5,7 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
+import { openDashboardInBrowser } from '../debugger/session/dashboardLauncher';
 import {
     AspireDebugSessionStatusLanguageModelTool,
     AspireExplainLaunchFailureLanguageModelTool,
@@ -317,6 +318,25 @@ suite('Editor assistance AppHost services', () => {
                 uiHandoffService,
             });
         });
+
+        function createEditorOwnedRunningAppHost(
+            appHostPath: string,
+            dashboardUrl: string | null,
+            status = 'running',
+            cliPid = 2001): AppHostDisplayInfo {
+            dashboardSessionsByIdentity.set(
+                resolver.getIdentityForAppHostPath(appHostPath),
+                [{
+                    cliProcessId: cliPid,
+                    configuration: {},
+                    isShuttingDown: false,
+                    openDashboard: (url, browserType) => openDashboardInBrowser(url, browserType),
+                }]);
+            return {
+                ...createRunningAppHost(appHostPath, dashboardUrl, status),
+                cliPid,
+            };
+        }
 
         teardown(() => {
             isTrustedStub.restore();
@@ -1565,7 +1585,7 @@ suite('Editor assistance AppHost services', () => {
                     createWorkspaceFolder(secondWorkspaceRoot, 'second', 0),
                 ]);
                 uiRepository.appHosts = [
-                    createRunningAppHost(replacementPath, 'https://replacement.example.invalid/login?t=private'),
+                    createEditorOwnedRunningAppHost(replacementPath, 'https://replacement.example.invalid/login?t=private'),
                 ];
 
                 const result = readEditorAssistanceToolResult(await tool.invoke(
@@ -1684,7 +1704,7 @@ suite('Editor assistance AppHost services', () => {
                 const tool = new AspireOpenDashboardLanguageModelTool(service);
                 const input = { appHostPath: 'AppHost/AppHost.csproj' };
                 uiRepository.appHosts = [
-                    createRunningAppHost(appHostProjectPath, 'https://dashboard.example.invalid/login?t=private'),
+                    createEditorOwnedRunningAppHost(appHostProjectPath, 'https://dashboard.example.invalid/login?t=private'),
                 ];
                 await tool.prepareInvocation(
                     { input },
@@ -1723,9 +1743,11 @@ suite('Editor assistance AppHost services', () => {
                     fs.writeFileSync(absolutePath, appHostProjectContents);
                     addCandidate(discoveryService, workspaceRoot, absolutePath);
                     uiRepository.appHosts = [
-                        createRunningAppHost(
+                        createEditorOwnedRunningAppHost(
                             absolutePath,
-                            `https://dashboard.example.invalid/login?t=private-${index}`),
+                            `https://dashboard.example.invalid/login?t=private-${index}`,
+                            'running',
+                            2001 + index),
                     ];
                     const input = { appHostPath: relativePath };
 
@@ -1811,7 +1833,7 @@ suite('Editor assistance AppHost services', () => {
                 fs.writeFileSync(laterPath, appHostProjectContents);
                 addCandidate(discoveryService, workspaceRoot, laterPath);
                 uiRepository.appHosts = [
-                    createRunningAppHost(laterPath, 'https://dashboard.example.invalid/login?t=private'),
+                    createEditorOwnedRunningAppHost(laterPath, 'https://dashboard.example.invalid/login?t=private'),
                 ];
                 await tool.prepareInvocation(
                     { input },
@@ -1852,7 +1874,7 @@ suite('Editor assistance AppHost services', () => {
                 const tool = new AspireOpenDashboardLanguageModelTool(service);
                 const input = { appHostPath: 'AppHost/AppHost.csproj' };
                 uiRepository.appHosts = [
-                    createRunningAppHost(appHostProjectPath, 'https://dashboard.example.invalid/login?t=private'),
+                    createEditorOwnedRunningAppHost(appHostProjectPath, 'https://dashboard.example.invalid/login?t=private'),
                 ];
                 await tool.prepareInvocation(
                     { input },
@@ -1941,7 +1963,7 @@ suite('Editor assistance AppHost services', () => {
                     { input },
                     new vscode.CancellationTokenSource().token);
                 uiRepository.appHosts = [
-                    createRunningAppHost(appHostProjectPath, 'https://dashboard.example.invalid/login?t=private'),
+                    createEditorOwnedRunningAppHost(appHostProjectPath, 'https://dashboard.example.invalid/login?t=private'),
                 ];
                 const recovered = readEditorAssistanceToolResult(await tool.invoke(
                     { input, toolInvocationToken: undefined },
@@ -1955,7 +1977,7 @@ suite('Editor assistance AppHost services', () => {
             }
         });
 
-        test('opens only the exact current running AppHost and never returns its URL', async () => {
+        test('fails closed for an exact ownerless AppHost and never returns its URL', async () => {
             const sandbox = sinon.createSandbox();
             try {
                 sandbox.stub(vscode.workspace, 'getConfiguration').returns(createAspireConfiguration({
@@ -1973,13 +1995,11 @@ suite('Editor assistance AppHost services', () => {
                     new vscode.CancellationTokenSource().token);
 
                 assert.deepStrictEqual(result, {
-                    success: true,
+                    success: false,
                     tool: aspireOpenDashboardToolName,
-                    outcome: 'opened',
-                    presentation: 'externalBrowser',
+                    outcome: 'error',
                 });
-                assert.strictEqual(openExternal.callCount, 1);
-                assert.strictEqual((openExternal.firstCall.args[0] as vscode.Uri).toString(true), secretUrl);
+                assert.strictEqual(openExternal.callCount, 0);
                 assert.strictEqual(JSON.stringify(result).includes(secretUrl), false);
             }
             finally {
@@ -1987,7 +2007,7 @@ suite('Editor assistance AppHost services', () => {
             }
         });
 
-        test('correlates fresh running rows through AppHost path equivalence', async function () {
+        test('fails closed for ownerless AppHost path aliases', async function () {
             const sandbox = sinon.createSandbox();
             try {
                 sandbox.stub(vscode.workspace, 'getConfiguration').returns(createAspireConfiguration({
@@ -2017,14 +2037,13 @@ suite('Editor assistance AppHost services', () => {
                         new vscode.CancellationTokenSource().token);
 
                     assert.deepStrictEqual(result, {
-                        success: true,
+                        success: false,
                         tool: aspireOpenDashboardToolName,
-                        outcome: 'opened',
-                        presentation: 'externalBrowser',
+                        outcome: 'error',
                     });
                 }
 
-                assert.strictEqual(openExternal.callCount, 2);
+                assert.strictEqual(openExternal.callCount, 0);
             }
             finally {
                 sandbox.restore();
@@ -2074,6 +2093,54 @@ suite('Editor assistance AppHost services', () => {
 
                 const result = await service.openDashboard(
                     { appHostPath: 'Linked/AppHost.csproj' },
+                    new vscode.CancellationTokenSource().token);
+
+                assert.deepStrictEqual(result, {
+                    success: false,
+                    tool: aspireOpenDashboardToolName,
+                    outcome: 'error',
+                });
+                sinon.assert.notCalled(openExternal);
+            }
+            finally {
+                sandbox.restore();
+            }
+        });
+
+        test('fails closed when an ownerless stale CLI row uses a retargeted symlink', async function () {
+            const sandbox = sinon.createSandbox();
+            try {
+                sandbox.stub(vscode.workspace, 'getConfiguration').returns(createAspireConfiguration({
+                    dashboardBrowser: 'openExternalBrowser',
+                }));
+                const openExternal = sandbox.stub(vscode.env, 'openExternal').resolves(true);
+                const firstTarget = path.join(workspaceRoot, 'ExternalFirst', 'AppHost.csproj');
+                const secondTarget = path.join(workspaceRoot, 'ExternalSecond', 'AppHost.csproj');
+                const linkedTarget = path.join(workspaceRoot, 'ExternalLinked', 'AppHost.csproj');
+                for (const target of [firstTarget, secondTarget]) {
+                    fs.mkdirSync(path.dirname(target), { recursive: true });
+                    fs.writeFileSync(target, appHostProjectContents);
+                }
+                fs.mkdirSync(path.dirname(linkedTarget), { recursive: true });
+                try {
+                    fs.symlinkSync(firstTarget, linkedTarget);
+                }
+                catch {
+                    this.skip();
+                    return;
+                }
+
+                addCandidate(discoveryService, workspaceRoot, linkedTarget);
+                fs.rmSync(linkedTarget);
+                fs.symlinkSync(secondTarget, linkedTarget);
+                uiRepository.appHosts = [
+                    createRunningAppHost(
+                        linkedTarget,
+                        'https://dashboard.example.invalid/login?t=private'),
+                ];
+
+                const result = await service.openDashboard(
+                    { appHostPath: 'ExternalLinked/AppHost.csproj' },
                     new vscode.CancellationTokenSource().token);
 
                 assert.deepStrictEqual(result, {
@@ -2256,7 +2323,7 @@ suite('Editor assistance AppHost services', () => {
                     const startDebugging = sandbox.stub(vscode.debug, 'startDebugging').resolves(true);
                     const showInformationMessage = sandbox.stub(vscode.window, 'showInformationMessage').resolves(undefined);
                     uiRepository.appHosts = [
-                        createRunningAppHost(appHostProjectPath, 'https://dashboard.example.invalid/login?t=private'),
+                        createEditorOwnedRunningAppHost(appHostProjectPath, 'https://dashboard.example.invalid/login?t=private'),
                     ];
 
                     const result = await service.openDashboard(
@@ -2291,7 +2358,7 @@ suite('Editor assistance AppHost services', () => {
             }
         });
 
-        test('reuses the exact editor-owned Dashboard launcher and uses ownerless fallback only with zero editor sessions', async () => {
+        test('reuses the exact editor-owned Dashboard launcher and rejects ownerless rows', async () => {
             const sandbox = sinon.createSandbox();
             try {
                 sandbox.stub(vscode.workspace, 'getConfiguration').returns(createAspireConfiguration({
@@ -2336,12 +2403,11 @@ suite('Editor assistance AppHost services', () => {
                     { appHostPath: 'AppHost/AppHost.csproj' },
                     new vscode.CancellationTokenSource().token);
                 assert.deepStrictEqual(fallback, {
-                    success: true,
+                    success: false,
                     tool: aspireOpenDashboardToolName,
-                    outcome: 'opened',
-                    presentation: 'externalBrowser',
+                    outcome: 'error',
                 });
-                assert.strictEqual(openExternal.callCount, 1);
+                assert.strictEqual(openExternal.callCount, 0);
             }
             finally {
                 sandbox.restore();
@@ -2592,7 +2658,7 @@ suite('Editor assistance AppHost services', () => {
                 const showInformationMessage = sandbox.stub(vscode.window, 'showInformationMessage')
                     .returns(new Promise<vscode.MessageItem | undefined>(() => { }));
                 uiRepository.appHosts = [
-                    createRunningAppHost(appHostProjectPath, 'https://dashboard.example.invalid/login?t=private'),
+                    createEditorOwnedRunningAppHost(appHostProjectPath, 'https://dashboard.example.invalid/login?t=private'),
                 ];
 
                 const result = await Promise.race([
@@ -2625,7 +2691,7 @@ suite('Editor assistance AppHost services', () => {
                 sandbox.stub(vscode.window, 'showInformationMessage')
                     .rejects(new Error(`Selection failed for ${secretUrl}`));
                 const errorLog = sandbox.stub(extensionLogOutputChannel, 'error');
-                uiRepository.appHosts = [createRunningAppHost(appHostProjectPath, secretUrl)];
+                uiRepository.appHosts = [createEditorOwnedRunningAppHost(appHostProjectPath, secretUrl)];
 
                 const result = await service.openDashboard(
                     { appHostPath: 'AppHost/AppHost.csproj' },
@@ -2658,7 +2724,7 @@ suite('Editor assistance AppHost services', () => {
                 sandbox.stub(vscode.window, 'showInformationMessage').resolves({ title: directLink });
                 sandbox.stub(vscode.env, 'openExternal').rejects(new Error(`Could not open ${secretUrl}`));
                 const errorLog = sandbox.stub(extensionLogOutputChannel, 'error');
-                uiRepository.appHosts = [createRunningAppHost(appHostProjectPath, secretUrl)];
+                uiRepository.appHosts = [createEditorOwnedRunningAppHost(appHostProjectPath, secretUrl)];
 
                 const result = await service.openDashboard(
                     { appHostPath: 'AppHost/AppHost.csproj' },
@@ -2729,7 +2795,7 @@ suite('Editor assistance AppHost services', () => {
                     dashboardBrowser: 'openExternalBrowser',
                 }));
                 sandbox.stub(vscode.env, 'openExternal').rejects(new Error(`Could not open ${secretUrl}`));
-                uiRepository.appHosts = [createRunningAppHost(appHostProjectPath, secretUrl)];
+                uiRepository.appHosts = [createEditorOwnedRunningAppHost(appHostProjectPath, secretUrl)];
 
                 const dashboardResult = await service.openDashboard(
                     { appHostPath: 'AppHost/AppHost.csproj' },

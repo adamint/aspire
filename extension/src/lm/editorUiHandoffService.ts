@@ -2,7 +2,6 @@ import * as vscode from 'vscode';
 
 import {
     isWebDashboardUrl,
-    openDashboardInBrowser,
     resolveExplicitDashboardLaunchBehavior,
     showDashboardLaunchNotification,
     type DashboardBrowserType,
@@ -71,37 +70,22 @@ export class EditorUiHandoffService implements EditorUiHandoffOperations {
             }
 
             const sessionOwners = this._dependencies.getAspireDebugSessionOwners();
-            const sessions = sessionOwners
-                .filter(owner => owner.appHostIdentity === target.identity)
-                .map(owner => owner.session);
-            let editorSession: (typeof sessions)[number] | undefined;
             const cliPid = runningAppHost.cliPid;
-            const cliOwners = typeof cliPid === 'number'
-                ? sessionOwners.filter(owner => owner.session.cliProcessId === cliPid)
-                : [];
-            if (sessions.length > 0) {
-                // Any editor session owns its Dashboard settings, shutdown state, and child cleanup.
-                // Falling back to an ownerless browser is safe only for a genuinely external AppHost,
-                // so a fresh CLI row must identify exactly one editor owner before UI is presented.
-                if (typeof cliPid !== 'number') {
-                    return { outcome: 'error' };
-                }
-
-                const matchingOwners = cliOwners.filter(owner => owner.appHostIdentity === target.identity);
-                if (matchingOwners.length !== 1 || cliOwners.length !== 1) {
-                    return { outcome: 'error' };
-                }
-
-                editorSession = matchingOwners[0].session;
-            }
-            else if (cliOwners.length > 0) {
-                // A CLI row can retain the lexical symlink path after that link is retargeted.
-                // Its PID still belongs to the original editor session, so it must not become an
-                // ownerless Dashboard for the newly resolved target.
+            if (typeof cliPid !== 'number') {
                 return { outcome: 'error' };
             }
+
+            // External CLI rows do not carry a launch-time target identity. Require one editor
+            // session whose captured identity and CLI PID both match the fresh repository row.
+            const cliOwners = sessionOwners.filter(owner => owner.session.cliProcessId === cliPid);
+            const matchingOwners = cliOwners.filter(owner => owner.appHostIdentity === target.identity);
+            if (matchingOwners.length !== 1 || cliOwners.length !== 1) {
+                return { outcome: 'error' };
+            }
+
+            const editorSession = matchingOwners[0].session;
             throwIfCanceled(token);
-            if (editorSession?.isShuttingDown) {
+            if (editorSession.isShuttingDown) {
                 return { outcome: 'error' };
             }
             if (!this._dependencies.targetResolver.isTargetCurrent(target)) {
@@ -110,7 +94,7 @@ export class EditorUiHandoffService implements EditorUiHandoffOperations {
 
             const resolvedBehavior = resolveExplicitDashboardLaunchBehavior(
                 vscode.workspace.getConfiguration('aspire'),
-                editorSession?.configuration.dashboardBrowser);
+                editorSession.configuration.dashboardBrowser);
             throwIfCanceled(token);
 
             if (resolvedBehavior.behavior === 'notification') {
@@ -122,9 +106,7 @@ export class EditorUiHandoffService implements EditorUiHandoffOperations {
             }
 
             const browserType: DashboardBrowserType = resolvedBehavior.behavior;
-            const presentation = editorSession
-                ? await editorSession.openDashboard(dashboardUrl, browserType)
-                : await openDashboardInBrowser(dashboardUrl, browserType);
+            const presentation = await editorSession.openDashboard(dashboardUrl, browserType);
             return presentation
                 ? { outcome: 'opened', presentation }
                 : { outcome: 'error' };
