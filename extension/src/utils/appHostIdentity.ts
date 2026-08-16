@@ -19,7 +19,12 @@ export interface AppHostIdentityKeyInfo {
 const appHostProjectFileExtensions = ['.csproj', '.fsproj', '.vbproj'];
 const appHostAliasKeySuffix = '\u0000apphost';
 const opaqueIdentityRegistry = new Map<string, OpaqueAppHostIdentity>();
+const currentTargetIdentityRegistry = new Map<string, OpaqueAppHostIdentity>();
 let nextOpaqueIdentity = 0;
+
+interface CurrentTargetIdentityKeyInfo extends AppHostIdentityKeyInfo {
+    readonly exactPathKey: string;
+}
 
 export function getAppHostPathComparisonKey(value: string): string {
     return canonicalize(path.normalize(path.resolve(value)));
@@ -154,6 +159,91 @@ export function getOrCreateIdentityForAbsolutePath(appHostPath: string): OpaqueA
     return identity;
 }
 
+/**
+ * Returns an identity bound to the canonical filesystem target currently selected by the path.
+ *
+ * Unlike {@link getOrCreateIdentityForAbsolutePath}, this detects symlink retargeting.
+ * Callers that capture launch, failure, or confirmation ownership retain the returned
+ * opaque value; a later resolution of the same lexical path receives a different value
+ * when its canonical target changed. Replacing the same target file in place or through
+ * an atomic rename preserves identity because the selected AppHost did not change.
+ */
+export function getOrCreateIdentityForCurrentAppHostTarget(appHostPath: string): OpaqueAppHostIdentity {
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const keyInfo = getCurrentTargetIdentityKeyInfo(appHostPath);
+        if (!sameCurrentTargetIdentityKeyInfo(keyInfo, getCurrentTargetIdentityKeyInfo(appHostPath))) {
+            continue;
+        }
+
+        const exactIdentity = currentTargetIdentityRegistry.get(keyInfo.exactPathKey);
+        if (exactIdentity) {
+            assignUnmappedCurrentTargetAliases(keyInfo, exactIdentity);
+            return exactIdentity;
+        }
+
+        const issuedIdentities = new Set<OpaqueAppHostIdentity>();
+        const aliasIdentity = currentTargetIdentityRegistry.get(keyInfo.key);
+        if (aliasIdentity) {
+            issuedIdentities.add(aliasIdentity);
+        }
+        for (const pathKey of keyInfo.pathKeys) {
+            const identity = currentTargetIdentityRegistry.get(pathKey);
+            if (identity) {
+                issuedIdentities.add(identity);
+            }
+        }
+
+        const identity = issuedIdentities.size === 1
+            ? [...issuedIdentities][0]
+            : createOpaqueAppHostIdentity();
+        currentTargetIdentityRegistry.set(keyInfo.exactPathKey, identity);
+        if (issuedIdentities.size <= 1) {
+            assignUnmappedCurrentTargetAliases(keyInfo, identity);
+        }
+
+        return identity;
+    }
+
+    // A target that changes during every bounded sample cannot be safely correlated.
+    // Return an unregistered identity so the next resolution necessarily differs.
+    return createOpaqueAppHostIdentity();
+}
+
+function createOpaqueAppHostIdentity(): OpaqueAppHostIdentity {
+    return `apphost-${++nextOpaqueIdentity}` as OpaqueAppHostIdentity;
+}
+
+function getCurrentTargetIdentityKeyInfo(appHostPath: string): CurrentTargetIdentityKeyInfo {
+    const keyInfo = getAppHostIdentityKeyInfo(appHostPath);
+    return {
+        ...keyInfo,
+        exactPathKey: getAppHostPathComparisonKey(appHostPath),
+    };
+}
+
+function sameCurrentTargetIdentityKeyInfo(left: CurrentTargetIdentityKeyInfo, right: CurrentTargetIdentityKeyInfo): boolean {
+    return left.exactPathKey === right.exactPathKey &&
+        left.key === right.key &&
+        left.pathKeys.length === right.pathKeys.length &&
+        left.pathKeys.every((pathKey, index) => pathKey === right.pathKeys[index]);
+}
+
+function assignUnmappedCurrentTargetAliases(keyInfo: CurrentTargetIdentityKeyInfo, identity: OpaqueAppHostIdentity): void {
+    const keys = new Set([keyInfo.exactPathKey, keyInfo.key, ...keyInfo.pathKeys]);
+    if ([...keys].some(key => {
+        const existing = currentTargetIdentityRegistry.get(key);
+        return existing !== undefined && existing !== identity;
+    })) {
+        return;
+    }
+
+    for (const key of keys) {
+        if (!currentTargetIdentityRegistry.has(key)) {
+            currentTargetIdentityRegistry.set(key, identity);
+        }
+    }
+}
+
 function assignUnmappedAliases(keyInfo: AppHostIdentityKeyInfo, identity: OpaqueAppHostIdentity): void {
     const keys = new Set([keyInfo.key, ...keyInfo.pathKeys]);
     if ([...keys].some(key => {
@@ -172,6 +262,7 @@ function assignUnmappedAliases(keyInfo: AppHostIdentityKeyInfo, identity: Opaque
 
 export function resetAppHostIdentityRegistry(): void {
     opaqueIdentityRegistry.clear();
+    currentTargetIdentityRegistry.clear();
     nextOpaqueIdentity = 0;
 }
 

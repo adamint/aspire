@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 import { extensionLogOutputChannel } from '../utils/logging';
 import {
     compareAppHostIdentity,
-    getOrCreateIdentityForAbsolutePath,
+    getOrCreateIdentityForCurrentAppHostTarget,
     isAppHostPathWithinDirectory,
     type AppHostIdentityRelation,
     type OpaqueAppHostIdentity,
@@ -98,11 +98,15 @@ export class SafeAppHostTargetResolver {
     /**
      * Returns the window-scoped opaque identity for an AppHost path.
      *
-     * Session snapshots use the lexical path recorded at launch so a later symlink
-     * retarget cannot move an active session to another list item.
+     * The identity is bound to the filesystem entry currently selected by the path, so
+     * confirmation re-resolution can detect a symlink retarget.
      */
     getIdentityForAppHostPath(appHostPath: string): AppHostTargetIdentity {
-        return getOrCreateIdentityForAbsolutePath(appHostPath);
+        return getOrCreateIdentityForCurrentAppHostTarget(appHostPath);
+    }
+
+    isTargetCurrent(target: ResolvedAppHostTarget): boolean {
+        return this.getIdentityForAppHostPath(target.absolutePath) === target.identity;
     }
 
     /**

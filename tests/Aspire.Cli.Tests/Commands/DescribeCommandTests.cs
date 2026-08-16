@@ -349,6 +349,58 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task DescribeCommand_Follow_JsonFormat_IncludesDisabledCommandsWhenRequested()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var outputWriter = new TestOutputTextWriter(outputHelper);
+        using var provider = CreateDescribeTestServices(
+            workspace,
+            outputWriter,
+            [
+                new ResourceSnapshot
+                {
+                    Name = "redis",
+                    DisplayName = "redis",
+                    ResourceType = "Container",
+                    State = "Running",
+                    Commands =
+                    [
+                        new ResourceSnapshotCommand
+                        {
+                            Name = "restart",
+                            DisplayName = "Restart",
+                            State = KnownCommandState.Enabled,
+                            Visibility = KnownCommandVisibility.UI,
+                        },
+                        new ResourceSnapshotCommand
+                        {
+                            Name = "repair",
+                            DisplayName = "Repair",
+                            State = KnownCommandState.Disabled,
+                            Visibility = KnownCommandVisibility.UI,
+                        },
+                    ],
+                },
+            ],
+            configureConnection: connection =>
+            {
+                connection.WatchResourceSnapshotsHandler = (_, cancellationToken) => EmptyResourceSnapshots(cancellationToken);
+            });
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("describe --follow --format json --include-disabled-commands");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        var jsonLine = Assert.Single(outputWriter.Logs, l => l.TrimStart().StartsWith("{", StringComparison.Ordinal));
+        var resource = JsonSerializer.Deserialize(jsonLine, ResourcesCommandJsonContext.Ndjson.ResourceJson);
+        Assert.NotNull(resource);
+        Assert.Equal(["repair", "restart"], resource.Commands!.Keys);
+        Assert.Equal(KnownCommandState.Disabled, resource.Commands["repair"].State);
+    }
+
+    [Fact]
     public async Task DescribeCommand_Follow_JsonFormat_DoesNotMissResourceCreatedDuringInitialLoad()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);

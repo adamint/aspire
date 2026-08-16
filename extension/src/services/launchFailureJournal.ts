@@ -1,4 +1,4 @@
-import { getOrCreateIdentityForAbsolutePath, type OpaqueAppHostIdentity } from '../utils/appHostIdentity';
+import { getOrCreateIdentityForCurrentAppHostTarget, type OpaqueAppHostIdentity } from '../utils/appHostIdentity';
 import {
     isCommandCancellation,
     sendTelemetryEvent,
@@ -259,17 +259,27 @@ const defaultLaunchFailureJournal = new LaunchFailureJournal(
     sendLaunchFailureRecordedTelemetry);
 
 export function recordLaunchFailureForAppHostPath(appHostPath: string, input: LaunchFailureInput): LaunchFailureRecord {
-    return defaultLaunchFailureJournal.record(
-        getOrCreateIdentityForAbsolutePath(appHostPath),
-        normalizeLaunchFailure(input));
+    return recordLaunchFailureForAppHostIdentity(
+        getOrCreateIdentityForCurrentAppHostTarget(appHostPath),
+        input);
+}
+
+export function recordLaunchFailureForAppHostIdentity(appHostIdentity: OpaqueAppHostIdentity, input: LaunchFailureInput): LaunchFailureRecord {
+    return defaultLaunchFailureJournal.record(appHostIdentity, normalizeLaunchFailure(input));
 }
 
 export function recordSanitizedLaunchFailureForAppHostPath(appHostPath: string, failure: SanitizedLaunchFailure): LaunchFailureRecord {
-    return defaultLaunchFailureJournal.record(getOrCreateIdentityForAbsolutePath(appHostPath), failure);
+    return recordSanitizedLaunchFailureForAppHostIdentity(
+        getOrCreateIdentityForCurrentAppHostTarget(appHostPath),
+        failure);
+}
+
+export function recordSanitizedLaunchFailureForAppHostIdentity(appHostIdentity: OpaqueAppHostIdentity, failure: SanitizedLaunchFailure): LaunchFailureRecord {
+    return defaultLaunchFailureJournal.record(appHostIdentity, failure);
 }
 
 export function readLatestLaunchFailures(appHostPath?: string): readonly LaunchFailureRecord[] {
-    const identity = appHostPath ? getOrCreateIdentityForAbsolutePath(appHostPath) : undefined;
+    const identity = appHostPath ? getOrCreateIdentityForCurrentAppHostTarget(appHostPath) : undefined;
     return defaultLaunchFailureJournal.readLatest(identity);
 }
 

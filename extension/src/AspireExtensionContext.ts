@@ -11,7 +11,7 @@ import type { AspireDebugConsoleOutputEvent } from './types/extensionApi';
 import { extensionLogOutputChannel } from './utils/logging';
 import { resetEditorAssistanceWindowState } from './services/editorAssistanceWindowState';
 import { type EditorResourceSessionSnapshot } from './services/appHostLaunchContracts';
-import { getOrCreateIdentityForAbsolutePath, type OpaqueAppHostIdentity } from './utils/appHostIdentity';
+import { getOrCreateIdentityForCurrentAppHostTarget, type OpaqueAppHostIdentity } from './utils/appHostIdentity';
 
 export class AspireExtensionContext implements vscode.Disposable {
     private static readonly _cliStopTimeoutMs = 5_000;
@@ -86,6 +86,9 @@ export class AspireExtensionContext implements vscode.Disposable {
         return this.aspireDebugSessions.flatMap(session =>
             session.editorResourceSessions.map(resourceSession => ({
                 appHostPath: resourceSession.appHostPath,
+                ...(resourceSession.appHostIdentity === undefined
+                    ? {}
+                    : { appHostIdentity: resourceSession.appHostIdentity }),
                 targetPath: resourceSession.targetPath,
                 ...(resourceSession.resourceExecutablePaths === undefined
                     ? {}
@@ -100,7 +103,7 @@ export class AspireExtensionContext implements vscode.Disposable {
             const appHostPath = session.resolvedAppHostPath ?? session.appHostPath;
             return session.operationKind === 'run' &&
                 appHostPath !== undefined &&
-                getOrCreateIdentityForAbsolutePath(appHostPath) === identity;
+                (session.appHostIdentity ?? getOrCreateIdentityForCurrentAppHostTarget(appHostPath)) === identity;
         });
     }
 

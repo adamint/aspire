@@ -86,6 +86,7 @@ class FakeEditorUiHandoffRepository {
     readonly requests: vscode.CancellationToken[] = [];
     appHosts: readonly AppHostDisplayInfo[] = [];
     error: unknown;
+    afterFetch: (() => void) | undefined;
 
     async fetchRunningAppHostsOnce(token: vscode.CancellationToken): Promise<readonly AppHostDisplayInfo[]> {
         this.requests.push(token);
@@ -97,6 +98,7 @@ class FakeEditorUiHandoffRepository {
             throw this.error;
         }
 
+        this.afterFetch?.();
         return this.appHosts;
     }
 }
@@ -1589,6 +1591,50 @@ suite('Editor assistance AppHost services', () => {
             finally {
                 sandbox.restore();
             }
+        });
+
+        test('rejects a Dashboard symlink that retargets after confirmation', async function () {
+            const firstTarget = path.join(workspaceRoot, 'FirstTarget', 'AppHost.csproj');
+            const secondTarget = path.join(workspaceRoot, 'SecondTarget', 'AppHost.csproj');
+            const linkedTarget = path.join(workspaceRoot, 'LinkedTarget', 'AppHost.csproj');
+            fs.mkdirSync(path.dirname(firstTarget), { recursive: true });
+            fs.mkdirSync(path.dirname(secondTarget), { recursive: true });
+            fs.mkdirSync(path.dirname(linkedTarget), { recursive: true });
+            fs.writeFileSync(firstTarget, appHostProjectContents);
+            fs.writeFileSync(secondTarget, appHostProjectContents);
+            try {
+                fs.symlinkSync(firstTarget, linkedTarget);
+            }
+            catch {
+                this.skip();
+                return;
+            }
+
+            addCandidate(discoveryService, workspaceRoot, linkedTarget);
+            const tool = new AspireOpenDashboardLanguageModelTool(service);
+            const input = { appHostPath: 'LinkedTarget/AppHost.csproj' };
+            await tool.prepareInvocation(
+                { input },
+                new vscode.CancellationTokenSource().token);
+
+            uiRepository.appHosts = [
+                createRunningAppHost(linkedTarget, 'https://replacement.example.invalid/login?t=private'),
+            ];
+            uiRepository.afterFetch = () => {
+                fs.rmSync(linkedTarget);
+                fs.symlinkSync(secondTarget, linkedTarget);
+            };
+
+            const result = readEditorAssistanceToolResult(await tool.invoke(
+                { input, toolInvocationToken: undefined },
+                new vscode.CancellationTokenSource().token));
+
+            assert.deepStrictEqual(result, {
+                success: false,
+                tool: aspireOpenDashboardToolName,
+                outcome: 'appHostNotRunning',
+            });
+            assert.strictEqual(uiRepository.requests.length, 1);
         });
 
         test('fails closed when Dashboard invocation has no matching preparation', async () => {

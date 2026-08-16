@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { AspireCommandType, AspireOperationKind } from '../dcp/types';
 import { appHostLifecycleBusy } from '../loc/strings';
+import { type OpaqueAppHostIdentity } from '../utils/appHostIdentity';
 
 export interface AppHostLaunchRequestedEvent {
     appHostPath: string;
@@ -19,6 +20,7 @@ export interface AppHostDebugSessionTerminatedEvent {
 
 export interface AppHostLaunchSession {
     readonly appHostPath: string | undefined;
+    readonly appHostIdentity?: OpaqueAppHostIdentity;
     /**
      * The concrete AppHost the extension resolved for this session, when the session's
      * own `program` is a workspace folder rather than a file.
@@ -47,6 +49,7 @@ export interface AppHostLaunchSession {
 export interface AppHostEditorSessionSnapshot {
     readonly appHostPath: string | undefined;
     readonly resolvedAppHostPath: string | undefined;
+    readonly appHostIdentity?: OpaqueAppHostIdentity;
     readonly operationKind: AspireOperationKind;
     readonly startupCompleted: boolean;
     readonly noDebug: boolean | undefined;
@@ -66,6 +69,7 @@ export type EditorResourceSessionMode = 'run' | 'debug' | 'other';
  */
 export interface EditorResourceSessionSnapshot {
     readonly appHostPath: string;
+    readonly appHostIdentity?: OpaqueAppHostIdentity;
     readonly targetPath: string;
     readonly resourceExecutablePaths?: readonly string[];
     readonly state: EditorResourceSessionState;

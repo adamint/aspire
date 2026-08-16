@@ -34,6 +34,9 @@ export class EditorUiHandoffService implements EditorUiHandoffOperations {
             throwIfCanceled(token);
             const appHosts = await this._dependencies.appHostRepository.fetchRunningAppHostsOnce(token);
             throwIfCanceled(token);
+            if (!this._dependencies.targetResolver.isTargetCurrent(target)) {
+                return { outcome: 'appHostNotRunning' };
+            }
 
             const runningMatches: Array<(typeof appHosts)[number]> = [];
             for (const appHost of appHosts) {
@@ -88,6 +91,9 @@ export class EditorUiHandoffService implements EditorUiHandoffOperations {
             throwIfCanceled(token);
             if (editorSession?.isShuttingDown) {
                 return { outcome: 'error' };
+            }
+            if (!this._dependencies.targetResolver.isTargetCurrent(target)) {
+                return { outcome: 'appHostNotRunning' };
             }
 
             const resolvedBehavior = resolveExplicitDashboardLaunchBehavior(

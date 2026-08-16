@@ -92,7 +92,8 @@ export class EditorStateSnapshotService {
                 continue;
             }
 
-            const identity = this._dependencies.targetResolver.getIdentityForAppHostPath(appHostPath);
+            const identity = session.appHostIdentity
+                ?? this._dependencies.targetResolver.getIdentityForAppHostPath(appHostPath);
             if (!knownIdentities.has(identity)) {
                 continue;
             }

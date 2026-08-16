@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import { AspireCommandType, AspireExtendedDebugConfiguration, type AspireResourceDebugSession } from '../dcp/types';
 import { startDebuggingDeclined } from '../loc/strings';
-import { recordLaunchFailureForAppHostPath, type LaunchFailureCategory, type LaunchFailureMode, type LaunchFailureProviderKind } from './launchFailureJournal';
-import { compareAppHostIdentity, getAppHostIdentityKeyInfo, isAppHostPathWithinDirectory, type AppHostIdentityKeyInfo, type AppHostIdentityRelation } from '../utils/appHostIdentity';
+import { recordLaunchFailureForAppHostIdentity, type LaunchFailureCategory, type LaunchFailureMode, type LaunchFailureProviderKind } from './launchFailureJournal';
+import { compareAppHostIdentity, getAppHostIdentityKeyInfo, getOrCreateIdentityForCurrentAppHostTarget, isAppHostPathWithinDirectory, type AppHostIdentityKeyInfo, type AppHostIdentityRelation } from '../utils/appHostIdentity';
 import { classifyAppHostPath } from '../utils/appHostLanguage';
 import { classifyError, isCommandCancellation, sendTelemetryEvent, type EventProperties } from '../utils/telemetry';
 import { extensionLogOutputChannel } from '../utils/logging';
@@ -209,6 +209,7 @@ export class AppHostLaunchService implements vscode.Disposable {
     trackAppHostDebugSession(owner: AppHostLaunchSession, appHostPath: string, debugSession: AspireResourceDebugSession): void {
         const session: AppHostTrackedSession = {
             appHostPath,
+            appHostIdentity: owner.appHostIdentity ?? getOrCreateIdentityForCurrentAppHostTarget(appHostPath),
             resolvedAppHostPath: appHostPath,
             operationKind: owner.operationKind,
             get startupCompleted() { return owner.startupCompleted; },
@@ -232,6 +233,7 @@ export class AppHostLaunchService implements vscode.Disposable {
         return this.getTrackedEditorSessions().map(session => ({
             appHostPath: session.appHostPath,
             resolvedAppHostPath: session.resolvedAppHostPath,
+            appHostIdentity: session.appHostIdentity,
             operationKind: session.operationKind,
             startupCompleted: session.startupCompleted,
             noDebug: typeof session.configuration.noDebug === 'boolean'
@@ -254,8 +256,22 @@ export class AppHostLaunchService implements vscode.Disposable {
     getEditorRunSessions(appHostPath: string): AppHostEditorSessions {
         const sessions: AppHostLaunchSession[] = [];
         let ambiguous = false;
+        const requestedIdentity = getOrCreateIdentityForCurrentAppHostTarget(appHostPath);
         for (const session of this.getTrackedEditorSessions()) {
             if (session.operationKind !== 'run') {
+                continue;
+            }
+
+            if (session.appHostIdentity !== undefined) {
+                if (session.appHostIdentity === requestedIdentity) {
+                    sessions.push(session);
+                }
+                else {
+                    const sessionPath = session.resolvedAppHostPath ?? session.appHostPath;
+                    if (compareAppHostIdentity(sessionPath, appHostPath) === 'ambiguous') {
+                        ambiguous = true;
+                    }
+                }
                 continue;
             }
 
@@ -672,6 +688,7 @@ export class AppHostLaunchService implements vscode.Disposable {
         // clears it because VS Code emits no terminate event for a launch that never
         // started. See https://code.visualstudio.com/api/references/vscode-api#debug.startDebugging
         const reservationId = this.reserveLaunch(appHostPath);
+        const appHostIdentity = getOrCreateIdentityForCurrentAppHostTarget(appHostPath);
         // Everything between the reservation and the main try/catch below has to release
         // the reservation itself, otherwise a cancelled or failed launch would leave this
         // AppHost permanently reported as launching.
@@ -780,7 +797,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             this.clearMatchingLaunching(appHostPath, reservationId);
             const hasSpecificFailureForAttempt = this._launchTokensWithSpecificFailure.delete(launchToken);
             if (!hasSpecificFailureForAttempt) {
-                recordLaunchFailureForAppHostPath(appHostPath, {
+                recordLaunchFailureForAppHostIdentity(appHostIdentity, {
                     stage: 'cliLaunch',
                     category: failureCategory,
                     controller: 'editor',

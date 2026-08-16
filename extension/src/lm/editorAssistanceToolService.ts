@@ -217,7 +217,8 @@ export class EditorAssistanceToolService {
             // claim more than one resource.
             const matchingSessions = this._dependencies.getEditorResourceSessions()
                 .filter(session =>
-                    this._dependencies.targetResolver.getIdentityForAppHostPath(session.appHostPath) === preflight.target.identity)
+                    (session.appHostIdentity
+                        ?? this._dependencies.targetResolver.getIdentityForAppHostPath(session.appHostPath)) === preflight.target.identity)
                 .map(session => ({
                     session,
                     matchingResources: resources.filter(candidate => {

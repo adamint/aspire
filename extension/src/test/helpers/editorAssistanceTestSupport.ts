@@ -11,11 +11,12 @@ import {
     type AppHostLifecycleEditorSessions,
 } from '../../lm/appHostLifecycleToolContracts';
 import { type CandidateAppHostDisplayInfo } from '../../utils/appHostDiscovery';
-import { compareAppHostIdentity } from '../../utils/appHostIdentity';
+import { compareAppHostIdentity, type OpaqueAppHostIdentity } from '../../utils/appHostIdentity';
 
 interface TestEditorSession {
     readonly appHostPath: string | undefined;
     readonly resolvedAppHostPath: string | undefined;
+    readonly appHostIdentity?: OpaqueAppHostIdentity;
     readonly operationKind: AspireOperationKind;
     readonly startupCompleted: boolean;
     readonly noDebug: boolean | undefined;

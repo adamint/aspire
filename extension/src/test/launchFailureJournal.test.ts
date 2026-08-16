@@ -20,6 +20,7 @@ import {
 import {
     __resetAppHostIdentityRegistryForTests,
     getOrCreateIdentityForAbsolutePath,
+    getOrCreateIdentityForCurrentAppHostTarget,
 } from '../utils/appHostIdentity';
 import {
     appHostProjectContents,
@@ -89,7 +90,7 @@ suite('Editor assistance AppHost services', () => {
         });
 
         test('uses the shared opaque AppHost identity registry', () => {
-            const journalIdentity = getOrCreateIdentityForAbsolutePath(appHostProjectPath);
+            const journalIdentity = getOrCreateIdentityForCurrentAppHostTarget(appHostProjectPath);
             const resolverIdentity = resolver.getIdentityForAppHostPath(appHostProjectPath);
 
             assert.strictEqual(journalIdentity, resolverIdentity);
@@ -154,6 +155,51 @@ suite('Editor assistance AppHost services', () => {
                 ['dcpStartup']);
             assert.strictEqual(getOrCreateIdentityForAbsolutePath(projectPath), projectIdentity);
             assert.strictEqual(getOrCreateIdentityForAbsolutePath(sourcePath), sourceIdentity);
+        });
+
+        test('does not return a failure after a symlink retargets', function () {
+            const firstTarget = path.join(workspaceRoot, 'FirstTarget', 'AppHost.csproj');
+            const secondTarget = path.join(workspaceRoot, 'SecondTarget', 'AppHost.csproj');
+            const linkedTarget = path.join(workspaceRoot, 'LinkedTarget', 'AppHost.csproj');
+            fs.mkdirSync(path.dirname(firstTarget), { recursive: true });
+            fs.mkdirSync(path.dirname(secondTarget), { recursive: true });
+            fs.mkdirSync(path.dirname(linkedTarget), { recursive: true });
+            fs.writeFileSync(firstTarget, '<Project />');
+            fs.writeFileSync(secondTarget, '<Project />');
+            try {
+                fs.symlinkSync(firstTarget, linkedTarget);
+            }
+            catch {
+                this.skip();
+                return;
+            }
+
+            recordLaunchFailureForAppHostPath(linkedTarget, {
+                stage: 'build',
+                category: 'buildFailed',
+                controller: 'editor',
+            });
+
+            fs.rmSync(linkedTarget);
+            fs.symlinkSync(secondTarget, linkedTarget);
+
+            assert.deepStrictEqual(readLatestLaunchFailures(linkedTarget), []);
+        });
+
+        test('preserves a failure when the same AppHost file is atomically replaced', () => {
+            recordLaunchFailureForAppHostPath(appHostProjectPath, {
+                stage: 'build',
+                category: 'buildFailed',
+                controller: 'editor',
+            });
+
+            const replacementPath = `${appHostProjectPath}.replacement`;
+            fs.writeFileSync(replacementPath, '<Project />');
+            fs.renameSync(replacementPath, appHostProjectPath);
+
+            assert.deepStrictEqual(
+                readLatestLaunchFailures(appHostProjectPath).map(record => record.stage),
+                ['build']);
         });
 
         test('keeps the latest five failures per AppHost in latest-first order', () => {

@@ -15,7 +15,7 @@ import {
 } from '../services/launchFailureJournal';
 import { appHostLifecycleBusy } from '../loc/strings';
 import { AppHostLaunchService, AppHostLifecycleLockTimeoutError, AppHostStopCancellationError, appHostLifecycleLockMaxHoldMs, appHostLifecycleLockWaitTimeoutMs, externalLaunchReservationTimeoutMs, type AppHostLaunchSession } from '../services/AppHostLaunchService';
-import { __resetAppHostIdentityRegistryForTests, getAppHostIdentityKey } from '../utils/appHostIdentity';
+import { __resetAppHostIdentityRegistryForTests, getAppHostIdentityKey, getOrCreateIdentityForCurrentAppHostTarget } from '../utils/appHostIdentity';
 import { AppHostDiscoveryService } from '../utils/appHostDiscovery';
 import * as cliPathModule from '../utils/cliPath';
 import { __resetCommonPropertiesForTests, __setReporterForTests } from '../utils/telemetry';
@@ -360,6 +360,7 @@ suite('AppHostLaunchService', () => {
         service.setEditorSessionProvider(() => [{
             appHostPath: path.join(directory, 'Program.cs'),
             resolvedAppHostPath: undefined,
+            appHostIdentity: getOrCreateIdentityForCurrentAppHostTarget(path.join(directory, 'Program.cs')),
             operationKind: 'run',
             startupCompleted: true,
             configuration: { noDebug: true },
@@ -1207,6 +1208,48 @@ suite('AppHostLaunchService', () => {
         assert.deepStrictEqual(result, { outcome: 'stopped', controller: 'editor', noDebug: false });
         assert.strictEqual(parentStopCount, 1);
         assert.strictEqual(childStopCount, 0);
+    });
+
+    test('keeps a launched child tracked when its symlink target changes before tracking', function () {
+        const firstDirectory = createAppHostDirectory('AppHost.csproj');
+        const secondDirectory = createAppHostDirectory('AppHost.csproj');
+        const firstTarget = path.join(firstDirectory, 'AppHost.csproj');
+        const secondTarget = path.join(secondDirectory, 'AppHost.csproj');
+        const linkedDirectory = createAppHostDirectory();
+        const linkedTarget = path.join(linkedDirectory, 'AppHost.csproj');
+        fs.mkdirSync(linkedDirectory, { recursive: true });
+        try {
+            fs.symlinkSync(firstTarget, linkedTarget);
+        }
+        catch {
+            this.skip();
+            return;
+        }
+
+        const parentSession: AppHostLaunchSession = {
+            appHostPath: linkedDirectory,
+            resolvedAppHostPath: linkedTarget,
+            appHostIdentity: getOrCreateIdentityForCurrentAppHostTarget(linkedTarget),
+            operationKind: 'run',
+            startupCompleted: true,
+            configuration: { noDebug: false },
+            stopDebugging: async () => { },
+        };
+        const childDebugSession = {
+            id: 'retargeted-apphost-child',
+            session: { id: 'retargeted-apphost-child', configuration: { noDebug: false } } as unknown as vscode.DebugSession,
+            stopSession: async () => { },
+        } satisfies AspireResourceDebugSession;
+        service.setEditorSessionProvider(() => []);
+
+        fs.rmSync(linkedTarget);
+        fs.symlinkSync(secondTarget, linkedTarget);
+        service.trackAppHostDebugSession(parentSession, linkedTarget, childDebugSession);
+
+        assert.strictEqual(service.getEditorSessions().length, 1);
+        assert.strictEqual(service.getEditorSessions()[0].appHostIdentity, parentSession.appHostIdentity);
+        assert.deepStrictEqual(service.getEditorRunSessions(linkedTarget), { sessions: [], ambiguous: false });
+        assert.strictEqual(service.getEditorRunSessions(firstTarget).sessions.length, 1);
     });
 
 

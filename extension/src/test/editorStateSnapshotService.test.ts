@@ -6,6 +6,7 @@ import * as vscode from 'vscode';
 
 import { EditorStateSnapshotService } from '../lm/editorStateSnapshotService';
 import { SafeAppHostTargetResolver } from '../lm/safeAppHostTargetResolver';
+import { getOrCreateIdentityForCurrentAppHostTarget } from '../utils/appHostIdentity';
 import { __resetLaunchFailureJournalForTests } from '../services/launchFailureJournal';
 import {
     __resetAppHostIdentityRegistryForTests,
@@ -335,7 +336,7 @@ suite('Editor assistance AppHost services', () => {
             }]);
         });
 
-        test('keeps an active session attributed to its lexical launch path after a symlink retargets', async function () {
+        test('keeps an active session attributed to its launch target after a symlink retargets', async function () {
             const firstTarget = path.join(workspaceRoot, 'First', 'AppHost.csproj');
             const secondTarget = path.join(workspaceRoot, 'Second', 'AppHost.csproj');
             const linkedTarget = path.join(workspaceRoot, 'ZLinked', 'AppHost.csproj');
@@ -359,6 +360,7 @@ suite('Editor assistance AppHost services', () => {
             launchService.editorSessions.push({
                 appHostPath: linkedTarget,
                 resolvedAppHostPath: linkedTarget,
+                appHostIdentity: getOrCreateIdentityForCurrentAppHostTarget(linkedTarget),
                 operationKind: 'run',
                 startupCompleted: true,
                 noDebug: false,
@@ -373,20 +375,14 @@ suite('Editor assistance AppHost services', () => {
             assert.deepStrictEqual(snapshot.appHosts, [
                 {
                     appHost: 'First/AppHost.csproj',
-                    state: 'notDebugging',
-                    mode: 'other',
+                    state: 'running',
+                    mode: 'debug',
                     controller: 'editor',
                 },
                 {
                     appHost: 'Second/AppHost.csproj',
                     state: 'notDebugging',
                     mode: 'other',
-                    controller: 'editor',
-                },
-                {
-                    appHost: 'ZLinked/AppHost.csproj',
-                    state: 'running',
-                    mode: 'debug',
                     controller: 'editor',
                 },
             ]);

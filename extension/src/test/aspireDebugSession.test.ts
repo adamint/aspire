@@ -5613,12 +5613,15 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             {} as any,
             terminalProvider as any,
             () => { });
+        const appHostIdentity = aspireDebugSession.appHostIdentity;
+        assert.ok(appHostIdentity);
         sinon.stub(aspireDebugSession as any, 'createDebugAdapterTrackerCore');
 
         const resourcePromise = aspireDebugSession.startAndGetDebugSession(debugConfig);
         await Promise.resolve();
         assert.deepStrictEqual(aspireDebugSession.editorResourceSessions, [{
             appHostPath: '/workspace/AppHost/AppHost.csproj',
+            appHostIdentity,
             targetPath: '/workspace/Api/Api.csproj',
             resourceExecutablePaths: ['/workspace/.dotnet/dotnet'],
             state: 'starting',
@@ -5631,6 +5634,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.ok(resource);
         assert.deepStrictEqual(aspireDebugSession.editorResourceSessions, [{
             appHostPath: '/workspace/AppHost/AppHost.csproj',
+            appHostIdentity,
             targetPath: '/workspace/Api/Api.csproj',
             resourceExecutablePaths: ['/workspace/.dotnet/dotnet'],
             state: 'running',
@@ -5640,6 +5644,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         const stop = resource.stopSession();
         assert.deepStrictEqual(aspireDebugSession.editorResourceSessions, [{
             appHostPath: '/workspace/AppHost/AppHost.csproj',
+            appHostIdentity,
             targetPath: '/workspace/Api/Api.csproj',
             resourceExecutablePaths: ['/workspace/.dotnet/dotnet'],
             state: 'stopping',

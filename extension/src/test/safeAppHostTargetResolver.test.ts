@@ -329,7 +329,7 @@ suite('Editor assistance AppHost services', () => {
             assert.strictEqual(linkedResolution.target.absolutePath, linkedTarget);
         });
 
-        test('keeps lexical identities stable when a symlink retargets', async function () {
+        test('changes target identity when a symlink retargets', async function () {
             const firstRealTarget = path.join(workspaceRoot, 'First', 'AppHost.csproj');
             const secondRealTarget = path.join(workspaceRoot, 'Second', 'AppHost.csproj');
             const linkedTarget = path.join(workspaceRoot, 'Linked', 'AppHost.csproj');
@@ -357,7 +357,20 @@ suite('Editor assistance AppHost services', () => {
             fs.symlinkSync(secondRealTarget, linkedTarget);
             const thirdResolution = await resolver.resolveTarget('Linked/AppHost.csproj', new vscode.CancellationTokenSource().token);
             assertResolved(thirdResolution);
-            assert.strictEqual(firstResolution.target.identity, thirdResolution.target.identity);
+            assert.notStrictEqual(firstResolution.target.identity, thirdResolution.target.identity);
+        });
+
+        test('preserves target identity when the same AppHost file is atomically replaced', async () => {
+            const firstResolution = await resolver.resolveTarget('AppHost/AppHost.csproj', new vscode.CancellationTokenSource().token);
+            assertResolved(firstResolution);
+
+            const replacementPath = `${appHostProjectPath}.replacement`;
+            fs.writeFileSync(replacementPath, `${appHostProjectContents}\n`);
+            fs.renameSync(replacementPath, appHostProjectPath);
+
+            const secondResolution = await resolver.resolveTarget('AppHost/AppHost.csproj', new vscode.CancellationTokenSource().token);
+            assertResolved(secondResolution);
+            assert.strictEqual(firstResolution.target.identity, secondResolution.target.identity);
         });
 
         test('bounds known AppHosts on not-found results', async () => {

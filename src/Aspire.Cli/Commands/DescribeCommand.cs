@@ -247,7 +247,11 @@ internal sealed class DescribeCommand : BaseCommand
 
             if (format == OutputFormat.Json)
             {
-                var resourceJson = ResourceSnapshotMapper.MapToResourceJson(snapshot, currentSnapshots, dashboardBaseUrl, includeDisabledCommands);
+                var resourceJson = ResourceSnapshotMapper.MapToResourceJson(
+                    snapshot,
+                    currentSnapshots,
+                    dashboardBaseUrl,
+                    includeDisabledCommands: includeDisabledCommands);
 
                 // NDJSON output - compact, one object per line for streaming
                 var json = JsonSerializer.Serialize(resourceJson, ResourcesCommandJsonContext.Ndjson.ResourceJson);

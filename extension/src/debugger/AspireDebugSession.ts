@@ -28,13 +28,14 @@ import { classifyAppHostPath, classifyAppHostDirectory, type AppHostLanguage } f
 import { bucketAspireCommand } from "../utils/telemetryBuckets";
 import { getAppHostTargetVersion } from "../utils/appHostTargetVersion";
 import type { AspireDebugConsoleOutputEvent } from "../types/extensionApi";
-import { recordLaunchFailureForAppHostPath, recordSanitizedLaunchFailureForAppHostPath, type LaunchFailureMode, type LaunchFailureProviderKind, type SanitizedLaunchFailure } from "../services/launchFailureJournal";
+import { recordLaunchFailureForAppHostIdentity, recordLaunchFailureForAppHostPath, recordSanitizedLaunchFailureForAppHostIdentity, recordSanitizedLaunchFailureForAppHostPath, type LaunchFailureMode, type LaunchFailureProviderKind, type SanitizedLaunchFailure } from "../services/launchFailureJournal";
 import { appHostRestartSourceSessionIdConfigKey, appHostSelectionOriginConfigKey, appHostTelemetryTargetPathConfigKey } from "./AspireDebugConfigurationMetadata";
 import { AppHostParentOutputFilter } from "./session/appHostParentOutputFilter";
 import { DashboardLauncher, type DashboardBrowserType, type DashboardLauncherHost, type DashboardPresentation } from "./session/dashboardLauncher";
 import { describeStopFailure, startStop, stopSessionInBackground } from "./session/stopHelpers";
 import { AppHostBuildFailureError } from "./appHostBuildFailureError";
 import type { EditorResourceSessionMode, EditorResourceSessionSnapshot, EditorResourceSessionState } from "../services/appHostLaunchContracts";
+import { getOrCreateIdentityForCurrentAppHostTarget, type OpaqueAppHostIdentity } from "../utils/appHostIdentity";
 
 export type AppHostDebugSessionTracker = (owner: AspireDebugSession, appHostPath: string, debugSession: AspireResourceDebugSession) => void;
 
@@ -174,6 +175,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
   private _appHostTargetVersionAtLaunchPromise: Promise<string> | undefined = undefined;
   private _appHostIsDirectoryAtLaunch: 'true' | 'false' | 'unknown' = 'unknown';
   private _resolvedAppHostPath: string | undefined;
+  private _appHostIdentity: OpaqueAppHostIdentity | undefined;
   // Mode the AppHost was launched with (`run` | `debug`) — captured for the
   // matching end event.
   private _appHostModeAtLaunch: 'run' | 'debug' = 'run';
@@ -197,6 +199,10 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
    */
   get resolvedAppHostPath(): string | undefined {
     return this._resolvedAppHostPath;
+  }
+
+  get appHostIdentity(): OpaqueAppHostIdentity | undefined {
+    return this._appHostIdentity;
   }
 
   get dashboardUrl(): string | undefined {
@@ -243,7 +249,11 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
   recordDashboardLaunchFailure(failure: SanitizedLaunchFailure): void {
     const appHostPath = this.resolvedAppHostPath ?? this.appHostPath;
     if (!this.isShuttingDown && appHostPath) {
-      recordSanitizedLaunchFailureForAppHostPath(appHostPath, failure);
+      if (this._appHostIdentity) {
+        recordSanitizedLaunchFailureForAppHostIdentity(this._appHostIdentity, failure);
+      } else {
+        recordSanitizedLaunchFailureForAppHostPath(appHostPath, failure);
+      }
     }
   }
 
@@ -265,6 +275,10 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
     this.configuration = session.configuration as AspireExtendedDebugConfiguration;
     const resolvedAppHostPath = this.configuration[appHostTelemetryTargetPathConfigKey];
     this._resolvedAppHostPath = typeof resolvedAppHostPath === 'string' ? resolvedAppHostPath : undefined;
+    const appHostPath = this._resolvedAppHostPath ?? this.appHostPath;
+    this._appHostIdentity = appHostPath
+      ? getOrCreateIdentityForCurrentAppHostTarget(appHostPath)
+      : undefined;
     this.operationKind = operationKind ?? getOperationKind(this.configuration.command);
 
     this.debugSessionId = debugSessionId;
@@ -522,6 +536,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
       executablePath => typeof executablePath === 'string' && executablePath.trim().length > 0);
     this._editorResourceSessions.set(debugConfig.runId, {
       appHostPath,
+      appHostIdentity: this._appHostIdentity ?? getOrCreateIdentityForCurrentAppHostTarget(appHostPath),
       targetPath: debugConfig.targetPath,
       ...(resourceExecutablePaths && resourceExecutablePaths.length > 0
         ? { resourceExecutablePaths: [...resourceExecutablePaths] }
@@ -1237,7 +1252,11 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
       return false;
     }
 
-    recordLaunchFailureForAppHostPath(appHostPath, input);
+    if (this._appHostIdentity) {
+      recordLaunchFailureForAppHostIdentity(this._appHostIdentity, input);
+    } else {
+      recordLaunchFailureForAppHostPath(appHostPath, input);
+    }
     return true;
   }
 
@@ -1294,6 +1313,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
       // Once DCP supplies the concrete project/source path, keep it as the session's
       // attribution identity for every later build, startup, debugger, and dashboard failure.
       this._resolvedAppHostPath = projectFile;
+      this._appHostIdentity = getOrCreateIdentityForCurrentAppHostTarget(projectFile);
       this._appHostTerminationRequested = false;
       const fileExtension = path.extname(projectFile).toLowerCase();
       const isNodeAppHost = AspireDebugSession._nodeAppHostExtensions.includes(fileExtension);

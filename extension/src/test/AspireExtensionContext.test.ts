@@ -21,6 +21,7 @@ import {
 import {
     __resetAppHostIdentityRegistryForTests,
     getOrCreateIdentityForAbsolutePath,
+    getOrCreateIdentityForCurrentAppHostTarget,
 } from '../utils/appHostIdentity';
 import { type EditorResourceSessionSnapshot } from '../services/appHostLaunchContracts';
 
@@ -111,7 +112,7 @@ suite('AspireExtensionContext', () => {
         context.addAspireDebugSession(publishSession);
 
         try {
-            const identity = getOrCreateIdentityForAbsolutePath(exactPath);
+            const identity = getOrCreateIdentityForCurrentAppHostTarget(exactPath);
 
             assert.deepStrictEqual(
                 context.getAspireDebugSessionsForAppHostIdentity(identity),
