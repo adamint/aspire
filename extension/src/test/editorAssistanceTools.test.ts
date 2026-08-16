@@ -295,7 +295,12 @@ suite('Editor assistance AppHost services', () => {
                 targetResolver: resolver,
                 appHostRepository: uiRepository,
                 output: editorOutput,
-                getAspireDebugSessions: identity => dashboardSessionsByIdentity.get(identity) ?? [],
+                getAspireDebugSessionOwners: () => Array.from(
+                    dashboardSessionsByIdentity,
+                    ([appHostIdentity, sessions]) => sessions.map(session => ({
+                        appHostIdentity,
+                        session,
+                    }))).flat(),
             });
             service = new EditorAssistanceToolService({
                 targetResolver: resolver,
@@ -1889,6 +1894,63 @@ suite('Editor assistance AppHost services', () => {
             }
         });
 
+        test('fails closed when a stale CLI row is owned by another AppHost identity', async function () {
+            const sandbox = sinon.createSandbox();
+            try {
+                sandbox.stub(vscode.workspace, 'getConfiguration').returns(createAspireConfiguration({
+                    dashboardBrowser: 'openExternalBrowser',
+                }));
+                const openExternal = sandbox.stub(vscode.env, 'openExternal').resolves(true);
+                const firstTarget = path.join(workspaceRoot, 'First', 'AppHost.csproj');
+                const secondTarget = path.join(workspaceRoot, 'Second', 'AppHost.csproj');
+                const linkedTarget = path.join(workspaceRoot, 'Linked', 'AppHost.csproj');
+                for (const target of [firstTarget, secondTarget]) {
+                    fs.mkdirSync(path.dirname(target), { recursive: true });
+                    fs.writeFileSync(target, appHostProjectContents);
+                }
+                fs.mkdirSync(path.dirname(linkedTarget), { recursive: true });
+                try {
+                    fs.symlinkSync(firstTarget, linkedTarget);
+                }
+                catch {
+                    this.skip();
+                    return;
+                }
+
+                addCandidate(discoveryService, workspaceRoot, linkedTarget);
+                const oldIdentity = resolver.getIdentityForAppHostPath(linkedTarget);
+                dashboardSessionsByIdentity.set(oldIdentity, [{
+                    cliProcessId: 2001,
+                    configuration: { dashboardBrowser: 'debugEdge' },
+                    isShuttingDown: false,
+                    openDashboard: sandbox.stub().resolves('debugBrowser'),
+                }]);
+
+                fs.rmSync(linkedTarget);
+                fs.symlinkSync(secondTarget, linkedTarget);
+                uiRepository.appHosts = [{
+                    ...createRunningAppHost(
+                        linkedTarget,
+                        'https://dashboard.example.invalid/login?t=private'),
+                    cliPid: 2001,
+                }];
+
+                const result = await service.openDashboard(
+                    { appHostPath: 'Linked/AppHost.csproj' },
+                    new vscode.CancellationTokenSource().token);
+
+                assert.deepStrictEqual(result, {
+                    success: false,
+                    tool: aspireOpenDashboardToolName,
+                    outcome: 'error',
+                });
+                sinon.assert.notCalled(openExternal);
+            }
+            finally {
+                sandbox.restore();
+            }
+        });
+
         test('fails closed when any fresh running row has an ambiguous AppHost relationship', async () => {
             const sandbox = sinon.createSandbox();
             try {
@@ -2499,7 +2561,7 @@ suite('Editor assistance AppHost services', () => {
                 targetResolver: resolver,
                 appHostRepository: uiRepository,
                 output,
-                getAspireDebugSessions: () => [],
+                getAspireDebugSessionOwners: () => [],
             });
             const localService = new EditorAssistanceToolService({
                 targetResolver: resolver,

@@ -277,7 +277,10 @@ export interface EditorUiHandoffServiceDependencies {
     readonly targetResolver: SafeAppHostTargetResolver;
     readonly appHostRepository: EditorUiHandoffAppHostRepository;
     readonly output: EditorUiHandoffOutput;
-    readonly getAspireDebugSessions: (identity: AppHostTargetIdentity) => readonly EditorUiHandoffDebugSession[];
+    readonly getAspireDebugSessionOwners: () => readonly {
+        readonly appHostIdentity: AppHostTargetIdentity;
+        readonly session: EditorUiHandoffDebugSession;
+    }[];
 }
 
 export interface EditorAssistanceToolDependencies {

@@ -70,23 +70,35 @@ export class EditorUiHandoffService implements EditorUiHandoffOperations {
                 return { outcome: 'dashboardUnavailable' };
             }
 
-            const sessions = this._dependencies.getAspireDebugSessions(target.identity);
+            const sessionOwners = this._dependencies.getAspireDebugSessionOwners();
+            const sessions = sessionOwners
+                .filter(owner => owner.appHostIdentity === target.identity)
+                .map(owner => owner.session);
             let editorSession: (typeof sessions)[number] | undefined;
+            const cliPid = runningAppHost.cliPid;
+            const cliOwners = typeof cliPid === 'number'
+                ? sessionOwners.filter(owner => owner.session.cliProcessId === cliPid)
+                : [];
             if (sessions.length > 0) {
                 // Any editor session owns its Dashboard settings, shutdown state, and child cleanup.
                 // Falling back to an ownerless browser is safe only for a genuinely external AppHost,
                 // so a fresh CLI row must identify exactly one editor owner before UI is presented.
-                const cliPid = runningAppHost.cliPid;
                 if (typeof cliPid !== 'number') {
                     return { outcome: 'error' };
                 }
 
-                const matchingSessions = sessions.filter(session => session.cliProcessId === cliPid);
-                if (matchingSessions.length !== 1) {
+                const matchingOwners = cliOwners.filter(owner => owner.appHostIdentity === target.identity);
+                if (matchingOwners.length !== 1 || cliOwners.length !== 1) {
                     return { outcome: 'error' };
                 }
 
-                editorSession = matchingSessions[0];
+                editorSession = matchingOwners[0].session;
+            }
+            else if (cliOwners.length > 0) {
+                // A CLI row can retain the lexical symlink path after that link is retargeted.
+                // Its PID still belongs to the original editor session, so it must not become an
+                // ownerless Dashboard for the newly resolved target.
+                return { outcome: 'error' };
             }
             throwIfCanceled(token);
             if (editorSession?.isShuttingDown) {

@@ -117,6 +117,16 @@ suite('AspireExtensionContext', () => {
             assert.deepStrictEqual(
                 context.getAspireDebugSessionsForAppHostIdentity(identity),
                 [exactSession, resolvedSession]);
+            assert.deepStrictEqual(
+                context.getAspireDebugSessionDashboardOwners(),
+                [
+                    { appHostIdentity: identity, session: exactSession },
+                    { appHostIdentity: identity, session: resolvedSession },
+                    {
+                        appHostIdentity: getOrCreateIdentityForCurrentAppHostTarget('/workspace/Other/AppHost.csproj'),
+                        session: otherSession,
+                    },
+                ]);
         }
         finally {
             __resetAppHostIdentityRegistryForTests();

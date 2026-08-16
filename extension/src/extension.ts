@@ -230,8 +230,8 @@ export async function activate(context: vscode.ExtensionContext) {
     targetResolver: appHostTargetResolver,
     appHostRepository: dataRepository,
     output: extensionLogOutputChannel,
-    getAspireDebugSessions: identity =>
-      aspireExtensionContext.getAspireDebugSessionsForAppHostIdentity(identity),
+    getAspireDebugSessionOwners: () =>
+      aspireExtensionContext.getAspireDebugSessionDashboardOwners(),
   });
   const editorAssistanceToolService = new EditorAssistanceToolService({
     targetResolver: appHostTargetResolver,

@@ -107,6 +107,23 @@ export class AspireExtensionContext implements vscode.Disposable {
         });
     }
 
+    getAspireDebugSessionDashboardOwners(): readonly {
+        readonly appHostIdentity: OpaqueAppHostIdentity;
+        readonly session: AspireDebugSession;
+    }[] {
+        return this._aspireDebugSessions.flatMap(session => {
+            const appHostPath = session.resolvedAppHostPath ?? session.appHostPath;
+            if (session.operationKind !== 'run' || appHostPath === undefined) {
+                return [];
+            }
+
+            return [{
+                appHostIdentity: session.appHostIdentity ?? getOrCreateIdentityForCurrentAppHostTarget(appHostPath),
+                session,
+            }];
+        });
+    }
+
     addAspireDebugSession(debugSession: AspireDebugSession) {
         if (this._isDisposed) {
             // `_disposeCore` disposes exactly the sessions present when it takes its snapshot, and
