@@ -61,6 +61,7 @@ export class AspireExplainLaunchFailureLanguageModelTool implements vscode.Langu
 export class AspireOpenDashboardLanguageModelTool implements vscode.LanguageModelTool<OpenDashboardToolInput> {
     private static readonly _maxPreparedSelectors = 32;
     private readonly _preparedIdentities = new Map<string, PreparedDashboardIdentity>();
+    private _preparationStateExhausted = false;
 
     constructor(
         private readonly _service: EditorAssistanceToolService,
@@ -97,13 +98,21 @@ export class AspireOpenDashboardLanguageModelTool implements vscode.LanguageMode
     }
 
     private recordPreparedIdentity(rawAppHostPath: unknown, identity: AppHostTargetIdentity): void {
+        if (this._preparationStateExhausted) {
+            return;
+        }
+
         const selectorKey = getPreparedSelectorKey(rawAppHostPath);
         const existing = this._preparedIdentities.get(selectorKey);
         if (!existing) {
             if (this._preparedIdentities.size >= AspireOpenDashboardLanguageModelTool._maxPreparedSelectors) {
                 // The API does not provide a token that correlates prepareInvocation with invoke.
-                // Evicting confirmation history could therefore let a delayed invocation consume a
-                // newer target's preparation. Missing state fails closed instead.
+                // Once the actual outstanding-confirmation limit is exceeded, no bounded structure
+                // can later distinguish the discarded invocation from a newer preparation for the
+                // same selector. Disable this handoff for the activation rather than open the wrong
+                // target; normal sequential use retires entries and never reaches this branch.
+                this._preparationStateExhausted = true;
+                this._preparedIdentities.clear();
                 return;
             }
 
@@ -111,10 +120,12 @@ export class AspireOpenDashboardLanguageModelTool implements vscode.LanguageMode
                 identity,
                 conflicted: false,
                 available: true,
+                pendingInvocations: 1,
             });
             return;
         }
 
+        existing.pendingInvocations++;
         if (existing.identity !== identity) {
             existing.conflicted = true;
             existing.available = false;
@@ -125,20 +136,53 @@ export class AspireOpenDashboardLanguageModelTool implements vscode.LanguageMode
     }
 
     private invalidatePreparedIdentity(rawAppHostPath: unknown): void {
-        const prepared = this._preparedIdentities.get(getPreparedSelectorKey(rawAppHostPath));
+        if (this._preparationStateExhausted) {
+            return;
+        }
+
+        const selectorKey = getPreparedSelectorKey(rawAppHostPath);
+        const prepared = this._preparedIdentities.get(selectorKey);
         if (prepared) {
+            // The unresolved preparation conflicts with every earlier confirmation for this
+            // selector. Keep one fail-closed slot per outstanding preparation so a delayed
+            // invocation cannot consume a later identity.
+            prepared.conflicted = true;
             prepared.available = false;
+            prepared.pendingInvocations++;
+        }
+        else if (this._preparedIdentities.size < AspireOpenDashboardLanguageModelTool._maxPreparedSelectors) {
+            this._preparedIdentities.set(selectorKey, {
+                identity: null,
+                conflicted: true,
+                available: false,
+                pendingInvocations: 1,
+            });
+        }
+        else {
+            this._preparationStateExhausted = true;
+            this._preparedIdentities.clear();
         }
     }
 
     private consumePreparedIdentity(rawAppHostPath: unknown): AppHostTargetIdentity | null {
-        const selectorKey = getPreparedSelectorKey(rawAppHostPath);
-        const prepared = this._preparedIdentities.get(selectorKey);
-        if (!prepared || prepared.conflicted || !prepared.available) {
+        if (this._preparationStateExhausted) {
             return null;
         }
 
-        prepared.available = false;
+        const selectorKey = getPreparedSelectorKey(rawAppHostPath);
+        const prepared = this._preparedIdentities.get(selectorKey);
+        if (!prepared) {
+            return null;
+        }
+
+        prepared.pendingInvocations--;
+        if (prepared.pendingInvocations === 0) {
+            this._preparedIdentities.delete(selectorKey);
+        }
+        if (prepared.conflicted || !prepared.available || prepared.identity === null) {
+            return null;
+        }
+
         return prepared.identity;
     }
 }
@@ -247,7 +291,8 @@ function getPreparedSelectorKey(rawAppHostPath: unknown): string {
 }
 
 interface PreparedDashboardIdentity {
-    readonly identity: AppHostTargetIdentity;
+    readonly identity: AppHostTargetIdentity | null;
     conflicted: boolean;
     available: boolean;
+    pendingInvocations: number;
 }
