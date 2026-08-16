@@ -496,7 +496,14 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
     public async Task DescribeCommand_Follow_TableFormat_DeduplicatesIdenticalSnapshots()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var outputWriter = new TestOutputTextWriter(outputHelper);
+        var initialSnapshotDisplayed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var outputWriter = new TestOutputTextWriter(outputHelper, line =>
+        {
+            if (line.Equals("[redis] Running", StringComparison.Ordinal))
+            {
+                initialSnapshotDisplayed.TrySetResult();
+            }
+        });
         using var provider = CreateDescribeTestServices(
             workspace,
             outputWriter,
@@ -506,7 +513,8 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
             disableAnsi: true,
             configureConnection: connection =>
             {
-                connection.WatchResourceSnapshotsHandler = (_, cancellationToken) => YieldResourceSnapshots(
+                connection.WatchResourceSnapshotsHandler = (_, cancellationToken) => YieldResourceSnapshotsAfter(
+                    initialSnapshotDisplayed.Task,
                     [
                         // Duplicate of the initial snapshot - should be suppressed
                         new ResourceSnapshot { Name = "redis", DisplayName = "redis", ResourceType = "Container", State = "Running" },
