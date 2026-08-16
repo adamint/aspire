@@ -261,7 +261,14 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
     public async Task DescribeCommand_Follow_JsonFormat_DeduplicatesIdenticalSnapshots()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var outputWriter = new TestOutputTextWriter(outputHelper);
+        var initialSnapshotDisplayed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var outputWriter = new TestOutputTextWriter(outputHelper, line =>
+        {
+            if (line.Contains("\"state\":\"Running\"", StringComparison.Ordinal))
+            {
+                initialSnapshotDisplayed.TrySetResult();
+            }
+        });
         using var provider = CreateDescribeTestServices(
             workspace,
             outputWriter,
@@ -270,7 +277,8 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
             ],
             configureConnection: connection =>
             {
-                connection.WatchResourceSnapshotsHandler = (_, cancellationToken) => YieldResourceSnapshots(
+                connection.WatchResourceSnapshotsHandler = (_, cancellationToken) => YieldResourceSnapshotsAfter(
+                    initialSnapshotDisplayed.Task,
                     [
                         // Duplicate of the initial snapshot - should be suppressed
                         new ResourceSnapshot { Name = "redis", DisplayName = "redis", ResourceType = "Container", State = "Running" },
@@ -381,6 +389,53 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
         Assert.NotNull(resource);
         Assert.Equal("redis", resource.Name);
         Assert.Equal("Running", resource.State);
+    }
+
+    [Fact]
+    public async Task ResourceSnapshotWatcher_CoalescesWithoutBlockingBackchannelUpdates()
+    {
+        var updatesGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allUpdatesProduced = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var producedUpdateCount = 0;
+        var connection = new TestAppHostAuxiliaryBackchannel
+        {
+            GetResourceSnapshotsHandler = _ => Task.FromResult(new List<ResourceSnapshot>()),
+            WatchResourceSnapshotsHandler = (_, cancellationToken) =>
+                ProduceResourceSnapshotsAfter(
+                    updatesGate.Task,
+                    ResourceSnapshotWatcher.UpdateBufferCapacity * 2,
+                    index =>
+                    {
+                        if (Interlocked.Increment(ref producedUpdateCount) == ResourceSnapshotWatcher.UpdateBufferCapacity * 2)
+                        {
+                            allUpdatesProduced.TrySetResult();
+                        }
+
+                        return new ResourceSnapshot
+                        {
+                            Name = $"resource-{index}",
+                            DisplayName = $"resource-{index}",
+                            ResourceType = "Project",
+                            State = "Running"
+                        };
+                    },
+                    cancellationToken)
+        };
+
+        using var watcher = new ResourceSnapshotWatcher(connection, bufferUpdates: true);
+        await watcher.WaitForInitialLoadAsync().DefaultTimeout();
+        var initialCapture = watcher.CaptureAllResources();
+
+        updatesGate.TrySetResult();
+        await allUpdatesProduced.Task.DefaultTimeout();
+
+        var updates = await watcher
+            .WatchResourceSnapshotsAsync(initialCapture.UpdateSequence)
+            .ToListAsync()
+            .DefaultTimeout();
+
+        Assert.Equal(ResourceSnapshotWatcher.UpdateBufferCapacity * 2, producedUpdateCount);
+        Assert.Equal(ResourceSnapshotWatcher.UpdateBufferCapacity * 2, updates.Count);
     }
 
     [Fact]
@@ -780,6 +835,21 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
         return services.BuildServiceProvider();
     }
 
+    private static async IAsyncEnumerable<ResourceSnapshot> ProduceResourceSnapshotsAfter(
+        Task prerequisite,
+        int count,
+        Func<int, ResourceSnapshot> createSnapshot,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await prerequisite.WaitAsync(cancellationToken);
+        for (var i = 0; i < count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return createSnapshot(i);
+            await Task.Yield();
+        }
+    }
+
     private static AppHostInformation CreateAppHostInfo(TemporaryWorkspace workspace, int processId)
     {
         return new AppHostInformation
@@ -820,6 +890,18 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
         {
             await Task.Yield();
             cancellationToken.ThrowIfCancellationRequested();
+            yield return snapshot;
+        }
+    }
+
+    private static async IAsyncEnumerable<ResourceSnapshot> YieldResourceSnapshotsAfter(
+        Task prerequisite,
+        IEnumerable<ResourceSnapshot> snapshots,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        await prerequisite.WaitAsync(cancellationToken);
+        await foreach (var snapshot in YieldResourceSnapshots(snapshots, cancellationToken))
+        {
             yield return snapshot;
         }
     }

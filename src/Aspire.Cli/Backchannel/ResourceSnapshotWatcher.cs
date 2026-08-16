@@ -13,14 +13,18 @@ namespace Aspire.Cli.Backchannel;
 /// </summary>
 internal sealed class ResourceSnapshotWatcher : IDisposable
 {
+    internal const int UpdateBufferCapacity = 256;
+
     private readonly IAppHostAuxiliaryBackchannel _connection;
     private readonly ConcurrentDictionary<string, ResourceSnapshot> _resources = new(StringComparers.ResourceName);
-    private readonly Channel<ResourceSnapshotUpdate>? _updates;
+    private readonly Channel<bool>? _updateSignal;
+    private readonly Dictionary<string, ResourceSnapshotUpdate>? _pendingUpdates;
     private readonly object _resourcesLock = new();
     private readonly CancellationTokenSource _cts = new();
     private readonly TaskCompletionSource _initialLoadTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Task _watchTask;
     private long _updateSequence;
+    private bool _resyncPending;
     private volatile Exception? _watchException;
 
     public ResourceSnapshotWatcher(
@@ -32,8 +36,14 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
         IncludeHidden = includeHidden;
         if (bufferUpdates)
         {
-            _updates = Channel.CreateUnbounded<ResourceSnapshotUpdate>(
-                new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
+            _updateSignal = Channel.CreateBounded<bool>(
+                new BoundedChannelOptions(1)
+                {
+                    SingleReader = true,
+                    SingleWriter = true,
+                    FullMode = BoundedChannelFullMode.DropWrite
+                });
+            _pendingUpdates = new Dictionary<string, ResourceSnapshotUpdate>(StringComparers.ResourceName);
         }
         _watchTask = WatchAsync(_cts.Token);
     }
@@ -71,12 +81,12 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
 
             _initialLoadTcs.TrySetResult();
             await watchTask.ConfigureAwait(false);
-            _updates?.Writer.TryComplete();
+            _updateSignal?.Writer.TryComplete();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             _initialLoadTcs.TrySetCanceled(cancellationToken);
-            _updates?.Writer.TryComplete();
+            _updateSignal?.Writer.TryComplete();
         }
         catch (Exception ex)
         {
@@ -85,7 +95,7 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
                 // Initial load already completed; store for callers to detect.
                 _watchException = ex;
             }
-            _updates?.Writer.TryComplete(ex);
+            _updateSignal?.Writer.TryComplete(ex);
         }
     }
 
@@ -93,13 +103,27 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
     {
         await foreach (var snapshot in _connection.WatchResourceSnapshotsAsync(includeHidden: true, cancellationToken).ConfigureAwait(false))
         {
-            ResourceSnapshotUpdate update;
             lock (_resourcesLock)
             {
                 _resources[snapshot.Name] = snapshot;
-                update = new(++_updateSequence, snapshot);
+                var update = new ResourceSnapshotUpdate(++_updateSequence, snapshot);
+                if (_pendingUpdates is not null && !_resyncPending)
+                {
+                    if (_pendingUpdates.ContainsKey(snapshot.Name) || _pendingUpdates.Count < UpdateBufferCapacity)
+                    {
+                        _pendingUpdates[snapshot.Name] = update;
+                    }
+                    else
+                    {
+                        // Once the bounded per-resource buffer is full, the current dictionary is the
+                        // coalesced representation. The consumer will resynchronize from it rather than
+                        // retaining every intermediate transition or stalling the AppHost event stream.
+                        _pendingUpdates.Clear();
+                        _resyncPending = true;
+                    }
+                }
             }
-            _updates?.Writer.TryWrite(update);
+            _updateSignal?.Writer.TryWrite(true);
         }
     }
 
@@ -112,12 +136,35 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         EnsureInitialLoadComplete();
-        var updates = _updates ?? throw new InvalidOperationException("Resource update buffering was not enabled for this watcher.");
-        await foreach (var update in updates.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        var updateSignal = _updateSignal ?? throw new InvalidOperationException("Resource update buffering was not enabled for this watcher.");
+        await foreach (var _ in updateSignal.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
-            if (update.Sequence > afterSequence)
+            ResourceSnapshotUpdate[] updates;
+            lock (_resourcesLock)
             {
-                yield return update.Snapshot;
+                if (_resyncPending)
+                {
+                    updates = _resources.Values
+                        .Select(snapshot => new ResourceSnapshotUpdate(_updateSequence, snapshot))
+                        .OrderBy(update => update.Snapshot.Name, StringComparer.OrdinalIgnoreCase)
+                        .ToArray();
+                    _resyncPending = false;
+                }
+                else
+                {
+                    updates = _pendingUpdates!.Values
+                        .OrderBy(update => update.Sequence)
+                        .ToArray();
+                    _pendingUpdates.Clear();
+                }
+            }
+
+            foreach (var update in updates)
+            {
+                if (update.Sequence > afterSequence)
+                {
+                    yield return update.Snapshot;
+                }
             }
         }
     }

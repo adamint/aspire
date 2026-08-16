@@ -9,6 +9,7 @@ import { AppHostCliRunner, LimitedOutputBuffer, oneShotOutputBufferLimit } from 
 export interface PsOutput {
     readonly stdout: string;
     readonly canCompleteGlobalLoading: boolean;
+    readonly followOutputsToReplay?: readonly string[];
 }
 
 /**
@@ -19,6 +20,7 @@ export interface PsOutput {
  */
 export class AppHostPsPoller implements vscode.Disposable {
     private static readonly _oneShotOutputBufferLimit = oneShotOutputBufferLimit;
+    private static readonly _authoritativeSnapshotFollowOutputLimit = 256;
 
     private readonly _onDidReceivePsOutput = new vscode.EventEmitter<PsOutput>();
     readonly onDidReceivePsOutput = this._onDidReceivePsOutput.event;
@@ -45,7 +47,8 @@ export class AppHostPsPoller implements vscode.Disposable {
     private _authoritativeSnapshotPendingForce = false;
     private _authoritativeSnapshotRequestId = 0;
     private _activeAuthoritativeSnapshotRequestId: number | undefined;
-    private _psFollowOutputVersion = 0;
+    private readonly _authoritativeSnapshotFollowOutputs: string[] = [];
+    private _authoritativeSnapshotFollowOutputsOverflowed = false;
 
     // Disposal, data-activity, and post-stop refresh scheduling stay owned by the repository; the
     // poller reads them through these accessors so it never holds a reference back to the repository.
@@ -126,6 +129,8 @@ export class AppHostPsPoller implements vscode.Disposable {
         this._authoritativeSnapshotPending = false;
         this._authoritativeSnapshotPendingForce = false;
         this._activeAuthoritativeSnapshotRequestId = undefined;
+        this._authoritativeSnapshotFollowOutputs.length = 0;
+        this._authoritativeSnapshotFollowOutputsOverflowed = false;
         if (options?.clearPostStopRefreshTimers ?? true) {
             this._clearPostStopRefreshTimers();
         }
@@ -201,7 +206,7 @@ export class AppHostPsPoller implements vscode.Disposable {
                     return;
                 }
 
-                this._psFollowOutputVersion++;
+                this._recordAuthoritativeSnapshotFollowOutput(line);
                 this._onDidChangePsError.fire(undefined);
                 this._onDidReceivePsOutput.fire({ stdout: line, canCompleteGlobalLoading: false });
             },
@@ -289,11 +294,12 @@ export class AppHostPsPoller implements vscode.Disposable {
         this._authoritativeSnapshotInProgress = true;
         const snapshotRequestId = ++this._authoritativeSnapshotRequestId;
         this._activeAuthoritativeSnapshotRequestId = snapshotRequestId;
+        this._authoritativeSnapshotFollowOutputs.length = 0;
+        this._authoritativeSnapshotFollowOutputsOverflowed = false;
         const isCurrentSnapshot = () => this._activeAuthoritativeSnapshotRequestId === snapshotRequestId
             && !this._isDisposed()
             && (force || this._isDataActive());
         const pollingGeneration = this._psPollingGeneration;
-        const followOutputVersion = this._psFollowOutputVersion;
         const args = this._cliRunner.withNoLogo(['ps', '--format', 'json']);
         this._runPsCommand(args, (code, stdout, stderr) => {
             if (this._activeAuthoritativeSnapshotRequestId !== snapshotRequestId) {
@@ -302,6 +308,8 @@ export class AppHostPsPoller implements vscode.Disposable {
 
             if (pollingGeneration !== this._psPollingGeneration) {
                 this._activeAuthoritativeSnapshotRequestId = undefined;
+                this._authoritativeSnapshotFollowOutputs.length = 0;
+                this._authoritativeSnapshotFollowOutputsOverflowed = false;
                 this._authoritativeSnapshotInProgress = false;
                 return;
             }
@@ -309,13 +317,20 @@ export class AppHostPsPoller implements vscode.Disposable {
             if (!this._isDisposed() && (force || this._isDataActive())) {
                 if (code === 0) {
                     this._onDidChangePsError.fire(undefined);
-                    if (followOutputVersion === this._psFollowOutputVersion) {
-                        this._onDidReceivePsOutput.fire({ stdout, canCompleteGlobalLoading: true });
+                    if (this._authoritativeSnapshotFollowOutputsOverflowed) {
+                        // The bounded replay window is incomplete, so applying the snapshot could
+                        // overwrite newer follow state. A queued retry will reconcile after activity
+                        // settles without retaining an unbounded history.
+                        this._onDidRequestClearLoading.fire();
                     }
                     else {
-                        // A newer follow delta is already applied, so the snapshot must not
-                        // replace it. The request still completed the explicit refresh.
-                        this._onDidRequestClearLoading.fire();
+                        // Apply the authoritative snapshot to recover AppHosts whose follow delta was
+                        // missed, then replay deltas through the repository's canonical instance matcher.
+                        this._onDidReceivePsOutput.fire({
+                            stdout,
+                            canCompleteGlobalLoading: true,
+                            followOutputsToReplay: [...this._authoritativeSnapshotFollowOutputs],
+                        });
                     }
                 } else {
                     this._onDidRequestClearLoading.fire();
@@ -324,6 +339,8 @@ export class AppHostPsPoller implements vscode.Disposable {
             }
 
             this._activeAuthoritativeSnapshotRequestId = undefined;
+            this._authoritativeSnapshotFollowOutputs.length = 0;
+            this._authoritativeSnapshotFollowOutputsOverflowed = false;
             this._authoritativeSnapshotInProgress = false;
             if (this._authoritativeSnapshotPending) {
                 const pendingForce = this._authoritativeSnapshotPendingForce;
@@ -332,6 +349,20 @@ export class AppHostPsPoller implements vscode.Disposable {
                 this.refreshAppHostsFromAuthoritativeSnapshot(pendingForce);
             }
         }, { force, isCurrent: isCurrentSnapshot });
+    }
+
+    private _recordAuthoritativeSnapshotFollowOutput(line: string): void {
+        if (this._activeAuthoritativeSnapshotRequestId === undefined) {
+            return;
+        }
+
+        this._authoritativeSnapshotPending = true;
+        if (this._authoritativeSnapshotFollowOutputs.length < AppHostPsPoller._authoritativeSnapshotFollowOutputLimit) {
+            this._authoritativeSnapshotFollowOutputs.push(line);
+        }
+        else {
+            this._authoritativeSnapshotFollowOutputsOverflowed = true;
+        }
     }
 
     private _isCurrentPsFetch(fetchVersion: number): boolean {
