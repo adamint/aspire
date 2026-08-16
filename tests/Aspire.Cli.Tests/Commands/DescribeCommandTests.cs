@@ -354,6 +354,7 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var outputWriter = new TestOutputTextWriter(outputHelper);
         var watchStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var watchUpdateConsumed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var watchCallCount = 0;
         using var provider = CreateDescribeTestServices(
             workspace,
@@ -364,6 +365,7 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
                 connection.GetResourceSnapshotsHandler = async cancellationToken =>
                 {
                     await watchStarted.Task.WaitAsync(cancellationToken);
+                    await watchUpdateConsumed.Task.WaitAsync(cancellationToken);
                     // The watch has already published Running by the time this stale
                     // initial snapshot completes. The live change must win.
                     return
@@ -373,7 +375,7 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
                 };
                 connection.WatchResourceSnapshotsHandler = (_, cancellationToken) =>
                     Interlocked.Increment(ref watchCallCount) == 1
-                        ? YieldResourceAfterSignaling(watchStarted, cancellationToken)
+                        ? YieldResourceAfterSignaling(watchStarted, watchUpdateConsumed, cancellationToken)
                         : EmptyResourceSnapshots(cancellationToken);
             });
 
@@ -908,6 +910,7 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
 
     private static async IAsyncEnumerable<ResourceSnapshot> YieldResourceAfterSignaling(
         TaskCompletionSource watchStarted,
+        TaskCompletionSource watchUpdateConsumed,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         watchStarted.TrySetResult();
@@ -920,6 +923,7 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
             ResourceType = "Container",
             State = "Running",
         };
+        watchUpdateConsumed.TrySetResult();
     }
 
     private static async IAsyncEnumerable<ResourceSnapshot> ThrowObjectDisposedAfterCancellationAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)

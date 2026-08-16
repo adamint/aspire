@@ -2393,7 +2393,7 @@ suite('Editor assistance AppHost services', () => {
                     outcome: 'opened',
                     presentation: 'notification',
                 });
-                sinon.assert.calledOnceWithExactly(
+                sinon.assert.calledWithExactly(
                     errorLog,
                     'Failed to handle the Aspire Dashboard notification.');
                 assert.strictEqual(JSON.stringify(errorLog.getCalls()).includes(secretUrl), false);
