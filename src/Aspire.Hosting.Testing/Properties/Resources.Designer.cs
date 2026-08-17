@@ -79,38 +79,29 @@ namespace Aspire.Hosting.Testing.Properties {
         }
 
         /// <summary>
-        ///   Looks up a localized string similar to The dashboard login URL is not available because anonymous dashboard access is enabled..
+        ///   Looks up a localized string similar to The application must be started before retrieving the dashboard URL..
         /// </summary>
-        internal static string DashboardLoginUrlAnonymousExceptionMessage {
+        internal static string DashboardUrlApplicationNotStartedExceptionMessage {
             get {
-                return ResourceManager.GetString("DashboardLoginUrlAnonymousExceptionMessage", resourceCulture);
+                return ResourceManager.GetString("DashboardUrlApplicationNotStartedExceptionMessage", resourceCulture);
             }
         }
 
         /// <summary>
-        ///   Looks up a localized string similar to The application must be started before retrieving the dashboard login URL..
+        ///   Looks up a localized string similar to The dashboard URL is not available in publish mode..
         /// </summary>
-        internal static string DashboardLoginUrlApplicationNotStartedExceptionMessage {
+        internal static string DashboardUrlPublishModeExceptionMessage {
             get {
-                return ResourceManager.GetString("DashboardLoginUrlApplicationNotStartedExceptionMessage", resourceCulture);
+                return ResourceManager.GetString("DashboardUrlPublishModeExceptionMessage", resourceCulture);
             }
         }
 
         /// <summary>
-        ///   Looks up a localized string similar to The dashboard login URL is not available in publish mode..
+        ///   Looks up a localized string similar to The dashboard URL is not available..
         /// </summary>
-        internal static string DashboardLoginUrlPublishModeExceptionMessage {
+        internal static string DashboardUrlUnavailableExceptionMessage {
             get {
-                return ResourceManager.GetString("DashboardLoginUrlPublishModeExceptionMessage", resourceCulture);
-            }
-        }
-
-        /// <summary>
-        ///   Looks up a localized string similar to The dashboard login URL is not available..
-        /// </summary>
-        internal static string DashboardLoginUrlUnavailableExceptionMessage {
-            get {
-                return ResourceManager.GetString("DashboardLoginUrlUnavailableExceptionMessage", resourceCulture);
+                return ResourceManager.GetString("DashboardUrlUnavailableExceptionMessage", resourceCulture);
             }
         }
 

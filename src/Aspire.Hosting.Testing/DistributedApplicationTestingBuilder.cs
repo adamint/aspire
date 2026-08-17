@@ -429,7 +429,7 @@ public static class DistributedApplicationTestingBuilder
             // The AppHost and child dashboard each write a startup summary. Under the testing host, both flow into
             // test and CI output, so withhold the live browser credential from each while keeping their endpoint
             // lines. The ASPIRE_DASHBOARD-prefixed value is copied to the child process by DashboardEventHandlers.
-            // Tests get the credential through GetDashboardLoginUrlAsync instead.
+            // Tests get the credential through GetDashboardUrlAsync instead.
             ["AppHost:SuppressDashboardLoginUrlInStartupSummary"] = "true",
             [KnownConfigNames.DashboardSuppressBrowserTokenInOutput] = "true"
         });

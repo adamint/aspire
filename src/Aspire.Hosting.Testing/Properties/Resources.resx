@@ -123,17 +123,14 @@
   <data name="DashboardDisabledExceptionMessage" xml:space="preserve">
     <value>The dashboard is not enabled for this application.</value>
   </data>
-  <data name="DashboardLoginUrlAnonymousExceptionMessage" xml:space="preserve">
-    <value>The dashboard login URL is not available because anonymous dashboard access is enabled.</value>
+  <data name="DashboardUrlApplicationNotStartedExceptionMessage" xml:space="preserve">
+    <value>The application must be started before retrieving the dashboard URL.</value>
   </data>
-  <data name="DashboardLoginUrlApplicationNotStartedExceptionMessage" xml:space="preserve">
-    <value>The application must be started before retrieving the dashboard login URL.</value>
+  <data name="DashboardUrlPublishModeExceptionMessage" xml:space="preserve">
+    <value>The dashboard URL is not available in publish mode.</value>
   </data>
-  <data name="DashboardLoginUrlPublishModeExceptionMessage" xml:space="preserve">
-    <value>The dashboard login URL is not available in publish mode.</value>
-  </data>
-  <data name="DashboardLoginUrlUnavailableExceptionMessage" xml:space="preserve">
-    <value>The dashboard login URL is not available.</value>
+  <data name="DashboardUrlUnavailableExceptionMessage" xml:space="preserve">
+    <value>The dashboard URL is not available.</value>
   </data>
   <data name="DashboardTestingPublishModeExceptionMessage" xml:space="preserve">
     <value>Dashboard testing is not supported in publish mode.</value>

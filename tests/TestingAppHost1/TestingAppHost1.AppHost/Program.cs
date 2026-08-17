@@ -91,6 +91,10 @@ if (args.Contains("--crash-after-build"))
 
 await app.StartAsync();
 
+// Tests use this wait to model a debugger stopped on the next AppHost statement. The application has already
+// started, so its hosted services, resources, and dashboard continue running while top-level execution is paused.
+await TestingAppHostEntryPointProbe.WaitAtBreakpointAsync(args);
+
 if (args.Contains("--wait-for-healthy"))
 {
     // Wait indefinitely until redis becomes healthy.

@@ -16,12 +16,13 @@ public static class DistributedApplicationHostingTestingExtensions
     private const string DashboardResourceName = "aspire-dashboard";
 
     /// <summary>
-    /// Gets the authenticated login URL for the running Aspire dashboard.
+    /// Gets the URL for the running Aspire dashboard.
     /// </summary>
     /// <param name="app">The distributed application.</param>
     /// <param name="cancellationToken">A token used to cancel the operation.</param>
     /// <returns>
-    /// An absolute <see cref="Uri"/> that authenticates the browser with the running dashboard.
+    /// An absolute <see cref="Uri"/> that can be opened in a browser. The URL authenticates the browser when
+    /// authentication is enabled and otherwise points directly to the dashboard.
     /// </returns>
     /// <remarks>
     /// <para>
@@ -30,17 +31,18 @@ public static class DistributedApplicationHostingTestingExtensions
     /// </para>
     /// <para>
     /// This method does not start the distributed application. Call <see cref="DistributedApplication.StartAsync(CancellationToken)"/>
-    /// before requesting the dashboard login URL.
+    /// before requesting the dashboard URL.
     /// </para>
     /// <para>
     /// This method waits for the dashboard resource to become healthy. Pass a cancellation token when the wait must
-    /// be bounded. The returned URI contains an authentication credential and should be treated as sensitive.
+    /// be bounded. When authentication is enabled, the returned URI contains an authentication credential and should
+    /// be treated as sensitive.
     /// </para>
     /// </remarks>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="app"/> is <see langword="null"/>.</exception>
     /// <exception cref="InvalidOperationException">
     /// Thrown when the application is in publish mode, the dashboard is disabled, the application has not started,
-    /// anonymous dashboard access is enabled, or a dashboard login URL is unavailable.
+    /// or a dashboard URL is unavailable.
     /// </exception>
     /// <exception cref="DistributedApplicationException">Thrown when the dashboard reaches a terminal failure state.</exception>
     /// <exception cref="OperationCanceledException">Thrown when <paramref name="cancellationToken"/> is canceled.</exception>
@@ -56,11 +58,11 @@ public static class DistributedApplicationHostingTestingExtensions
     /// await using var app = await builder.BuildAsync();
     /// await app.StartAsync();
     ///
-    /// var dashboardLoginUrl = await app.GetDashboardLoginUrlAsync();
+    /// var dashboardUrl = await app.GetDashboardUrlAsync();
     /// </code>
     /// </example>
-    [AspireExportIgnore(Reason = "Dashboard URLs are only available to .NET test code and may contain authentication credentials.")]
-    public static async Task<Uri> GetDashboardLoginUrlAsync(
+    [AspireExportIgnore(Reason = "Use the exported getDashboardUrl overload without a cancellation token.")]
+    public static async Task<Uri> GetDashboardUrlAsync(
         this DistributedApplication app,
         CancellationToken cancellationToken = default)
     {
@@ -69,7 +71,7 @@ public static class DistributedApplicationHostingTestingExtensions
         var executionContext = app.Services.GetRequiredService<DistributedApplicationExecutionContext>();
         if (executionContext.IsPublishMode)
         {
-            throw new InvalidOperationException(Properties.Resources.DashboardLoginUrlPublishModeExceptionMessage);
+            throw new InvalidOperationException(Properties.Resources.DashboardUrlPublishModeExceptionMessage);
         }
 
         var applicationOptions = app.Services.GetRequiredService<DistributedApplicationOptions>();
@@ -78,7 +80,7 @@ public static class DistributedApplicationHostingTestingExtensions
             throw new InvalidOperationException(Properties.Resources.DashboardDisabledExceptionMessage);
         }
 
-        ThrowIfNotStarted(app, Properties.Resources.DashboardLoginUrlApplicationNotStartedExceptionMessage);
+        ThrowIfNotStarted(app, Properties.Resources.DashboardUrlApplicationNotStartedExceptionMessage);
         cancellationToken.ThrowIfCancellationRequested();
 
         await app.ResourceNotifications.WaitForResourceHealthyAsync(
@@ -90,25 +92,41 @@ public static class DistributedApplicationHostingTestingExtensions
         if (!applicationModel.Resources.TryGetByName(DashboardResourceName, out var resource) ||
             resource is not IResourceWithEndpoints dashboardResource)
         {
-            throw new InvalidOperationException(Properties.Resources.DashboardLoginUrlUnavailableExceptionMessage);
+            throw new InvalidOperationException(Properties.Resources.DashboardUrlUnavailableExceptionMessage);
         }
 
         var httpsEndpoint = dashboardResource.GetEndpoint("https");
         var httpEndpoint = dashboardResource.GetEndpoint("http");
         var dashboardEndpoint = httpsEndpoint.Exists ? httpsEndpoint : httpEndpoint;
-        var browserToken = app.Services.GetRequiredService<IConfiguration>()["AppHost:BrowserToken"];
-        if (string.IsNullOrEmpty(browserToken))
+        if (!dashboardEndpoint.Exists)
         {
-            throw new InvalidOperationException(Properties.Resources.DashboardLoginUrlAnonymousExceptionMessage);
+            throw new InvalidOperationException(Properties.Resources.DashboardUrlUnavailableExceptionMessage);
         }
 
-        if (!dashboardEndpoint.Exists ||
-            !Uri.TryCreate($"{dashboardEndpoint.Url.TrimEnd('/')}/login?t={browserToken}", UriKind.Absolute, out var dashboardUri))
+        var browserToken = app.Services.GetRequiredService<IConfiguration>()["AppHost:BrowserToken"];
+        var dashboardUrl = string.IsNullOrEmpty(browserToken)
+            ? dashboardEndpoint.Url
+            : $"{dashboardEndpoint.Url.TrimEnd('/')}/login?t={Uri.EscapeDataString(browserToken)}";
+
+        if (!Uri.TryCreate(dashboardUrl, UriKind.Absolute, out var dashboardUri))
         {
-            throw new InvalidOperationException(Properties.Resources.DashboardLoginUrlUnavailableExceptionMessage);
+            throw new InvalidOperationException(Properties.Resources.DashboardUrlUnavailableExceptionMessage);
         }
 
         return dashboardUri;
+    }
+
+    /// <summary>
+    /// Gets the URL for the running Aspire dashboard.
+    /// </summary>
+    /// <returns>
+    /// An absolute <see cref="Uri"/> that can be opened in a browser. When authentication is enabled, the URI
+    /// contains an authentication credential and should be treated as sensitive.
+    /// </returns>
+    [AspireExport("getDashboardUrl")]
+    internal static Task<Uri> GetDashboardUrlAsyncExport(this DistributedApplication app)
+    {
+        return app.GetDashboardUrlAsync(default);
     }
 
     /// <summary>

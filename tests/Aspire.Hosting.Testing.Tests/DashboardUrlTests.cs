@@ -3,27 +3,29 @@
 
 using System.Net;
 using Aspire.TestUtilities;
+using Aspire.Templates.Tests;
 using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Testing;
+using Microsoft.Playwright;
 using Xunit;
 using TestingResources = Aspire.Hosting.Testing.Properties.Resources;
 
 namespace Aspire.Hosting.Testing.Tests;
 
-public class DashboardLoginUrlTests
+public class DashboardUrlTests
 {
     [Fact]
     [RequiresFeature(TestFeature.ContainerRuntime)]
-    public async Task GetDashboardLoginUrlAsyncAuthenticatesDashboardBrowser()
+    public async Task GetDashboardUrlAsyncAuthenticatesDashboardBrowser()
     {
         await using var builder = await CreateDashboardBuilderAsync();
         await using var app = await builder.BuildAsync();
         await app.StartAsync().WaitAsync(TestConstants.LongTimeoutTimeSpan);
 
         using var cancellationTokenSource = new CancellationTokenSource(TestConstants.LongTimeoutTimeSpan);
-        var dashboardUri = await app.GetDashboardLoginUrlAsync(cancellationTokenSource.Token);
+        var dashboardUri = await app.GetDashboardUrlAsync(cancellationTokenSource.Token);
 
         Assert.True(dashboardUri.IsAbsoluteUri);
         Assert.Equal(Uri.UriSchemeHttp, dashboardUri.Scheme);
@@ -57,6 +59,118 @@ public class DashboardLoginUrlTests
     }
 
     [Fact]
+    [OuterloopTest("Resource-intensive Playwright browser test")]
+    [RequiresFeature(TestFeature.ContainerRuntime | TestFeature.Playwright)]
+    public async Task DashboardDisplaysResourceUpdatesWhileAppHostIsPausedAtBreakpoint()
+    {
+        const string resourceName = "dashboard-test-resource";
+        const string initialState = "Dashboard test initial";
+        const string updatedState = "Dashboard test updated";
+
+        using var breakpoint = TestingAppHostEntryPointProbe.CreateBreakpoint();
+        await using var builder = await CreateDashboardBuilderAsync($"--entry-point-breakpoint-probe={breakpoint.Id}");
+        builder.AddExternalService(resourceName, "https://example.com/");
+        await using var app = await builder.BuildAsync();
+
+        try
+        {
+            await app.StartAsync().WaitAsync(TestConstants.LongTimeoutTimeSpan);
+
+            using var cancellationTokenSource = new CancellationTokenSource(TestConstants.LongTimeoutTimeSpan);
+            var cancellationToken = cancellationTokenSource.Token;
+
+            // The AppHost signals this immediately after app.StartAsync() and then waits for Continue(). This models a
+            // debugger stopped on the next AppHost statement while hosted services, child resources, and the dashboard run.
+            await breakpoint.Reached.WaitAsync(cancellationToken);
+
+            var runningResourceEvent = await app.ResourceNotifications.WaitForResourceAsync(
+                resourceName,
+                resourceEvent => resourceEvent.Snapshot.State?.Text == KnownResourceStates.Running,
+                cancellationToken);
+
+            await app.ResourceNotifications.PublishUpdateAsync(
+                runningResourceEvent.Resource,
+                snapshot => snapshot with { State = initialState });
+
+            // GetDashboardUrlAsync is a dashboard-health barrier, not a resource-propagation barrier. The resource service
+            // caches notifications for dashboard clients, so a browser that connects now receives this state as initial data.
+            var dashboardUri = await app.GetDashboardUrlAsync(cancellationToken);
+
+            PlaywrightProvider.DetectAndSetInstalledPlaywrightDependenciesPath();
+            Assertions.SetDefaultExpectTimeout(TestConstants.LongTimeoutDuration);
+            var browser = await PlaywrightProvider.CreateBrowserAsync();
+            try
+            {
+                await using var context = await browser.NewContextAsync();
+                var page = await context.NewPageAsync();
+                await page.GotoAsync(dashboardUri.AbsoluteUri);
+
+                var resourceRow = page.Locator("tr.resource-row").Filter(new() { HasText = resourceName });
+                var stateCell = resourceRow.Locator(".state-column-cell");
+
+                await Assertions.Expect(resourceRow).ToBeVisibleAsync();
+                await Assertions.Expect(stateCell).ToContainTextAsync(initialState);
+
+                var updatedResourceTask = app.ResourceNotifications.WaitForResourceAsync(
+                    resourceName,
+                    resourceEvent => resourceEvent.Snapshot.State?.Text == updatedState,
+                    cancellationToken);
+
+                await app.ResourceNotifications.PublishUpdateAsync(
+                    runningResourceEvent.Resource,
+                    snapshot => snapshot with { State = updatedState });
+                await updatedResourceTask;
+
+                // PublishUpdateAsync updates the application notification stream while the AppHost breakpoint remains held.
+                // Dashboard consumption and browser rendering are asynchronous, so wait separately for the rendered change.
+                await Assertions.Expect(stateCell).ToContainTextAsync(updatedState);
+            }
+            finally
+            {
+                await browser.CloseAsync();
+            }
+        }
+        finally
+        {
+            // Release AppHost execution before the application is disposed; otherwise its entry point cannot finish cleanup.
+            breakpoint.Continue();
+        }
+    }
+
+    [Fact]
+    [RequiresFeature(TestFeature.ContainerRuntime)]
+    public async Task GetDashboardUrlAsyncEncodesCustomBrowserToken()
+    {
+        const string BrowserToken = "browser&token#with+reserved";
+        await using var builder = await CreateDashboardBuilderAsync();
+        builder.Configuration["AppHost:BrowserToken"] = BrowserToken;
+        await using var app = await builder.BuildAsync();
+        await app.StartAsync().WaitAsync(TestConstants.LongTimeoutTimeSpan);
+
+        using var cancellationTokenSource = new CancellationTokenSource(TestConstants.LongTimeoutTimeSpan);
+        var dashboardUri = await app.GetDashboardUrlAsync(cancellationTokenSource.Token);
+
+        Assert.Equal($"?t={Uri.EscapeDataString(BrowserToken)}", dashboardUri.Query);
+
+        using var handler = new HttpClientHandler
+        {
+            AllowAutoRedirect = false,
+            UseCookies = true
+        };
+        using var httpClient = new HttpClient(handler)
+        {
+            Timeout = TestConstants.LongTimeoutTimeSpan
+        };
+        using var loginResponse = await httpClient.GetAsync(dashboardUri, cancellationTokenSource.Token);
+
+        Assert.Equal(HttpStatusCode.Redirect, loginResponse.StatusCode);
+        Assert.Equal("/", loginResponse.Headers.Location?.OriginalString);
+        Assert.Single(
+            loginResponse.Headers.GetValues("Set-Cookie"),
+            cookie => cookie.StartsWith(".Aspire.Dashboard.Auth", StringComparison.Ordinal));
+    }
+
+    [Fact]
     [RequiresFeature(TestFeature.ContainerRuntime)]
     public async Task DashboardRejectsWrongCrossApplicationAndBogusLoginTokens()
     {
@@ -68,8 +182,8 @@ public class DashboardLoginUrlTests
         await Task.WhenAll(firstApp.StartAsync(), secondApp.StartAsync()).WaitAsync(TestConstants.LongTimeoutTimeSpan);
 
         using var cancellationTokenSource = new CancellationTokenSource(TestConstants.LongTimeoutTimeSpan);
-        var firstUrl = await firstApp.GetDashboardLoginUrlAsync(cancellationTokenSource.Token);
-        var secondUrl = await secondApp.GetDashboardLoginUrlAsync(cancellationTokenSource.Token);
+        var firstUrl = await firstApp.GetDashboardUrlAsync(cancellationTokenSource.Token);
+        var secondUrl = await secondApp.GetDashboardUrlAsync(cancellationTokenSource.Token);
         var firstBaseUrl = firstUrl.GetLeftPart(UriPartial.Authority);
         Uri[] invalidLoginUrls =
         [
@@ -102,60 +216,69 @@ public class DashboardLoginUrlTests
 
     [Fact]
     [RequiresFeature(TestFeature.ContainerRuntime)]
-    public async Task GetDashboardLoginUrlAsyncThrowsWhenDashboardIsDisabled()
+    public async Task GetDashboardUrlAsyncThrowsWhenDashboardIsDisabled()
     {
         var builder = DistributedApplicationTestingBuilder.Create();
         await using var app = await builder.BuildAsync();
         await app.StartAsync().WaitAsync(TestConstants.LongTimeoutTimeSpan);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => app.GetDashboardLoginUrlAsync(default));
+            () => app.GetDashboardUrlAsync(default));
 
         Assert.Equal(TestingResources.DashboardDisabledExceptionMessage, exception.Message);
     }
 
     [Fact]
     [RequiresFeature(TestFeature.ContainerRuntime)]
-    public async Task GetDashboardLoginUrlAsyncThrowsWhenDashboardAllowsAnonymousAccess()
+    public async Task GetDashboardUrlAsyncReturnsBaseUrlWhenDashboardAllowsAnonymousAccess()
     {
         await using var builder = await CreateDashboardBuilderAsync();
         builder.Configuration["AppHost:BrowserToken"] = string.Empty;
         await using var app = await builder.BuildAsync();
         await app.StartAsync().WaitAsync(TestConstants.LongTimeoutTimeSpan);
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => app.GetDashboardLoginUrlAsync(default));
+        using var cancellationTokenSource = new CancellationTokenSource(TestConstants.LongTimeoutTimeSpan);
+        var dashboardUri = await app.GetDashboardUrlAsync(cancellationTokenSource.Token);
 
-        Assert.Equal(TestingResources.DashboardLoginUrlAnonymousExceptionMessage, exception.Message);
+        Assert.True(dashboardUri.IsAbsoluteUri);
+        Assert.Equal(Uri.UriSchemeHttp, dashboardUri.Scheme);
+        Assert.True(dashboardUri.IsLoopback);
+        Assert.InRange(dashboardUri.Port, 1, 65535);
+        Assert.Equal("/", dashboardUri.AbsolutePath);
+        Assert.Equal(string.Empty, dashboardUri.Query);
+
+        using var httpClient = new HttpClient { Timeout = TestConstants.LongTimeoutTimeSpan };
+        using var response = await httpClient.GetAsync(dashboardUri, cancellationTokenSource.Token);
+        response.EnsureSuccessStatusCode();
     }
 
     [Fact]
-    public async Task GetDashboardLoginUrlAsyncThrowsBeforeApplicationStarts()
+    public async Task GetDashboardUrlAsyncThrowsBeforeApplicationStarts()
     {
         await using var builder = await CreateDashboardBuilderAsync();
         await using var app = await builder.BuildAsync();
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => app.GetDashboardLoginUrlAsync(default));
+            () => app.GetDashboardUrlAsync(default));
 
-        Assert.Equal(TestingResources.DashboardLoginUrlApplicationNotStartedExceptionMessage, exception.Message);
+        Assert.Equal(TestingResources.DashboardUrlApplicationNotStartedExceptionMessage, exception.Message);
     }
 
     [Fact]
-    public async Task GetDashboardLoginUrlAsyncThrowsInPublishMode()
+    public async Task GetDashboardUrlAsyncThrowsInPublishMode()
     {
         var builder = DistributedApplicationTestingBuilder.Create(["--publisher", "manifest"]);
         await using var app = await builder.BuildAsync();
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => app.GetDashboardLoginUrlAsync(default));
+            () => app.GetDashboardUrlAsync(default));
 
-        Assert.Equal(TestingResources.DashboardLoginUrlPublishModeExceptionMessage, exception.Message);
+        Assert.Equal(TestingResources.DashboardUrlPublishModeExceptionMessage, exception.Message);
     }
 
     [Fact]
     [RequiresFeature(TestFeature.ContainerRuntime)]
-    public async Task GetDashboardLoginUrlAsyncPreservesTerminalDashboardFailure()
+    public async Task GetDashboardUrlAsyncPreservesTerminalDashboardFailure()
     {
         var missingDashboardPath = Path.Combine(
             AppContext.BaseDirectory,
@@ -169,7 +292,7 @@ public class DashboardLoginUrlTests
 
         using var cancellationTokenSource = new CancellationTokenSource(TestConstants.LongTimeoutTimeSpan);
         var exception = await Assert.ThrowsAsync<DistributedApplicationException>(
-            () => app.GetDashboardLoginUrlAsync(cancellationTokenSource.Token));
+            () => app.GetDashboardUrlAsync(cancellationTokenSource.Token));
 
         Assert.Contains(KnownResourceNames.AspireDashboard, exception.Message, StringComparison.Ordinal);
     }
@@ -186,7 +309,7 @@ public class DashboardLoginUrlTests
         await app.StartAsync().WaitAsync(TestConstants.LongTimeoutTimeSpan);
 
         using var cancellationTokenSource = new CancellationTokenSource(TestConstants.LongTimeoutTimeSpan);
-        var dashboardUri = await app.GetDashboardLoginUrlAsync(cancellationTokenSource.Token);
+        var dashboardUri = await app.GetDashboardUrlAsync(cancellationTokenSource.Token);
         var token = dashboardUri.Query["?t=".Length..];
         Assert.NotEmpty(token);
 
@@ -216,11 +339,11 @@ public class DashboardLoginUrlTests
             (accumulated, pair) => accumulated + " " + pair.Value);
     }
 
-    private static Task<IDistributedApplicationTestingBuilder> CreateDashboardBuilderAsync()
+    private static Task<IDistributedApplicationTestingBuilder> CreateDashboardBuilderAsync(params string[] args)
     {
         return DistributedApplicationTestingBuilder.CreateAsync<Projects.TestingAppHost1_AppHost>(
             CreateDashboardOptions(),
-            []);
+            args);
     }
 
     private static DistributedApplicationTestingBuilderOptions CreateDashboardOptions()

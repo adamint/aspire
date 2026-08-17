@@ -25,7 +25,7 @@ internal class DashboardOptions
     /// <remarks>
     /// Set by <c>Aspire.Hosting.Testing</c> when it runs a dashboard for a test application. That dashboard's
     /// browser token is generated per application and handed to the test through
-    /// <c>GetDashboardLoginUrlAsync</c>, so writing it to the AppHost logger only publishes a live credential
+    /// <c>GetDashboardUrlAsync</c>, so writing it to the AppHost logger only publishes a live credential
     /// into test and CI output. The dashboard and OTLP endpoint lines are still written.
     /// </remarks>
     public bool SuppressLoginUrlInStartupSummary { get; set; }

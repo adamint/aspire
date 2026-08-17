@@ -25,7 +25,7 @@ namespace Aspire.Hosting.Testing;
 /// await app.StartAsync();
 ///
 /// // Open this in a browser to inspect the running application.
-/// var loginUrl = await app.GetDashboardLoginUrlAsync();
+/// var dashboardUrl = await app.GetDashboardUrlAsync();
 /// </code>
 /// </example>
 public sealed class DistributedApplicationTestingBuilderOptions
@@ -38,12 +38,18 @@ public sealed class DistributedApplicationTestingBuilderOptions
     /// The default is <see langword="false"/>.
     /// </value>
     /// <remarks>
+    /// <para>
     /// When the dashboard runs, it listens on loopback endpoints using dynamically assigned ports, so concurrent
     /// test applications do not compete for a fixed port. Loopback still means every dashboard on the machine is
     /// reachable from it; what keeps applications out of each other's dashboards is that each one generates its own
     /// browser token. Use
-    /// <see cref="DistributedApplicationHostingTestingExtensions.GetDashboardLoginUrlAsync"/> to obtain an
-    /// authenticated URL for the running dashboard.
+    /// <see cref="DistributedApplicationHostingTestingExtensions.GetDashboardUrlAsync"/> to obtain a browser-ready
+    /// URL for the running dashboard.
+    /// </para>
+    /// <para>
+    /// The dashboard process remains reachable when a debugger pauses the test process, but resource state changes,
+    /// logs, and commands flow through the paused process and do not update until execution resumes.
+    /// </para>
     /// </remarks>
     public bool EnableDashboard { get; set; }
 }
