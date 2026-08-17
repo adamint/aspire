@@ -42,6 +42,7 @@ internal sealed class AppHostLauncher(
     ILogger<AppHostLauncher> logger,
     TimeProvider timeProvider)
 {
+    private const string DefaultDiscoverySelectionOrigin = "default-discovery";
     private const int MaxDisplayedChildLogLines = 80;
     private const int MaxParentLogReplayLines = 200;
     private static readonly TimeSpan s_legacyDetachedStartupStabilityWindow = TimeSpan.FromSeconds(2);
@@ -132,6 +133,12 @@ internal sealed class AppHostLauncher(
             return CommandResult.Failure(CliExitCodes.FailedToFindProject);
         }
 
+        var appHostSelectionOrigin = configuration[KnownConfigNames.CliAppHostSelectionOrigin];
+        if (string.IsNullOrEmpty(appHostSelectionOrigin) && passedAppHostProjectFile is null)
+        {
+            appHostSelectionOrigin = DefaultDiscoverySelectionOrigin;
+        }
+
         logger.LogDebug("Starting AppHost in background: {AppHostPath}", effectiveAppHostFile.FullName);
 
         // Check for running instance and stop it if found (same behavior as regular run)
@@ -175,7 +182,7 @@ internal sealed class AppHostLauncher(
         {
             launchResult = await interactionService.ShowDynamicStatusAsync(
                 RunCommandStrings.StartingAppHostInBackground,
-                updateStatus => LaunchAndWaitForBackchannelAsync(executablePath, childArgs, expectedHash, legacyHashes, TimeSpan.FromSeconds(timeoutSeconds), updateStatus, cancellationToken));
+                updateStatus => LaunchAndWaitForBackchannelAsync(executablePath, childArgs, expectedHash, legacyHashes, appHostSelectionOrigin, TimeSpan.FromSeconds(timeoutSeconds), updateStatus, cancellationToken));
         }
         catch (OperationCanceledException)
         {
@@ -390,6 +397,7 @@ internal sealed class AppHostLauncher(
         List<string> childArgs,
         string expectedHash,
         IReadOnlyList<string> legacyHashes,
+        string? appHostSelectionOrigin,
         TimeSpan timeout,
         Action<string> updateStatus,
         CancellationToken cancellationToken)
@@ -409,7 +417,7 @@ internal sealed class AppHostLauncher(
                 childProcess = processExecutionFactory.CreateExecution(
                     executablePath,
                     childArgs.ToArray(),
-                    CreateDetachedChildEnvironment(Activity.Current, configuration[KnownConfigNames.CliAppHostSelectionOrigin]),
+                    CreateDetachedChildEnvironment(Activity.Current, appHostSelectionOrigin),
                     executionContext.WorkingDirectory,
                     options);
 
