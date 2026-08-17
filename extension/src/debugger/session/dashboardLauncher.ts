@@ -132,10 +132,9 @@ export interface DashboardLaunchNotificationOptions {
   readonly delayMs?: number;
 }
 
-export function showDashboardLaunchNotification(options: DashboardLaunchNotificationOptions): void {
+export async function showDashboardLaunchNotification(options: DashboardLaunchNotificationOptions): Promise<boolean> {
   if (options.delayMs && options.delayMs > 0) {
-    setTimeout(() => showDashboardLaunchNotification({ ...options, delayMs: 0 }), options.delayMs);
-    return;
+    await new Promise(resolve => setTimeout(resolve, options.delayMs));
   }
 
   const actions: vscode.MessageItem[] = [{ title: directLink }];
@@ -150,12 +149,33 @@ export function showDashboardLaunchNotification(options: DashboardLaunchNotifica
   }
   catch {
     extensionLogOutputChannel.error('Failed to show the Aspire Dashboard notification.');
-    return;
+    return false;
   }
 
-  void Promise.resolve(selection)
+  const selectionPromise = Promise.resolve(selection);
+  const initialState = await Promise.race([
+    selectionPromise.then(
+      selected => ({ kind: 'selected' as const, selected }),
+      () => ({ kind: 'rejected' as const })),
+    new Promise<{ kind: 'pending' }>(resolve =>
+      setTimeout(() => resolve({ kind: 'pending' }), 0)),
+  ]);
+
+  if (initialState.kind === 'rejected') {
+    extensionLogOutputChannel.error('Failed to show the Aspire Dashboard notification.');
+    return false;
+  }
+
+  if (initialState.kind === 'selected') {
+    void handleDashboardLaunchNotificationSelection(initialState.selected, options)
+      .catch(() => extensionLogOutputChannel.error('Failed to handle the Aspire Dashboard notification.'));
+    return true;
+  }
+
+  void selectionPromise
     .then(selected => handleDashboardLaunchNotificationSelection(selected, options))
     .catch(() => extensionLogOutputChannel.error('Failed to handle the Aspire Dashboard notification.'));
+  return true;
 }
 
 async function handleDashboardLaunchNotificationSelection(

@@ -2845,7 +2845,7 @@ suite('Editor assistance AppHost services', () => {
             }
         });
 
-        test('keeps notification selection failures URL-free after presentation', async () => {
+        test('reports an error when Dashboard notification presentation rejects', async () => {
             const sandbox = sinon.createSandbox();
             try {
                 const secretUrl = 'https://dashboard.example.invalid/login?t=secret';
@@ -2863,14 +2863,44 @@ suite('Editor assistance AppHost services', () => {
                 await new Promise(resolve => setTimeout(resolve, 0));
 
                 assert.deepStrictEqual(result, {
-                    success: true,
+                    success: false,
                     tool: aspireOpenDashboardToolName,
-                    outcome: 'opened',
-                    presentation: 'notification',
+                    outcome: 'error',
                 });
                 sinon.assert.calledWithExactly(
                     errorLog,
-                    'Failed to handle the Aspire Dashboard notification.');
+                    'Failed to show the Aspire Dashboard notification.');
+                assert.strictEqual(JSON.stringify(errorLog.getCalls()).includes(secretUrl), false);
+            }
+            finally {
+                sandbox.restore();
+            }
+        });
+
+        test('reports an error when Dashboard notification presentation throws', async () => {
+            const sandbox = sinon.createSandbox();
+            try {
+                const secretUrl = 'https://dashboard.example.invalid/login?t=secret';
+                sandbox.stub(vscode.workspace, 'getConfiguration').returns(createAspireConfiguration({
+                    dashboardBrowser: 'notification',
+                }));
+                sandbox.stub(vscode.window, 'showInformationMessage')
+                    .throws(new Error(`Presentation failed for ${secretUrl}`));
+                const errorLog = sandbox.stub(extensionLogOutputChannel, 'error');
+                uiRepository.appHosts = [createEditorOwnedRunningAppHost(appHostProjectPath, secretUrl)];
+
+                const result = await service.openDashboard(
+                    { appHostPath: 'AppHost/AppHost.csproj' },
+                    new vscode.CancellationTokenSource().token);
+
+                assert.deepStrictEqual(result, {
+                    success: false,
+                    tool: aspireOpenDashboardToolName,
+                    outcome: 'error',
+                });
+                sinon.assert.calledWithExactly(
+                    errorLog,
+                    'Failed to show the Aspire Dashboard notification.');
                 assert.strictEqual(JSON.stringify(errorLog.getCalls()).includes(secretUrl), false);
             }
             finally {

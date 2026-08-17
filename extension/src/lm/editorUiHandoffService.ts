@@ -98,11 +98,13 @@ export class EditorUiHandoffService implements EditorUiHandoffOperations {
             throwIfCanceled(token);
 
             if (resolvedBehavior.behavior === 'notification') {
-                showDashboardLaunchNotification({
+                const presented = await showDashboardLaunchNotification({
                     baseUrl: dashboardUrl,
                     source: resolvedBehavior.source,
                 });
-                return { outcome: 'opened', presentation: 'notification' };
+                return presented
+                    ? { outcome: 'opened', presentation: 'notification' }
+                    : { outcome: 'error' };
             }
 
             const browserType: DashboardBrowserType = resolvedBehavior.behavior;
