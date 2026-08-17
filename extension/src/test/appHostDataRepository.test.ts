@@ -6653,8 +6653,64 @@ suite('AppHostDataRepository global polling', () => {
                 ['/workspace/MissedAppHost.csproj']);
             assert.strictEqual(
                 spawned.filter(call => call.args[0] === 'ps' && !call.args.includes('--follow')).length,
+                1,
+                'replayed follow deltas should not queue another authoritative snapshot');
+        }
+        finally {
+            repository.dispose();
+            getConfigurationStub.restore();
+            clock.restore();
+        }
+    });
+
+    test('ps reconciliation retries when the bounded follow replay buffer overflows', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const inspect = sinon.stub();
+        inspect.withArgs('appHostsPollingInterval').returns({ globalValue: 1000 });
+        inspect.withArgs('globalAppHostsPollingInterval').returns({ globalValue: 9000 });
+        const getConfigurationStub = sinon.stub(vscode.workspace, 'getConfiguration');
+        getConfigurationStub.withArgs('aspire').returns({
+            inspect,
+            get: sinon.stub().withArgs('appHostsPollingInterval', 30000).returns(30000),
+        } as unknown as vscode.WorkspaceConfiguration);
+        const spawned: { args: string[]; options: any }[] = [];
+        spawnStub.callsFake((_terminalProvider, _command, args, options) => {
+            spawned.push({ args, options });
+            return new TestChildProcess();
+        });
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        try {
+            repository.activate();
+            repository.setViewMode('global');
+            repository.setPanelVisible(true);
+            await waitForMicrotasks();
+
+            const followCall = spawned.find(call =>
+                call.args[0] === 'ps' && call.args.includes('--follow'));
+            assert.ok(followCall);
+
+            await clock.tickAsync(1000);
+            const snapshotCall = spawned.find(call =>
+                call.args[0] === 'ps' && !call.args.includes('--follow'));
+            assert.ok(snapshotCall);
+            snapshotCall.options.stdoutCallback('[]');
+
+            for (let index = 0; index < 257; index++) {
+                followCall.options.lineCallback(JSON.stringify({
+                    appHostPath: `/workspace/AppHost-${index}.csproj`,
+                    appHostPid: index + 1,
+                    status: 'running',
+                }));
+            }
+
+            snapshotCall.options.exitCallback(0);
+            await waitForMicrotasks();
+
+            assert.strictEqual(
+                spawned.filter(call => call.args[0] === 'ps' && !call.args.includes('--follow')).length,
                 2,
-                'a follow delta during reconciliation should queue a quiet-period authoritative retry');
+                'an incomplete bounded replay should queue a fresh authoritative snapshot');
         }
         finally {
             repository.dispose();

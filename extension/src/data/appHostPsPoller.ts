@@ -356,12 +356,12 @@ export class AppHostPsPoller implements vscode.Disposable {
             return;
         }
 
-        this._authoritativeSnapshotPending = true;
         if (this._authoritativeSnapshotFollowOutputs.length < AppHostPsPoller._authoritativeSnapshotFollowOutputLimit) {
             this._authoritativeSnapshotFollowOutputs.push(line);
         }
         else {
             this._authoritativeSnapshotFollowOutputsOverflowed = true;
+            this._authoritativeSnapshotPending = true;
         }
     }
 
