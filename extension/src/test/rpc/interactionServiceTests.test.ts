@@ -13,6 +13,7 @@ import { AspireDebugSession } from '../../debugger/AspireDebugSession';
 import { dashboardDefaultChangedNotificationKey } from '../../utils/dashboardNotificationState';
 import { AspireExtensionContext } from '../../AspireExtensionContext';
 import { debugSessionStopTimedOut } from '../../loc/strings';
+import { appHostSelectionOriginConfigKey } from '../../debugger/AspireDebugConfigurationMetadata';
 
 suite('InteractionService endpoints', () => {
 	let statusBarItem: vscode.StatusBarItem;
@@ -175,6 +176,72 @@ suite('InteractionService endpoints', () => {
 			assert.deepStrictEqual(debugConfiguration.env, {
 				ASPIRE_HOME: '/isolated/aspire-home',
 			});
+		}
+		finally {
+			startDebuggingStub.restore();
+		}
+	});
+
+	test('startDebugSession keeps explicit CLI AppHost selection invocation scoped', async () => {
+		const testInfo = await createTestRpcServer();
+		const startDebuggingStub = sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+		const options = {
+			command: 'run',
+			appHostSelectionOrigin: 'explicit-cli' as const,
+		};
+
+		try {
+			await testInfo.interactionService.startDebugSession(
+				'/workspace',
+				'/workspace/apphost.cs',
+				false,
+				options);
+
+			const debugConfiguration = startDebuggingStub.firstCall.args[1] as vscode.DebugConfiguration;
+			assert.strictEqual(
+				Object.prototype.hasOwnProperty.call(debugConfiguration, appHostSelectionOriginConfigKey),
+				false);
+		}
+		finally {
+			startDebuggingStub.restore();
+		}
+	});
+
+	test('startDebugSession preserves user selection fallback for older CLIs', async () => {
+		const testInfo = await createTestRpcServer();
+		const startDebuggingStub = sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+
+		try {
+			await testInfo.interactionService.startDebugSession(
+				'/workspace',
+				'/workspace/apphost.cs',
+				false);
+
+			const debugConfiguration = startDebuggingStub.firstCall.args[1] as vscode.DebugConfiguration;
+			assert.strictEqual(debugConfiguration[appHostSelectionOriginConfigKey], 'user-selection');
+		}
+		finally {
+			startDebuggingStub.restore();
+		}
+	});
+
+	test('startDebugSession carries explicit default discovery origin', async () => {
+		const testInfo = await createTestRpcServer();
+		const startDebuggingStub = sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+		const options = {
+			command: 'run',
+			appHostSelectionOrigin: 'default-discovery' as const,
+		};
+
+		try {
+			await testInfo.interactionService.startDebugSession(
+				'/workspace',
+				'/workspace/apphost.cs',
+				false,
+				options);
+
+			const debugConfiguration = startDebuggingStub.firstCall.args[1] as vscode.DebugConfiguration;
+			assert.strictEqual(debugConfiguration[appHostSelectionOriginConfigKey], 'default-discovery');
 		}
 		finally {
 			startDebuggingStub.restore();
