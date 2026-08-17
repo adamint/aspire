@@ -213,7 +213,17 @@ internal sealed class RunCommand : BaseCommand
             && string.IsNullOrEmpty(_configuration[KnownConfigNames.ExtensionDebugSessionId]))
         {
             extensionInteractionService.DisplayConsolePlainText(string.Format(CultureInfo.CurrentCulture, startDebugSession ? RunCommandStrings.StartingDebugSessionInExtension : RunCommandStrings.StartingRunSessionInExtension, "run"));
-            await extensionInteractionService.StartDebugSessionAsync(ExecutionContext.WorkingDirectory.FullName, passedAppHostProjectFile?.FullName, startDebugSession, new DebugSessionOptions { Command = "run" });
+            await extensionInteractionService.StartDebugSessionAsync(
+                ExecutionContext.WorkingDirectory.FullName,
+                passedAppHostProjectFile?.FullName,
+                startDebugSession,
+                new DebugSessionOptions
+                {
+                    Command = "run",
+                    AppHostSelectionOrigin = passedAppHostProjectFile is not null
+                        ? DebugSessionOptions.ExplicitCliAppHostSelectionOrigin
+                        : DebugSessionOptions.DefaultDiscoveryAppHostSelectionOrigin
+                });
             return CommandResult.Success();
         }
 

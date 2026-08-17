@@ -115,7 +115,10 @@ internal sealed class StartCommand : BaseCommand
                 new DebugSessionOptions
                 {
                     Command = "run",
-                    Args = debugSessionArgs.Count > 0 ? [.. debugSessionArgs] : null
+                    Args = debugSessionArgs.Count > 0 ? [.. debugSessionArgs] : null,
+                    AppHostSelectionOrigin = passedAppHostProjectFile is not null
+                        ? DebugSessionOptions.ExplicitCliAppHostSelectionOrigin
+                        : DebugSessionOptions.DefaultDiscoveryAppHostSelectionOrigin
                 });
 
             return CommandResult.Success();
