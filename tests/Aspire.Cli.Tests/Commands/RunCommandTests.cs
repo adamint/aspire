@@ -3600,6 +3600,22 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
         }
     }
 
+    [Fact]
+    public void DebugSessionOptions_SerializesAppHostSelectionOriginUsingWireContract()
+    {
+        var options = new DebugSessionOptions
+        {
+            AppHostSelectionOrigin = DebugSessionOptions.ExplicitCliAppHostSelectionOrigin
+        };
+
+        var json = JsonSerializer.Serialize(options, BackchannelJsonSerializerContext.Default.DebugSessionOptions);
+        using var document = JsonDocument.Parse(json);
+        var property = Assert.Single(document.RootElement.EnumerateObject(), property => property.Value.GetString() == "explicit-cli");
+
+        Assert.Equal("appHostSelectionOrigin", property.Name);
+        Assert.Equal("explicit-cli", property.Value.GetString());
+    }
+
     [Theory]
     [InlineData(false, "default-discovery")]
     [InlineData(true, "explicit-cli")]

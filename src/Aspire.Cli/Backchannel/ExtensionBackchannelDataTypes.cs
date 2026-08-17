@@ -90,7 +90,7 @@ internal sealed class DebugSessionOptions
     public Dictionary<string, string>? EnvironmentVariables { get; set; }
 
     /// <summary>
-    /// Gets or sets whether the AppHost was selected explicitly by the CLI or through default discovery.
+    /// Gets or sets a value describing how the AppHost was selected.
     /// </summary>
     [JsonPropertyName("appHostSelectionOrigin")]
     public string? AppHostSelectionOrigin { get; set; }
