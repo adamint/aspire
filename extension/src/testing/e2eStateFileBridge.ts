@@ -608,16 +608,25 @@ async function executeE2eControlCommand(
         };
       }
 
-      const prepared = await registration.tool.prepareInvocation(
-        { input: command.input },
-        new vscode.CancellationTokenSource().token);
-      return {
-        registered: registration.registered,
-        supportsPreparation: true,
-        invocationMessage: prepared?.invocationMessage,
-        confirmationTitle: prepared?.confirmationMessages?.title,
-        confirmationMessage: prepared?.confirmationMessages?.message,
-      };
+      const cancellationSource = new vscode.CancellationTokenSource();
+      try {
+        const prepared = await registration.tool.prepareInvocation(
+          { input: command.input },
+          cancellationSource.token);
+        return {
+          registered: registration.registered,
+          supportsPreparation: true,
+          invocationMessage: prepared?.invocationMessage,
+          confirmationTitle: prepared?.confirmationMessages?.title,
+          confirmationMessage: prepared?.confirmationMessages?.message,
+        };
+      }
+      finally {
+        // This command inspects preparation output without invoking the tool. Cancel the
+        // synthetic preparation so it cannot affect a later real invocation in the same host.
+        cancellationSource.cancel();
+        cancellationSource.dispose();
+      }
     }
     case 'invokeLanguageModelTool': {
       markStarted();

@@ -68,8 +68,48 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
             // Start the watch before fetching the initial snapshot so a resource transition cannot
             // fall into the gap between those two backchannel calls. Changes win over the initial
             // snapshot because the snapshot may already be stale by the time it is returned.
-            var watchTask = WatchChangesAsync(cancellationToken);
-            var snapshots = await _connection.GetResourceSnapshotsAsync(includeHidden: true, cancellationToken).ConfigureAwait(false);
+            using var watchCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var watchTask = WatchChangesAsync(watchCts.Token);
+            List<ResourceSnapshot> snapshots;
+            try
+            {
+                snapshots = await _connection.GetResourceSnapshotsAsync(includeHidden: true, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                Exception? cancellationException = null;
+                try
+                {
+                    watchCts.Cancel();
+                }
+                catch (Exception ex)
+                {
+                    // Preserve the initial-load exception while retaining a cancellation callback
+                    // failure for diagnostics after the already-started watch has been observed.
+                    cancellationException = ex;
+                }
+
+                try
+                {
+                    await watchTask.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException watchException) when (
+                    watchException.CancellationToken == watchCts.Token ||
+                    watchException.CancellationToken == default && watchCts.IsCancellationRequested)
+                {
+                    // This cancellation is the expected result of stopping the watch after the
+                    // initial snapshot failed, not an independent watch-loop failure.
+                }
+                catch (Exception watchException)
+                {
+                    // Preserve the initial-load exception for callers while still observing any
+                    // independent failure raised as the already-started watch is canceled.
+                    _watchException = watchException;
+                }
+
+                _watchException ??= cancellationException;
+                throw;
+            }
 
             lock (_resourcesLock)
             {
@@ -170,7 +210,7 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
     }
 
     /// <summary>
-    /// Gets the exception that terminated the watch loop after the initial load, or <see langword="null"/> if the watch is still running.
+    /// Gets an independent exception that terminated the watch loop, or <see langword="null"/> if no watch failure was observed.
     /// </summary>
     public Exception? WatchException => _watchException;
 

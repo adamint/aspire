@@ -19,7 +19,6 @@ import {
 } from '../services/launchFailureJournal';
 import {
     __resetAppHostIdentityRegistryForTests,
-    getOrCreateIdentityForAbsolutePath,
     getOrCreateIdentityForCurrentAppHostTarget,
 } from '../utils/appHostIdentity';
 import {
@@ -105,19 +104,19 @@ suite('Editor assistance AppHost services', () => {
             fs.mkdirSync(directoryPath, { recursive: true });
             fs.writeFileSync(projectPath, '<Project />');
 
-            const identity = getOrCreateIdentityForAbsolutePath(projectPath);
+            const identity = getOrCreateIdentityForCurrentAppHostTarget(projectPath);
 
             fs.writeFileSync(sourcePath, 'var builder = DistributedApplication.CreateBuilder(args);');
-            assert.strictEqual(getOrCreateIdentityForAbsolutePath(sourcePath), identity);
+            assert.strictEqual(getOrCreateIdentityForCurrentAppHostTarget(sourcePath), identity);
 
             fs.unlinkSync(projectPath);
-            assert.strictEqual(getOrCreateIdentityForAbsolutePath(sourcePath), identity);
+            assert.strictEqual(getOrCreateIdentityForCurrentAppHostTarget(sourcePath), identity);
 
             fs.writeFileSync(projectPath, '<Project />');
-            assert.strictEqual(getOrCreateIdentityForAbsolutePath(projectPath), identity);
+            assert.strictEqual(getOrCreateIdentityForCurrentAppHostTarget(projectPath), identity);
 
             fs.unlinkSync(sourcePath);
-            assert.strictEqual(getOrCreateIdentityForAbsolutePath(projectPath), identity);
+            assert.strictEqual(getOrCreateIdentityForCurrentAppHostTarget(projectPath), identity);
         });
 
         test('preserves issued path histories when project-source uniqueness changes', () => {
@@ -130,8 +129,8 @@ suite('Editor assistance AppHost services', () => {
             fs.writeFileSync(secondProjectPath, '<Project />');
             fs.writeFileSync(sourcePath, 'var builder = DistributedApplication.CreateBuilder(args);');
 
-            const projectIdentity = getOrCreateIdentityForAbsolutePath(projectPath);
-            const sourceIdentity = getOrCreateIdentityForAbsolutePath(sourcePath);
+            const projectIdentity = getOrCreateIdentityForCurrentAppHostTarget(projectPath);
+            const sourceIdentity = getOrCreateIdentityForCurrentAppHostTarget(sourcePath);
             assert.notStrictEqual(projectIdentity, sourceIdentity);
 
             recordLaunchFailureForAppHostPath(projectPath, {
@@ -153,8 +152,8 @@ suite('Editor assistance AppHost services', () => {
             assert.deepStrictEqual(
                 readLatestLaunchFailures(sourcePath).map(record => record.stage),
                 ['dcpStartup']);
-            assert.strictEqual(getOrCreateIdentityForAbsolutePath(projectPath), projectIdentity);
-            assert.strictEqual(getOrCreateIdentityForAbsolutePath(sourcePath), sourceIdentity);
+            assert.strictEqual(getOrCreateIdentityForCurrentAppHostTarget(projectPath), projectIdentity);
+            assert.strictEqual(getOrCreateIdentityForCurrentAppHostTarget(sourcePath), sourceIdentity);
         });
 
         test('does not return a failure after a symlink retargets', function () {
@@ -205,7 +204,7 @@ suite('Editor assistance AppHost services', () => {
         test('keeps the latest five failures per AppHost in latest-first order', () => {
             let now = 1_000;
             const journal = new LaunchFailureJournal({ now: () => now });
-            const identity = getOrCreateIdentityForAbsolutePath(appHostProjectPath);
+            const identity = getOrCreateIdentityForCurrentAppHostTarget(appHostProjectPath);
 
             for (let index = 0; index < 6; index++) {
                 journal.record(identity, createFailure());
@@ -219,7 +218,7 @@ suite('Editor assistance AppHost services', () => {
             const journal = new LaunchFailureJournal({ now: () => 1_000 });
 
             for (let index = 0; index < 51; index++) {
-                const identity = getOrCreateIdentityForAbsolutePath(path.join(workspaceRoot, `AppHost${index}.csproj`));
+                const identity = getOrCreateIdentityForCurrentAppHostTarget(path.join(workspaceRoot, `AppHost${index}.csproj`));
                 journal.record(identity, createFailure());
             }
 
@@ -231,7 +230,7 @@ suite('Editor assistance AppHost services', () => {
         test('prunes failures after the thirty minute window on reads', () => {
             let now = 1_000;
             const journal = new LaunchFailureJournal({ now: () => now });
-            const identity = getOrCreateIdentityForAbsolutePath(appHostProjectPath);
+            const identity = getOrCreateIdentityForCurrentAppHostTarget(appHostProjectPath);
             journal.record(identity, createFailure());
 
             now += 30 * 60 * 1_000;
@@ -306,7 +305,7 @@ suite('Editor assistance AppHost services', () => {
             } as unknown as LaunchFailureInput;
             const normalized = normalizeLaunchFailure(rawFailure);
             const journal = new LaunchFailureJournal({ now: () => 123_456 });
-            const identity = getOrCreateIdentityForAbsolutePath(appHostProjectPath);
+            const identity = getOrCreateIdentityForCurrentAppHostTarget(appHostProjectPath);
             journal.record(identity, normalized);
             const records = journal.readLatest(identity);
 

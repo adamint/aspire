@@ -20,7 +20,6 @@ import {
 } from '../services/launchFailureJournal';
 import {
     __resetAppHostIdentityRegistryForTests,
-    getOrCreateIdentityForAbsolutePath,
     getOrCreateIdentityForCurrentAppHostTarget,
 } from '../utils/appHostIdentity';
 import { type EditorResourceSessionSnapshot } from '../services/appHostLaunchContracts';
@@ -45,8 +44,8 @@ suite('AspireExtensionContext', () => {
         const context = createContext([]);
 
         try {
-            const firstIdentity = getOrCreateIdentityForAbsolutePath('/workspace/First/AppHost.csproj');
-            const secondIdentity = getOrCreateIdentityForAbsolutePath('/workspace/Second/AppHost.csproj');
+            const firstIdentity = getOrCreateIdentityForCurrentAppHostTarget('/workspace/First/AppHost.csproj');
+            const secondIdentity = getOrCreateIdentityForCurrentAppHostTarget('/workspace/Second/AppHost.csproj');
             recordLaunchFailureForAppHostPath('/workspace/First/AppHost.csproj', {
                 stage: 'debugSession',
                 category: 'unknown',
@@ -61,7 +60,7 @@ suite('AspireExtensionContext', () => {
 
             assert.deepStrictEqual(readLatestLaunchFailures(), []);
             assert.strictEqual(
-                getOrCreateIdentityForAbsolutePath('/workspace/Third/AppHost.csproj'),
+                getOrCreateIdentityForCurrentAppHostTarget('/workspace/Third/AppHost.csproj'),
                 'apphost-1');
         }
         finally {
@@ -127,6 +126,29 @@ suite('AspireExtensionContext', () => {
                         session: otherSession,
                     },
                 ]);
+        }
+        finally {
+            __resetAppHostIdentityRegistryForTests();
+        }
+    });
+
+    test('excludes disposed sessions from Dashboard ownership', () => {
+        __resetAppHostIdentityRegistryForTests();
+        const context = createContext([]);
+        const appHostPath = '/workspace/AppHost/AppHost.csproj';
+        const activeSession = createContextDebugSession('active', appHostPath, appHostPath);
+        const disposedSession = createContextDebugSession('disposed', appHostPath, appHostPath);
+        context.addAspireDebugSession(activeSession);
+        context.addAspireDebugSession(disposedSession);
+        disposedSession.finalizeForExtensionShutdown();
+
+        try {
+            assert.deepStrictEqual(
+                context.getAspireDebugSessionDashboardOwners(),
+                [{
+                    appHostIdentity: getOrCreateIdentityForCurrentAppHostTarget(appHostPath),
+                    session: activeSession,
+                }]);
         }
         finally {
             __resetAppHostIdentityRegistryForTests();
@@ -861,18 +883,24 @@ function createContextDebugSession(
     appHostPath: string,
     resolvedAppHostPath: string,
     operationKind: 'run' | 'publish' = 'run'): AspireDebugSession {
+    let disposed = false;
     return {
         debugSessionId,
         appHostPath,
         resolvedAppHostPath,
         operationKind,
+        get isDisposed() {
+            return disposed;
+        },
         editorResourceSessions: [],
         onDidChangeState: () => ({ dispose: () => { } }),
         onDidSendDebugConsoleOutput: () => ({ dispose: () => { } }),
         stopDebugging: () => Promise.resolve(),
         requestCliStopForExtensionShutdown: () => Promise.resolve(),
         terminateCliProcessTree: () => { },
-        finalizeForExtensionShutdown: () => { },
+        finalizeForExtensionShutdown: () => {
+            disposed = true;
+        },
         dispose: () => { },
     } as unknown as AspireDebugSession;
 }

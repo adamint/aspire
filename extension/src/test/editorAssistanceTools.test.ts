@@ -7,6 +7,11 @@ import * as vscode from 'vscode';
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
 import { openDashboardInBrowser } from '../debugger/session/dashboardLauncher';
 import {
+    editorAssistanceOpenDashboardConfirmationMessage,
+    editorAssistanceOpenDashboardConfirmationTitle,
+    yesLabel,
+} from '../loc/strings';
+import {
     AspireDebugSessionStatusLanguageModelTool,
     AspireExplainLaunchFailureLanguageModelTool,
     AspireListDebugSessionsLanguageModelTool,
@@ -1726,6 +1731,51 @@ suite('Editor assistance AppHost services', () => {
             }
         });
 
+        test('requires fresh confirmation after overlapping Dashboard preparations for the same selector', async () => {
+            const sandbox = sinon.createSandbox();
+            try {
+                sandbox.stub(vscode.workspace, 'getConfiguration').returns(createAspireConfiguration({
+                    dashboardBrowser: 'openExternalBrowser',
+                }));
+                const openExternal = sandbox.stub(vscode.env, 'openExternal').resolves(true);
+                const showWarningMessage = sandbox.stub(vscode.window, 'showWarningMessage')
+                    .onFirstCall().resolves({ title: yesLabel });
+                const tool = new AspireOpenDashboardLanguageModelTool(service);
+                const input = { appHostPath: 'AppHost/AppHost.csproj' };
+                uiRepository.appHosts = [
+                    createEditorOwnedRunningAppHost(appHostProjectPath, 'https://dashboard.example.invalid/login?t=private'),
+                ];
+
+                const firstPreparation = await tool.prepareInvocation(
+                    { input },
+                    new vscode.CancellationTokenSource().token);
+                const fallbackPreparation = await tool.prepareInvocation(
+                    { input },
+                    new vscode.CancellationTokenSource().token);
+                assert.ok(firstPreparation.confirmationMessages);
+                assert.strictEqual(fallbackPreparation.confirmationMessages, undefined);
+
+                const confirmed = readEditorAssistanceToolResult(await tool.invoke(
+                    { input, toolInvocationToken: undefined },
+                    new vscode.CancellationTokenSource().token));
+                const denied = readEditorAssistanceToolResult(await tool.invoke(
+                    { input, toolInvocationToken: undefined },
+                    new vscode.CancellationTokenSource().token));
+
+                assert.strictEqual(confirmed.outcome, 'opened');
+                assert.strictEqual(denied.outcome, 'canceled');
+                assert.strictEqual(openExternal.callCount, 1);
+                assert.strictEqual(showWarningMessage.callCount, 2);
+                assert.strictEqual(showWarningMessage.firstCall.args[0], editorAssistanceOpenDashboardConfirmationTitle);
+                assert.strictEqual(
+                    (showWarningMessage.firstCall.args[1] as vscode.MessageOptions).detail,
+                    editorAssistanceOpenDashboardConfirmationMessage('AppHost/AppHost.csproj'));
+            }
+            finally {
+                sandbox.restore();
+            }
+        });
+
         test('releases Dashboard preparation capacity after invocation', async () => {
             const sandbox = sinon.createSandbox();
             try {
@@ -1767,13 +1817,127 @@ suite('Editor assistance AppHost services', () => {
             }
         });
 
-        test('fails closed after exceeding the outstanding Dashboard preparation limit', async () => {
+        test('releases Dashboard preparation capacity after invocation cancellation', async () => {
             const sandbox = sinon.createSandbox();
             try {
                 sandbox.stub(vscode.workspace, 'getConfiguration').returns(createAspireConfiguration({
                     dashboardBrowser: 'openExternalBrowser',
                 }));
                 const openExternal = sandbox.stub(vscode.env, 'openExternal').resolves(true);
+                const showWarningMessage = sandbox.stub(vscode.window, 'showWarningMessage')
+                    .resolves({ title: yesLabel });
+                const tool = new AspireOpenDashboardLanguageModelTool(service);
+                const cancellationSources: vscode.CancellationTokenSource[] = [];
+
+                for (let index = 0; index < 33; index++) {
+                    const relativePath = `Canceled${index}/AppHost.csproj`;
+                    const absolutePath = path.join(workspaceRoot, relativePath);
+                    fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+                    fs.writeFileSync(absolutePath, appHostProjectContents);
+                    addCandidate(discoveryService, workspaceRoot, absolutePath);
+                    const cancellationSource = new vscode.CancellationTokenSource();
+                    cancellationSources.push(cancellationSource);
+                    await tool.prepareInvocation(
+                        { input: { appHostPath: relativePath } },
+                        cancellationSource.token);
+                }
+
+                for (const cancellationSource of cancellationSources) {
+                    cancellationSource.cancel();
+                    cancellationSource.dispose();
+                }
+
+                const relativePath = 'Recovered/AppHost.csproj';
+                const absolutePath = path.join(workspaceRoot, relativePath);
+                fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+                fs.writeFileSync(absolutePath, appHostProjectContents);
+                addCandidate(discoveryService, workspaceRoot, absolutePath);
+                uiRepository.appHosts = [
+                    createEditorOwnedRunningAppHost(
+                        absolutePath,
+                        'https://dashboard.example.invalid/login?t=private',
+                        'running',
+                        3001),
+                ];
+                const input = { appHostPath: relativePath };
+                await tool.prepareInvocation(
+                    { input },
+                    new vscode.CancellationTokenSource().token);
+                const recovered = readEditorAssistanceToolResult(await tool.invoke(
+                    { input, toolInvocationToken: undefined },
+                    new vscode.CancellationTokenSource().token));
+
+                assert.strictEqual(recovered.outcome, 'opened');
+                assert.strictEqual(openExternal.callCount, 1);
+                assert.strictEqual(showWarningMessage.callCount, 1);
+            }
+            finally {
+                sandbox.restore();
+            }
+        });
+
+        test('expires abandoned Dashboard preparations and recovers overflow capacity', async () => {
+            const sandbox = sinon.createSandbox();
+            try {
+                sandbox.stub(vscode.workspace, 'getConfiguration').returns(createAspireConfiguration({
+                    dashboardBrowser: 'openExternalBrowser',
+                }));
+                const openExternal = sandbox.stub(vscode.env, 'openExternal').resolves(true);
+                const showWarningMessage = sandbox.stub(vscode.window, 'showWarningMessage')
+                    .resolves({ title: yesLabel });
+                let now = Date.now();
+                sandbox.stub(Date, 'now').callsFake(() => now);
+                const tool = new AspireOpenDashboardLanguageModelTool(service);
+
+                for (let index = 0; index < 33; index++) {
+                    const relativePath = `Abandoned${index}/AppHost.csproj`;
+                    const absolutePath = path.join(workspaceRoot, relativePath);
+                    fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+                    fs.writeFileSync(absolutePath, appHostProjectContents);
+                    addCandidate(discoveryService, workspaceRoot, absolutePath);
+                    await tool.prepareInvocation(
+                        { input: { appHostPath: relativePath } },
+                        new vscode.CancellationTokenSource().token);
+                }
+
+                now += 60 * 60 * 1000;
+                const relativePath = 'RecoveredAfterExpiration/AppHost.csproj';
+                const absolutePath = path.join(workspaceRoot, relativePath);
+                fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+                fs.writeFileSync(absolutePath, appHostProjectContents);
+                addCandidate(discoveryService, workspaceRoot, absolutePath);
+                uiRepository.appHosts = [
+                    createEditorOwnedRunningAppHost(
+                        absolutePath,
+                        'https://dashboard.example.invalid/login?t=private',
+                        'running',
+                        3002),
+                ];
+                const input = { appHostPath: relativePath };
+                await tool.prepareInvocation(
+                    { input },
+                    new vscode.CancellationTokenSource().token);
+                const recovered = readEditorAssistanceToolResult(await tool.invoke(
+                    { input, toolInvocationToken: undefined },
+                    new vscode.CancellationTokenSource().token));
+
+                assert.strictEqual(recovered.outcome, 'opened');
+                assert.strictEqual(openExternal.callCount, 1);
+                assert.strictEqual(showWarningMessage.callCount, 1);
+            }
+            finally {
+                sandbox.restore();
+            }
+        });
+
+        test('requires fresh confirmation after exceeding the outstanding Dashboard preparation limit', async () => {
+            const sandbox = sinon.createSandbox();
+            try {
+                sandbox.stub(vscode.workspace, 'getConfiguration').returns(createAspireConfiguration({
+                    dashboardBrowser: 'openExternalBrowser',
+                }));
+                const openExternal = sandbox.stub(vscode.env, 'openExternal').resolves(true);
+                const showWarningMessage = sandbox.stub(vscode.window, 'showWarningMessage').resolves(undefined);
                 const tool = new AspireOpenDashboardLanguageModelTool(service);
                 const inputs = [];
 
@@ -1805,9 +1969,10 @@ suite('Editor assistance AppHost services', () => {
                     { input: inputs[32], toolInvocationToken: undefined },
                     new vscode.CancellationTokenSource().token));
 
-                assert.strictEqual(stale.outcome, 'appHostNotFound');
-                assert.strictEqual(retry.outcome, 'appHostNotFound');
+                assert.strictEqual(stale.outcome, 'canceled');
+                assert.strictEqual(retry.outcome, 'canceled');
                 assert.strictEqual(openExternal.callCount, 0);
+                assert.strictEqual(showWarningMessage.callCount, 2);
             }
             finally {
                 sandbox.restore();
@@ -1821,6 +1986,8 @@ suite('Editor assistance AppHost services', () => {
                     dashboardBrowser: 'openExternalBrowser',
                 }));
                 const openExternal = sandbox.stub(vscode.env, 'openExternal').resolves(true);
+                const showWarningMessage = sandbox.stub(vscode.window, 'showWarningMessage');
+                showWarningMessage.onThirdCall().resolves({ title: yesLabel });
                 const tool = new AspireOpenDashboardLanguageModelTool(service);
                 const input = { appHostPath: 'Later/AppHost.csproj' };
 
@@ -1845,8 +2012,8 @@ suite('Editor assistance AppHost services', () => {
                     { input, toolInvocationToken: undefined },
                     new vscode.CancellationTokenSource().token));
 
-                assert.strictEqual(unresolved.outcome, 'appHostNotFound');
-                assert.strictEqual(superseded.outcome, 'appHostNotFound');
+                assert.strictEqual(unresolved.outcome, 'canceled');
+                assert.strictEqual(superseded.outcome, 'canceled');
                 assert.strictEqual(openExternal.callCount, 0);
 
                 await tool.prepareInvocation(
@@ -1858,6 +2025,7 @@ suite('Editor assistance AppHost services', () => {
 
                 assert.strictEqual(recovered.outcome, 'opened');
                 assert.strictEqual(openExternal.callCount, 1);
+                assert.strictEqual(showWarningMessage.callCount, 3);
             }
             finally {
                 sandbox.restore();
@@ -1871,6 +2039,8 @@ suite('Editor assistance AppHost services', () => {
                     dashboardBrowser: 'openExternalBrowser',
                 }));
                 const openExternal = sandbox.stub(vscode.env, 'openExternal').resolves(true);
+                const showWarningMessage = sandbox.stub(vscode.window, 'showWarningMessage');
+                showWarningMessage.onSecondCall().resolves({ title: yesLabel });
                 const tool = new AspireOpenDashboardLanguageModelTool(service);
                 const input = { appHostPath: 'AppHost/AppHost.csproj' };
                 uiRepository.appHosts = [
@@ -1889,21 +2059,7 @@ suite('Editor assistance AppHost services', () => {
                     { input, toolInvocationToken: undefined },
                     new vscode.CancellationTokenSource().token));
 
-                assert.strictEqual(invalidated.outcome, 'appHostNotFound');
-                assert.strictEqual(openExternal.callCount, 0);
-
-                await tool.prepareInvocation(
-                    { input },
-                    new vscode.CancellationTokenSource().token);
-                const stale = readEditorAssistanceToolResult(await tool.invoke(
-                    { input, toolInvocationToken: undefined },
-                    new vscode.CancellationTokenSource().token));
-                const superseded = readEditorAssistanceToolResult(await tool.invoke(
-                    { input, toolInvocationToken: undefined },
-                    new vscode.CancellationTokenSource().token));
-
-                assert.strictEqual(stale.outcome, 'appHostNotFound');
-                assert.strictEqual(superseded.outcome, 'appHostNotFound');
+                assert.strictEqual(invalidated.outcome, 'canceled');
                 assert.strictEqual(openExternal.callCount, 0);
 
                 await tool.prepareInvocation(
@@ -1912,9 +2068,14 @@ suite('Editor assistance AppHost services', () => {
                 const recovered = readEditorAssistanceToolResult(await tool.invoke(
                     { input, toolInvocationToken: undefined },
                     new vscode.CancellationTokenSource().token));
+                const duplicate = readEditorAssistanceToolResult(await tool.invoke(
+                    { input, toolInvocationToken: undefined },
+                    new vscode.CancellationTokenSource().token));
 
                 assert.strictEqual(recovered.outcome, 'opened');
+                assert.strictEqual(duplicate.outcome, 'canceled');
                 assert.strictEqual(openExternal.callCount, 1);
+                assert.strictEqual(showWarningMessage.callCount, 3);
             }
             finally {
                 sandbox.restore();
@@ -1928,6 +2089,8 @@ suite('Editor assistance AppHost services', () => {
                     dashboardBrowser: 'openExternalBrowser',
                 }));
                 const openExternal = sandbox.stub(vscode.env, 'openExternal').resolves(true);
+                const showWarningMessage = sandbox.stub(vscode.window, 'showWarningMessage');
+                showWarningMessage.onThirdCall().resolves({ title: yesLabel });
                 const tool = new AspireOpenDashboardLanguageModelTool(service);
                 const input = { appHostPath: 'AppHost/AppHost.csproj' };
                 await tool.prepareInvocation(
@@ -1952,8 +2115,8 @@ suite('Editor assistance AppHost services', () => {
                     { input, toolInvocationToken: undefined },
                     new vscode.CancellationTokenSource().token));
 
-                assert.strictEqual(first.outcome, 'appHostNotFound');
-                assert.strictEqual(second.outcome, 'appHostNotFound');
+                assert.strictEqual(first.outcome, 'canceled');
+                assert.strictEqual(second.outcome, 'canceled');
                 assert.strictEqual(uiRepository.requests.length, 0);
 
                 workspaceFoldersStub.value([
@@ -1971,6 +2134,7 @@ suite('Editor assistance AppHost services', () => {
 
                 assert.strictEqual(recovered.outcome, 'opened');
                 assert.strictEqual(openExternal.callCount, 1);
+                assert.strictEqual(showWarningMessage.callCount, 3);
             }
             finally {
                 sandbox.restore();

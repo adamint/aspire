@@ -111,7 +111,7 @@ export class AspireExtensionContext implements vscode.Disposable {
         readonly appHostIdentity: OpaqueAppHostIdentity;
         readonly session: AspireDebugSession;
     }[] {
-        return this._aspireDebugSessions.flatMap(session => {
+        return this.aspireDebugSessions.flatMap(session => {
             const appHostPath = session.resolvedAppHostPath ?? session.appHostPath;
             if (session.operationKind !== 'run' || appHostPath === undefined) {
                 return [];

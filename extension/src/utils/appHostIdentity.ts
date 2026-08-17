@@ -18,7 +18,6 @@ export interface AppHostIdentityKeyInfo {
 
 const appHostProjectFileExtensions = ['.csproj', '.fsproj', '.vbproj'];
 const appHostAliasKeySuffix = '\u0000apphost';
-const opaqueIdentityRegistry = new Map<string, OpaqueAppHostIdentity>();
 const currentTargetIdentityRegistry = new Map<string, OpaqueAppHostIdentity>();
 let nextOpaqueIdentity = 0;
 
@@ -77,92 +76,8 @@ export function getAppHostIdentityKey(appHostPath: string): string {
 }
 
 /**
- * Returns an AppHost identity that never follows filesystem aliases.
- *
- * Editor state uses the path recorded when a session launched. Following a symlink again
- * while producing a later snapshot would let retargeting that link move the active
- * session to a different AppHost. Project/source pairs still share one identity when the
- * lexical directory proves there is exactly one candidate of each shape.
- */
-export function getLexicalAppHostIdentityKey(appHostPath: string): string {
-    return getLexicalAppHostIdentityKeyInfo(appHostPath).key;
-}
-
-function getLexicalAppHostIdentityKeyInfo(appHostPath: string): AppHostIdentityKeyInfo {
-    const resolvedPath = path.normalize(path.resolve(appHostPath));
-    const resolvedKey = getLexicalPathComparisonKey(resolvedPath);
-    if (!isAppHostProjectFile(resolvedPath) && !isAppHostSourceFile(resolvedPath)) {
-        return { key: resolvedKey, pathKeys: [resolvedKey] };
-    }
-
-    const directory = path.dirname(resolvedPath);
-    const shapes = readDirectoryAppHostShapes(directory);
-    const isAliasedPair = shapes.enumerated &&
-        shapes.projectFiles.length === 1 &&
-        shapes.sourceFiles.length === 1 &&
-        [...shapes.projectFiles, ...shapes.sourceFiles]
-            .some(candidate => getLexicalPathComparisonKey(candidate) === resolvedKey);
-
-    if (!isAliasedPair) {
-        return { key: resolvedKey, pathKeys: [resolvedKey] };
-    }
-
-    return {
-        key: `${getLexicalPathComparisonKey(directory)}${appHostAliasKeySuffix}`,
-        pathKeys: [
-            getLexicalPathComparisonKey(shapes.projectFiles[0]),
-            getLexicalPathComparisonKey(shapes.sourceFiles[0]),
-        ],
-    };
-}
-
-/**
- * Returns the shared window-scoped identity for an absolute AppHost path.
- *
- * The registry owns the path-to-identity relationship so privacy-sensitive consumers can
- * retain only the opaque value. Lexical keys intentionally keep a launched symlink bound
- * to the target the user selected even if the link is retargeted later.
- */
-export function getOrCreateIdentityForAbsolutePath(appHostPath: string): OpaqueAppHostIdentity {
-    const keyInfo = getLexicalAppHostIdentityKeyInfo(appHostPath);
-    const exactPathKey = getLexicalPathComparisonKey(appHostPath);
-    const exactIdentity = opaqueIdentityRegistry.get(exactPathKey);
-    if (exactIdentity) {
-        assignUnmappedAliases(keyInfo, exactIdentity);
-        return exactIdentity;
-    }
-
-    const issuedIdentities = new Set<OpaqueAppHostIdentity>();
-    const aliasIdentity = opaqueIdentityRegistry.get(keyInfo.key);
-    if (aliasIdentity) {
-        issuedIdentities.add(aliasIdentity);
-    }
-    for (const pathKey of keyInfo.pathKeys) {
-        const pathIdentity = opaqueIdentityRegistry.get(pathKey);
-        if (pathIdentity) {
-            issuedIdentities.add(pathIdentity);
-        }
-    }
-
-    const identity = issuedIdentities.size === 1
-        ? [...issuedIdentities][0]
-        : `apphost-${++nextOpaqueIdentity}` as OpaqueAppHostIdentity;
-    opaqueIdentityRegistry.set(exactPathKey, identity);
-
-    // Project/source uniqueness is filesystem-dependent and can change after an identity
-    // is issued. Share newly discovered aliases only when every existing mapping agrees;
-    // overwriting a different issued identity would orphan records already stored under it.
-    if (issuedIdentities.size <= 1) {
-        assignUnmappedAliases(keyInfo, identity);
-    }
-
-    return identity;
-}
-
-/**
  * Returns an identity bound to the canonical filesystem target currently selected by the path.
  *
- * Unlike {@link getOrCreateIdentityForAbsolutePath}, this detects symlink retargeting.
  * Callers that capture launch, failure, or confirmation ownership retain the returned
  * opaque value; a later resolution of the same lexical path receives a different value
  * when its canonical target changed. Replacing the same target file in place or through
@@ -244,24 +159,7 @@ function assignUnmappedCurrentTargetAliases(keyInfo: CurrentTargetIdentityKeyInf
     }
 }
 
-function assignUnmappedAliases(keyInfo: AppHostIdentityKeyInfo, identity: OpaqueAppHostIdentity): void {
-    const keys = new Set([keyInfo.key, ...keyInfo.pathKeys]);
-    if ([...keys].some(key => {
-        const existing = opaqueIdentityRegistry.get(key);
-        return existing !== undefined && existing !== identity;
-    })) {
-        return;
-    }
-
-    for (const key of keys) {
-        if (!opaqueIdentityRegistry.has(key)) {
-            opaqueIdentityRegistry.set(key, identity);
-        }
-    }
-}
-
 export function resetAppHostIdentityRegistry(): void {
-    opaqueIdentityRegistry.clear();
     currentTargetIdentityRegistry.clear();
     nextOpaqueIdentity = 0;
 }
@@ -338,11 +236,6 @@ function readDirectoryAppHostShapes(directoryPath: string): DirectoryAppHostShap
 
 function containsPath(paths: readonly string[], candidate: string): boolean {
     return paths.some(value => isSameFileSystemEntry(value, candidate));
-}
-
-function getLexicalPathComparisonKey(value: string): string {
-    const resolvedPath = path.normalize(path.resolve(value));
-    return process.platform === 'win32' ? resolvedPath.toLowerCase() : resolvedPath;
 }
 
 export function canonicalizeAppHostPath(resolvedPath: string): string {
