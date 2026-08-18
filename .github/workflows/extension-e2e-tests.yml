@@ -786,6 +786,13 @@ jobs:
             }
           }
 
+          # GitHub's pwsh wrapper appends `if ((Test-Path variable:/LASTEXITCODE)) { exit $LASTEXITCODE }`,
+          # so a failed apt-get would otherwise fail this step through the leftover exit code and take
+          # the shard down over a missing diagnostic recorder. Exit explicitly to hold the
+          # "this step must never fail the job" contract.
+          # https://docs.github.com/actions/reference/workflows-and-actions/workflow-syntax#exit-codes-and-error-action-preference
+          exit 0
+
       - name: Run extension E2E tests
         working-directory: extension
         env:
