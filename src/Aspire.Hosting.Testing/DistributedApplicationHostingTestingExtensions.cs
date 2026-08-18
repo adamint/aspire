@@ -1,7 +1,6 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 using System.Globalization;
-using System.Reflection;
 using Aspire.Hosting.ApplicationModel;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,10 +14,6 @@ namespace Aspire.Hosting.Testing;
 public static class DistributedApplicationHostingTestingExtensions
 {
     private const string DashboardResourceName = "aspire-dashboard";
-    // Aspire.Hosting owns the shared target-host resolver, but it is internal to that assembly.
-    // Cache a delegate to the shared implementation so testing follows the same localhost-TLD
-    // resolution path without copying that logic into Aspire.Hosting.Testing.
-    private static readonly Func<EndpointReference, CancellationToken, ValueTask<string?>> s_getUrlWithTargetHostAsync = CreateGetUrlWithTargetHostAsync();
 
     /// <summary>
     /// Gets the URL for the running Aspire dashboard.
@@ -108,7 +103,7 @@ public static class DistributedApplicationHostingTestingExtensions
             throw new InvalidOperationException(Properties.Resources.DashboardUrlUnavailableExceptionMessage);
         }
 
-        var dashboardUrl = await s_getUrlWithTargetHostAsync(dashboardEndpoint, cancellationToken).ConfigureAwait(false);
+        var dashboardUrl = await EndpointHostHelpers.GetUrlWithTargetHostAsync(dashboardEndpoint, cancellationToken).ConfigureAwait(false);
         if (string.IsNullOrEmpty(dashboardUrl))
         {
             throw new InvalidOperationException(Properties.Resources.DashboardUrlUnavailableExceptionMessage);
@@ -236,19 +231,6 @@ public static class DistributedApplicationHostingTestingExtensions
         ArgumentException.ThrowIfNullOrEmpty(resourceName);
 
         return new(GetEndpointUriStringCore(app, resourceName, endpointName, networkIdentifier));
-    }
-
-    private static Func<EndpointReference, CancellationToken, ValueTask<string?>> CreateGetUrlWithTargetHostAsync()
-    {
-        var method = typeof(EndpointHostHelpers).GetMethod(
-            "GetUrlWithTargetHostAsync",
-            BindingFlags.NonPublic | BindingFlags.Static,
-            binder: null,
-            [typeof(EndpointReference), typeof(CancellationToken)],
-            modifiers: null)
-            ?? throw new MissingMethodException(typeof(EndpointHostHelpers).FullName, "GetUrlWithTargetHostAsync");
-
-        return method.CreateDelegate<Func<EndpointReference, CancellationToken, ValueTask<string?>>>();
     }
 
     /// <summary>
