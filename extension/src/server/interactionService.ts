@@ -681,7 +681,7 @@ export class InteractionService implements IInteractionService {
 
         const command = options?.command ?? 'run';
         const appHostSelectionOrigin = options?.appHostSelectionOrigin
-            ?? (projectFile !== null ? 'user-selection' : 'default-discovery');
+            ?? (projectFile ? 'user-selection' : 'default-discovery');
 
         const debugConfiguration: AspireExtendedDebugConfiguration = {
             type: 'aspire',

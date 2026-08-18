@@ -172,6 +172,7 @@ suite('InteractionService endpoints', () => {
 					},
 				});
 
+			assert.ok(startDebuggingStub.calledOnce);
 			const debugConfiguration = startDebuggingStub.firstCall.args[1] as vscode.DebugConfiguration;
 			assert.deepStrictEqual(debugConfiguration.env, {
 				ASPIRE_HOME: '/isolated/aspire-home',
@@ -197,6 +198,7 @@ suite('InteractionService endpoints', () => {
 				false,
 				options);
 
+			assert.ok(startDebuggingStub.calledOnce);
 			const debugConfiguration = startDebuggingStub.firstCall.args[1] as vscode.DebugConfiguration;
 			assert.strictEqual(debugConfiguration[appHostSelectionOriginConfigKey], 'explicit-cli');
 		}
@@ -215,8 +217,28 @@ suite('InteractionService endpoints', () => {
 				'/workspace/apphost.cs',
 				false);
 
+			assert.ok(startDebuggingStub.calledOnce);
 			const debugConfiguration = startDebuggingStub.firstCall.args[1] as vscode.DebugConfiguration;
 			assert.strictEqual(debugConfiguration[appHostSelectionOriginConfigKey], 'user-selection');
+		}
+		finally {
+			startDebuggingStub.restore();
+		}
+	});
+
+	test('startDebugSession preserves default discovery fallback for older CLIs', async () => {
+		const testInfo = await createTestRpcServer();
+		const startDebuggingStub = sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+
+		try {
+			await testInfo.interactionService.startDebugSession(
+				'/workspace',
+				null,
+				false);
+
+			assert.ok(startDebuggingStub.calledOnce);
+			const debugConfiguration = startDebuggingStub.firstCall.args[1] as vscode.DebugConfiguration;
+			assert.strictEqual(debugConfiguration[appHostSelectionOriginConfigKey], 'default-discovery');
 		}
 		finally {
 			startDebuggingStub.restore();
@@ -238,6 +260,7 @@ suite('InteractionService endpoints', () => {
 				false,
 				options);
 
+			assert.ok(startDebuggingStub.calledOnce);
 			const debugConfiguration = startDebuggingStub.firstCall.args[1] as vscode.DebugConfiguration;
 			assert.strictEqual(debugConfiguration[appHostSelectionOriginConfigKey], 'default-discovery');
 		}

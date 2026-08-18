@@ -3610,10 +3610,8 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
 
         var json = JsonSerializer.Serialize(options, BackchannelJsonSerializerContext.Default.DebugSessionOptions);
         using var document = JsonDocument.Parse(json);
-        var property = Assert.Single(document.RootElement.EnumerateObject(), property => property.Value.GetString() == "explicit-cli");
 
-        Assert.Equal("appHostSelectionOrigin", property.Name);
-        Assert.Equal("explicit-cli", property.Value.GetString());
+        Assert.Equal("explicit-cli", document.RootElement.GetProperty("appHostSelectionOrigin").GetString());
     }
 
     [Theory]
