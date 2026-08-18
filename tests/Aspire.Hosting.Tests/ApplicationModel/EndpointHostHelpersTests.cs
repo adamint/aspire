@@ -233,4 +233,34 @@ public class EndpointHostHelpersTests
 
         Assert.Equal(expectedUrl, url);
     }
+
+    [Fact]
+    public async Task GetUrlWithTargetHostAsync_KeepsAddressResolvedForANonLocalNetworkContext()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create();
+
+        var container = builder.AddContainer("container1", "image")
+                               .WithHttpEndpoint(name: "primary", targetPort: 10005)
+                               .WithEndpoint("primary", ep =>
+                               {
+                                   ep.TargetHost = "app.dev.localhost";
+                                   ep.AllocatedEndpoint = new AllocatedEndpoint(ep, "localhost", 17454);
+                                   ep.AllAllocatedEndpoints.AddOrUpdateAllocatedEndpoint(
+                                       KnownNetworkIdentifiers.DefaultAspireContainerNetwork,
+                                       new AllocatedEndpoint(ep, "container1.dev.internal", 10005, EndpointBindingMode.SingleAddress, networkId: KnownNetworkIdentifiers.DefaultAspireContainerNetwork));
+                               });
+
+        var containerNetworkEndpoint = new EndpointReference(
+            container.Resource,
+            container.GetEndpoint("primary").EndpointAnnotation,
+            KnownNetworkIdentifiers.DefaultAspireContainerNetwork);
+
+        var url = await EndpointHostHelpers.GetUrlWithTargetHostAsync(containerNetworkEndpoint)
+            .AsTask()
+            .DefaultTimeout();
+
+        // A localhost TLD only ever resolves on the host loopback, so it must not be substituted into an
+        // address that was resolved for the container network - the container would be sent to its own loopback.
+        Assert.Equal("http://container1.dev.internal:10005", url);
+    }
 }
