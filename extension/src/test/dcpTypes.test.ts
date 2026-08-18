@@ -56,6 +56,23 @@ suite('DCP launch configuration types', () => {
                 working_directory: '/workspace/rust-package',
             }, '/workspace/rust-package'],
             [{
+                type: 'java',
+                main_class: 'com.example.Api',
+                working_directory: '/workspace/java-api',
+                build_tool: 'maven',
+            }, '/workspace/java-api'],
+            [{
+                // The IDE resolves the entry point itself, so there is no main_class to fall back on.
+                type: 'java',
+                project_name: 'api',
+                working_directory: '/workspace/java-imported',
+            }, '/workspace/java-imported'],
+            [{
+                // A module-qualified class name is not a path and must never be treated as one.
+                type: 'java',
+                main_class: 'api/com.example.Api',
+            }, undefined],
+            [{
                 type: 'node',
                 runtime_executable: '/private/runtime/node',
                 args: ['/workspace/forged-from-args'],
@@ -117,6 +134,18 @@ suite('DCP launch configuration types', () => {
                 type: 'rust',
                 cargo: { executable_path: '/workspace/rust/target/debug/api' },
             }, ['cargo']],
+            [{
+                type: 'java',
+                main_class: 'com.example.Api',
+                working_directory: '/workspace/java-api',
+            }, ['java']],
+            [{
+                // Wrapper invocations run through sh/cmd, so they correlate on the working
+                // directory instead of a command that every wrapper resource would share.
+                type: 'java',
+                working_directory: '/workspace/java-gradle',
+                build_tool: 'gradle',
+            }, ['java']],
             [{
                 type: 'node',
                 script_path: '/workspace/web/server.js',

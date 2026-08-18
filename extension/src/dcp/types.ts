@@ -146,6 +146,13 @@ export function getLaunchConfigurationTargetPath(configuration: ExecutableLaunch
             getNonEmptyPath(configuration.working_directory);
     }
 
+    if (isJavaLaunchConfiguration(configuration)) {
+        // `main_class` is a fully qualified class name ("[module/]com.example.Api") far more often
+        // than a path, and it is absent entirely when the IDE resolves the entry point itself, so
+        // the working directory is the only field that is both stable and always a real path.
+        return getNonEmptyPath(configuration.working_directory);
+    }
+
     return undefined;
 }
 
@@ -192,6 +199,14 @@ export function getLaunchConfigurationExecutablePaths(configuration: ExecutableL
 
     if (isRustLaunchConfiguration(configuration)) {
         return ['cargo'];
+    }
+
+    if (isJavaLaunchConfiguration(configuration)) {
+        // JavaAppResource is an ExecutableResource whose command is "java". A Maven goal or Gradle
+        // task replaces that command with the wrapper invocation, which is "sh" or "cmd" rather than
+        // anything Java-specific. Those are far too generic to correlate a resource on, so wrapper
+        // resources deliberately correlate through the working-directory target path instead.
+        return ['java'];
     }
 
     return [];
