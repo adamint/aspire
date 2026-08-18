@@ -14,7 +14,7 @@ import { dashboardDefaultChangedNotificationKey } from '../../utils/dashboardNot
 import { AspireExtensionContext } from '../../AspireExtensionContext';
 import { debugSessionStopTimedOut } from '../../loc/strings';
 import { appHostSelectionOriginConfigKey } from '../../debugger/AspireDebugConfigurationMetadata';
-import { AspireDebugConfigurationProvider, type ExternalLaunchReservation } from '../../debugger/AspireDebugConfigurationProvider';
+import { AspireDebugConfigurationProvider } from '../../debugger/AspireDebugConfigurationProvider';
 import type { AspireExtendedDebugConfiguration } from '../../dcp/types';
 import type { AppHostDiscoveryService } from '../../utils/appHostDiscovery';
 import * as cliPathModule from '../../utils/cliPath';
@@ -248,8 +248,11 @@ suite('InteractionService endpoints', () => {
 				createDirectoryAppHostDiscoveryService(),
 				{
 					tryReserveExternalLaunch: () => 'reservation-1',
+					validateOrReacquireExternalLaunchReservation: (_appHostPath, reservationId) => reservationId,
 					replaceExternalLaunchReservation: () => 'reservation-1',
-				} as ExternalLaunchReservation,
+					releaseExternalLaunchReservation: () => { },
+					prepareLaunchArguments: async (_appHostPath, _command, args) => ({ args }),
+				},
 				createTestMemento());
 			const workspaceFolder: vscode.WorkspaceFolder = {
 				uri: vscode.Uri.file(workspaceRoot),

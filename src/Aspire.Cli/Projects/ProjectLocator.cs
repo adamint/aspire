@@ -1209,14 +1209,19 @@ internal sealed class ProjectLocator(
     private async Task CreateSettingsFileAsync(FileInfo projectFile, bool preserveExistingDefault, CancellationToken cancellationToken)
     {
         var configuredSelectionOrigin = configuration[KnownConfigNames.CliAppHostSelectionOrigin];
-        var isInvocationScopedSelection =
-            string.Equals(configuredSelectionOrigin, ExplicitLaunchConfigurationSelectionOrigin, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(configuredSelectionOrigin, ExplicitCliSelectionOrigin, StringComparison.OrdinalIgnoreCase);
+        var isExplicitLaunchConfigurationSelection = string.Equals(
+            configuredSelectionOrigin,
+            ExplicitLaunchConfigurationSelectionOrigin,
+            StringComparison.OrdinalIgnoreCase);
+        var isExplicitCliSelection = string.Equals(
+            configuredSelectionOrigin,
+            ExplicitCliSelectionOrigin,
+            StringComparison.OrdinalIgnoreCase);
         var hasConfiguredSelectionOrigin = !string.IsNullOrEmpty(configuredSelectionOrigin);
         var selectionOrigin = hasConfiguredSelectionOrigin ? configuredSelectionOrigin : "--apphost";
         var shouldPreserveExistingDefault =
-            preserveExistingDefault &&
-            (isInvocationScopedSelection || !hasConfiguredSelectionOrigin);
+            isExplicitLaunchConfigurationSelection ||
+            (preserveExistingDefault && (isExplicitCliSelection || !hasConfiguredSelectionOrigin));
 
         var (settingsFile, appHostDirForScopedConfig) = ResolveWorkspaceConfigTarget(projectFile);
 

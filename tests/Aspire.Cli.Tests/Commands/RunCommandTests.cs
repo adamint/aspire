@@ -3699,8 +3699,11 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
         Assert.False(debug);
         Assert.NotNull(options);
         Assert.Equal("run", options.Command);
-        Assert.Null(options.Args);
+        Assert.Empty(options.Args!);
         Assert.Equal(expectedOrigin, options.AppHostSelectionOrigin);
+    }
+
+    [Fact]
     public async Task RunCommand_WhenRunningInExtension_ForwardsExplicitArgumentsInSemanticOrder()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
