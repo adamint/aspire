@@ -320,7 +320,7 @@ export class AppHostPsPoller implements vscode.Disposable {
                 this._authoritativeSnapshotFollowOutputs.length = 0;
                 this._authoritativeSnapshotFollowOutputsOverflowed = false;
                 this._authoritativeSnapshotCaptured = false;
-        this._authoritativeSnapshotContested = false;
+                this._authoritativeSnapshotContested = false;
                 this._authoritativeSnapshotInProgress = false;
                 return;
             }
@@ -357,7 +357,7 @@ export class AppHostPsPoller implements vscode.Disposable {
             this._authoritativeSnapshotFollowOutputs.length = 0;
             this._authoritativeSnapshotFollowOutputsOverflowed = false;
             this._authoritativeSnapshotCaptured = false;
-        this._authoritativeSnapshotContested = false;
+            this._authoritativeSnapshotContested = false;
             this._authoritativeSnapshotInProgress = false;
             if (this._authoritativeSnapshotPending) {
                 const pendingForce = this._authoritativeSnapshotPendingForce;
