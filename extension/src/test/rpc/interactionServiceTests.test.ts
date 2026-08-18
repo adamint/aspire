@@ -182,7 +182,7 @@ suite('InteractionService endpoints', () => {
 		}
 	});
 
-	test('startDebugSession keeps explicit CLI AppHost selection invocation scoped', async () => {
+	test('startDebugSession carries explicit CLI AppHost selection origin', async () => {
 		const testInfo = await createTestRpcServer();
 		const startDebuggingStub = sinon.stub(vscode.debug, 'startDebugging').resolves(true);
 		const options = {
@@ -198,9 +198,7 @@ suite('InteractionService endpoints', () => {
 				options);
 
 			const debugConfiguration = startDebuggingStub.firstCall.args[1] as vscode.DebugConfiguration;
-			assert.strictEqual(
-				Object.prototype.hasOwnProperty.call(debugConfiguration, appHostSelectionOriginConfigKey),
-				false);
+			assert.strictEqual(debugConfiguration[appHostSelectionOriginConfigKey], 'explicit-cli');
 		}
 		finally {
 			startDebuggingStub.restore();

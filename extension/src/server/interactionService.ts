@@ -163,7 +163,7 @@ type DebugSessionOptions = {
     command?: string;
     args?: string[];
     env?: { [key: string]: string };
-    appHostSelectionOrigin?: AppHostSelectionOrigin | 'explicit-cli';
+    appHostSelectionOrigin?: AppHostSelectionOrigin;
 };
 
 export class InteractionService implements IInteractionService {
@@ -692,13 +692,8 @@ export class InteractionService implements IInteractionService {
             args: options?.args,
             env: options?.env,
             noDebug: !debug,
+            [appHostSelectionOriginConfigKey]: appHostSelectionOrigin,
         };
-
-        // `explicit-cli` describes this RPC invocation only. Forwarding it through the debug
-        // configuration would let the child CLI replace the workspace's persisted default.
-        if (appHostSelectionOrigin !== 'explicit-cli') {
-            debugConfiguration[appHostSelectionOriginConfigKey] = appHostSelectionOrigin;
-        }
 
         const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(workingDirectory));
         const didDebugStart = await vscode.debug.startDebugging(workspaceFolder, debugConfiguration);

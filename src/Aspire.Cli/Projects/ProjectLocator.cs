@@ -150,6 +150,7 @@ internal sealed class ProjectLocator(
     private const string AspireConfigAppHostPathKey = "appHost.path";
     private const string LegacySettingsAppHostPathKey = "appHostPath";
     private const string ExplicitLaunchConfigurationSelectionOrigin = "explicit-launch-configuration";
+    private const string ExplicitCliSelectionOrigin = "explicit-cli";
     private static readonly TimeSpan s_workspaceConfigLockTimeout = TimeSpan.FromSeconds(30);
 
     /// <summary>
@@ -1205,11 +1206,13 @@ internal sealed class ProjectLocator(
     private async Task CreateSettingsFileAsync(FileInfo projectFile, bool preserveExistingDefault, CancellationToken cancellationToken)
     {
         var configuredSelectionOrigin = configuration[KnownConfigNames.CliAppHostSelectionOrigin];
-        var isExplicitLaunchConfiguration = string.Equals(configuredSelectionOrigin, ExplicitLaunchConfigurationSelectionOrigin, StringComparison.OrdinalIgnoreCase);
+        var isInvocationScopedSelection =
+            string.Equals(configuredSelectionOrigin, ExplicitLaunchConfigurationSelectionOrigin, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(configuredSelectionOrigin, ExplicitCliSelectionOrigin, StringComparison.OrdinalIgnoreCase);
         var hasConfiguredSelectionOrigin = !string.IsNullOrEmpty(configuredSelectionOrigin);
         var selectionOrigin = hasConfiguredSelectionOrigin ? configuredSelectionOrigin : "--apphost";
         var shouldPreserveExistingDefault =
-            isExplicitLaunchConfiguration ||
+            isInvocationScopedSelection ||
             preserveExistingDefault && !hasConfiguredSelectionOrigin;
 
         var (settingsFile, appHostDirForScopedConfig) = ResolveWorkspaceConfigTarget(projectFile);

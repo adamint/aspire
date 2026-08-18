@@ -53,8 +53,10 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
         return appHostFile;
     }
 
-    [Fact]
-    public async Task UseOrFindAppHostProjectFilePreservesExistingDefaultForLaunchConfiguration()
+    [Theory]
+    [InlineData("explicit-launch-configuration")]
+    [InlineData("explicit-cli")]
+    public async Task UseOrFindAppHostProjectFilePreservesExistingDefaultForInvocationScopedSelection(string selectionOrigin)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
 
@@ -72,7 +74,7 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
 
         var projectLocator = CreateProjectLocator(
             CreateExecutionContext(workspace.WorkspaceRoot),
-            configuration: CreateLaunchConfigurationOrigin());
+            configuration: CreateSelectionOrigin(selectionOrigin));
 
         var result = await projectLocator.UseOrFindAppHostProjectFileAsync(
             secondAppHostProjectFile,
@@ -352,8 +354,10 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
         Assert.False(ProjectLocator.IsSamePersistedAppHostPath(configuredPath, selectedPath, TestEnvironment.CreateMacOS()));
     }
 
-    [Fact]
-    public async Task UseOrFindAppHostProjectFileReplacesDeletedDefaultForLaunchConfiguration()
+    [Theory]
+    [InlineData("explicit-launch-configuration")]
+    [InlineData("explicit-cli")]
+    public async Task UseOrFindAppHostProjectFileReplacesDeletedDefaultForInvocationScopedSelection(string selectionOrigin)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
 
@@ -371,7 +375,7 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
 
         var projectLocator = CreateProjectLocator(
             CreateExecutionContext(workspace.WorkspaceRoot),
-            configuration: CreateLaunchConfigurationOrigin());
+            configuration: CreateSelectionOrigin(selectionOrigin));
 
         var result = await projectLocator.UseOrFindAppHostProjectFileAsync(
             secondAppHostProjectFile,
