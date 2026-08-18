@@ -203,9 +203,11 @@ export function getLaunchConfigurationExecutablePaths(configuration: ExecutableL
 
     if (isJavaLaunchConfiguration(configuration)) {
         // JavaAppResource is an ExecutableResource whose command is "java". A Maven goal or Gradle
-        // task replaces that command with the wrapper invocation, which is "sh" or "cmd" rather than
-        // anything Java-specific. Those are far too generic to correlate a resource on, so wrapper
-        // resources deliberately correlate through the working-directory target path instead.
+        // task replaces that command with the wrapper invocation, which DCP reports as "sh" or
+        // "cmd"; those are far too generic to claim here, so wrapper resources are correlated by
+        // working directory instead (see `isSessionTargetMatch` in editorAssistanceToolService.ts).
+        // An AppHost running several plain Java resources still cannot be told apart by command
+        // alone, and resource correlation deliberately fails closed as ambiguous in that case.
         return ['java'];
     }
 

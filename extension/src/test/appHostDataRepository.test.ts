@@ -7047,6 +7047,78 @@ suite('AppHostDataRepository global polling', () => {
         }
     });
 
+    test('ps reconciliation restarts the replay window when an older CLI rejects nologo on stdout', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const inspect = sinon.stub();
+        inspect.withArgs('appHostsPollingInterval').returns({ globalValue: 1000 });
+        inspect.withArgs('globalAppHostsPollingInterval').returns({ globalValue: 9000 });
+        const getConfigurationStub = sinon.stub(vscode.workspace, 'getConfiguration');
+        getConfigurationStub.withArgs('aspire').returns({
+            inspect,
+            get: sinon.stub().withArgs('appHostsPollingInterval', 30000).returns(30000),
+        } as unknown as vscode.WorkspaceConfiguration);
+        const spawned: { args: string[]; options: any }[] = [];
+        spawnStub.callsFake((_terminalProvider, _command, args, options) => {
+            spawned.push({ args, options });
+            return new TestChildProcess();
+        });
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        try {
+            repository.activate();
+            repository.setViewMode('global');
+            repository.setPanelVisible(true);
+            await waitForMicrotasks();
+
+            const followCall = spawned.find(call =>
+                call.args[0] === 'ps' && call.args.includes('--follow'));
+            assert.ok(followCall);
+
+            await clock.tickAsync(1000);
+            const rejectedSnapshotCall = spawned.find(call =>
+                call.args[0] === 'ps' && !call.args.includes('--follow') && call.args.includes('--nologo'));
+            assert.ok(rejectedSnapshotCall);
+
+            // An older CLI can report the rejection on stdout rather than stderr, so the attempt
+            // looks like it started producing a snapshot even though it never enumerated anything.
+            rejectedSnapshotCall.options.stdoutCallback("Unrecognized command or argument '--nologo'.");
+            rejectedSnapshotCall.options.exitCallback(1);
+            await waitForMicrotasks();
+
+            const retrySnapshotCall = spawned.find(call =>
+                call.args[0] === 'ps' && !call.args.includes('--follow') && !call.args.includes('--nologo'));
+            assert.ok(retrySnapshotCall);
+
+            // This delta predates the retry's capture, so replaying it would resurrect an AppHost
+            // the retry snapshot already knows is gone.
+            followCall.options.lineCallback(JSON.stringify({
+                appHostPath: '/workspace/StoppedBeforeCapture.csproj',
+                appHostPid: 4321,
+                status: 'running',
+            }));
+            await waitForMicrotasks();
+
+            retrySnapshotCall.options.stdoutCallback(JSON.stringify([
+                {
+                    appHostPath: '/workspace/StillRunning.csproj',
+                    appHostPid: 1234,
+                    status: 'running',
+                },
+            ]));
+            retrySnapshotCall.options.exitCallback(0);
+            await waitForMicrotasks();
+
+            assert.deepStrictEqual(
+                repository.appHosts.map(appHost => appHost.appHostPath),
+                ['/workspace/StillRunning.csproj']);
+        }
+        finally {
+            repository.dispose();
+            getConfigurationStub.restore();
+            clock.restore();
+        }
+    });
+
     test('ps reconciliation retries when the bounded follow replay buffer overflows', async () => {
         const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
         const inspect = sinon.stub();

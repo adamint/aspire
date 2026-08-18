@@ -43,8 +43,7 @@ type ResolvedPreflight<T> =
     | { readonly resolved: false; readonly outcome: 'appHostNotFound' | 'ambiguousAppHost' | 'workspaceNotTrusted' | 'invalidInput' | 'canceled' | 'error' };
 
 /**
- * Provides model-safe editor assistance for AppHost state, diagnostics, and
- * confirmation-gated editor UI handoffs.
+ * Provides model-safe editor assistance for AppHost state, diagnostics, and editor UI handoffs.
  *
  * The service resolves every selector through {@link SafeAppHostTargetResolver}.
  * Resource data and editor session snapshots are used only for exact internal
@@ -56,17 +55,21 @@ export class EditorAssistanceToolService {
     constructor(private readonly _dependencies: EditorAssistanceToolDependencies) {
     }
 
-    async prepareDashboardTarget(
+    /**
+     * Resolves the display path used in the Dashboard tool's progress message.
+     *
+     * This is presentation only. The Dashboard handoff does not confirm, so nothing is bound to
+     * the target resolved here; `openDashboard` resolves the target again through `preflight`.
+     */
+    async prepareDashboardTargetDisplayPath(
         rawAppHost: unknown,
-        token: vscode.CancellationToken): Promise<{ readonly displayPath: string; readonly identity: AppHostTargetIdentity | null }> {
+        token: vscode.CancellationToken): Promise<string> {
         if (!vscode.workspace.isTrusted) {
-            return { displayPath: appHostLifecycleUnresolvedPath, identity: null };
+            return appHostLifecycleUnresolvedPath;
         }
 
         const resolution = await this._dependencies.targetResolver.resolveTarget(rawAppHost, token);
-        return resolution.resolved
-            ? { displayPath: resolution.target.displayPath, identity: resolution.target.identity }
-            : { displayPath: appHostLifecycleUnresolvedPath, identity: null };
+        return resolution.resolved ? resolution.target.displayPath : appHostLifecycleUnresolvedPath;
     }
 
     async openDashboard(
@@ -507,6 +510,9 @@ function throwIfCanceled(token: vscode.CancellationToken): void {
 type ResourceTarget = {
     readonly kind: 'project' | 'executable';
     readonly path: string;
+    // Only carried for executables. See `isSessionTargetMatch` for why the command alone is not
+    // always enough to identify one executable resource.
+    readonly workDir?: string;
 };
 
 function getResourceTarget(resource: ResourceJson): ResourceTarget | undefined {
@@ -516,9 +522,16 @@ function getResourceTarget(resource: ResourceJson): ResourceTarget | undefined {
     }
 
     const executablePath = resource.properties?.['executable.path'];
-    return typeof executablePath === 'string' && executablePath.trim().length > 0
-        ? { kind: 'executable', path: executablePath }
-        : undefined;
+    if (typeof executablePath !== 'string' || executablePath.trim().length === 0) {
+        return undefined;
+    }
+
+    const workDir = resource.properties?.['executable.workDir'];
+    return {
+        kind: 'executable',
+        path: executablePath,
+        ...(typeof workDir === 'string' && workDir.trim().length > 0 ? { workDir } : {}),
+    };
 }
 
 function isSessionTargetMatch(
@@ -529,5 +542,15 @@ function isSessionTargetMatch(
     }
 
     const executablePaths = session.resourceExecutablePaths ?? [session.targetPath];
-    return executablePaths.some(executablePath => isSamePath(executablePath, resourceTarget.path));
+    if (executablePaths.some(executablePath => isSamePath(executablePath, resourceTarget.path))) {
+        return true;
+    }
+
+    // Some resources cannot be identified by their command at all. A Java resource launched
+    // through WithMavenGoal/WithGradleTask runs the wrapper, so DCP reports its command as `sh`
+    // on POSIX or `cmd` on Windows, which no launch configuration can meaningfully claim. For
+    // those the working directory is the only stable link back to the session's target, and this
+    // stays an additional way to match rather than a replacement so source-target languages —
+    // where the target is a script or program path rather than a directory — are unaffected.
+    return resourceTarget.workDir !== undefined && isSamePath(session.targetPath, resourceTarget.workDir);
 }

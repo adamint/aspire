@@ -830,6 +830,107 @@ suite('Editor assistance AppHost services', () => {
             }
         });
 
+        test('correlates a wrapper-launched Java resource through executable.workDir', async () => {
+            // WithMavenGoal/WithGradleTask replace the resource command with the wrapper
+            // invocation, so DCP reports 'sh' rather than anything the launch configuration can
+            // claim. The working directory is the only link left between the two.
+            const javaWorkingDirectory = path.join(workspaceRoot, 'JavaApi');
+            resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [
+                createResource('javaapi', undefined, {
+                    'executable.path': 'sh',
+                    'executable.workDir': javaWorkingDirectory,
+                }),
+            ]);
+            resourceSessions.push({
+                appHostPath: appHostProjectPath,
+                targetPath: javaWorkingDirectory,
+                resourceExecutablePaths: ['java'],
+                state: 'running',
+                mode: 'debug',
+            });
+
+            assert.deepStrictEqual(
+                await service.getDebugSessionStatus(
+                    { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'javaapi' },
+                    new vscode.CancellationTokenSource().token),
+                {
+                    success: true,
+                    tool: aspireDebugSessionStatusToolName,
+                    outcome: 'running',
+                    scope: 'resource',
+                    controller: 'editor',
+                    mode: 'debug',
+                    appHost: 'AppHost/AppHost.csproj',
+                    resourceName: 'javaapi',
+                });
+        });
+
+        test('correlates a directly launched Java resource through its java command', async () => {
+            const javaWorkingDirectory = path.join(workspaceRoot, 'JavaApi');
+            resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [
+                createResource('javaapi', undefined, {
+                    'executable.path': 'java',
+                    'executable.workDir': javaWorkingDirectory,
+                }),
+            ]);
+            resourceSessions.push({
+                appHostPath: appHostProjectPath,
+                targetPath: javaWorkingDirectory,
+                resourceExecutablePaths: ['java'],
+                state: 'running',
+                mode: 'debug',
+            });
+
+            assert.deepStrictEqual(
+                await service.getDebugSessionStatus(
+                    { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'javaapi' },
+                    new vscode.CancellationTokenSource().token),
+                {
+                    success: true,
+                    tool: aspireDebugSessionStatusToolName,
+                    outcome: 'running',
+                    scope: 'resource',
+                    controller: 'editor',
+                    mode: 'debug',
+                    appHost: 'AppHost/AppHost.csproj',
+                    resourceName: 'javaapi',
+                });
+        });
+
+        test('fails closed when two Java resources share the java command and the session cannot pick one', async () => {
+            resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [
+                createResource('javaapi', undefined, {
+                    'executable.path': 'java',
+                    'executable.workDir': path.join(workspaceRoot, 'JavaApi'),
+                }),
+                createResource('javaworker', undefined, {
+                    'executable.path': 'java',
+                    'executable.workDir': path.join(workspaceRoot, 'JavaWorker'),
+                }),
+            ]);
+            resourceSessions.push({
+                appHostPath: appHostProjectPath,
+                targetPath: path.join(workspaceRoot, 'JavaApi'),
+                resourceExecutablePaths: ['java'],
+                state: 'running',
+                mode: 'debug',
+            });
+
+            assert.deepStrictEqual(
+                await service.getDebugSessionStatus(
+                    { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'javaapi' },
+                    new vscode.CancellationTokenSource().token),
+                {
+                    success: false,
+                    tool: aspireDebugSessionStatusToolName,
+                    outcome: 'resourceAmbiguous',
+                    scope: 'resource',
+                    controller: 'editor',
+                    appHost: 'AppHost/AppHost.csproj',
+                    resourceName: 'javaapi',
+                });
+        });
+
         test('returns resourceAmbiguous when different exact resource names share one target path', async () => {
             const sharedTargetPath = 'node';
             resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [

@@ -68,9 +68,9 @@ export class AspireOpenDashboardLanguageModelTool implements vscode.LanguageMode
         // runs without a confirmation prompt. Preparation only resolves the display path for the
         // progress message; the target that actually gets opened is resolved again inside
         // `invoke`, so there is no confirmed-target state for a later call to consume.
-        const preparedTarget = await this._service.prepareDashboardTarget(options.input?.appHostPath, token);
+        const displayPath = await this._service.prepareDashboardTargetDisplayPath(options.input?.appHostPath, token);
         return {
-            invocationMessage: editorAssistanceOpenDashboardInvocationMessage(escapeMarkdown(preparedTarget.displayPath)),
+            invocationMessage: editorAssistanceOpenDashboardInvocationMessage(escapeMarkdown(displayPath)),
         };
     }
 
@@ -129,8 +129,13 @@ export class AspireListDebugSessionsLanguageModelTool implements vscode.Language
  * Registers editor-assistance tools when the stable language model tool API exists.
  *
  * Status, explanation, and session listing are read-only and intentionally expose only
- * `invoke`. Dashboard and Output handoff change editor UI, so those two adapters alone
- * implement confirmation preparation.
+ * `invoke`. Dashboard and Output handoff change editor UI, so those two adapters also
+ * implement `prepareInvocation`.
+ *
+ * Only Output confirms. The rule is what the handoff reveals: opening the Dashboard is a
+ * read-only handoff to a surface the user already owns a command and a tree-view button for,
+ * and the result never returns its URL, whereas the Output view surfaces log content and takes
+ * over an editor panel.
  */
 export function registerEditorAssistanceTools(
     service: EditorAssistanceToolService,

@@ -368,6 +368,13 @@ export class AppHostPsPoller implements vscode.Disposable {
                     this._authoritativeSnapshotCaptured = true;
                 }
             },
+            onAttemptRestart: () => {
+                if (this._activeAuthoritativeSnapshotRequestId === snapshotRequestId) {
+                    this._authoritativeSnapshotCaptured = false;
+                    this._authoritativeSnapshotFollowOutputs.length = 0;
+                    this._authoritativeSnapshotFollowOutputsOverflowed = false;
+                }
+            },
         });
     }
 
@@ -389,7 +396,7 @@ export class AppHostPsPoller implements vscode.Disposable {
         return !this._isDisposed() && this._isDataActive() && fetchVersion === this._psFetchVersion;
     }
 
-    private async _runPsCommand(args: string[], callback: (code: number, stdout: string, stderr: string) => void, options?: { fetchVersion?: number; force?: boolean; isCurrent?: () => boolean; onFirstStdout?: () => void }): Promise<void> {
+    private async _runPsCommand(args: string[], callback: (code: number, stdout: string, stderr: string) => void, options?: { fetchVersion?: number; force?: boolean; isCurrent?: () => boolean; onFirstStdout?: () => void; onAttemptRestart?: () => void }): Promise<void> {
         const fetchVersion = options?.fetchVersion;
         const force = options?.force === true;
         const isCurrentPsCommand = () => {
@@ -452,6 +459,10 @@ export class AppHostPsPoller implements vscode.Disposable {
                     if ((code ?? 1) !== 0) {
                         const retryArgs = this._cliRunner.tryGetNoLogoRetryArgs(cliPath, invocationArgs, stdout, stderr, 'aspire ps');
                         if (retryArgs) {
+                            // A rejected --nologo can report itself on stdout, which already fired
+                            // onFirstStdout for an attempt that produced no snapshot. Let the caller
+                            // drop that false capture so the retry's window starts from its own output.
+                            options?.onAttemptRestart?.();
                             this._runPsCommand(retryArgs, callback, options);
                             return;
                         }
