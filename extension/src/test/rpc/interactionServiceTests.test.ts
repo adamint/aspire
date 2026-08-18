@@ -249,7 +249,8 @@ suite('InteractionService endpoints', () => {
 				{
 					tryReserveExternalLaunch: () => 'reservation-1',
 					replaceExternalLaunchReservation: () => 'reservation-1',
-				} as ExternalLaunchReservation);
+				} as ExternalLaunchReservation,
+				createTestMemento());
 			const workspaceFolder: vscode.WorkspaceFolder = {
 				uri: vscode.Uri.file(workspaceRoot),
 				name: 'workspace',
