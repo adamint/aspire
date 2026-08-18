@@ -545,13 +545,13 @@ jobs:
             ~/.gradle/caches
             ~/.gradle/wrapper
           # `maven-wrapper.properties` participates in the key for the same reason
-          # `gradle-wrapper.properties` does: it carries the pinned `distributionUrl`, so the cache has
-          # to rotate when the Maven version changes. The `v2` prefix forces one rebuild of the entry,
-          # because actions/cache skips the save step on an exact key hit and the previously stored
-          # caches predate `~/.m2/wrapper`.
-          key: java-e2e-v2-${{ runner.os }}-${{ hashFiles('playground/JavaSpringBoot/**/pom.xml', 'playground/JavaSpringBoot/**/build.gradle*', 'playground/JavaSpringBoot/**/gradle-wrapper.properties', 'playground/JavaSpringBoot/**/maven-wrapper.properties') }}
+          # `gradle-wrapper.properties` does: it carries the pinned `distributionUrl`, so the entry has
+          # to rotate when the Maven version changes. Otherwise the key would still hit exactly after a
+          # version bump, actions/cache would skip the save, and the newly downloaded distribution would
+          # never make it into the cache.
+          key: java-e2e-${{ runner.os }}-${{ hashFiles('playground/JavaSpringBoot/**/pom.xml', 'playground/JavaSpringBoot/**/build.gradle*', 'playground/JavaSpringBoot/**/gradle-wrapper.properties', 'playground/JavaSpringBoot/**/maven-wrapper.properties') }}
           restore-keys: |
-            java-e2e-v2-${{ runner.os }}-
+            java-e2e-${{ runner.os }}-
 
       - name: Warm the Java dependency caches
         if: ${{ matrix.installJava }}
