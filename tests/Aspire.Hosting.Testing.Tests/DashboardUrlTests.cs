@@ -59,6 +59,25 @@ public class DashboardUrlTests
     }
 
     [Fact]
+    [RequiresFeature(TestFeature.ContainerRuntime)]
+    public async Task GetDashboardUrlAsyncUsesConfiguredLocalhostTld()
+    {
+        const string DashboardHost = "dashboard.testing.localhost";
+
+        await using var builder = await CreateDashboardBuilderAsync();
+        builder.Configuration["ASPNETCORE_URLS"] = $"http://{DashboardHost}:0";
+        await using var app = await builder.BuildAsync();
+        await app.StartAsync().WaitAsync(TestConstants.LongTimeoutTimeSpan);
+
+        using var cancellationTokenSource = new CancellationTokenSource(TestConstants.LongTimeoutTimeSpan);
+        var dashboardUri = await app.GetDashboardUrlAsync(cancellationTokenSource.Token);
+
+        Assert.Equal(DashboardHost, dashboardUri.Host);
+        Assert.Equal("/login", dashboardUri.AbsolutePath);
+        Assert.StartsWith("?t=", dashboardUri.Query, StringComparison.Ordinal);
+    }
+
+    [Fact]
     [OuterloopTest("Resource-intensive Playwright browser test")]
     [RequiresFeature(TestFeature.ContainerRuntime | TestFeature.Playwright)]
     public async Task DashboardDisplaysResourceUpdatesWhileAppHostIsPausedAtBreakpoint()
