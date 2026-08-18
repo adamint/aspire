@@ -6983,7 +6983,95 @@ suite('AppHostDataRepository global polling', () => {
         }
     });
 
-    test('ps reconciliation does not replay follow deltas that predate the authoritative snapshot', async () => {
+    test('ps reconciliation abandons a snapshot whose replay window is contested by a follow delta', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const inspect = sinon.stub();
+        inspect.withArgs('appHostsPollingInterval').returns({ globalValue: 1000 });
+        inspect.withArgs('globalAppHostsPollingInterval').returns({ globalValue: 9000 });
+        const getConfigurationStub = sinon.stub(vscode.workspace, 'getConfiguration');
+        getConfigurationStub.withArgs('aspire').returns({
+            inspect,
+            get: sinon.stub().withArgs('appHostsPollingInterval', 30000).returns(30000),
+        } as unknown as vscode.WorkspaceConfiguration);
+        const spawned: { args: string[]; options: any }[] = [];
+        spawnStub.callsFake((_terminalProvider, _command, args, options) => {
+            spawned.push({ args, options });
+            return new TestChildProcess();
+        });
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        try {
+            repository.activate();
+            repository.setViewMode('global');
+            repository.setPanelVisible(true);
+            await waitForMicrotasks();
+
+            const followCall = spawned.find(call =>
+                call.args[0] === 'ps' && call.args.includes('--follow'));
+            assert.ok(followCall);
+
+            await clock.tickAsync(1000);
+            const contestedSnapshot = spawned.find(call =>
+                call.args[0] === 'ps' && !call.args.includes('--follow'));
+            assert.ok(contestedSnapshot);
+
+            // The delta lands before the snapshot's first byte, so there is no evidence of whether
+            // it happened before or after the CLI enumerated. Replaying it could resurrect an
+            // AppHost the snapshot omits, and dropping it could erase a stop that really did
+            // happen after enumeration, so the snapshot is abandoned rather than guessed at.
+            followCall.options.lineCallback(JSON.stringify({
+                appHostPath: '/workspace/Contested.csproj',
+                appHostPid: 4321,
+                status: 'running',
+            }));
+            await waitForMicrotasks();
+
+            contestedSnapshot.options.stdoutCallback(JSON.stringify([
+                {
+                    appHostPath: '/workspace/SnapshotOnly.csproj',
+                    appHostPid: 1234,
+                    status: 'running',
+                },
+            ]));
+            contestedSnapshot.options.exitCallback(0);
+            await waitForMicrotasks();
+
+            // The abandoned snapshot contributes nothing, so its AppHost never appears and the
+            // live follow state is left exactly as the stream delivered it.
+            assert.deepStrictEqual(
+                repository.appHosts.map(appHost => appHost.appHostPath),
+                ['/workspace/Contested.csproj']);
+
+            // The next tick takes a fresh snapshot. Its window is uncontested, so it applies
+            // normally and reconciles the state the abandoned one could not.
+            await clock.tickAsync(1000);
+            const uncontestedSnapshot = spawned.filter(call =>
+                call.args[0] === 'ps' && !call.args.includes('--follow')).at(-1);
+            assert.ok(uncontestedSnapshot);
+            assert.notStrictEqual(uncontestedSnapshot, contestedSnapshot);
+
+            uncontestedSnapshot.options.stdoutCallback(JSON.stringify([
+                {
+                    appHostPath: '/workspace/SnapshotOnly.csproj',
+                    appHostPid: 1234,
+                    status: 'running',
+                },
+            ]));
+            uncontestedSnapshot.options.exitCallback(0);
+            await waitForMicrotasks();
+
+            assert.deepStrictEqual(
+                repository.appHosts.map(appHost => appHost.appHostPath),
+                ['/workspace/SnapshotOnly.csproj']);
+        }
+        finally {
+            repository.dispose();
+            getConfigurationStub.restore();
+            clock.restore();
+        }
+    });
+
+    test('ps reconciliation replays follow deltas observed after the authoritative snapshot was captured', async () => {
         const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
         const inspect = sinon.stub();
         inspect.withArgs('appHostsPollingInterval').returns({ globalValue: 1000 });
@@ -7015,30 +7103,28 @@ suite('AppHostDataRepository global polling', () => {
                 call.args[0] === 'ps' && !call.args.includes('--follow'));
             assert.ok(snapshotCall);
 
-            // The AppHost starts and then stops while the snapshot process is still enumerating,
-            // and follow drops the stop delta. The snapshot is captured after both events, so it
-            // correctly omits the AppHost; replaying this pre-capture 'running' delta on top of it
-            // would resurrect a process that is already gone.
+            // The snapshot's first byte establishes its capture point, so this AppHost started
+            // after the CLI enumerated and the delta is provably newer than the snapshot.
+            snapshotCall.options.stdoutCallback(JSON.stringify([
+                {
+                    appHostPath: '/workspace/SnapshotOnly.csproj',
+                    appHostPid: 1234,
+                    status: 'running',
+                },
+            ]));
             followCall.options.lineCallback(JSON.stringify({
-                appHostPath: '/workspace/StoppedBeforeCapture.csproj',
+                appHostPath: '/workspace/StartedAfterCapture.csproj',
                 appHostPid: 4321,
                 status: 'running',
             }));
             await waitForMicrotasks();
 
-            snapshotCall.options.stdoutCallback(JSON.stringify([
-                {
-                    appHostPath: '/workspace/StillRunning.csproj',
-                    appHostPid: 1234,
-                    status: 'running',
-                },
-            ]));
             snapshotCall.options.exitCallback(0);
             await waitForMicrotasks();
 
             assert.deepStrictEqual(
-                repository.appHosts.map(appHost => appHost.appHostPath),
-                ['/workspace/StillRunning.csproj']);
+                repository.appHosts.map(appHost => appHost.appHostPath).sort(),
+                ['/workspace/SnapshotOnly.csproj', '/workspace/StartedAfterCapture.csproj']);
         }
         finally {
             repository.dispose();
@@ -7089,10 +7175,11 @@ suite('AppHostDataRepository global polling', () => {
                 call.args[0] === 'ps' && !call.args.includes('--follow') && !call.args.includes('--nologo'));
             assert.ok(retrySnapshotCall);
 
-            // This delta predates the retry's capture, so replaying it would resurrect an AppHost
-            // the retry snapshot already knows is gone.
+            // Without clearing the false capture, this delta would count as newer than the retry's
+            // snapshot and be replayed over it. It is actually unorderable against the retry, so
+            // the retry's window is contested and its snapshot must be abandoned.
             followCall.options.lineCallback(JSON.stringify({
-                appHostPath: '/workspace/StoppedBeforeCapture.csproj',
+                appHostPath: '/workspace/Contested.csproj',
                 appHostPid: 4321,
                 status: 'running',
             }));
@@ -7100,7 +7187,7 @@ suite('AppHostDataRepository global polling', () => {
 
             retrySnapshotCall.options.stdoutCallback(JSON.stringify([
                 {
-                    appHostPath: '/workspace/StillRunning.csproj',
+                    appHostPath: '/workspace/SnapshotOnly.csproj',
                     appHostPid: 1234,
                     status: 'running',
                 },
@@ -7110,7 +7197,7 @@ suite('AppHostDataRepository global polling', () => {
 
             assert.deepStrictEqual(
                 repository.appHosts.map(appHost => appHost.appHostPath),
-                ['/workspace/StillRunning.csproj']);
+                ['/workspace/Contested.csproj']);
         }
         finally {
             repository.dispose();

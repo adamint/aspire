@@ -51,6 +51,7 @@ export class AppHostPsPoller implements vscode.Disposable {
     private readonly _authoritativeSnapshotFollowOutputs: string[] = [];
     private _authoritativeSnapshotFollowOutputsOverflowed = false;
     private _authoritativeSnapshotCaptured = false;
+    private _authoritativeSnapshotContested = false;
 
     // Disposal, data-activity, and post-stop refresh scheduling stay owned by the repository; the
     // poller reads them through these accessors so it never holds a reference back to the repository.
@@ -134,6 +135,7 @@ export class AppHostPsPoller implements vscode.Disposable {
         this._authoritativeSnapshotFollowOutputs.length = 0;
         this._authoritativeSnapshotFollowOutputsOverflowed = false;
         this._authoritativeSnapshotCaptured = false;
+        this._authoritativeSnapshotContested = false;
         if (options?.clearPostStopRefreshTimers ?? true) {
             this._clearPostStopRefreshTimers();
         }
@@ -302,6 +304,7 @@ export class AppHostPsPoller implements vscode.Disposable {
         this._authoritativeSnapshotFollowOutputs.length = 0;
         this._authoritativeSnapshotFollowOutputsOverflowed = false;
         this._authoritativeSnapshotCaptured = false;
+        this._authoritativeSnapshotContested = false;
         const isCurrentSnapshot = () => this._activeAuthoritativeSnapshotRequestId === snapshotRequestId
             && !this._isDisposed()
             && (force || this._isDataActive());
@@ -317,6 +320,7 @@ export class AppHostPsPoller implements vscode.Disposable {
                 this._authoritativeSnapshotFollowOutputs.length = 0;
                 this._authoritativeSnapshotFollowOutputsOverflowed = false;
                 this._authoritativeSnapshotCaptured = false;
+        this._authoritativeSnapshotContested = false;
                 this._authoritativeSnapshotInProgress = false;
                 return;
             }
@@ -324,10 +328,14 @@ export class AppHostPsPoller implements vscode.Disposable {
             if (!this._isDisposed() && (force || this._isDataActive())) {
                 if (code === 0) {
                     this._onDidChangePsError.fire(undefined);
-                    if (this._authoritativeSnapshotFollowOutputsOverflowed) {
-                        // The bounded replay window is incomplete, so applying the snapshot could
-                        // overwrite newer follow state. A queued retry will reconcile after activity
-                        // settles without retaining an unbounded history.
+                    if (this._authoritativeSnapshotFollowOutputsOverflowed || this._authoritativeSnapshotContested) {
+                        // The replay window cannot be trusted, so applying the snapshot could
+                        // overwrite newer follow state. Overflow queues a retry to reconcile once
+                        // activity settles, without retaining an unbounded history. Contention is
+                        // deliberately left to the polling timer instead: a delta landing inside the
+                        // snapshot's startup window is common enough that retrying immediately could
+                        // spawn `aspire ps` in a tight loop, and a contested window is itself proof
+                        // that follow is delivering, which is when reconciliation matters least.
                         this._onDidRequestClearLoading.fire();
                     }
                     else {
@@ -349,6 +357,7 @@ export class AppHostPsPoller implements vscode.Disposable {
             this._authoritativeSnapshotFollowOutputs.length = 0;
             this._authoritativeSnapshotFollowOutputsOverflowed = false;
             this._authoritativeSnapshotCaptured = false;
+        this._authoritativeSnapshotContested = false;
             this._authoritativeSnapshotInProgress = false;
             if (this._authoritativeSnapshotPending) {
                 const pendingForce = this._authoritativeSnapshotPendingForce;
@@ -360,9 +369,10 @@ export class AppHostPsPoller implements vscode.Disposable {
             force,
             isCurrent: isCurrentSnapshot,
             // `aspire ps` enumerates and then writes its JSON, so the first byte of output is a
-            // safe lower bound for when the snapshot was captured. Only deltas observed after that
-            // point are newer than the snapshot; buffering from the request instead would replay
-            // pre-capture deltas and could resurrect an AppHost the snapshot deliberately omits.
+            // safe lower bound for when the snapshot was captured. Deltas observed from that point
+            // on are provably newer than the snapshot and are replayed over it; deltas observed
+            // before it are unorderable and abandon the snapshot instead, which is handled in
+            // `_recordAuthoritativeSnapshotFollowOutput`.
             onFirstStdout: () => {
                 if (this._activeAuthoritativeSnapshotRequestId === snapshotRequestId) {
                     this._authoritativeSnapshotCaptured = true;
@@ -371,6 +381,7 @@ export class AppHostPsPoller implements vscode.Disposable {
             onAttemptRestart: () => {
                 if (this._activeAuthoritativeSnapshotRequestId === snapshotRequestId) {
                     this._authoritativeSnapshotCaptured = false;
+                    this._authoritativeSnapshotContested = false;
                     this._authoritativeSnapshotFollowOutputs.length = 0;
                     this._authoritativeSnapshotFollowOutputsOverflowed = false;
                 }
@@ -379,7 +390,19 @@ export class AppHostPsPoller implements vscode.Disposable {
     }
 
     private _recordAuthoritativeSnapshotFollowOutput(line: string): void {
-        if (this._activeAuthoritativeSnapshotRequestId === undefined || !this._authoritativeSnapshotCaptured) {
+        if (this._activeAuthoritativeSnapshotRequestId === undefined) {
+            return;
+        }
+
+        if (!this._authoritativeSnapshotCaptured) {
+            // This delta cannot be ordered against the snapshot. It was observed before the first
+            // byte of output, but the CLI had already enumerated at some unknown instant inside
+            // that window, so the delta is either newer than the snapshot or older than it and
+            // there is no evidence to tell which. Replaying it could resurrect an AppHost the
+            // snapshot deliberately omits; dropping it lets the snapshot overwrite a stop that
+            // really did happen after enumeration. The snapshot is abandoned instead, leaving the
+            // live follow state in place until a later snapshot lands on an uncontested window.
+            this._authoritativeSnapshotContested = true;
             return;
         }
 
