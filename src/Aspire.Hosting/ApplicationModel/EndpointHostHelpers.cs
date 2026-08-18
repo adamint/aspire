@@ -6,7 +6,8 @@ using System.Diagnostics.CodeAnalysis;
 namespace Aspire.Hosting.ApplicationModel;
 
 /// <summary>
-/// Provides helper methods for validating localhost addresses.
+/// Provides helper methods for validating localhost addresses and for resolving endpoint URLs
+/// against a configured target host.
 /// </summary>
 public static class EndpointHostHelpers
 {
