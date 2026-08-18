@@ -50,6 +50,7 @@ export class AppHostPsPoller implements vscode.Disposable {
     private _activeAuthoritativeSnapshotRequestId: number | undefined;
     private readonly _authoritativeSnapshotFollowOutputs: string[] = [];
     private _authoritativeSnapshotFollowOutputsOverflowed = false;
+    private _authoritativeSnapshotCaptured = false;
 
     // Disposal, data-activity, and post-stop refresh scheduling stay owned by the repository; the
     // poller reads them through these accessors so it never holds a reference back to the repository.
@@ -132,6 +133,7 @@ export class AppHostPsPoller implements vscode.Disposable {
         this._activeAuthoritativeSnapshotRequestId = undefined;
         this._authoritativeSnapshotFollowOutputs.length = 0;
         this._authoritativeSnapshotFollowOutputsOverflowed = false;
+        this._authoritativeSnapshotCaptured = false;
         if (options?.clearPostStopRefreshTimers ?? true) {
             this._clearPostStopRefreshTimers();
         }
@@ -299,6 +301,7 @@ export class AppHostPsPoller implements vscode.Disposable {
         this._activeAuthoritativeSnapshotRequestId = snapshotRequestId;
         this._authoritativeSnapshotFollowOutputs.length = 0;
         this._authoritativeSnapshotFollowOutputsOverflowed = false;
+        this._authoritativeSnapshotCaptured = false;
         const isCurrentSnapshot = () => this._activeAuthoritativeSnapshotRequestId === snapshotRequestId
             && !this._isDisposed()
             && (force || this._isDataActive());
@@ -313,6 +316,7 @@ export class AppHostPsPoller implements vscode.Disposable {
                 this._activeAuthoritativeSnapshotRequestId = undefined;
                 this._authoritativeSnapshotFollowOutputs.length = 0;
                 this._authoritativeSnapshotFollowOutputsOverflowed = false;
+                this._authoritativeSnapshotCaptured = false;
                 this._authoritativeSnapshotInProgress = false;
                 return;
             }
@@ -344,6 +348,7 @@ export class AppHostPsPoller implements vscode.Disposable {
             this._activeAuthoritativeSnapshotRequestId = undefined;
             this._authoritativeSnapshotFollowOutputs.length = 0;
             this._authoritativeSnapshotFollowOutputsOverflowed = false;
+            this._authoritativeSnapshotCaptured = false;
             this._authoritativeSnapshotInProgress = false;
             if (this._authoritativeSnapshotPending) {
                 const pendingForce = this._authoritativeSnapshotPendingForce;
@@ -351,11 +356,23 @@ export class AppHostPsPoller implements vscode.Disposable {
                 this._authoritativeSnapshotPendingForce = false;
                 this.refreshAppHostsFromAuthoritativeSnapshot(pendingForce);
             }
-        }, { force, isCurrent: isCurrentSnapshot });
+        }, {
+            force,
+            isCurrent: isCurrentSnapshot,
+            // `aspire ps` enumerates and then writes its JSON, so the first byte of output is a
+            // safe lower bound for when the snapshot was captured. Only deltas observed after that
+            // point are newer than the snapshot; buffering from the request instead would replay
+            // pre-capture deltas and could resurrect an AppHost the snapshot deliberately omits.
+            onFirstStdout: () => {
+                if (this._activeAuthoritativeSnapshotRequestId === snapshotRequestId) {
+                    this._authoritativeSnapshotCaptured = true;
+                }
+            },
+        });
     }
 
     private _recordAuthoritativeSnapshotFollowOutput(line: string): void {
-        if (this._activeAuthoritativeSnapshotRequestId === undefined) {
+        if (this._activeAuthoritativeSnapshotRequestId === undefined || !this._authoritativeSnapshotCaptured) {
             return;
         }
 
@@ -372,7 +389,7 @@ export class AppHostPsPoller implements vscode.Disposable {
         return !this._isDisposed() && this._isDataActive() && fetchVersion === this._psFetchVersion;
     }
 
-    private async _runPsCommand(args: string[], callback: (code: number, stdout: string, stderr: string) => void, options?: { fetchVersion?: number; force?: boolean; isCurrent?: () => boolean }): Promise<void> {
+    private async _runPsCommand(args: string[], callback: (code: number, stdout: string, stderr: string) => void, options?: { fetchVersion?: number; force?: boolean; isCurrent?: () => boolean; onFirstStdout?: () => void }): Promise<void> {
         const fetchVersion = options?.fetchVersion;
         const force = options?.force === true;
         const isCurrentPsCommand = () => {
@@ -421,7 +438,13 @@ export class AppHostPsPoller implements vscode.Disposable {
         psProcess = spawnCliProcess(this._terminalProvider, cliPath, invocationArgs, {
             createProcessGroup: true,
             noExtensionVariables: true,
-            stdoutCallback: (data) => { stdout += data; },
+            stdoutCallback: (data) => {
+                if (stdout.length === 0 && data.length > 0) {
+                    options?.onFirstStdout?.();
+                }
+
+                stdout += data;
+            },
             stderrCallback: (data) => { stderr += data; },
             exitCallback: (code) => {
                 removePsProcess();

@@ -6983,6 +6983,70 @@ suite('AppHostDataRepository global polling', () => {
         }
     });
 
+    test('ps reconciliation does not replay follow deltas that predate the authoritative snapshot', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const inspect = sinon.stub();
+        inspect.withArgs('appHostsPollingInterval').returns({ globalValue: 1000 });
+        inspect.withArgs('globalAppHostsPollingInterval').returns({ globalValue: 9000 });
+        const getConfigurationStub = sinon.stub(vscode.workspace, 'getConfiguration');
+        getConfigurationStub.withArgs('aspire').returns({
+            inspect,
+            get: sinon.stub().withArgs('appHostsPollingInterval', 30000).returns(30000),
+        } as unknown as vscode.WorkspaceConfiguration);
+        const spawned: { args: string[]; options: any }[] = [];
+        spawnStub.callsFake((_terminalProvider, _command, args, options) => {
+            spawned.push({ args, options });
+            return new TestChildProcess();
+        });
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        try {
+            repository.activate();
+            repository.setViewMode('global');
+            repository.setPanelVisible(true);
+            await waitForMicrotasks();
+
+            const followCall = spawned.find(call =>
+                call.args[0] === 'ps' && call.args.includes('--follow'));
+            assert.ok(followCall);
+
+            await clock.tickAsync(1000);
+            const snapshotCall = spawned.find(call =>
+                call.args[0] === 'ps' && !call.args.includes('--follow'));
+            assert.ok(snapshotCall);
+
+            // The AppHost starts and then stops while the snapshot process is still enumerating,
+            // and follow drops the stop delta. The snapshot is captured after both events, so it
+            // correctly omits the AppHost; replaying this pre-capture 'running' delta on top of it
+            // would resurrect a process that is already gone.
+            followCall.options.lineCallback(JSON.stringify({
+                appHostPath: '/workspace/StoppedBeforeCapture.csproj',
+                appHostPid: 4321,
+                status: 'running',
+            }));
+            await waitForMicrotasks();
+
+            snapshotCall.options.stdoutCallback(JSON.stringify([
+                {
+                    appHostPath: '/workspace/StillRunning.csproj',
+                    appHostPid: 1234,
+                    status: 'running',
+                },
+            ]));
+            snapshotCall.options.exitCallback(0);
+            await waitForMicrotasks();
+
+            assert.deepStrictEqual(
+                repository.appHosts.map(appHost => appHost.appHostPath),
+                ['/workspace/StillRunning.csproj']);
+        }
+        finally {
+            repository.dispose();
+            getConfigurationStub.restore();
+            clock.restore();
+        }
+    });
+
     test('ps reconciliation retries when the bounded follow replay buffer overflows', async () => {
         const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
         const inspect = sinon.stub();
