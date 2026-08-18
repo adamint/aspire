@@ -1,6 +1,9 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using Aspire.Hosting.Utils;
+using Microsoft.AspNetCore.InternalTesting;
+
 namespace Aspire.Hosting.Tests.ApplicationModel;
 
 [Trait("Partition", "4")]
@@ -201,5 +204,33 @@ public class EndpointHostHelpersTests
 
         // Assert
         Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData("dashboard.testing.localhost", "http://dashboard.testing.localhost:17454")]
+    [InlineData("app.dev.localhost", "http://app.dev.localhost:17454")]
+    [InlineData("localhost", "http://localhost:17454")]
+    [InlineData("example.com", "http://localhost:17454")]
+    public async Task GetUrlWithTargetHostAsync_UsesTargetHostOnlyForLocalhostTld(string targetHost, string expectedUrl)
+    {
+        using var builder = TestDistributedApplicationBuilder.Create();
+
+        var container = builder.AddContainer("container1", "image")
+                               .WithHttpEndpoint(name: "primary", targetPort: 10005)
+                               .WithEndpoint("primary", ep =>
+                               {
+                                   ep.TargetHost = targetHost;
+
+                                   // DCP allocates "localhost" even when a localhost TLD is configured, because
+                                   // "localhost" is the address the service actually binds to. The TLD hostname
+                                   // only ever exists in the URL presented back to the user.
+                                   ep.AllocatedEndpoint = new AllocatedEndpoint(ep, "localhost", 17454);
+                               });
+
+        var url = await EndpointHostHelpers.GetUrlWithTargetHostAsync(container.GetEndpoint("primary"))
+            .AsTask()
+            .DefaultTimeout();
+
+        Assert.Equal(expectedUrl, url);
     }
 }

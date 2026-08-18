@@ -120,7 +120,7 @@ public static class EndpointHostHelpers
     /// <param name="endpoint">The endpoint reference.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The URL with the appropriate hostname.</returns>
-    internal static async ValueTask<string?> GetUrlWithTargetHostAsync(EndpointReference endpoint, CancellationToken cancellationToken = default)
+    public static async ValueTask<string?> GetUrlWithTargetHostAsync(EndpointReference endpoint, CancellationToken cancellationToken = default)
     {
         var allocatedUrl = await endpoint.GetValueAsync(cancellationToken).ConfigureAwait(false);
 
