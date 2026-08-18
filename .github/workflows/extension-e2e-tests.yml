@@ -763,13 +763,16 @@ jobs:
             $attempts = 2
 
             for ($attempt = 1; $attempt -le $attempts; $attempt++) {
-              # `timeout` (coreutils) kills a stalled child and exits 124, which is what converts an
+              # `timeout` (coreutils) bounds a stalled child and exits 124, which is what converts an
               # unresponsive mirror into a retryable failure rather than an open-ended wait.
-              sudo timeout 180 apt-get update
+              # `--kill-after` matters: plain `timeout` only sends SIGTERM, and apt/dpkg block or
+              # defer signals around critical sections, so without the escalation to SIGKILL a
+              # wedged child could still outlive its own timeout.
+              sudo timeout --kill-after=30 180 apt-get update
 
               # Only the install decides success: `apt-get update` can time out while the install
               # still succeeds from the indices already on the runner image.
-              sudo timeout 180 apt-get install -y --no-install-recommends ffmpeg
+              sudo timeout --kill-after=30 180 apt-get install -y --no-install-recommends ffmpeg
               if ($LASTEXITCODE -eq 0) {
                 $installed = $true
                 break
