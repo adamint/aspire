@@ -533,13 +533,25 @@ jobs:
           # whole Spring dependency tree inside the test's readiness budget. Cache the user-level Maven
           # and Gradle stores rather than a per-project directory: the specs run out of a generated
           # workspace copied from the playground, so only the shared caches survive the copy.
+          #
+          # `~/.m2/wrapper` holds the Maven distribution itself, which `mvnw` downloads from
+          # repo.maven.apache.org into `${MAVEN_USER_HOME}/wrapper/dists` because these projects pin
+          # `distributionType=only-script`. Without it cached, every run re-fetched Maven from Maven
+          # Central, so a single outage there failed the shard - the `~/.gradle/wrapper` entry below
+          # already gave Gradle the equivalent protection.
           path: |
             ~/.m2/repository
+            ~/.m2/wrapper
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: java-e2e-${{ runner.os }}-${{ hashFiles('playground/JavaSpringBoot/**/pom.xml', 'playground/JavaSpringBoot/**/build.gradle*', 'playground/JavaSpringBoot/**/gradle-wrapper.properties') }}
+          # `maven-wrapper.properties` participates in the key for the same reason
+          # `gradle-wrapper.properties` does: it carries the pinned `distributionUrl`, so the cache has
+          # to rotate when the Maven version changes. The `v2` prefix forces one rebuild of the entry,
+          # because actions/cache skips the save step on an exact key hit and the previously stored
+          # caches predate `~/.m2/wrapper`.
+          key: java-e2e-v2-${{ runner.os }}-${{ hashFiles('playground/JavaSpringBoot/**/pom.xml', 'playground/JavaSpringBoot/**/build.gradle*', 'playground/JavaSpringBoot/**/gradle-wrapper.properties', 'playground/JavaSpringBoot/**/maven-wrapper.properties') }}
           restore-keys: |
-            java-e2e-${{ runner.os }}-
+            java-e2e-v2-${{ runner.os }}-
 
       - name: Warm the Java dependency caches
         if: ${{ matrix.installJava }}
@@ -554,6 +566,32 @@ jobs:
           #
           # A resolution failure must not fail the job - it only means the specs pay the download cost
           # they paid before this step existed.
+          #
+          # Retry before giving up, though. Both wrappers fetch their own distribution on a cold cache,
+          # and a failure there is not merely a slower run: it leaves no Maven on the runner at all, so
+          # the build inside the spec exits 1, the resource never starts, and the shard fails 15 minutes
+          # later as "Timed out after 900000ms waiting for an HTTP endpoint for resource 'catalog'"
+          # rather than as the download error it actually is.
+          warm() {
+            local description=$1
+            local directory=$2
+            shift 2
+
+            local attempt
+            for attempt in 1 2 3; do
+              if ( cd "$directory" && "$@" ); then
+                return 0
+              fi
+
+              if [ "$attempt" -lt 3 ]; then
+                echo "warning: pre-resolving $description failed (attempt $attempt/3), retrying"
+                sleep $((attempt * 15))
+              fi
+            done
+
+            echo "warning: could not pre-resolve $description"
+          }
+
           cd playground/JavaSpringBoot
           for maven_project in catalog worker; do
             # `dependency:go-offline` resolves the dependency tree but not every plugin a real build
@@ -562,11 +600,11 @@ jobs:
             # deliberately not reused: the specs copy the playground without `target/` so each run
             # builds clean, which is the same reason the Gradle project below is compiled rather than
             # only resolved.
-            (cd "$maven_project" && ./mvnw --batch-mode --no-transfer-progress -q dependency:go-offline compile) \
-              || echo "warning: could not pre-resolve Maven dependencies for $maven_project"
+            warm "Maven dependencies for $maven_project" "$maven_project" \
+              ./mvnw --batch-mode --no-transfer-progress -q dependency:go-offline compile
           done
-          (cd orders && ./gradlew --no-daemon --quiet compileJava) \
-            || echo 'warning: could not pre-resolve Gradle dependencies for orders'
+          warm "Gradle dependencies for orders" orders \
+            ./gradlew --no-daemon --quiet compileJava
 
       - name: Install Java E2E prerequisites
         if: ${{ matrix.installJava }}
