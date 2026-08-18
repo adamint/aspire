@@ -71,8 +71,7 @@ export class EditorAssistanceToolService {
 
     async openDashboard(
         input: unknown,
-        token: vscode.CancellationToken,
-        confirmedIdentity?: AppHostTargetIdentity | null): Promise<OpenDashboardToolResult> {
+        token: vscode.CancellationToken): Promise<OpenDashboardToolResult> {
         const preflight = await this.preflight(
             input,
             token,
@@ -80,9 +79,6 @@ export class EditorAssistanceToolService {
             aspireOpenDashboardToolName);
         if (!preflight.resolved) {
             return createOpenDashboardFailure(preflight.outcome);
-        }
-        if (confirmedIdentity !== undefined && preflight.target.identity !== confirmedIdentity) {
-            return createOpenDashboardFailure('appHostNotFound');
         }
 
         try {

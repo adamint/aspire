@@ -547,9 +547,6 @@
     <trans-unit id="languageModelTool.aspireOpenDashboard.displayName">
       <source xml:lang="en">Open Aspire Dashboard</source>
     </trans-unit>
-    <trans-unit id="aspire-vscode.strings.editorAssistanceOpenDashboardConfirmationTitle">
-      <source xml:lang="en">Open Aspire Dashboard</source>
-    </trans-unit>
     <trans-unit id="command.codeLensOpenDashboard">
       <source xml:lang="en">Open Aspire Dashboard</source>
     </trans-unit>
@@ -602,10 +599,7 @@
       <source xml:lang="en">Open the Aspire Dashboard for a running AppHost.</source>
     </trans-unit>
     <trans-unit id="languageModelTool.aspireOpenDashboard.modelDescription">
-      <source xml:lang="en">Open the Aspire Dashboard for a running discovered AppHost using the editor-configured presentation. This changes editor or browser UI after confirmation. The result reports only whether it opened and the bounded presentation; it never returns the Dashboard URL.</source>
-    </trans-unit>
-    <trans-unit id="aspire-vscode.strings.editorAssistanceOpenDashboardConfirmationMessage">
-      <source xml:lang="en">Open the Aspire Dashboard for {0}?</source>
+      <source xml:lang="en">Open the Aspire Dashboard for a running discovered AppHost using the editor-configured presentation. This changes editor or browser UI. The result reports only whether it opened and the bounded presentation; it never returns the Dashboard URL.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.dashboardLaunchIntegratedBrowserDescription">
       <source xml:lang="en">Open the dashboard in VS Code&apos;s integrated browser.</source>

@@ -7,7 +7,7 @@ import { executeE2eControlCommand, getCliWrapperInvocations, restoreE2eCliPathFo
 import { runProcess, terminateProcessTree } from './helpers/process';
 import { getProcessEntry, listProcessEntries, type ProcessEntry } from './helpers/processArguments';
 import { ensureDiagnosticsDir, getCliPath, getPrimaryAppHostProjectPath, getRepoRoot, getRunRoot, getWorkspaceRoot } from './helpers/paths';
-import { closeAllEditors, getOpenEditorTitles, interactWithModalDialog, openAspireView, setPanelVisible, waitForOpenEditorCount, waitForPanelVisibility, type ModalDialogInteraction } from './helpers/vscode';
+import { captureScreenshot, closeAllEditors, getOpenEditorTitles, interactWithModalDialog, openAspireView, setPanelVisible, waitForOpenEditorCount, waitForPanelVisibility, type ModalDialogInteraction } from './helpers/vscode';
 import { assertLinkedAppHostCliLaunch, commandLineArgumentEquals } from '../test/helpers/processArguments';
 import { getCmdShimSpawnCommand, shouldWrapWithCmd } from '../utils/cmdShimCommand';
 
@@ -162,8 +162,6 @@ suite('Aspire AppHost lifecycle E2E', function () {
             registered: true,
             supportsPreparation: true,
             invocationMessage: `Opening Aspire Dashboard for ${relativeAppHostPath}...`,
-            confirmationTitle: 'Open Aspire Dashboard',
-            confirmationMessage: `Open the Aspire Dashboard for ${relativeAppHostPath}?`,
         });
         assert.deepStrictEqual(preparedOutput, {
             registered: true,
@@ -214,18 +212,21 @@ suite('Aspire AppHost lifecycle E2E', function () {
         });
         assertSafeEditorAssistanceResult(beforeLaunchExplanation);
 
-        const beforeLaunchDashboard = await invokeLanguageModelToolWithConfirmations<Record<string, unknown>>({
+        const editorsBeforeNotRunningDashboard = await getOpenEditorTitles();
+        const beforeLaunchDashboard = await invokeToolWithoutConfirmation<Record<string, unknown>>({
             name: 'invokeLanguageModelTool',
             toolName: dashboardToolName,
             input: { appHostPath: relativeAppHostPath },
-        }, 120000, 1, 'editor-assistance-dashboard-not-running-confirmation');
-        assert.deepStrictEqual(beforeLaunchDashboard.results, [{
+        });
+        assert.deepStrictEqual(beforeLaunchDashboard, {
             success: false,
             tool: dashboardToolName,
             outcome: 'appHostNotRunning',
-        }]);
-        assertInvocationCompleted(beforeLaunchDashboard);
-        assertSafeEditorAssistanceResult(beforeLaunchDashboard.results[0]);
+        });
+        // The Dashboard tool no longer confirms, so the refusal path is the only thing standing
+        // between a model request and editor UI changing. Assert it opened nothing.
+        assert.deepStrictEqual(await getOpenEditorTitles(), editorsBeforeNotRunningDashboard);
+        assertSafeEditorAssistanceResult(beforeLaunchDashboard);
 
         const missingAppHost = await invokeToolWithoutConfirmation<Record<string, unknown>>({
             name: 'invokeLanguageModelTool',
@@ -387,34 +388,21 @@ suite('Aspire AppHost lifecycle E2E', function () {
 
         await executeE2eControlCommand({ name: 'setDashboardBrowserForE2E', value: 'integratedBrowser' });
         await closeAllEditors();
-        const dashboardEditorsBeforeDenial = await getOpenEditorTitles();
-        const dashboardBrowserSessionsBeforeDenial = readStateFile().browserDebugSessions;
-        const deniedDashboardInvocation = await invokeLanguageModelToolWithConfirmations<Record<string, unknown>>({
+        const dashboardEditorsBeforeOpen = await getOpenEditorTitles();
+        const dashboardInvocation = await invokeToolWithoutConfirmation<Record<string, unknown>>({
             name: 'invokeLanguageModelTool',
             toolName: dashboardToolName,
             input: { appHostPath: relativeAppHostPath },
-        }, 120000, 1, 'editor-assistance-dashboard-confirmation-denied', 'Cancel');
-        assertDeniedToolInvocation(deniedDashboardInvocation, dashboardToolName);
-        assert.deepStrictEqual(await getOpenEditorTitles(), dashboardEditorsBeforeDenial);
-        assert.deepStrictEqual(readStateFile().browserDebugSessions, dashboardBrowserSessionsBeforeDenial);
-        assertSafeEditorAssistanceResult(deniedDashboardInvocation);
-
-        const dashboardInvocation = await invokeLanguageModelToolWithConfirmations<Record<string, unknown>>({
-            name: 'invokeLanguageModelTool',
-            toolName: dashboardToolName,
-            input: { appHostPath: relativeAppHostPath },
-        }, 180000, 1, 'editor-assistance-dashboard-confirmation');
-        assert.strictEqual(dashboardInvocation.dialogs[0].message, 'Open Aspire Dashboard');
-        assert.strictEqual(dashboardInvocation.dialogs[0].details, `Open the Aspire Dashboard for ${relativeAppHostPath}?`);
-        assert.strictEqual(dashboardInvocation.results[0].success, true);
-        assert.strictEqual(dashboardInvocation.results[0].tool, dashboardToolName);
-        assert.strictEqual(dashboardInvocation.results[0].outcome, 'opened');
-        assertInvocationCompleted(dashboardInvocation);
-        assert.strictEqual(dashboardInvocation.results[0].presentation, 'integratedBrowser');
-        assert.ok((await waitForOpenEditorCount(dashboardEditorsBeforeDenial.length + 1)).length >
-            dashboardEditorsBeforeDenial.length);
-        assert.deepStrictEqual(Object.keys(dashboardInvocation.results[0]).sort(), ['outcome', 'presentation', 'success', 'tool']);
-        assertSafeEditorAssistanceResult(dashboardInvocation.results[0]);
+        }, 180000);
+        assert.strictEqual(dashboardInvocation.success, true);
+        assert.strictEqual(dashboardInvocation.tool, dashboardToolName);
+        assert.strictEqual(dashboardInvocation.outcome, 'opened');
+        assert.strictEqual(dashboardInvocation.presentation, 'integratedBrowser');
+        assert.ok((await waitForOpenEditorCount(dashboardEditorsBeforeOpen.length + 1)).length >
+            dashboardEditorsBeforeOpen.length);
+        await captureScreenshot('editor-assistance-dashboard-opened');
+        assert.deepStrictEqual(Object.keys(dashboardInvocation).sort(), ['outcome', 'presentation', 'success', 'tool']);
+        assertSafeEditorAssistanceResult(dashboardInvocation);
 
         await setPanelVisible(false);
         const deniedOutputInvocation = await invokeLanguageModelToolWithConfirmations<Record<string, unknown>>({
@@ -508,18 +496,17 @@ suite('Aspire AppHost lifecycle E2E', function () {
         });
         assertSafeEditorAssistanceResult(afterStopSessions);
 
-        const afterStopDashboard = await invokeLanguageModelToolWithConfirmations<Record<string, unknown>>({
+        const afterStopDashboard = await invokeToolWithoutConfirmation<Record<string, unknown>>({
             name: 'invokeLanguageModelTool',
             toolName: dashboardToolName,
             input: { appHostPath: relativeAppHostPath },
-        }, 120000, 1, 'editor-assistance-dashboard-stopped-confirmation');
-        assert.deepStrictEqual(afterStopDashboard.results, [{
+        });
+        assert.deepStrictEqual(afterStopDashboard, {
             success: false,
             tool: dashboardToolName,
             outcome: 'appHostNotRunning',
-        }]);
-        assertInvocationCompleted(afterStopDashboard);
-        assertSafeEditorAssistanceResult(afterStopDashboard.results[0]);
+        });
+        assertSafeEditorAssistanceResult(afterStopDashboard);
 
         const stopAgainResults = (await invokeLifecycleTool({
             name: 'invokeLanguageModelTool',
@@ -542,7 +529,7 @@ suite('Aspire AppHost lifecycle E2E', function () {
             beforeLaunchStatus,
             beforeLaunchSessions,
             beforeLaunchExplanation,
-            beforeLaunchDashboard: beforeLaunchDashboard.results[0],
+            beforeLaunchDashboard,
             missingAppHost,
             additionalPropertyValidation: additionalPropertyValidationEvidence,
             status,
@@ -551,27 +538,22 @@ suite('Aspire AppHost lifecycle E2E', function () {
             explanation,
             sessions,
             canceledStatus,
-            deniedDashboard: deniedDashboardInvocation,
-            dashboard: dashboardInvocation.results[0],
+            dashboard: dashboardInvocation,
             deniedOutput: deniedOutputInvocation,
             output: outputInvocation.results[0],
             confirmationDialogs: [
-                beforeLaunchDashboard.dialogs[0],
                 ...concurrentStartInvocation.dialogs,
-                ...deniedDashboardInvocation.dialogs,
-                ...dashboardInvocation.dialogs,
                 ...deniedOutputInvocation.dialogs,
                 ...outputInvocation.dialogs,
                 repeatedStartInvocation.dialogs[0],
                 stopInvocation.dialogs[0],
-                afterStopDashboard.dialogs[0],
             ],
             concurrentStarts,
             repeatedStart: repeatedStart[0],
             stop: stopResults[0],
             afterStopStatus,
             afterStopSessions,
-            afterStopDashboard: afterStopDashboard.results[0],
+            afterStopDashboard,
             stopAgain: stopAgainResults[0],
         });
     });

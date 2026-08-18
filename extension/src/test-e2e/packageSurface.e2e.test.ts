@@ -537,7 +537,7 @@ const expectedInstalledLanguageModelTools = createExpectedLanguageModelTools({
     explainModelDescription: 'Explain the latest sanitized launch failure recorded for one discovered AppHost. The result contains bounded failure categories and fixed recommended actions only; it never returns raw errors, logs, output, arguments, environment variables, URLs, process identifiers, or debug configurations.',
     explainUserDescription: 'Explain the latest safely recorded launch failure for an Aspire AppHost.',
     dashboardDisplayName: 'Open Aspire Dashboard',
-    dashboardModelDescription: 'Open the Aspire Dashboard for a running discovered AppHost using the editor-configured presentation. This changes editor or browser UI after confirmation. The result reports only whether it opened and the bounded presentation; it never returns the Dashboard URL.',
+    dashboardModelDescription: 'Open the Aspire Dashboard for a running discovered AppHost using the editor-configured presentation. This changes editor or browser UI. The result reports only whether it opened and the bounded presentation; it never returns the Dashboard URL.',
     dashboardUserDescription: 'Open the Aspire Dashboard for a running AppHost.',
     outputDisplayName: 'Show Aspire Output',
     outputModelDescription: 'Show the Aspire Output view in Visual Studio Code after confirmation without reading or returning its content.',

@@ -1,13 +1,10 @@
 import * as vscode from 'vscode';
 
 import {
-    editorAssistanceOpenDashboardConfirmationMessage,
-    editorAssistanceOpenDashboardConfirmationTitle,
     editorAssistanceOpenDashboardInvocationMessage,
     editorAssistanceOpenOutputConfirmationMessage,
     editorAssistanceOpenOutputConfirmationTitle,
     editorAssistanceOpenOutputInvocationMessage,
-    yesLabel,
 } from '../loc/strings';
 import { extensionLogOutputChannel } from '../utils/logging';
 import {
@@ -27,7 +24,6 @@ import {
 import { EditorAssistanceToolService } from './editorAssistanceToolService';
 import { EditorAssistanceTelemetry } from './editorAssistanceTelemetry';
 import { escapeMarkdown } from './languageModelToolUi';
-import { type AppHostTargetIdentity } from './safeAppHostTargetResolver';
 
 export class AspireDebugSessionStatusLanguageModelTool implements vscode.LanguageModelTool<DebugSessionStatusToolInput> {
     constructor(
@@ -60,11 +56,6 @@ export class AspireExplainLaunchFailureLanguageModelTool implements vscode.Langu
 }
 
 export class AspireOpenDashboardLanguageModelTool implements vscode.LanguageModelTool<OpenDashboardToolInput> {
-    private static readonly _maxPreparedSelectors = 32;
-    private static readonly _preparedIdentityTtlMs = 10 * 60 * 1000;
-    private readonly _preparedIdentities = new Map<string, PreparedDashboardIdentity>();
-    private _requiresInvocationConfirmation = false;
-
     constructor(
         private readonly _service: EditorAssistanceToolService,
         private readonly _telemetry: EditorAssistanceTelemetry = new EditorAssistanceTelemetry()) {
@@ -73,128 +64,22 @@ export class AspireOpenDashboardLanguageModelTool implements vscode.LanguageMode
     async prepareInvocation(
         options: vscode.LanguageModelToolInvocationPrepareOptions<OpenDashboardToolInput>,
         token: vscode.CancellationToken): Promise<vscode.PreparedToolInvocation> {
+        // Opening the Dashboard is a read-only handoff to a view the user already owns, so it
+        // runs without a confirmation prompt. Preparation only resolves the display path for the
+        // progress message; the target that actually gets opened is resolved again inside
+        // `invoke`, so there is no confirmed-target state for a later call to consume.
         const preparedTarget = await this._service.prepareDashboardTarget(options.input?.appHostPath, token);
-        this.recordPreparedIdentity(options.input?.appHostPath, preparedTarget.identity, token);
-        const displayPath = escapeMarkdown(preparedTarget.displayPath);
-        const preparedInvocation: vscode.PreparedToolInvocation = {
-            invocationMessage: editorAssistanceOpenDashboardInvocationMessage(displayPath),
+        return {
+            invocationMessage: editorAssistanceOpenDashboardInvocationMessage(escapeMarkdown(preparedTarget.displayPath)),
         };
-        if (!this._requiresInvocationConfirmation) {
-            preparedInvocation.confirmationMessages = {
-                title: editorAssistanceOpenDashboardConfirmationTitle,
-                message: editorAssistanceOpenDashboardConfirmationMessage(displayPath),
-            };
-        }
-
-        return preparedInvocation;
     }
 
     async invoke(
         options: vscode.LanguageModelToolInvocationOptions<OpenDashboardToolInput>,
         token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        const confirmedIdentity = this.consumePreparedIdentity(options.input?.appHostPath);
         return createToolResult(await this._telemetry.capture(
             aspireOpenDashboardToolName,
-            () => this._requiresInvocationConfirmation
-                ? this.confirmAndOpenDashboard(options.input, token)
-                : this._service.openDashboard(options.input, token, confirmedIdentity)));
-    }
-
-    private recordPreparedIdentity(
-        rawAppHostPath: unknown,
-        identity: AppHostTargetIdentity | null,
-        token: vscode.CancellationToken): void {
-        this.pruneExpiredPreparedIdentities();
-        if (this._requiresInvocationConfirmation) {
-            return;
-        }
-
-        const selectorKey = getPreparedSelectorKey(rawAppHostPath);
-        const existing = this._preparedIdentities.get(selectorKey);
-        if (existing || this._preparedIdentities.size >= AspireOpenDashboardLanguageModelTool._maxPreparedSelectors) {
-            // The stable API does not expose the tool-call identifier used internally by VS Code.
-            // Once preparations overlap or exceed the bound, confirm inside each invocation so a
-            // delayed call cannot consume another call's target identity.
-            this.requireInvocationConfirmation();
-            return;
-        }
-
-        const prepared: PreparedDashboardIdentity = {
-            identity,
-            createdAt: Date.now(),
-            cancellationRegistration: undefined,
-        };
-        this._preparedIdentities.set(selectorKey, prepared);
-        prepared.cancellationRegistration = token.onCancellationRequested(
-            () => this.removePreparedIdentity(selectorKey, prepared));
-    }
-
-    private consumePreparedIdentity(rawAppHostPath: unknown): AppHostTargetIdentity | null {
-        this.pruneExpiredPreparedIdentities();
-        const selectorKey = getPreparedSelectorKey(rawAppHostPath);
-        const prepared = this._preparedIdentities.get(selectorKey);
-        if (!prepared) {
-            return null;
-        }
-
-        this._preparedIdentities.delete(selectorKey);
-        prepared.cancellationRegistration?.dispose();
-        return prepared.identity;
-    }
-
-    private removePreparedIdentity(selectorKey: string, prepared: PreparedDashboardIdentity): void {
-        if (this._preparedIdentities.get(selectorKey) !== prepared) {
-            return;
-        }
-
-        this._preparedIdentities.delete(selectorKey);
-    }
-
-    private pruneExpiredPreparedIdentities(): void {
-        const expirationTime = Date.now() - AspireOpenDashboardLanguageModelTool._preparedIdentityTtlMs;
-        for (const prepared of this._preparedIdentities.values()) {
-            if (prepared.createdAt <= expirationTime) {
-                this.requireInvocationConfirmation();
-                return;
-            }
-        }
-    }
-
-    private requireInvocationConfirmation(): void {
-        for (const prepared of this._preparedIdentities.values()) {
-            prepared.cancellationRegistration?.dispose();
-        }
-        this._preparedIdentities.clear();
-        this._requiresInvocationConfirmation = true;
-    }
-
-    private async confirmAndOpenDashboard(
-        input: OpenDashboardToolInput,
-        token: vscode.CancellationToken): Promise<EditorAssistanceToolResult> {
-        const preparedTarget = await this._service.prepareDashboardTarget(input?.appHostPath, token);
-        if (preparedTarget.identity === null) {
-            return this._service.openDashboard(input, token, null);
-        }
-
-        const confirmationItem: vscode.MessageItem = {
-            title: yesLabel,
-        };
-        const selected = await vscode.window.showWarningMessage(
-            editorAssistanceOpenDashboardConfirmationTitle,
-            {
-                modal: true,
-                detail: editorAssistanceOpenDashboardConfirmationMessage(preparedTarget.displayPath),
-            },
-            confirmationItem);
-        if (selected?.title !== confirmationItem.title) {
-            return {
-                success: false,
-                tool: aspireOpenDashboardToolName,
-                outcome: 'canceled',
-            };
-        }
-
-        return this._service.openDashboard(input, token, preparedTarget.identity);
+            () => this._service.openDashboard(options.input, token)));
     }
 }
 
@@ -295,14 +180,4 @@ function createToolResult(result: EditorAssistanceToolResult): vscode.LanguageMo
     ]);
 }
 
-function getPreparedSelectorKey(rawAppHostPath: unknown): string {
-    return typeof rawAppHostPath === 'string'
-        ? `path:${rawAppHostPath}`
-        : `invalid:${typeof rawAppHostPath}`;
-}
 
-interface PreparedDashboardIdentity {
-    readonly identity: AppHostTargetIdentity | null;
-    readonly createdAt: number;
-    cancellationRegistration: vscode.Disposable | undefined;
-}

@@ -318,6 +318,12 @@ export interface ModalDialogInteraction {
     details: string;
 }
 
+// Screenshot capture for flows that change UI without a modal dialog. `interactWithModalDialog`
+// captures while a dialog is on screen; tools that open UI directly need their own capture point.
+export async function captureScreenshot(name: string): Promise<void> {
+    await VSBrowser.instance.takeScreenshot(name).catch(() => undefined);
+}
+
 export async function interactWithModalDialog(buttonTitle: string, timeoutMs = 120000, screenshotName?: string): Promise<ModalDialogInteraction> {
     let lastError: unknown;
     const interaction = await VSBrowser.instance.driver.wait(async () => {

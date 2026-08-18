@@ -290,8 +290,6 @@ export const appHostLifecycleBusy = vscode.l10n.t('Another start or stop operati
 export const appHostLifecycleIsolationModeNotSupported = vscode.l10n.t('The selected Aspire CLI does not support the requested isolation mode.');
 export const appHostLifecycleIsolationCapabilityCouldNotBeVerified = vscode.l10n.t('The selected Aspire CLI isolation capability could not be verified.');
 export const appHostLifecycleLaunchAlreadyClaimed = vscode.l10n.t('This Aspire AppHost is already starting or running. The new debug session was cancelled so only one AppHost runs.');
-export const editorAssistanceOpenDashboardConfirmationTitle = vscode.l10n.t('Open Aspire Dashboard');
-export const editorAssistanceOpenDashboardConfirmationMessage = (appHostPath: string) => vscode.l10n.t('Open the Aspire Dashboard for {0}?', appHostPath);
 export const editorAssistanceOpenDashboardInvocationMessage = (appHostPath: string) => vscode.l10n.t('Opening Aspire Dashboard for {0}...', appHostPath);
 export const editorAssistanceOpenOutputConfirmationTitle = vscode.l10n.t('Show Aspire Output');
 export const editorAssistanceOpenOutputConfirmationMessage = vscode.l10n.t('The Aspire Output view will be shown.');
