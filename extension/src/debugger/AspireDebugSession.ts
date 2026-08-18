@@ -891,7 +891,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       extensionArgs.push('--debug');
     }
 
-    if (!appHostIsDirectory) {
+    if (!appHostIsDirectory || appHostSelectionOrigin === 'explicit-cli') {
       extensionArgs.push('--apphost', appHostPath);
     }
 
