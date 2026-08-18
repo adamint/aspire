@@ -171,6 +171,28 @@ public sealed class DashboardClientTests
     }
 
     [Fact]
+    public async Task GetResources_HiddenReplica_DoesNotHideParent()
+    {
+        await using var instance = CreateResourceServiceClient();
+        var parent = CreateResource("syndule-api", "Azure Container App", "Scaled to zero");
+        var child = CreateReplicaChild(parent, "syndule-api--0000007", "Hidden");
+
+        instance.SetInitialDataReceived([parent, child]);
+
+        var resources = instance.GetResources();
+
+        var updatedParent = Assert.Single(resources, r => r.Name == parent.Name);
+        Assert.Equal("Scaled to zero", updatedParent.State);
+        Assert.Null(updatedParent.KnownState);
+        Assert.False(updatedParent.IsResourceHidden(showHiddenResources: false));
+
+        var updatedChild = Assert.Single(resources, r => r.Name == child.Name);
+        Assert.Equal("Hidden", updatedChild.State);
+        Assert.Equal(KnownResourceState.Hidden, updatedChild.KnownState);
+        Assert.True(updatedChild.IsResourceHidden(showHiddenResources: false));
+    }
+
+    [Fact]
     public async Task GetResources_ChildResourceWithDifferentDisplayName_DoesNotUpdateParentState()
     {
         await using var instance = CreateResourceServiceClient();

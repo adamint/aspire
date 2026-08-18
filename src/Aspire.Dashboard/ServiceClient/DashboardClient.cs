@@ -791,6 +791,9 @@ internal sealed class DashboardClient : IDashboardClient
             _ when r.IsRunningState() => 0,
             _ when r.IsUnusableTransitoryState() => 1,
             _ when r.IsRuntimeUnhealthy() || r.IsFailedToStart() => 2,
+            // Hidden is only meaningful on the row that owns it. Projecting it onto the logical parent
+            // would make an otherwise visible resource disappear as soon as one replica opts out of display.
+            _ when r.KnownState is KnownResourceState.Hidden => null,
             _ when !r.HasNoState() => 3,
             _ => null
         };
