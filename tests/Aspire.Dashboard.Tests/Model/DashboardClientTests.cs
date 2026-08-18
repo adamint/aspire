@@ -193,6 +193,23 @@ public sealed class DashboardClientTests
     }
 
     [Fact]
+    public async Task GetResources_HiddenParentWithRunningReplica_RemainsHidden()
+    {
+        await using var instance = CreateResourceServiceClient();
+        var parent = CreateResource("syndule-api", "Azure Container App", "Hidden");
+        var child = CreateReplicaChild(parent, "syndule-api--0000007", "Running");
+
+        instance.SetInitialDataReceived([parent, child]);
+
+        var resources = instance.GetResources();
+
+        var updatedParent = Assert.Single(resources, r => r.Name == parent.Name);
+        Assert.Equal("Hidden", updatedParent.State);
+        Assert.Equal(KnownResourceState.Hidden, updatedParent.KnownState);
+        Assert.True(updatedParent.IsResourceHidden(showHiddenResources: false));
+    }
+
+    [Fact]
     public async Task GetResources_ChildResourceWithDifferentDisplayName_DoesNotUpdateParentState()
     {
         await using var instance = CreateResourceServiceClient();
@@ -270,6 +287,67 @@ public sealed class DashboardClientTests
         var updatedParent = Assert.Single(enumerator.Current, c => c.ChangeType == ResourceViewModelChangeType.Upsert && c.Resource.Name == parent.Name).Resource;
         Assert.Equal("Running", updatedParent.State);
         Assert.Equal(KnownResourceState.Running, updatedParent.KnownState);
+    }
+
+    [Fact]
+    public async Task SubscribeResources_HiddenParentReplicaUpdated_RemainsHidden()
+    {
+        var resourceUpdates = Channel.CreateUnbounded<WatchResourcesUpdate>();
+        await using var instance = CreateResourceServiceClient();
+        instance.SetDashboardServiceClient(new MockDashboardServiceClient { ResourceUpdates = resourceUpdates });
+
+        IDashboardClient client = instance;
+        var parent = CreateResource("syndule-api", "Azure Container App", "Hidden");
+        var child = CreateReplicaChildWithoutState(parent, "syndule-api--0000007");
+
+        var subscribeTask = client.SubscribeResourcesAsync(CancellationToken.None);
+
+        resourceUpdates.Writer.TryWrite(new WatchResourcesUpdate
+        {
+            InitialData = new InitialResourceData
+            {
+                Resources = { parent, child }
+            }
+        });
+
+        var (initialData, subscription) = await subscribeTask.DefaultTimeout();
+        var initialParent = Assert.Single(initialData, r => r.Name == parent.Name);
+        Assert.Equal("Hidden", initialParent.State);
+        Assert.Equal(KnownResourceState.Hidden, initialParent.KnownState);
+        Assert.True(initialParent.IsResourceHidden(showHiddenResources: false));
+
+        resourceUpdates.Writer.TryWrite(new WatchResourcesUpdate
+        {
+            Changes = new WatchResourcesChanges
+            {
+                Value =
+                {
+                    new WatchResourcesChange
+                    {
+                        Upsert = CreateReplicaChild(parent, child.Name, "Running")
+                    }
+                }
+            }
+        });
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var enumerator = subscription.GetAsyncEnumerator(cts.Token);
+
+        Assert.True(await enumerator.MoveNextAsync().AsTask().DefaultTimeout());
+
+        var updatedParent = Assert.Single(instance.GetResources(), r => r.Name == parent.Name);
+        Assert.Equal("Hidden", updatedParent.State);
+        Assert.Equal(KnownResourceState.Hidden, updatedParent.KnownState);
+        Assert.True(updatedParent.IsResourceHidden(showHiddenResources: false));
+
+        Assert.Collection(
+            enumerator.Current,
+            change =>
+            {
+                Assert.Equal(ResourceViewModelChangeType.Upsert, change.ChangeType);
+                Assert.Equal(child.Name, change.Resource.Name);
+                Assert.Equal("Running", change.Resource.State);
+            });
     }
 
     [Fact]

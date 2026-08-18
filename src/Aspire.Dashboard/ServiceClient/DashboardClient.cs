@@ -761,6 +761,12 @@ internal sealed class DashboardClient : IDashboardClient
 
     private static ResourceViewModel? GetReplicaStateSource(ResourceViewModel parent, ILookup<string, ResourceViewModel> childrenByParentName)
     {
+        // The legacy Hidden state controls parent visibility and downstream filtering, so a replica must not replace it.
+        if (parent.KnownState is KnownResourceState.Hidden)
+        {
+            return null;
+        }
+
         ResourceViewModel? best = null;
         var bestTier = int.MaxValue;
 
