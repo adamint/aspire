@@ -1,6 +1,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { AspireTerminalProvider, ShellArg, shellArg } from '../utils/AspireTerminalProvider';
+import { getCliPathTargetForUri, windowCliPathTarget } from '../utils/cliPathVariables';
 import { compareResourceCommands } from '../utils/resourceDisplay';
 import {
     pidDescription,
@@ -973,14 +974,18 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
             const command = appHostPath
                 ? ['logs', shellArg(resourceName), '--apphost', shellArg(appHostPath)]
                 : ['logs', shellArg(resourceName)];
-            await this._terminalProvider.sendAspireCommandToAspireTerminal(command);
+            const target = appHostPath
+                ? getCliPathTargetForUri(vscode.Uri.file(appHostPath))
+                : windowCliPathTarget;
+            await this._terminalProvider.sendAspireCommandToAspireTerminal(command, true, undefined, { target });
             return;
         }
         const appHost = this._findAppHostForResource(element);
         if (!appHost) {
             return;
         }
-        await this._terminalProvider.sendAspireCommandToAspireTerminal(['logs', shellArg(resourceName), '--apphost', shellArg(appHost.appHostPath)]);
+        const target = getCliPathTargetForUri(vscode.Uri.file(appHost.appHostPath));
+        await this._terminalProvider.sendAspireCommandToAspireTerminal(['logs', shellArg(resourceName), '--apphost', shellArg(appHost.appHostPath)], true, undefined, { target });
     }
 
     async openResourceTerminal(element: ResourceItem): Promise<void> {
@@ -995,7 +1000,10 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
             command.push('--replica', shellArg(replicaIndex));
         }
 
-        await this._terminalProvider.sendAspireCommandToAspireTerminal(command, true, undefined, { terminalTarget: 'editor' });
+        const target = appHostPath
+            ? getCliPathTargetForUri(vscode.Uri.file(appHostPath))
+            : windowCliPathTarget;
+        await this._terminalProvider.sendAspireCommandToAspireTerminal(command, true, undefined, { terminalTarget: 'editor', target });
     }
 
     async executeResourceCommand(element: ResourceItem): Promise<ResourceCommandExecutionOutcome | void> {
