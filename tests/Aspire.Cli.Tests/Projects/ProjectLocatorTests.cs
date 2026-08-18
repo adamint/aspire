@@ -178,8 +178,11 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
         Assert.Equal("SecondAppHost/SecondAppHost.csproj", ReadConfiguredAppHostPath(configPath));
     }
 
-    [Fact]
-    public async Task UseOrFindAppHostProjectFilePersistsSelectionFromExplicitDirectoryPrompt()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("explicit-cli")]
+    [InlineData("explicit-launch-configuration")]
+    public async Task UseOrFindAppHostProjectFilePersistsSelectionFromExplicitDirectoryPrompt(string? selectionOrigin)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
 
@@ -196,7 +199,9 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
         var configPath = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
         await File.WriteAllTextAsync(configPath, """{"appHost":{"path":"FirstAppHost/FirstAppHost.csproj"}}""");
 
-        var projectLocator = CreateProjectLocator(CreateExecutionContext(workspace.WorkspaceRoot));
+        var projectLocator = CreateProjectLocator(
+            CreateExecutionContext(workspace.WorkspaceRoot),
+            configuration: selectionOrigin is null ? null : CreateSelectionOrigin(selectionOrigin));
 
         var result = await projectLocator.UseOrFindAppHostProjectFileAsync(
             new FileInfo(alternativesDirectory.FullName),
@@ -205,6 +210,7 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
             CancellationToken.None).DefaultTimeout();
 
         Assert.Equal(firstAlternative.FullName, result.SelectedProjectFile?.FullName);
+        Assert.True(result.WasExplicitDirectorySelectionPrompted);
         Assert.Equal("Alternatives/FirstAlternative.csproj", ReadConfiguredAppHostPath(configPath));
     }
 

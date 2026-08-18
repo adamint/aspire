@@ -1030,7 +1030,10 @@ internal sealed class ProjectLocator(
                             await CreateSettingsFileAsync(projectFile, preserveExistingDefault: !explicitSelectionWasPrompted, cancellationToken);
                         }
 
-                        return new AppHostProjectSearchResult(projectFile, [projectFile]);
+                        return new AppHostProjectSearchResult(projectFile, [projectFile])
+                        {
+                            WasExplicitDirectorySelectionPrompted = explicitSelectionWasPrompted
+                        };
                     }
 
                     if (validationResult.IsPossiblyUnbuildable)
@@ -1212,8 +1215,8 @@ internal sealed class ProjectLocator(
         var hasConfiguredSelectionOrigin = !string.IsNullOrEmpty(configuredSelectionOrigin);
         var selectionOrigin = hasConfiguredSelectionOrigin ? configuredSelectionOrigin : "--apphost";
         var shouldPreserveExistingDefault =
-            isInvocationScopedSelection ||
-            preserveExistingDefault && !hasConfiguredSelectionOrigin;
+            preserveExistingDefault &&
+            (isInvocationScopedSelection || !hasConfiguredSelectionOrigin);
 
         var (settingsFile, appHostDirForScopedConfig) = ResolveWorkspaceConfigTarget(projectFile);
 
@@ -1432,7 +1435,10 @@ internal enum ProjectLocatorFailureReason
     UnsupportedProjects,
 }
 
-internal record AppHostProjectSearchResult(FileInfo? SelectedProjectFile, List<FileInfo> AllProjectFileCandidates);
+internal record AppHostProjectSearchResult(FileInfo? SelectedProjectFile, List<FileInfo> AllProjectFileCandidates)
+{
+    internal bool WasExplicitDirectorySelectionPrompted { get; init; }
+}
 
 internal enum MultipleAppHostProjectsFoundBehavior
 {

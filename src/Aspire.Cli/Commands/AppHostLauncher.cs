@@ -43,6 +43,7 @@ internal sealed class AppHostLauncher(
     TimeProvider timeProvider)
 {
     private const string DefaultDiscoverySelectionOrigin = "default-discovery";
+    private const string UserSelectionOrigin = "user-selection";
     private const int MaxDisplayedChildLogLines = 80;
     private const int MaxParentLogReplayLines = 200;
     private static readonly TimeSpan s_legacyDetachedStartupStabilityWindow = TimeSpan.FromSeconds(2);
@@ -133,7 +134,11 @@ internal sealed class AppHostLauncher(
             return CommandResult.Failure(CliExitCodes.FailedToFindProject);
         }
 
-        var appHostSelectionOrigin = configuration[KnownConfigNames.CliAppHostSelectionOrigin];
+        // The detached child receives the selected file rather than the directory that caused the
+        // prompt, so carry the prompt provenance explicitly to persist the user's choice.
+        var appHostSelectionOrigin = searchResult.WasExplicitDirectorySelectionPrompted
+            ? UserSelectionOrigin
+            : configuration[KnownConfigNames.CliAppHostSelectionOrigin];
         if (string.IsNullOrEmpty(appHostSelectionOrigin) && passedAppHostProjectFile is null)
         {
             appHostSelectionOrigin = DefaultDiscoverySelectionOrigin;

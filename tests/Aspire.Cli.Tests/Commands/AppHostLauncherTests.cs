@@ -209,18 +209,21 @@ public class AppHostLauncherTests(ITestOutputHelper outputHelper)
     }
 
     [Theory]
-    [InlineData(false, null, "default-discovery")]
-    [InlineData(false, "", "default-discovery")]
-    [InlineData(true, null, null)]
-    [InlineData(true, "", null)]
-    [InlineData(false, "user-selection", "user-selection")]
-    [InlineData(true, "explicit-launch-configuration", "explicit-launch-configuration")]
+    [InlineData(false, null, false, "default-discovery")]
+    [InlineData(false, "", false, "default-discovery")]
+    [InlineData(true, null, false, null)]
+    [InlineData(true, "", false, null)]
+    [InlineData(false, "user-selection", false, "user-selection")]
+    [InlineData(true, "explicit-launch-configuration", false, "explicit-launch-configuration")]
+    [InlineData(true, null, true, "user-selection")]
+    [InlineData(true, "explicit-cli", true, "user-selection")]
     public async Task LaunchDetachedAsync_PropagatesPersistentSelectionOriginToChild(
         bool passedAppHost,
         string? inheritedOrigin,
+        bool selectionWasPrompted,
         string? expectedOrigin)
     {
-        using var harness = AppHostLauncherHarness.Create(outputHelper, inheritedOrigin);
+        using var harness = AppHostLauncherHarness.Create(outputHelper, inheritedOrigin, selectionWasPrompted);
         harness.AddConnection(new TestAppHostAuxiliaryBackchannel
         {
             SupportsV3 = true,
@@ -1020,6 +1023,14 @@ public class AppHostLauncherTests(ITestOutputHelper outputHelper)
 
         public static AppHostLauncherHarness Create(ITestOutputHelper outputHelper, string? appHostSelectionOrigin)
         {
+            return Create(outputHelper, appHostSelectionOrigin, selectionWasPrompted: false);
+        }
+
+        public static AppHostLauncherHarness Create(
+            ITestOutputHelper outputHelper,
+            string? appHostSelectionOrigin,
+            bool selectionWasPrompted)
+        {
             var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
             var homeDirectory = workspace.WorkspaceRoot.CreateSubdirectory("home");
             var hivesDirectory = workspace.WorkspaceRoot.CreateSubdirectory("hives");
@@ -1052,7 +1063,10 @@ public class AppHostLauncherTests(ITestOutputHelper outputHelper)
             var projectLocator = new TestProjectLocator
             {
                 UseOrFindAppHostProjectFileWithBehaviorAsyncCallback = (_, _, _, _) =>
-                    Task.FromResult(new AppHostProjectSearchResult(appHostFile, [appHostFile]))
+                    Task.FromResult(new AppHostProjectSearchResult(appHostFile, [appHostFile])
+                    {
+                        WasExplicitDirectorySelectionPrompted = selectionWasPrompted
+                    })
             };
             var launcher = new AppHostLauncher(
                 projectLocator,
