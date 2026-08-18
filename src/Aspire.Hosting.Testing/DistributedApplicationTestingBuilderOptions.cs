@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using Aspire.Hosting.ApplicationModel;
+
 namespace Aspire.Hosting.Testing;
 
 /// <summary>
@@ -40,11 +42,17 @@ public sealed class DistributedApplicationTestingBuilderOptions
     /// <remarks>
     /// <para>
     /// When the dashboard runs, it listens on loopback endpoints using dynamically assigned ports, so concurrent
-    /// test applications do not compete for a fixed port. Loopback still means every dashboard on the machine is
-    /// reachable from it; what keeps applications out of each other's dashboards is that each one generates its own
-    /// browser token. Use
+    /// test applications do not compete for a fixed port. Each application generates its own browser token instead
+    /// of reusing an ambient dashboard credential. Dashboard instances in the same browser still share the dashboard
+    /// authentication cookie, so use separate browser contexts when tests require isolation between dashboards. Use
     /// <see cref="DistributedApplicationHostingTestingExtensions.GetDashboardUrlAsync"/> to obtain a browser-ready
     /// URL for the running dashboard.
+    /// </para>
+    /// <para>
+    /// Enabling the dashboard sets <see cref="ResourceNotificationServiceOptions.DefaultWaitBehavior"/> to
+    /// <see cref="WaitBehavior.StopOnResourceUnavailable"/> after AppHost configuration. To use a different default
+    /// for <c>WaitFor</c>, configure <see cref="ResourceNotificationServiceOptions"/> through the returned builder
+    /// before building the application.
     /// </para>
     /// <para>
     /// The dashboard process remains reachable when a debugger pauses the test process, but resource state changes,
