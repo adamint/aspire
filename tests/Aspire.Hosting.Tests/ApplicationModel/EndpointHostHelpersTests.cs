@@ -263,4 +263,11 @@ public class EndpointHostHelpersTests
         // address that was resolved for the container network - the container would be sent to its own loopback.
         Assert.Equal("http://container1.dev.internal:10005", url);
     }
+
+    [Fact]
+    public async Task GetUrlWithTargetHostAsync_ThrowsForNullEndpoint()
+    {
+        await Assert.ThrowsAsync<ArgumentNullException>(
+            async () => await EndpointHostHelpers.GetUrlWithTargetHostAsync(null!));
+    }
 }

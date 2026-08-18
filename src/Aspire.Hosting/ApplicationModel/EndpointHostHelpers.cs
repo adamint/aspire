@@ -120,8 +120,11 @@ public static class EndpointHostHelpers
     /// <param name="endpoint">The endpoint reference.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The URL with the appropriate hostname.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="endpoint"/> is null.</exception>
     public static async ValueTask<string?> GetUrlWithTargetHostAsync(EndpointReference endpoint, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(endpoint);
+
         var allocatedUrl = await endpoint.GetValueAsync(cancellationToken).ConfigureAwait(false);
 
         if (string.IsNullOrEmpty(allocatedUrl))
