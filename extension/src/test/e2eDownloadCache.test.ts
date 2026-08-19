@@ -2147,12 +2147,13 @@ suite('E2E download cache', () => {
 
         // A process that never stops writing has to surface as a cleanup failure rather than hang
         // the shard, so the sweeps are bounded.
-        withLateWriterDuringRemoval(refilled, Number.POSITIVE_INFINITY, () => {
+        const writes = withLateWriterDuringRemoval(refilled, Number.POSITIVE_INFINITY, () => {
             assert.throws(
                 () => cache.removePathWithoutFollowingLinks(refilled, { maxRetries: 0, retryDelay: 1 }),
                 /ENOTEMPTY/);
         });
 
+        assert.strictEqual(writes, 6);
         assert.ok(fs.existsSync(refilled));
     });
 
