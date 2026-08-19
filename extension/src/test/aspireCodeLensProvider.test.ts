@@ -666,6 +666,39 @@ suite('AspireCodeLensProvider resource lens anchoring', () => {
         }
     });
 
+    test('emits a Java install lens for a running resource with both missing debugger extensions', async () => {
+        const getExtensionStub = sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
+        const docPath = p('repo', 'AppHost', 'AppHost.cs');
+        const hostPath = p('repo', 'AppHost', 'AppHost.csproj');
+        const harness = createHarness({
+            workspaceAppHostPath: hostPath,
+            workspaceResources: [
+                makeResource('java', {
+                    properties: { [launchConfigurationTypePropertyName]: 'java' },
+                }),
+            ],
+        });
+
+        try {
+            const doc = createMockDocument(
+                'var builder = DistributedApplication.CreateBuilder(args);\nbuilder.AddProject("java", "../java");',
+                docPath);
+            const lenses = await harness.provider.provideCodeLenses(doc, cancellationToken) as vscode.CodeLens[];
+            const installLenses = lenses.filter(lens => lens.command?.command === 'aspire-vscode.installDebuggerExtension');
+
+            assert.strictEqual(installLenses.length, 1);
+            assert.strictEqual(installLenses[0].command?.title, '$(warning)\u200A Install Java debugger');
+            assert.deepStrictEqual(installLenses[0].command?.arguments?.[0], {
+                debuggerName: 'Java',
+                debuggerType: 'java',
+                extensionIds: ['redhat.java', 'vscjava.vscode-java-debug'],
+            });
+        } finally {
+            harness.dispose();
+            getExtensionStub.restore();
+        }
+    });
+
     test('emits resource state and action lenses for a running Rust AppHost', async () => {
         const appHostPath = p('repo', 'AppHost', 'apphost.rs');
         const content = [
