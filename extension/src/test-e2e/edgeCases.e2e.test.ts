@@ -32,10 +32,14 @@ suite('Aspire extension edge case E2E', function () {
                 externalAppHostPath = undefined;
             },
             () => {
-                if (debuggerInstallHintProjectName) {
-                    removeGeneratedProject(debuggerInstallHintProjectName);
-                    debuggerInstallHintProjectName = undefined;
+                if (!debuggerInstallHintProjectName) {
+                    return undefined;
                 }
+
+                const projectName = debuggerInstallHintProjectName;
+                return removeGeneratedProject(projectName).then(() => {
+                    debuggerInstallHintProjectName = undefined;
+                });
             },
             () => stopPrimaryAppHostIfRunning(),
         ], 'Edge case E2E teardown failed.');
