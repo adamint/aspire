@@ -71,9 +71,14 @@ export function getDebuggerInstallHintForResource(
     const launchConfigurationType = resource.properties?.[launchConfigurationTypePropertyName];
     let hint = launchConfigurationType ? debuggerInstallHints.get(launchConfigurationType) : undefined;
     if (launchConfigurationType === 'rust') {
-        const extensionId = getRustExtensionId(
+        const selectedExtensionId = getRustExtensionId(
             platform,
             candidateExtensionId => !!vscode.extensions.getExtension(candidateExtensionId));
+        // Preserve either installed Windows adapter, but recommend CodeLLDB when neither is installed
+        // because GNU targets require it and it also supports MSVC targets.
+        const extensionId = platform === 'win32' && !vscode.extensions.getExtension(selectedExtensionId)
+            ? 'vadimcn.vscode-lldb'
+            : selectedExtensionId;
         hint = {
             debuggerName: 'Rust',
             debuggerType: 'rust',

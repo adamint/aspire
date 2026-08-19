@@ -71,16 +71,39 @@ suite('debugger install hints', () => {
             ]);
     });
 
-    test('resolves the Rust debugger extension for the current platform and registry', () => {
-        const getExtension = sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
+    test('recommends CodeLLDB for Rust on Windows when no debugger adapter is installed', () => {
+        sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
 
         assert.deepStrictEqual(
             getDebuggerInstallHintForResource(createResource('rust'), 'win32'),
             {
                 debuggerName: 'Rust',
                 debuggerType: 'rust',
-                extensionIds: ['ms-vscode.cpptools'],
+                extensionIds: ['vadimcn.vscode-lldb'],
             });
+    });
+
+    test('returns no Rust hint on Windows when the C++ debugger is installed', () => {
+        sinon.stub(vscode.extensions, 'getExtension').callsFake(extensionId =>
+            extensionId === 'ms-vscode.cpptools' ? { id: extensionId } as vscode.Extension<unknown> : undefined);
+
+        assert.strictEqual(
+            getDebuggerInstallHintForResource(createResource('rust'), 'win32'),
+            undefined);
+    });
+
+    test('returns no Rust hint on Windows when CodeLLDB is installed', () => {
+        sinon.stub(vscode.extensions, 'getExtension').callsFake(extensionId =>
+            extensionId === 'vadimcn.vscode-lldb' ? { id: extensionId } as vscode.Extension<unknown> : undefined);
+
+        assert.strictEqual(
+            getDebuggerInstallHintForResource(createResource('rust'), 'win32'),
+            undefined);
+    });
+
+    test('recommends CodeLLDB for Rust on Linux and macOS', () => {
+        sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
+
         assert.deepStrictEqual(
             getDebuggerInstallHintForResource(createResource('rust'), 'linux'),
             {
@@ -95,13 +118,6 @@ suite('debugger install hints', () => {
                 debuggerType: 'rust',
                 extensionIds: ['vadimcn.vscode-lldb'],
             });
-
-        getExtension.callsFake(extensionId =>
-            extensionId === 'vadimcn.vscode-lldb' ? { id: extensionId } as vscode.Extension<unknown> : undefined);
-
-        assert.strictEqual(
-            getDebuggerInstallHintForResource(createResource('rust'), 'win32'),
-            undefined);
     });
 
     test('returns no hint for missing, empty, unknown, or fully installed debugger types', () => {
