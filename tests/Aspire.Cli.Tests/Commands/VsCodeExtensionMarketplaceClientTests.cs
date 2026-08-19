@@ -12,6 +12,29 @@ namespace Aspire.Cli.Tests.Commands;
 public class VsCodeExtensionMarketplaceClientTests
 {
     [Fact]
+    public async Task GetLatestVersionsAsync_CreatesClientForEachRequest()
+    {
+        var requestCount = 0;
+        using var handler = new MockHttpMessageHandler(_ =>
+        {
+            Interlocked.Increment(ref requestCount);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{ "results": [] }""", Encoding.UTF8, "application/json")
+            };
+        });
+        var factory = new MockHttpClientFactory(handler);
+        var client = new VsCodeExtensionMarketplaceClient(factory);
+
+        await client.GetLatestVersionsAsync(TestContext.Current.CancellationToken);
+        await client.GetLatestVersionsAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, factory.CreatedClientNames.Count);
+        Assert.All(factory.CreatedClientNames, name => Assert.Equal("VsCodeExtensionMarketplace", name));
+        Assert.Equal(2, requestCount);
+    }
+
+    [Fact]
     public async Task GetLatestVersionsAsync_ReturnsLatestVersionForEachChannel()
     {
         using var response = new HttpResponseMessage(HttpStatusCode.OK)
@@ -38,9 +61,8 @@ public class VsCodeExtensionMarketplaceClientTests
                 Encoding.UTF8,
                 "application/json")
         };
-        var handler = new MockHttpMessageHandler(response);
-        using var httpClient = new HttpClient(handler);
-        var client = new VsCodeExtensionMarketplaceClient(httpClient);
+        using var handler = new MockHttpMessageHandler(response);
+        var client = new VsCodeExtensionMarketplaceClient(new MockHttpClientFactory(handler));
 
         var versions = await client.GetLatestVersionsAsync(TestContext.Current.CancellationToken);
 
@@ -78,8 +100,8 @@ public class VsCodeExtensionMarketplaceClientTests
                 Encoding.UTF8,
                 "application/json")
         };
-        using var httpClient = new HttpClient(new MockHttpMessageHandler(response));
-        var client = new VsCodeExtensionMarketplaceClient(httpClient);
+        using var handler = new MockHttpMessageHandler(response);
+        var client = new VsCodeExtensionMarketplaceClient(new MockHttpClientFactory(handler));
 
         var versions = await client.GetLatestVersionsAsync(TestContext.Current.CancellationToken);
 
@@ -118,8 +140,8 @@ public class VsCodeExtensionMarketplaceClientTests
         {
             Content = new StringContent(responseJson, Encoding.UTF8, "application/json")
         };
-        using var httpClient = new HttpClient(new MockHttpMessageHandler(response));
-        var client = new VsCodeExtensionMarketplaceClient(httpClient);
+        using var handler = new MockHttpMessageHandler(response);
+        var client = new VsCodeExtensionMarketplaceClient(new MockHttpClientFactory(handler));
 
         var versions = await client.GetLatestVersionsAsync(TestContext.Current.CancellationToken);
 
@@ -154,8 +176,8 @@ public class VsCodeExtensionMarketplaceClientTests
                 Encoding.UTF8,
                 "application/json")
         };
-        using var httpClient = new HttpClient(new MockHttpMessageHandler(response));
-        var client = new VsCodeExtensionMarketplaceClient(httpClient);
+        using var handler = new MockHttpMessageHandler(response);
+        var client = new VsCodeExtensionMarketplaceClient(new MockHttpClientFactory(handler));
 
         var versions = await client.GetLatestVersionsAsync(TestContext.Current.CancellationToken);
 
@@ -195,8 +217,8 @@ public class VsCodeExtensionMarketplaceClientTests
         {
             Content = new StringContent(responseJson, Encoding.UTF8, "application/json")
         };
-        using var httpClient = new HttpClient(new MockHttpMessageHandler(response));
-        var client = new VsCodeExtensionMarketplaceClient(httpClient);
+        using var handler = new MockHttpMessageHandler(response);
+        var client = new VsCodeExtensionMarketplaceClient(new MockHttpClientFactory(handler));
 
         var versions = await client.GetLatestVersionsAsync(TestContext.Current.CancellationToken);
 
@@ -210,7 +232,7 @@ public class VsCodeExtensionMarketplaceClientTests
         {
             Content = new StringContent("""{ "results": [] }""", Encoding.UTF8, "application/json")
         };
-        var handler = new MockHttpMessageHandler(
+        using var handler = new MockHttpMessageHandler(
             response,
             request =>
             {
@@ -220,8 +242,7 @@ public class VsCodeExtensionMarketplaceClientTests
                     request.RequestUri?.AbsoluteUri);
                 Assert.Equal("3.0-preview.1", request.Headers.Accept.Single().Parameters.Single().Value);
             });
-        using var httpClient = new HttpClient(handler);
-        var client = new VsCodeExtensionMarketplaceClient(httpClient);
+        var client = new VsCodeExtensionMarketplaceClient(new MockHttpClientFactory(handler));
 
         await client.GetLatestVersionsAsync(TestContext.Current.CancellationToken);
 

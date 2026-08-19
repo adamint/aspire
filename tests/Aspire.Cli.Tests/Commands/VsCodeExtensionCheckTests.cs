@@ -207,11 +207,11 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
                 Encoding.UTF8,
                 "application/json")
         };
-        using var httpClient = new HttpClient(new MockHttpMessageHandler(response));
+        using var handler = new MockHttpMessageHandler(response);
         var check = new VsCodeExtensionCheck(
             environment,
             executionContext,
-            new VsCodeExtensionMarketplaceClient(httpClient),
+            new VsCodeExtensionMarketplaceClient(new MockHttpClientFactory(handler)),
             NullLogger<VsCodeExtensionCheck>.Instance,
             _ => null);
 
@@ -281,11 +281,11 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         {
             Content = new StringContent(payload, Encoding.UTF8, "application/json")
         };
-        using var httpClient = new HttpClient(new MockHttpMessageHandler(response));
+        using var handler = new MockHttpMessageHandler(response);
         var check = new VsCodeExtensionCheck(
             environment,
             executionContext,
-            new VsCodeExtensionMarketplaceClient(httpClient),
+            new VsCodeExtensionMarketplaceClient(new MockHttpClientFactory(handler)),
             NullLogger<VsCodeExtensionCheck>.Instance,
             _ => null);
 

@@ -102,6 +102,7 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
                 Encoding.UTF8,
                 "application/json")
         };
+        using var marketplaceHandler = new MockHttpMessageHandler(marketplaceResponse);
         using var document = await RunDoctorJsonAsync(
             workspace,
             configureOptions: options => options.CliUpdateNotifierFactory = _ => new TestCliUpdateNotifier(),
@@ -109,7 +110,7 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
                 services,
                 "1.2.3",
                 MicrosoftMarketplaceExtensionSource,
-                new MockHttpMessageHandler(marketplaceResponse)));
+                marketplaceHandler));
 
         var extensionCheck = GetCheckByName(document, VsCodeExtensionCheck.CheckName);
         Assert.Equal("warning", extensionCheck.GetProperty("status").GetString());
@@ -135,6 +136,7 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         const string rawFailure = "Proxy proxy.internal.example rejected the request.";
+        using var marketplaceHandler = new MockHttpMessageHandler(new HttpRequestException(rawFailure));
         using var document = await RunDoctorJsonAsync(
             workspace,
             configureOptions: options => options.CliUpdateNotifierFactory = _ => new TestCliUpdateNotifier(),
@@ -142,7 +144,7 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
                 services,
                 "1.2.3",
                 MicrosoftMarketplaceExtensionSource,
-                new MockHttpMessageHandler(new HttpRequestException(rawFailure))));
+                marketplaceHandler));
 
         var extensionCheck = GetCheckByName(document, VsCodeExtensionCheck.CheckName);
         Assert.Equal("warning", extensionCheck.GetProperty("status").GetString());
@@ -170,6 +172,7 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
             Enrichment = new ProfileEnrichment { UseDefaultEnrichers = false },
         });
         console.Profile.Width = int.MaxValue;
+        using var marketplaceHandler = new MockHttpMessageHandler(new HttpRequestException(rawFailure));
         var services = CreateDoctorVersionServiceCollection(workspace, outputHelper, options =>
         {
             options.CliUpdateNotifierFactory = _ => new TestCliUpdateNotifier();
@@ -178,7 +181,7 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
             services,
             "1.2.3",
             MicrosoftMarketplaceExtensionSource,
-            new MockHttpMessageHandler(new HttpRequestException(rawFailure)));
+            marketplaceHandler);
         services.RemoveAll<IAnsiConsole>();
         services.AddSingleton(console);
         using var provider = services.BuildServiceProvider();
@@ -1185,9 +1188,8 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
             [VsCodeExtensionCheck.ExtensionChannelEnvironmentVariable] = "stable",
             [VsCodeExtensionCheck.ExtensionSourceEnvironmentVariable] = reportedExtensionSource
         }));
-        services.AddSingleton(new HttpClient(marketplaceHandler));
-        services.AddSingleton<IVsCodeExtensionMarketplaceClient>(serviceProvider =>
-            new VsCodeExtensionMarketplaceClient(serviceProvider.GetRequiredService<HttpClient>()));
+        services.AddSingleton<IHttpClientFactory>(new MockHttpClientFactory(marketplaceHandler));
+        services.AddSingleton<IVsCodeExtensionMarketplaceClient, VsCodeExtensionMarketplaceClient>();
         services.AddSingleton<IEnvironmentCheck>(serviceProvider => new VsCodeExtensionCheck(
             serviceProvider.GetRequiredService<IEnvironment>(),
             serviceProvider.GetRequiredService<CliExecutionContext>(),

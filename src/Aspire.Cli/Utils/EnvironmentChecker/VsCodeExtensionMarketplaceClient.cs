@@ -10,8 +10,10 @@ namespace Aspire.Cli.Utils.EnvironmentChecker;
 /// <summary>
 /// Queries the Visual Studio Marketplace for Aspire VS Code extension versions.
 /// </summary>
-internal sealed class VsCodeExtensionMarketplaceClient(HttpClient httpClient) : IVsCodeExtensionMarketplaceClient
+internal sealed class VsCodeExtensionMarketplaceClient(IHttpClientFactory httpClientFactory) : IVsCodeExtensionMarketplaceClient
 {
+    internal const string HttpClientName = "VsCodeExtensionMarketplace";
+
     private const string MarketplaceQueryUrl = "https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery";
     private const string PreReleasePropertyName = "Microsoft.VisualStudio.Code.PreRelease";
 
@@ -34,6 +36,7 @@ internal sealed class VsCodeExtensionMarketplaceClient(HttpClient httpClient) : 
               "flags": 65584
             }
             """;
+        using var httpClient = httpClientFactory.CreateClient(HttpClientName);
         using var request = new HttpRequestMessage(HttpMethod.Post, MarketplaceQueryUrl)
         {
             Content = new StringContent(requestBody, Encoding.UTF8, "application/json")
