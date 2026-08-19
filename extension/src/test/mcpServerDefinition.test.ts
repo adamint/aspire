@@ -12,6 +12,22 @@ import {
 } from '../utils/cliPathEnvironment';
 import { CliPathResolutionTarget } from '../utils/cliPathVariables';
 
+function withPackagePreReleaseMarker(value: string, action: () => void): void {
+    const originalValue = process.env.ASPIRE_VSCODE_EXTENSION_PACKAGE_PRERELEASE;
+    process.env.ASPIRE_VSCODE_EXTENSION_PACKAGE_PRERELEASE = value;
+    try {
+        action();
+    }
+    finally {
+        if (originalValue === undefined) {
+            delete process.env.ASPIRE_VSCODE_EXTENSION_PACKAGE_PRERELEASE;
+        }
+        else {
+            process.env.ASPIRE_VSCODE_EXTENSION_PACKAGE_PRERELEASE = originalValue;
+        }
+    }
+}
+
 suite('AspireMcpServerDefinitionProvider definition tests', () => {
     test('wraps Windows command shims with only prerelease identity overrides', () => {
         const platformStub = sinon.stub(process, 'platform').value('win32');
@@ -72,47 +88,49 @@ suite('AspireMcpServerDefinitionProvider definition tests', () => {
     });
 
     test('passes native executables through with only stable identity overrides', () => {
-        const extensionEnvironment = getAspireExtensionEnvironment({
-            version: '1.16.0',
-        }, {
-            appName: 'Visual Studio Code',
-            uriScheme: 'vscode',
+        withPackagePreReleaseMarker('false', () => {
+            const extensionEnvironment = getAspireExtensionEnvironment({
+                version: '1.16.0',
+            }, {
+                appName: 'Visual Studio Code',
+                uriScheme: 'vscode',
+            });
+            assert.ok(extensionEnvironment);
+            const nativeCliPath = 'C:\\Program Files\\Aspire\\aspire.exe';
+            const inheritedEnvironment: NodeJS.ProcessEnv = {
+                PATH: '/sensitive/bin',
+                ASPIRE_MCP_SECRET_TEST: 'secret-value',
+                [ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR]: 'spoofed-version',
+                [ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR]: 'prerelease',
+                [ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR]: 'other',
+            };
+            const originalEnvironment = { ...inheritedEnvironment };
+            const processEnvironmentStub = sinon.stub(process, 'env').value(inheritedEnvironment);
+
+            try {
+                // Stub the path probing rather than letting it hit the real filesystem: the CLI path
+                // and the extension identity are independent contributions to the same environment,
+                // and this pins that they compose instead of one shadowing the other.
+                const definition = createAspireMcpServerDefinition(nativeCliPath, extensionEnvironment, undefined, undefined, {
+                    isAbsolute: () => true,
+                    fileExists: candidate => candidate === nativeCliPath,
+                    realpath: () => undefined,
+                });
+
+                assert.strictEqual(definition.command, nativeCliPath);
+                assert.deepStrictEqual(definition.args, ['agent', 'mcp']);
+                assert.deepStrictEqual(definition.env, {
+                    [ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR]: '1.16.0',
+                    [ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR]: 'stable',
+                    [ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR]: 'microsoft-marketplace',
+                    AspireCliPath: nativeCliPath,
+                });
+                assert.deepStrictEqual(process.env, originalEnvironment);
+            }
+            finally {
+                processEnvironmentStub.restore();
+            }
         });
-        assert.ok(extensionEnvironment);
-        const nativeCliPath = 'C:\\Program Files\\Aspire\\aspire.exe';
-        const inheritedEnvironment: NodeJS.ProcessEnv = {
-            PATH: '/sensitive/bin',
-            ASPIRE_MCP_SECRET_TEST: 'secret-value',
-            [ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR]: 'spoofed-version',
-            [ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR]: 'prerelease',
-            [ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR]: 'other',
-        };
-        const originalEnvironment = { ...inheritedEnvironment };
-        const processEnvironmentStub = sinon.stub(process, 'env').value(inheritedEnvironment);
-
-        try {
-            // Stub the path probing rather than letting it hit the real filesystem: the CLI path
-            // and the extension identity are independent contributions to the same environment,
-            // and this pins that they compose instead of one shadowing the other.
-            const definition = createAspireMcpServerDefinition(nativeCliPath, extensionEnvironment, undefined, undefined, {
-                isAbsolute: () => true,
-                fileExists: candidate => candidate === nativeCliPath,
-                realpath: () => undefined,
-            });
-
-            assert.strictEqual(definition.command, nativeCliPath);
-            assert.deepStrictEqual(definition.args, ['agent', 'mcp']);
-            assert.deepStrictEqual(definition.env, {
-                [ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR]: '1.16.0',
-                [ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR]: 'stable',
-                [ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR]: 'microsoft-marketplace',
-                AspireCliPath: nativeCliPath,
-            });
-            assert.deepStrictEqual(process.env, originalEnvironment);
-        }
-        finally {
-            processEnvironmentStub.restore();
-        }
     });
 
     test('passes native executables through to the VS Code MCP launcher', () => {

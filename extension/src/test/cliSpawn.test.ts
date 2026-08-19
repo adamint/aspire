@@ -20,48 +20,67 @@ import {
 import { EnvironmentVariables } from '../utils/environment';
 
 import { removeDirectorySafely } from './testHelpers';
+
+function withPackagePreReleaseMarker(value: string, action: () => void): void {
+    const originalValue = process.env.ASPIRE_VSCODE_EXTENSION_PACKAGE_PRERELEASE;
+    process.env.ASPIRE_VSCODE_EXTENSION_PACKAGE_PRERELEASE = value;
+    try {
+        action();
+    }
+    finally {
+        if (originalValue === undefined) {
+            delete process.env.ASPIRE_VSCODE_EXTENSION_PACKAGE_PRERELEASE;
+        }
+        else {
+            process.env.ASPIRE_VSCODE_EXTENSION_PACKAGE_PRERELEASE = originalValue;
+        }
+    }
+}
+
 suite('spawnCliProcess tests', () => {
     test('uses the active stable extension identity over explicit CLI environment overrides', () => {
-        const platformStub = sinon.stub(process, 'platform').value('win32');
-        const childProcess = createTestChildProcess(4001);
-        const spawnStub = sinon.stub(nodeChildProcess, 'spawn').returns(childProcess);
-        const extensionEnvironment = getAspireExtensionEnvironment({
-            version: '1.16.0',
-        }, {
-            appName: 'Visual Studio Code',
-            uriScheme: 'vscode',
-        });
-        assert.ok(extensionEnvironment);
-        const terminalProvider = {
-            createEnvironment: () => ({
-                aspire_vscode_extension_version: 'parent-version',
-                aspire_vscode_extension_channel: 'prerelease',
-                aspire_vscode_extension_source: 'other',
-            }),
-            aspireExtensionEnvironment: extensionEnvironment,
-        } as unknown as AspireTerminalProvider;
-
-        try {
-            spawnCliProcess(terminalProvider, '/usr/local/bin/aspire', ['doctor'], {
-                env: [
-                    { name: 'aspire_vscode_extension_version', value: 'caller-version' },
-                    { name: 'aspire_vscode_extension_channel', value: 'prerelease' },
-                    { name: 'aspire_vscode_extension_source', value: 'other' },
-                ],
+        withPackagePreReleaseMarker('false', () => {
+            const platformStub = sinon.stub(process, 'platform').value('win32');
+            const childProcess = createTestChildProcess(4001);
+            const spawnStub = sinon.stub(nodeChildProcess, 'spawn').returns(childProcess);
+            const extensionEnvironment = getAspireExtensionEnvironment({
+                version: '1.16.0',
+            }, {
+                appName: 'Visual Studio Code',
+                uriScheme: 'vscode',
             });
+            assert.ok(extensionEnvironment);
+            const terminalProvider = {
+                createEnvironment: () => ({
+                    aspire_vscode_extension_version: 'parent-version',
+                    aspire_vscode_extension_channel: 'prerelease',
+                    aspire_vscode_extension_source: 'other',
+                }),
+                aspireExtensionEnvironment: extensionEnvironment,
+            } as unknown as AspireTerminalProvider;
 
-            const env = spawnStub.firstCall.args[2]?.env;
-            assert.strictEqual(env?.[ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR], '1.16.0');
-            assert.strictEqual(env?.[ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR], 'stable');
-            assert.strictEqual(env?.[ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR], 'microsoft-marketplace');
-            assert.strictEqual(env?.aspire_vscode_extension_version, undefined);
-            assert.strictEqual(env?.aspire_vscode_extension_channel, undefined);
-            assert.strictEqual(env?.aspire_vscode_extension_source, undefined);
-        }
-        finally {
-            spawnStub.restore();
-            platformStub.restore();
-        }
+            try {
+                spawnCliProcess(terminalProvider, '/usr/local/bin/aspire', ['doctor'], {
+                    env: [
+                        { name: 'aspire_vscode_extension_version', value: 'caller-version' },
+                        { name: 'aspire_vscode_extension_channel', value: 'prerelease' },
+                        { name: 'aspire_vscode_extension_source', value: 'other' },
+                    ],
+                });
+
+                const env = spawnStub.firstCall.args[2]?.env;
+                assert.strictEqual(env?.[ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR], '1.16.0');
+                assert.strictEqual(env?.[ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR], 'stable');
+                assert.strictEqual(env?.[ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR], 'microsoft-marketplace');
+                assert.strictEqual(env?.aspire_vscode_extension_version, undefined);
+                assert.strictEqual(env?.aspire_vscode_extension_channel, undefined);
+                assert.strictEqual(env?.aspire_vscode_extension_source, undefined);
+            }
+            finally {
+                spawnStub.restore();
+                platformStub.restore();
+            }
+        });
     });
 
     test('builds the child environment from the exact CLI command being launched', () => {

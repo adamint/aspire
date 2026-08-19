@@ -81,6 +81,16 @@ export async function prepareDebugSession(debugSessionConfig: AspireExtendedDebu
     }
 
 
+    if (launchOptions.isApphost) {
+        // Some adapters materialize their own environment shape inside the callback. Apply the
+        // authoritative identity first so those derived values do not capture stale caller data.
+        // Debugger settings belong to the parent session and are reused, so clone before mutating.
+        configuration.env = { ...(configuration.env ?? {}) };
+        overlayAspireExtensionEnvironment(
+            configuration.env,
+            launchOptions.debugSession.aspireExtensionEnvironment);
+    }
+
     let alreadyStartedSession: AlreadyStartedResourceDebugSession | undefined;
     if (debuggerExtension.createDebugSessionConfigurationCallback) {
         alreadyStartedSession = await debuggerExtension.createDebugSessionConfigurationCallback(launchConfig, args, env, launchOptions, configuration) ?? undefined;
@@ -88,8 +98,8 @@ export async function prepareDebugSession(debugSessionConfig: AspireExtendedDebu
 
     if (launchOptions.isApphost) {
         // AppHosts are launched directly by the debugger instead of inheriting the Aspire CLI's
-        // environment. Apply the active identity after user and debugger-extension configuration
-        // because these values identify the extension itself and are not caller-customizable.
+        // environment. Reapply after the callback because these values identify the extension
+        // itself and callbacks are not allowed to replace them.
         overlayAspireExtensionEnvironment(
             configuration.env ??= {},
             launchOptions.debugSession.aspireExtensionEnvironment);
