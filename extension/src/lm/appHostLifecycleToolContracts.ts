@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 
 import { type AppHostIdentityRelation } from '../utils/appHostIdentity';
-import { type AppHostStopResult } from '../services/AppHostLaunchService';
+import { type AppHostLaunchIsolation, type AppHostStopResult } from '../services/AppHostLaunchService';
 import type {
     AppHostTarget,
     AppHostTargetDiscoveryService,
@@ -57,6 +57,8 @@ export type AppHostLifecycleOutcome =
 export interface AppHostStartToolInput {
     appHostPath: string;
     mode: AppHostLifecycleMode;
+    /** When omitted, linked git worktrees start isolated. Explicit true/false overrides that. */
+    isolated?: boolean;
 }
 
 export interface AppHostStopToolInput {
@@ -77,6 +79,8 @@ export interface AppHostLifecycleToolResult {
     appHostPath: string;
     requestedMode?: AppHostLifecycleMode;
     effectiveMode?: AppHostLifecycleMode;
+    /** Present on start results only when a known effective isolation value exists. */
+    isolated?: boolean;
     controller: AppHostLifecycleController;
     /**
      * The selectors the tool accepts, returned only when the requested one did not
@@ -103,7 +107,8 @@ export interface AppHostLifecycleLaunchService {
     getRunningAppHosts(token: vscode.CancellationToken): Promise<readonly AppHostLifecycleRunningAppHost[]>;
     compareAppHostIdentity(left: string | undefined, right: string | undefined): AppHostIdentityRelation;
     runWithAppHostLifecycleLock<T>(appHostPath: string, token: vscode.CancellationToken, action: (token: vscode.CancellationToken) => Promise<T>): Promise<T>;
-    launchFromLifecycleOwner(appHostPath: string, command: 'run', noDebug: boolean, token: vscode.CancellationToken): Promise<void>;
+    resolveLaunchIsolation(appHostPath: string, isolated: boolean | undefined, token: vscode.CancellationToken): Promise<AppHostLaunchIsolation>;
+    launchFromLifecycleOwner(appHostPath: string, command: 'run', noDebug: boolean, isolated: boolean | undefined, token: vscode.CancellationToken): Promise<AppHostLaunchIsolation | undefined>;
     stopAppHost(appHostPath: string, token: vscode.CancellationToken): Promise<AppHostStopResult>;
     stopAppHostFromLifecycleOwner(appHostPath: string, token: vscode.CancellationToken): Promise<AppHostStopResult>;
 }
@@ -159,6 +164,7 @@ export function createResult(
     requestedMode: AppHostLifecycleMode | undefined,
     effectiveMode: AppHostLifecycleMode | undefined,
     knownAppHosts?: readonly string[],
+    isolated?: boolean,
 ): AppHostLifecycleToolResult {
     const result: AppHostLifecycleToolResult = { tool, outcome, appHostPath, controller };
     if (requestedMode) {
@@ -173,6 +179,10 @@ export function createResult(
         result.knownAppHosts = knownAppHosts;
     }
 
+    if (tool === aspireAppHostStartToolName && isolated !== undefined) {
+        result.isolated = isolated;
+    }
+
     return result;
 }
 
@@ -181,9 +191,13 @@ export function parseMode(value: unknown): AppHostLifecycleMode | undefined {
 }
 
 export function isValidStartInput(value: unknown): value is AppHostStartToolInput {
-    return hasOnlyProperties(value, ['appHostPath', 'mode']) &&
-        typeof value.appHostPath === 'string' &&
-        parseMode(value.mode) !== undefined;
+    if (!hasOnlyProperties(value, ['appHostPath', 'mode'], ['isolated']) ||
+        typeof value.appHostPath !== 'string' ||
+        parseMode(value.mode) === undefined) {
+        return false;
+    }
+
+    return !('isolated' in value) || typeof value.isolated === 'boolean';
 }
 
 export function isValidStopInput(value: unknown): value is AppHostStopToolInput {
@@ -191,12 +205,13 @@ export function isValidStopInput(value: unknown): value is AppHostStopToolInput 
         typeof value.appHostPath === 'string';
 }
 
-function hasOnlyProperties<T extends string>(value: unknown, properties: readonly T[]): value is Record<T, unknown> {
+function hasOnlyProperties<T extends string>(value: unknown, properties: readonly T[], optional: readonly string[] = []): value is Record<T, unknown> {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
         return false;
     }
 
+    const allowed = new Set([...properties, ...optional]);
     const actualProperties = Object.keys(value);
-    return actualProperties.length === properties.length &&
-        properties.every(property => Object.prototype.hasOwnProperty.call(value, property));
+    return properties.every(property => Object.prototype.hasOwnProperty.call(value, property)) &&
+        actualProperties.every(property => allowed.has(property));
 }
