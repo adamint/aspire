@@ -93,8 +93,18 @@ public sealed class ExtensionE2eRecorderStepTests(ITestOutputHelper testOutput)
         // Plain `timeout` only sends SIGTERM, and apt/dpkg defer signals around critical sections,
         // so without the escalation a wedged child can outlive its own timeout - the hang this step
         // was bounded to prevent.
+        var timeoutInvocations = invocations
+            .Where(line => line.StartsWith("timeout ", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(expectedInstallAttempts * 2, timeoutInvocations.Length);
+        for (var attempt = 0; attempt < expectedInstallAttempts; attempt++)
+        {
+            Assert.EndsWith("apt-get update", timeoutInvocations[attempt * 2], StringComparison.Ordinal);
+            Assert.Contains("apt-get install", timeoutInvocations[(attempt * 2) + 1], StringComparison.Ordinal);
+        }
+
         Assert.All(
-            invocations.Where(line => line.StartsWith("timeout ", StringComparison.Ordinal)),
+            timeoutInvocations,
             line => Assert.Contains("--kill-after=", line, StringComparison.Ordinal));
 
         Assert.NotEmpty(pwshPath);
