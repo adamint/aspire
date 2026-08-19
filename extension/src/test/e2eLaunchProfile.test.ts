@@ -2376,7 +2376,7 @@ suite('E2E launch profile', () => {
             assert.ok(
                 Number(runnerTimeoutMatch[1]) >= worstCaseSuiteTimeoutMs + 300000,
                 'The resource debugger process-runner timeout must exceed its worst-case Mocha budget by at least five minutes.');
-            const jobTimeoutMatch = /\n            jobTimeoutMinutes: (\d+)(?:\n|$)/.exec(block);
+            const jobTimeoutMatch = /\n            timeoutMinutes: (\d+)(?:\n|$)/.exec(block);
             assert.ok(jobTimeoutMatch, 'Expected the resource debugger matrix entry to override the job timeout.');
             assert.ok(
                 Number(jobTimeoutMatch[1]) >= (Number(runnerTimeoutMatch[1]) / 60000) + 30,
@@ -2386,7 +2386,7 @@ suite('E2E launch profile', () => {
             workflow.includes('ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS: ${{ matrix.runTestsTimeoutMs || 2400000 }}'),
             'The workflow must pass the per-shard process-runner timeout override.');
         assert.ok(
-            workflow.includes('timeout-minutes: ${{ matrix.jobTimeoutMinutes || 75 }}'),
+            workflow.includes('timeout-minutes: ${{ matrix.timeoutMinutes || 75 }}'),
             'The workflow job must honor the per-shard timeout override.');
         assert.ok(
             contributing.includes('ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS=3600000 ASPIRE_EXTENSION_E2E_SHARD=resource-debugger'),

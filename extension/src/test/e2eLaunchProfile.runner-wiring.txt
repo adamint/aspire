@@ -21,6 +21,10 @@ const diagnosticsStorageRoot = path.join(extensionRoot, '.test-storage');
 const requestedTempRoot = verifyExtesterFeedOnly ? '' : process.env.ASPIRE_EXTENSION_E2E_TEMP_ROOT || os.tmpdir();
 const testSpec = process.env.ASPIRE_EXTENSION_E2E_SPEC || 'out/test-e2e/**/*.e2e.test.js';
 const matchedTestSpecs = verifyExtesterFeedOnly ? [] : findSpecMatches(testSpec);
+const enableJavaE2E = process.env.ASPIRE_EXTENSION_E2E_ENABLE_JAVA
+    ? process.env.ASPIRE_EXTENSION_E2E_ENABLE_JAVA === 'true'
+    : matchedTestSpecs.length > 0 && matchedTestSpecs.every(isJavaSpecPath);
+const REQUIRED_JAVA_EXTENSION_IDS = ['redhat.java', 'vscjava.vscode-java-debug', 'vscjava.vscode-java-dependency'];
 const extesterVersion = extensionPackageJson.devDependencies?.['vscode-extension-tester'];
 if (!extesterVersion) {
     throw new Error('vscode-extension-tester must be pinned in extension/package.json devDependencies.');
@@ -36,9 +40,12 @@ const shortRunRoot = verifyExtesterFeedOnly ? '' : fs.mkdtempSync(path.join(temp
 const isolatedAspireHome = path.join(shortRunRoot, 'aspire-home');
 const storageDir = path.join(shortRunRoot, 'storage');
 const extensionsDir = path.join(shortRunRoot, 'extensions');
+const javaScratchWorkspaceRoot = path.join(extensionRoot, 'java-e2e-workspace');
 const workspaceRoot = process.env.ASPIRE_EXTENSION_E2E_WORKSPACE_ROOT
     ? path.resolve(process.env.ASPIRE_EXTENSION_E2E_WORKSPACE_ROOT)
-    : path.join(shortRunRoot, 'workspace');
+    : enableJavaE2E
+        ? javaScratchWorkspaceRoot
+        : path.join(shortRunRoot, 'workspace');
 const workspaceMarkerFile = path.join(workspaceRoot, '.aspire-extension-e2e-workspace');
 const storageDiagnosticsDir = path.join(diagnosticsStorageRoot, shardName, runId);
 const workspaceDiagnosticsDir = path.join(extensionRoot, '.test-workspaces', shardName, runId);
@@ -86,11 +93,13 @@ async function main() {
         assertSpecMatches(testSpec);
         prepareRunDirectories();
         logE2eConfiguration();
-        const cliPath = isolateCliPath(resolveCliPath());
+        const bundledCliPath = resolveCliPath();
+        const cliPath = enableJavaE2E ? bundledCliPath : isolateCliPath(bundledCliPath);
         cliPathForCleanup = cliPath;
         validateCliPath(cliPath);
         const appHostSdkVersion = resolveAppHostSdkVersion(cliPath);
         prepareWorkspaceFixture(cliPath, appHostSdkVersion);
+        copyJavaPlaygroundIntoWorkspace(bundledCliPath);
         restoreWorkspaceFixture();
         const vsixPath = process.env.ASPIRE_EXTENSION_E2E_VSIX
             ? path.resolve(process.env.ASPIRE_EXTENSION_E2E_VSIX)
@@ -115,6 +124,7 @@ async function main() {
             ASPIRE_EXTENSION_E2E_WORKSPACE_ROOT: workspaceRoot,
             ASPIRE_EXTENSION_E2E_STATE_FILE: stateFile,
             ASPIRE_EXTENSION_E2E_CONTROL_FILE: controlFile,
+            ASPIRE_EXTENSION_E2E_RUN_ID: runId,
             ASPIRE_EXTENSION_E2E_ENABLE_BRIDGE: 'true',
             ASPIRE_EXTENSION_E2E_SKIP_CURRENT_CLI_REGRESSIONS: process.env.ASPIRE_EXTENSION_E2E_SKIP_CURRENT_CLI_REGRESSIONS === 'true' ? 'true' : 'false',
             ASPIRE_EXTENSION_E2E_PRIMARY_APPHOST: primaryAppHostProject,
@@ -149,12 +159,14 @@ async function main() {
         });
         console.log(`Extension E2E download cache ${downloadCache.cacheHit ? 'hit' : 'populated'}: ${downloadCache.cacheDirectory}`);
         projectDownloadCache(downloadCache, storageDir);
+        installJavaExtensions(extestEnv);
         logStep('Installing VSIX');
         run(process.execPath, [extesterCli, 'install-vsix', '--storage', storageDir, '--extensions_dir', extensionsDir, '--vsix_file', vsixPath], extestEnv, { timeout: 300000 });
         for (const azureFunctionsVsix of azureFunctionsVsixPaths) {
             logStep(`Installing ${azureFunctionsVsix.displayName} VSIX`);
             run(process.execPath, [extesterCli, 'install-vsix', '--storage', storageDir, '--extensions_dir', extensionsDir, '--vsix_file', azureFunctionsVsix.path], extestEnv, { timeout: 300000 });
         }
+        assertJavaExtensionsRegistered();
         recording = startRecording();
         try {
             logStep('Running VS Code extension E2E tests');
@@ -190,7 +202,7 @@ async function main() {
         await runCleanupStep('cleanup temporary run root', cleanupTemporaryRunRoot, cleanupErrors);
         if (cleanupErrors.length > 0) {
             cleanupFailed = true;
-            const cleanupFailure = new AggregateError(cleanupErrors, 'One or more E2E cleanup steps failed.');
+            const cleanupFailure = new AggregateError(cleanupErrors, `One or more E2E cleanup steps failed:\n  ${cleanupErrors.map(error => error.stack ?? error.message).join('\n  ')}`);
             if (testFailure) {
                 console.error(cleanupFailure);
             }
