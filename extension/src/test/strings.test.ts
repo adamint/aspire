@@ -1,7 +1,8 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import { launchingWithAppHost, launchingWithDirectory } from '../loc/strings';
+import * as locStrings from '../loc/strings';
+import { defaultConfigurationNameForWorkspaceFolder, launchingWithAppHost, launchingWithDirectory } from '../loc/strings';
 import { collapseWhitespace, escapeCodicons, formatText } from '../utils/strings';
 
 suite('utils/strings tests', () => {
@@ -61,6 +62,30 @@ suite('utils/strings tests', () => {
         }
     });
 
+    test('AppHost isolation compatibility loc strings are present in package.nls.json and the generated XLF catalog', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const stringsSource = fs.readFileSync(path.join(extensionRoot, 'src', 'loc', 'strings.ts'), 'utf8');
+        const packageNls = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.nls.json'), 'utf8')) as Record<string, string>;
+        const xlf = fs.readFileSync(path.join(extensionRoot, 'loc', 'xlf', 'aspire-vscode.xlf'), 'utf8');
+        const runtimeStrings = locStrings as Record<string, unknown>;
+
+        const expectedStrings = {
+            appHostLifecycleIsolationModeNotSupported: 'The selected Aspire CLI does not support the requested isolation mode.',
+            appHostLifecycleIsolationCapabilityCouldNotBeVerified: 'The selected Aspire CLI isolation capability could not be verified.',
+        };
+
+        for (const [name, value] of Object.entries(expectedStrings)) {
+            assert.strictEqual(runtimeStrings[name], value, `Expected ${name} to be exported from strings.ts.`);
+
+            const escapedValue = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const declaration = new RegExp(
+                `export\\s+const\\s+${name}\\s*=\\s*vscode\\.l10n\\.t\\(\\s*(['"\`])${escapedValue}\\1\\s*\\)`);
+            assert.match(stringsSource, declaration, `Expected ${name} to be registered in strings.ts with the value "${value}".`);
+            assert.strictEqual(packageNls[`aspire-vscode.strings.${name}`], value);
+            assert.ok(xlf.includes(`<trans-unit id="aspire-vscode.strings.${name}">`), `Regenerate loc/xlf/aspire-vscode.xlf with "yarn run localize" after adding ${name}.`);
+        }
+    });
+
     test('Rust loc strings are present in package.nls.json and the generated XLF catalog', () => {
         // package.nls.json is the only input to the XLF catalog (see gulpfile.js), so a string that
         // only exists in strings.ts is shipped untranslated. Guard the Rust debugger strings, which
@@ -109,6 +134,18 @@ suite('utils/strings tests', () => {
 });
 
 suite('loc/strings tests', () => {
+    test('formats and registers workspace-specific default configuration names', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const packageNls = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.nls.json'), 'utf8')) as Record<string, string>;
+
+        assert.strictEqual(
+            defaultConfigurationNameForWorkspaceFolder('src', 'file:///workspace/repo-with-apphost'),
+            'Aspire: Launch default AppHost (src: file:///workspace/repo-with-apphost)');
+        assert.strictEqual(
+            packageNls['aspire-vscode.strings.defaultConfigurationNameForWorkspaceFolder'],
+            'Aspire: Launch default AppHost ({0}: {1})');
+    });
+
 	test('formats launch messages with the session type', () => {
 		assert.deepStrictEqual(
 			[

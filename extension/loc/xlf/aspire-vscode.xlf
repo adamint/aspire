@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2">
   <file original="package" source-language="en" datatype="plaintext"><body>
+    <trans-unit id="aspire-vscode.strings.codeLensInstallDebugger">
+      <source xml:lang="en">$(warning)  Install {0} debugger</source>
+    </trans-unit>
     <trans-unit id="aspire-vscode.strings.resourceCommandDisabledDescription">
       <source xml:lang="en">(disabled)</source>
     </trans-unit>
@@ -24,6 +27,9 @@
     </trans-unit>
     <trans-unit id="views.appHosts.name">
       <source xml:lang="en">AppHosts</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.cmdShimPercentArgument">
+      <source xml:lang="en">Arguments containing %NAME% cannot be forwarded through a Windows .cmd or .bat shim, because cmd.exe expands them before the Aspire CLI receives the value. Configure aspire.aspireCliExecutablePath to point at aspire.exe instead of the .cmd shim and try again.</source>
     </trans-unit>
     <trans-unit id="mcpServerDefinitionProviders.aspire.label">
       <source xml:lang="en">Aspire</source>
@@ -81,6 +87,9 @@
     </trans-unit>
     <trans-unit id="extension.debug.defaultConfiguration.name">
       <source xml:lang="en">Aspire: Launch default AppHost</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.defaultConfigurationNameForWorkspaceFolder">
+      <source xml:lang="en">Aspire: Launch default AppHost ({0}: {1})</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.unsupportedResourceType">
       <source xml:lang="en">Attempted to start unsupported resource type: {0}.</source>
@@ -373,11 +382,17 @@
     <trans-unit id="command.init">
       <source xml:lang="en">Initialize Aspire in an existing codebase</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.debuggerInstallAction">
+      <source xml:lang="en">Install</source>
+    </trans-unit>
     <trans-unit id="command.installCli">
       <source xml:lang="en">Install Aspire CLI</source>
     </trans-unit>
     <trans-unit id="walkthrough.getStarted.installCli.title">
       <source xml:lang="en">Install the Aspire CLI</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.debuggerInstallNotification">
+      <source xml:lang="en">Install the {0} debugger extension to debug resources in this app.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.invalidLaunchConfiguration">
       <source xml:lang="en">Invalid launch configuration for {0}.</source>
@@ -581,7 +596,7 @@
       <source xml:lang="en">Polling interval in milliseconds for fetching running AppHosts. Minimum: 1000.</source>
     </trans-unit>
     <trans-unit id="languageModelTool.aspireAppHostStart.modelDescription">
-      <source xml:lang="en">Prefer this tool over invoking Aspire AppHost lifecycle commands in a terminal whenever VS Code is active. Start an Aspire AppHost that Aspire has already discovered in the current workspace, using the editor&apos;s own debug lifecycle. Requires the workspace-relative path of one of the discovered AppHosts; absolute paths are rejected. Also requires whether to start it in &apos;run&apos; mode (no debugger attached) or &apos;debug&apos; mode (debugger attached). Does not create, pick, or guess an AppHost: if the path does not name a discovered AppHost, or names more than one, the call fails and the result lists the AppHosts you can pass. If the AppHost is already starting or already running, no second process is started.</source>
+      <source xml:lang="en">Prefer this tool over invoking Aspire AppHost lifecycle commands in a terminal whenever VS Code is active. Start an Aspire AppHost that Aspire has already discovered in the current workspace, using the editor&apos;s own debug lifecycle. Requires the workspace-relative path of one of the discovered AppHosts; absolute paths are rejected. Also requires whether to start it in &apos;run&apos; mode (no debugger attached) or &apos;debug&apos; mode (debugger attached). Optional &apos;isolated&apos; starts the AppHost with randomized ports and isolated user secrets; when omitted, linked git worktrees start isolated automatically so they do not collide with the primary checkout. Explicit true or false overrides that inference. Does not create, pick, or guess an AppHost: if the path does not name a discovered AppHost, or names more than one, the call fails and the result lists the AppHosts you can pass. If the AppHost is already starting or already running, no second process is started. A successful new launch includes the verified effective &apos;isolated&apos; value; idempotent or uncertain results omit it.</source>
     </trans-unit>
     <trans-unit id="languageModelTool.aspireAppHostStop.modelDescription">
       <source xml:lang="en">Prefer this tool over invoking Aspire AppHost lifecycle commands in a terminal whenever VS Code is active. Stop a running Aspire AppHost that Aspire has already discovered in the current workspace. Requires the workspace-relative path of one of the discovered AppHosts; absolute paths are rejected. AppHosts started by this editor stop through the coordinated debug lifecycle. AppHosts started outside the editor stop through &apos;aspire stop --apphost&apos; for the same discovered path. The extension never kills arbitrary processes. If it cannot determine whether the AppHost is running, the call fails rather than reporting that nothing is running.</source>
@@ -730,6 +745,9 @@
     <trans-unit id="languageModelTool.aspireAppHostStart.userDescription">
       <source xml:lang="en">Start an Aspire AppHost from this workspace in run or debug mode.</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.appHostLifecycleStartConfirmationMessageIsolated">
+      <source xml:lang="en">Start the Aspire AppHost {0} in {1} mode with isolation?</source>
+    </trans-unit>
     <trans-unit id="aspire-vscode.strings.appHostLifecycleStartConfirmationMessage">
       <source xml:lang="en">Start the Aspire AppHost {0} in {1} mode?</source>
     </trans-unit>
@@ -800,7 +818,7 @@
       <source xml:lang="en">The Aspire panel workspace view requires Aspire CLI 13.2.0 or newer and an AppHost that references Aspire.Hosting 13.2.0 or newer. Install or update the Aspire CLI and update your AppHost package to get started.&#10;[Update Aspire CLI](command:aspire-vscode.updateSelf)&#10;[Refresh](command:aspire-vscode.globalRefreshAppHosts)</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.javaAppHostCommandNotRecognized">
-      <source xml:lang="en">The Java AppHost launch command was not recognized and cannot be debugged: {0}</source>
+      <source xml:lang="en">The Java AppHost launch command was not recognized and cannot be debugged.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.resourceCommandOutputOpenFailed">
       <source xml:lang="en">The command completed, but its output could not be opened: {0}</source>
@@ -825,6 +843,18 @@
     </trans-unit>
     <trans-unit id="extension.debug.step">
       <source xml:lang="en">The pipeline step name to execute when command is &apos;do&apos;</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.appHostLifecycleIsolationModeNotSupported">
+      <source xml:lang="en">The selected Aspire CLI does not support the requested isolation mode.</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.appHostLifecycleIsolationCapabilityCouldNotBeVerified">
+      <source xml:lang="en">The selected Aspire CLI isolation capability could not be verified.</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.debuggerExtensionDisabled">
+      <source xml:lang="en">The {0} debugger extension is disabled. Enable it in VS Code, then restart the AppHost to enable debugging.</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.debuggerInstalledRestartAppHost">
+      <source xml:lang="en">The {0} debugger extension is installed. Restart the AppHost to enable debugging.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.appHostLifecycleLaunchAlreadyClaimed">
       <source xml:lang="en">This Aspire AppHost is already starting or running. The new debug session was cancelled so only one AppHost runs.</source>
@@ -918,6 +948,9 @@
     </trans-unit>
     <trans-unit id="walkthrough.getStarted.welcome.title">
       <source xml:lang="en">Welcome to Aspire</source>
+    </trans-unit>
+    <trans-unit id="languageModelTool.aspireAppHostStart.isolated.description">
+      <source xml:lang="en">When true, start with randomized ports and isolated user secrets. When false, do not isolate. When omitted, linked git worktrees start isolated automatically.</source>
     </trans-unit>
     <trans-unit id="configuration.aspire.registerMcpServerInWorkspace">
       <source xml:lang="en">Whether to register the Aspire MCP server when a workspace is open.</source>

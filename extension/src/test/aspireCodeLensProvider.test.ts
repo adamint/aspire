@@ -15,6 +15,7 @@ import { AspireAppHostTreeProvider } from '../views/AspireAppHostTreeProvider';
 import { AppHostDataRepository, AppHostDisplayInfo, ResourceJson } from '../data/AppHostDataRepository';
 import { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
 import { AppHostLaunchService } from '../services/AppHostLaunchService';
+import { launchConfigurationTypePropertyName } from '../debugger/debuggerInstallHints';
 // Import parsers so they self-register before the provider consults them.
 import '../editor/parsers/csharpAppHostParser';
 import '../editor/parsers/jsTsAppHostParser';
@@ -71,7 +72,9 @@ function createHarness(opts: {
     const subs: vscode.Disposable[] = [];
     const terminalProvider = new AspireTerminalProvider(subs);
     const repository = new AppHostDataRepository(terminalProvider);
-    const treeProvider = new AspireAppHostTreeProvider(repository, terminalProvider, new AppHostLaunchService());
+    const treeProvider = new AspireAppHostTreeProvider(repository, terminalProvider, new AppHostLaunchService({
+        getCapabilityStatus: async () => 'supported',
+    }));
 
     const appHostsStub = sinon.stub(repository, 'appHosts').get(() => opts.appHosts ?? []);
     const workspaceResourcesStub = sinon.stub(repository, 'workspaceResources').get(() => opts.workspaceResources ?? []);
@@ -90,6 +93,7 @@ function createHarness(opts: {
         repository,
         treeProvider,
         dispose() {
+            provider.dispose();
             workspaceAppHostPathStub.restore();
             workspaceResourcesStub.restore();
             appHostsStub.restore();
@@ -633,6 +637,34 @@ suite('AspireCodeLensProvider resource lens anchoring', () => {
     function getStateLenses(lenses: vscode.CodeLens[]): vscode.CodeLens[] {
         return lenses.filter(l => l.command?.command === 'aspire-vscode.codeLensRevealResource');
     }
+
+    test('emits an install lens for a running resource with a missing debugger', async () => {
+        const getExtensionStub = sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
+        const docPath = p('repo', 'AppHost', 'AppHost.cs');
+        const hostPath = p('repo', 'AppHost', 'AppHost.csproj');
+        const harness = createHarness({
+            workspaceAppHostPath: hostPath,
+            workspaceResources: [
+                makeResource('python', {
+                    properties: { [launchConfigurationTypePropertyName]: 'python' },
+                }),
+            ],
+        });
+
+        try {
+            const doc = createMockDocument(
+                'var builder = DistributedApplication.CreateBuilder(args);\nbuilder.AddPythonApp("python", "../python", "app.py");',
+                docPath);
+            const lenses = await harness.provider.provideCodeLenses(doc, cancellationToken) as vscode.CodeLens[];
+            const installLenses = lenses.filter(lens => lens.command?.command === 'aspire-vscode.installDebuggerExtension');
+
+            assert.strictEqual(installLenses.length, 1);
+            assert.strictEqual(installLenses[0].command?.title, '$(warning)\u200A Install Python debugger');
+        } finally {
+            harness.dispose();
+            getExtensionStub.restore();
+        }
+    });
 
     test('emits resource state and action lenses for a running Rust AppHost', async () => {
         const appHostPath = p('repo', 'AppHost', 'apphost.rs');

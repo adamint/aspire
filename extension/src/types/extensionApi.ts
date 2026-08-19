@@ -219,6 +219,7 @@ export type AspireExtensionE2EControlCommand =
     | { name: 'setSourceBreakpoint'; filePath: string; line: number; clearExisting?: boolean }
     | { name: 'clearBreakpoints' }
     | { name: 'getBreakpoints' }
+    | { name: 'startDebugging'; configurationName: string }
     | { name: 'stopDebugging' }
     | { name: 'closeAllEditors' }
     | { name: 'getRegisteredAspireCommands' }
@@ -235,10 +236,12 @@ export type AspireExtensionE2EControlCommand =
     | { name: 'assertClipboardMatchesLastExpectation' }
     | { name: 'openFile'; filePath: string }
     | { name: 'openWorkspaceFolder'; folderPath: string }
+    | { name: 'setWorkspaceFolders'; folders: readonly { folderPath: string; name?: string }[] }
     | { name: 'stopOwnedDebugSessionProcesses'; appHostPath?: string }
     | { name: 'getWorkspaceFolders' }
     | { name: 'addWorkspaceFolder'; folderPath: string }
     | { name: 'getActiveEditor' }
+    | { name: 'runAspireCli'; args: readonly string[]; workingDirectory: string; timeoutMs?: number }
     | { name: 'getResourceDebuggerExtensions' }
     | { name: 'getSupportedCapabilities' }
     | { name: 'getVisibleExtensionIds' }

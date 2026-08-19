@@ -44,7 +44,7 @@ export function isCsharpInstalled() {
 }
 
 export function isPythonInstalled() {
-    return isExtensionInstalled("ms-python.python");
+    return isExtensionInstalled("ms-python.debugpy");
 }
 
 export function isGoInstalled() {
