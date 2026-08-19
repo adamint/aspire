@@ -52,6 +52,12 @@ public sealed class ExtensionE2eWorkflowTests
     {
         var jobs = LoadCallerWorkflowJobs();
         var extensionUnitJob = (YamlMappingNode)jobs.Children[new YamlScalarNode("extension_tests_win")];
+        if (extensionUnitJob.Children.TryGetValue(new YamlScalarNode("env"), out var jobEnvironmentNode))
+        {
+            var jobEnvironment = Assert.IsType<YamlMappingNode>(jobEnvironmentNode);
+            Assert.False(jobEnvironment.Children.ContainsKey(new YamlScalarNode("ASPIRE_EXTENSION_E2E_INCLUDE_BRIDGE")));
+        }
+
         var steps = ((YamlSequenceNode)extensionUnitJob.Children[new YamlScalarNode("steps")]).Cast<YamlMappingNode>().ToList();
         var packageStep = Assert.Single(steps, step => Scalar(step, "name") == "Package production VSIX");
 
