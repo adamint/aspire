@@ -37,6 +37,11 @@ together with the extension build script.** From `extension/`, run `./build.sh` 
 dependencies (seeds Corepack and runs `corepack yarn install`). You do not install Yarn yourself —
 it is pinned via `packageManager`.
 
+This is a specific override of repository-wide guidance to always run the root restore first. For
+changes limited to `extension/`, `src/Aspire.Cli/`, and/or `tests/Aspire.Cli*/`, start with the
+extension build script; it performs the restore and build steps needed by this workflow. Run
+targeted CLI test projects separately after the build.
+
 Use **yarn** for extension commands (`corepack yarn ...` or `yarn run ...`), not `npm` / `npx`.
 The dependency graph and scripts are pinned for Yarn via `extension/package.json` and `yarn.lock`.
 
