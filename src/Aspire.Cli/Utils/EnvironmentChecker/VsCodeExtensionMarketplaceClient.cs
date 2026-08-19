@@ -148,8 +148,8 @@ internal sealed class VsCodeExtensionMarketplaceClient(HttpClient httpClient) : 
                 marker is not null && marker.Value != propertyValue)
             {
                 // Malformed or conflicting prerelease metadata makes this version entry's channel
-                // unreadable, so skip the entry. Malformed response containers invalidate the
-                // protocol response instead and are reported by the check as lookup unavailable.
+                // unreadable, so skip the entry. Malformed top-level results, extensions, or versions
+                // containers invalidate the protocol response and are reported as lookup unavailable.
                 return false;
             }
 

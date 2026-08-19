@@ -5,6 +5,7 @@ using System.Net;
 using System.Text;
 using Aspire.Cli.Tests.Utils;
 using Aspire.Cli.Utils.EnvironmentChecker;
+using Semver;
 
 namespace Aspire.Cli.Tests.Commands;
 
@@ -43,8 +44,11 @@ public class VsCodeExtensionMarketplaceClientTests
 
         var versions = await client.GetLatestVersionsAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal("1.3.0", versions.StableVersion?.ToString());
-        Assert.Equal("1.4.0", versions.PreReleaseVersion?.ToString());
+        Assert.Equal(
+            new VsCodeExtensionMarketplaceVersions(
+                SemVersion.Parse("1.3.0", SemVersionStyles.Strict),
+                SemVersion.Parse("1.4.0", SemVersionStyles.Strict)),
+            versions);
     }
 
     [Fact]
@@ -79,7 +83,11 @@ public class VsCodeExtensionMarketplaceClientTests
 
         var versions = await client.GetLatestVersionsAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal("1.4.0", versions.PreReleaseVersion?.ToString());
+        Assert.Equal(
+            new VsCodeExtensionMarketplaceVersions(
+                null,
+                SemVersion.Parse("1.4.0", SemVersionStyles.Strict)),
+            versions);
     }
 
     [Theory]
@@ -115,7 +123,11 @@ public class VsCodeExtensionMarketplaceClientTests
 
         var versions = await client.GetLatestVersionsAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal("1.4.0", versions.PreReleaseVersion?.ToString());
+        Assert.Equal(
+            new VsCodeExtensionMarketplaceVersions(
+                null,
+                SemVersion.Parse("1.4.0", SemVersionStyles.Strict)),
+            versions);
     }
 
     [Fact]
@@ -147,7 +159,11 @@ public class VsCodeExtensionMarketplaceClientTests
 
         var versions = await client.GetLatestVersionsAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal("1.3.0", versions.StableVersion?.ToString());
+        Assert.Equal(
+            new VsCodeExtensionMarketplaceVersions(
+                SemVersion.Parse("1.3.0", SemVersionStyles.Strict),
+                null),
+            versions);
     }
 
     [Theory]
