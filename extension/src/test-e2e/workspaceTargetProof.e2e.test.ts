@@ -1,11 +1,11 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import { getCommandInvocationCount, getTerminalCommandCount, waitForCommandOutcome, waitForTerminalCommand } from './helpers/assertions';
-import { executeE2eControlCommand, restoreE2eCliPathForE2E, setE2eCliPathForE2E, setTerminalCommandExecutionSuppressedForE2E } from './helpers/fixtures';
+import { getCommandInvocationCount, getTerminalCommandCount, waitForCommandOutcome, waitForRepositoryIdle, waitForTerminalCommand } from './helpers/assertions';
+import { executeE2eControlCommand, restoreE2eCliPathForE2E, setE2eCliPathForE2E, setTerminalCommandExecutionSuppressedForE2E, writeWorkspaceSetting } from './helpers/fixtures';
 import { getWorkspaceRoot } from './helpers/paths';
 import { VSBrowser } from './helpers/extester';
-import { cancelActiveInput, chooseActiveQuickPick, executeCommandFromPalette, openAspireView } from './helpers/vscode';
+import { answerActiveInput, cancelActiveInput, chooseActiveQuickPick, executeCommandFromPalette, openAspireView, waitForActiveInput, waitForNotificationMessage } from './helpers/vscode';
 
 suite('Workspace target proof E2E', function () {
     this.timeout(900000);
@@ -13,6 +13,52 @@ suite('Workspace target proof E2E', function () {
     teardown(async () => {
         await setTerminalCommandExecutionSuppressedForE2E(false);
         await restoreE2eCliPathForE2E();
+        writeWorkspaceSetting('files.simpleDialog.enable', undefined);
+        fs.rmSync(path.join(getWorkspaceRoot(), '.new-project-output-collision'), { recursive: true, force: true });
+    });
+
+    test('reopens the project folder picker after a colliding selection', async function () {
+        if (process.env.ASPIRE_EXTENSION_E2E_SKIP_CURRENT_CLI_REGRESSIONS === 'true') {
+            this.skip();
+        }
+
+        const projectName = 'aspire-empty';
+        const testRoot = path.join(getWorkspaceRoot(), '.new-project-output-collision');
+        const collidingParent = path.join(testRoot, 'colliding-parent');
+        const validParent = path.join(testRoot, 'valid-parent');
+        const collidingProject = path.join(collidingParent, projectName);
+        const generatedAppHost = path.join(validParent, projectName, 'apphost.cs');
+        fs.mkdirSync(collidingProject, { recursive: true });
+        fs.mkdirSync(validParent, { recursive: true });
+        fs.writeFileSync(path.join(collidingProject, 'existing.txt'), 'existing project');
+        writeWorkspaceSetting('files.simpleDialog.enable', true);
+
+        await openAspireView();
+        await waitForRepositoryIdle();
+        const beforeInvocation = getCommandInvocationCount('aspire-vscode.new');
+        await executeCommandFromPalette('Aspire: New Project');
+        await chooseActiveQuickPick('Empty AppHost (Choose language...)');
+        await chooseActiveQuickPick('C# (.NET)');
+        await answerActiveInput(projectName, '');
+        await chooseActiveQuickPick(`In a subdirectory named '${projectName}' in the selected folder`);
+        await answerActiveInput(collidingParent, 'Folder path');
+
+        const expectedError = `The output directory '${collidingProject}' already exists and is not empty. Specify a different location.`;
+        await waitForNotificationMessage(expectedError, 60000);
+        await waitForActiveInput('Folder path', 'Enter the output path', 60000);
+        await VSBrowser.instance.takeScreenshot('new-project-output-collision-retry.png');
+
+        await answerActiveInput(validParent, 'Folder path');
+        await chooseActiveQuickPick('No');
+        await VSBrowser.instance.driver.wait(
+            () => fs.existsSync(generatedAppHost),
+            120000,
+            `Timed out waiting for the generated AppHost at '${generatedAppHost}'.`);
+
+        await chooseActiveQuickPick('No');
+        await waitForCommandOutcome('aspire-vscode.new', 'success', 60000, beforeInvocation);
+        assert.ok(fs.existsSync(path.join(collidingProject, 'existing.txt')));
+        assert.ok(fs.existsSync(generatedAppHost));
     });
 
     test('isolates folder terminals and keeps global commands window scoped', async function () {

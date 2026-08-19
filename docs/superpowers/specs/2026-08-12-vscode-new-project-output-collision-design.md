@@ -35,16 +35,13 @@ Add a `NewCommandTests` regression that reproduces the issue shape: extension mo
 
 ## End-to-end proof
 
-Build the local CLI and package the local VS Code extension. Run VS Code Insiders with `serve-web`, an isolated server data directory, and a workspace containing an existing non-empty `aspire-starter` directory. Configure the extension to use the locally built CLI.
+Add a VS Code extension E2E scenario under `extension/src/test-e2e/` that runs against the repo-built CLI and exercises the real backchannel RPC plus `vscode.window.showOpenDialog` path. The scenario must:
 
-Use Playwright CLI to:
+1. run `Aspire: New Project`;
+2. select a CLI-backed template and project-named subdirectory creation;
+3. select a parent containing a non-empty matching child;
+4. verify the existing validation message appears;
+5. verify the folder picker reopens;
+6. select a valid parent and verify project creation completes there.
 
-1. open the browser-hosted VS Code instance;
-2. run `Aspire: New Aspire Project`;
-3. accept the starter template and default project name;
-4. choose project-named subdirectory creation;
-5. select the colliding parent and verify the validation message appears;
-6. verify the folder picker reopens;
-7. select a valid parent and verify project creation completes there.
-
-Capture a Playwright trace and screenshot as persistent proof.
+Run the scenario against the pre-fix CLI to prove it fails while waiting for the reopened picker, then against the current CLI to prove it passes. Capture the reopened picker screenshot from the passing run and upload it to the PR description as persistent proof.

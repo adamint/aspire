@@ -8,6 +8,13 @@
 
 **Tech Stack:** .NET 10, C# 13, xUnit v3 with Microsoft.Testing.Platform, VS Code extension backchannel RPC, VS Code Insiders `serve-web`, Playwright CLI.
 
+Run these commands once in the shell used for the steps below:
+
+```bash
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+PROOF_DIR="${TMPDIR:-/tmp}/aspire-issue19283-proof"
+```
+
 ---
 
 ### Task 1: Add failing collision-retry coverage
@@ -23,7 +30,7 @@
 Run:
 
 ```bash
-cd /Volumes/DevDrive/source/aspire-issue19283
+cd "$REPO_ROOT"
 ./restore.sh
 ```
 
@@ -238,7 +245,7 @@ public async Task NewCommandInExtensionModeRetriesFolderPickerAfterProjectSubdir
 Run:
 
 ```bash
-cd /Volumes/DevDrive/source/aspire-issue19283
+cd "$REPO_ROOT"
 dotnet test --project tests/Aspire.Cli.Tests/Aspire.Cli.Tests.csproj --no-launch-profile -- \
   --filter-method "*.PromptForFilePathAsync_RetriesAfterInvalidSelection" \
   --filter-method "*.PromptForFilePathAsync_CancelAfterInvalidSelectionThrows" \
@@ -312,7 +319,7 @@ if (hasFilePickersCapability)
 Run:
 
 ```bash
-cd /Volumes/DevDrive/source/aspire-issue19283
+cd "$REPO_ROOT"
 dotnet test --project tests/Aspire.Cli.Tests/Aspire.Cli.Tests.csproj --no-launch-profile -- \
   --filter-method "*.PromptForFilePathAsync_RetriesAfterInvalidSelection" \
   --filter-method "*.PromptForFilePathAsync_CancelAfterInvalidSelectionThrows" \
@@ -328,7 +335,7 @@ Expected: all three tests PASS.
 Run:
 
 ```bash
-cd /Volumes/DevDrive/source/aspire-issue19283
+cd "$REPO_ROOT"
 dotnet test --project tests/Aspire.Cli.Tests/Aspire.Cli.Tests.csproj --no-launch-profile -- \
   --filter-not-trait "quarantined=true" \
   --filter-not-trait "outerloop=true"
@@ -341,7 +348,7 @@ Expected: PASS with no new warnings or failures.
 Run:
 
 ```bash
-cd /Volumes/DevDrive/source/aspire-issue19283
+cd "$REPO_ROOT"
 git diff --check
 git status --short
 ```
@@ -351,7 +358,7 @@ Expected: no whitespace errors; only the planned source, tests, design, and plan
 - [ ] **Step 5: Commit the implementation**
 
 ```bash
-cd /Volumes/DevDrive/source/aspire-issue19283
+cd "$REPO_ROOT"
 git add src/Aspire.Cli/Interaction/ExtensionInteractionService.cs \
   tests/Aspire.Cli.Tests/Interaction/ExtensionInteractionServiceTests.cs \
   tests/Aspire.Cli.Tests/Commands/NewCommandTests.cs \
@@ -365,16 +372,16 @@ git commit -m "Retry invalid VS Code project locations" \
 **Consumed by:** nothing
 
 **Files:**
-- Create proof artifacts outside the repository under `/Users/adamratzman/.copilot/session-state/75ac937a-798f-4895-b1b5-ee4948b12b56/files/issue19283-playwright/`
-- Read local extension package from `extension/.test-artifacts/aspire-extension-issue19283.vsix`
-- Read local CLI from `artifacts/bin/Aspire.Cli/Debug/net10.0/aspire`
+- Create proof artifacts outside the repository under `$PROOF_DIR`
+- Read the local extension package from `$REPO_ROOT/extension/.test-artifacts/aspire-extension-issue19283.vsix`
+- Read the local CLI from `$REPO_ROOT/artifacts/bin/Aspire.Cli/Debug/net10.0/aspire`
 
 - [ ] **Step 1: Build the CLI and package the extension**
 
 Run:
 
 ```bash
-cd /Volumes/DevDrive/source/aspire-issue19283
+cd "$REPO_ROOT"
 dotnet build src/Aspire.Cli/Aspire.Cli.csproj --no-restore
 cd extension
 mkdir -p .test-artifacts
@@ -389,7 +396,7 @@ Expected: the CLI executable exists at `artifacts/bin/Aspire.Cli/Debug/net10.0/a
 Create:
 
 ```text
-/Users/adamratzman/.copilot/session-state/75ac937a-798f-4895-b1b5-ee4948b12b56/files/issue19283-playwright/
+$PROOF_DIR/
 ├── server-data/
 ├── workspace/
 │   ├── .vscode/settings.json
@@ -398,12 +405,16 @@ Create:
 └── vscode-serve-web.log
 ```
 
-Write this exact workspace setting:
+Write the workspace setting with the resolved repository path:
 
-```json
-{
-  "aspire.aspireCliExecutablePath": "/Volumes/DevDrive/source/aspire-issue19283/artifacts/bin/Aspire.Cli/Debug/net10.0/aspire"
-}
+```bash
+mkdir -p "$PROOF_DIR/workspace/.vscode" \
+  "$PROOF_DIR/workspace/colliding-parent/aspire-starter" \
+  "$PROOF_DIR/workspace/valid-parent"
+jq -n \
+  --arg cliPath "$REPO_ROOT/artifacts/bin/Aspire.Cli/Debug/net10.0/aspire" \
+  '{ "aspire.aspireCliExecutablePath": $cliPath }' \
+  > "$PROOF_DIR/workspace/.vscode/settings.json"
 ```
 
 The existing file content can be any non-empty text, for example:
@@ -423,9 +434,9 @@ nohup '/Applications/Visual Studio Code - Insiders.app/Contents/Resources/app/bi
   --without-connection-token \
   --accept-server-license-terms \
   --disable-telemetry \
-  --server-data-dir /Users/adamratzman/.copilot/session-state/75ac937a-798f-4895-b1b5-ee4948b12b56/files/issue19283-playwright/server-data \
-  --default-folder /Users/adamratzman/.copilot/session-state/75ac937a-798f-4895-b1b5-ee4948b12b56/files/issue19283-playwright/workspace \
-  > /Users/adamratzman/.copilot/session-state/75ac937a-798f-4895-b1b5-ee4948b12b56/files/issue19283-playwright/vscode-serve-web.log 2>&1 &
+  --server-data-dir "$PROOF_DIR/server-data" \
+  --default-folder "$PROOF_DIR/workspace" \
+  > "$PROOF_DIR/vscode-serve-web.log" 2>&1 &
 ```
 
 Verify:
@@ -446,7 +457,7 @@ playwright-cli -s=issue19283 tracing-start
 playwright-cli -s=issue19283 press Control+Shift+P
 playwright-cli -s=issue19283 type "Extensions: Install from VSIX..."
 playwright-cli -s=issue19283 press Enter
-playwright-cli -s=issue19283 upload /Volumes/DevDrive/source/aspire-issue19283/extension/.test-artifacts/aspire-extension-issue19283.vsix
+playwright-cli -s=issue19283 upload "$REPO_ROOT/extension/.test-artifacts/aspire-extension-issue19283.vsix"
 ```
 
 Use `playwright-cli -s=issue19283 snapshot` after each command. If VS Code presents workspace-trust or reload confirmation, click the visible `Yes, I trust the authors` or `Reload Now` node returned by the snapshot, then wait for the workbench to reload.
@@ -485,7 +496,7 @@ Run:
 
 ```bash
 playwright-cli -s=issue19283 screenshot \
-  --filename /Users/adamratzman/.copilot/session-state/75ac937a-798f-4895-b1b5-ee4948b12b56/files/issue19283-playwright/fixed-flow.png \
+  --filename "$PROOF_DIR/fixed-flow.png" \
   --full-page
 playwright-cli -s=issue19283 tracing-stop
 playwright-cli -s=issue19283 close
@@ -496,9 +507,9 @@ Copy the trace path reported by `tracing-stop` into the proof directory if Playw
 Verify:
 
 ```bash
-test -f /Users/adamratzman/.copilot/session-state/75ac937a-798f-4895-b1b5-ee4948b12b56/files/issue19283-playwright/fixed-flow.png
-test -f /Users/adamratzman/.copilot/session-state/75ac937a-798f-4895-b1b5-ee4948b12b56/files/issue19283-playwright/workspace/valid-parent/aspire-starter/aspire-starter.AppHost/aspire-starter.AppHost.csproj
-git -C /Volumes/DevDrive/source/aspire-issue19283 status --short --branch
+test -f "$PROOF_DIR/fixed-flow.png"
+test -f "$PROOF_DIR/workspace/valid-parent/aspire-starter/aspire-starter.AppHost/aspire-starter.AppHost.csproj"
+git -C "$REPO_ROOT" status --short --branch
 ```
 
 Expected: the screenshot and generated project exist, and the repository has no uncommitted implementation changes.
