@@ -52,7 +52,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task CheckAsync_UsesNewerStableMarketplaceVersion_WhenReportedChannelIsPreRelease()
+    public async Task CheckAsync_UsesMatchingPreReleaseMarketplaceVersion_WhenStableIsNewer()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
@@ -78,8 +78,8 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
 
         Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
-        Assert.Equal("stable", result.Metadata!["latestVersionChannel"]!.GetValue<string>());
-        Assert.Equal("9.0.0", result.Metadata["latestVersion"]!.GetValue<string>());
+        Assert.Equal("prerelease", result.Metadata!["latestVersionChannel"]!.GetValue<string>());
+        Assert.Equal("1.4.0", result.Metadata["latestVersion"]!.GetValue<string>());
     }
 
     [Fact]
@@ -223,6 +223,78 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
             result.Details);
         Assert.False(result.Metadata!["latestVersionKnown"]!.GetValue<bool>());
         Assert.Null(result.Metadata["latestVersionError"]);
+    }
+
+    [Fact]
+    public async Task CheckAsync_DoesNotFallBackToStable_WhenPreReleaseMarketplaceVersionIsMissing()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            [VsCodeExtensionCheck.ExtensionVersionEnvironmentVariable] = "1.2.3",
+            [VsCodeExtensionCheck.ExtensionChannelEnvironmentVariable] = "prerelease",
+            [VsCodeExtensionCheck.ExtensionSourceEnvironmentVariable] = MicrosoftMarketplaceExtensionSource
+        });
+        var executionContext = TestExecutionContextHelper.CreateExecutionContext(home, homeDirectory: home);
+        var marketplaceClient = new TestMarketplaceClient(
+            new VsCodeExtensionMarketplaceVersions(
+                SemVersion.Parse("9.0.0", SemVersionStyles.Strict),
+                null));
+        var check = new VsCodeExtensionCheck(
+            environment,
+            executionContext,
+            marketplaceClient,
+            NullLogger<VsCodeExtensionCheck>.Instance,
+            _ => null);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
+        Assert.Equal(DoctorCommandStrings.VsCodeExtensionLatestVersionNotFoundDetails, result.Details);
+        Assert.False(result.Metadata!["latestVersionKnown"]!.GetValue<bool>());
+        Assert.Null(result.Metadata["latestVersion"]);
+        Assert.Null(result.Metadata["latestVersionChannel"]);
+        Assert.Null(result.Metadata["latestVersionError"]);
+    }
+
+    [Theory]
+    [InlineData("""[]""")]
+    [InlineData("""{ "results": {} }""")]
+    [InlineData("""{ "results": [{}] }""")]
+    [InlineData("""{ "results": [{ "extensions": {} }] }""")]
+    [InlineData("""{ "results": [{ "extensions": [{ "versions": {} }] }] }""")]
+    public async Task CheckAsync_ReturnsWarning_WhenMarketplacePayloadHasUnexpectedShape(string payload)
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            [VsCodeExtensionCheck.ExtensionVersionEnvironmentVariable] = "1.2.3",
+            [VsCodeExtensionCheck.ExtensionChannelEnvironmentVariable] = "stable",
+            [VsCodeExtensionCheck.ExtensionSourceEnvironmentVariable] = MicrosoftMarketplaceExtensionSource
+        });
+        var executionContext = TestExecutionContextHelper.CreateExecutionContext(home, homeDirectory: home);
+        using var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json")
+        };
+        using var httpClient = new HttpClient(new MockHttpMessageHandler(response));
+        var check = new VsCodeExtensionCheck(
+            environment,
+            executionContext,
+            new VsCodeExtensionMarketplaceClient(httpClient),
+            NullLogger<VsCodeExtensionCheck>.Instance,
+            _ => null);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
+        Assert.Equal(DoctorCommandStrings.VsCodeExtensionLatestVersionCheckUnavailableDetails, result.Details);
+        Assert.False(result.Metadata!["latestVersionKnown"]!.GetValue<bool>());
+        Assert.Equal("unavailable", result.Metadata["latestVersionError"]!.GetValue<string>());
     }
 
     [Fact]

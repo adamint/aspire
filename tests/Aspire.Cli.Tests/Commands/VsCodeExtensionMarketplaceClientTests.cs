@@ -48,6 +48,78 @@ public class VsCodeExtensionMarketplaceClientTests
     }
 
     [Fact]
+    public async Task GetLatestVersionsAsync_IgnoresMalformedUnrelatedVersionProperty()
+    {
+        using var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """
+                {
+                  "results": [{
+                    "extensions": [{
+                      "versions": [{
+                        "version": "1.4.0",
+                        "properties": [
+                          { "key": "Unrelated.Property" },
+                          {
+                            "key": "Microsoft.VisualStudio.Code.PreRelease",
+                            "value": "true"
+                          }
+                        ]
+                      }]
+                    }]
+                  }]
+                }
+                """,
+                Encoding.UTF8,
+                "application/json")
+        };
+        using var httpClient = new HttpClient(new MockHttpMessageHandler(response));
+        var client = new VsCodeExtensionMarketplaceClient(httpClient);
+
+        var versions = await client.GetLatestVersionsAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("1.4.0", versions.PreReleaseVersion?.ToString());
+    }
+
+    [Theory]
+    [InlineData("""{}""")]
+    [InlineData("""[{ "key": "Microsoft.VisualStudio.Code.PreRelease" }]""")]
+    [InlineData(
+        """
+        [
+          { "key": "Microsoft.VisualStudio.Code.PreRelease", "value": "false" },
+          { "key": "microsoft.visualstudio.code.prerelease", "value": "true" }
+        ]
+        """)]
+    public async Task GetLatestVersionsAsync_IgnoresVersion_WhenPreReleasePropertiesAreMalformedOrAmbiguous(
+        string properties)
+    {
+        var responseJson = $$"""
+            {
+              "results": [{
+                "extensions": [{
+                  "versions": [{
+                    "version": "1.4.0",
+                    "properties": {{properties}}
+                  }]
+                }]
+              }]
+            }
+            """;
+        using var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(responseJson, Encoding.UTF8, "application/json")
+        };
+        using var httpClient = new HttpClient(new MockHttpMessageHandler(response));
+        var client = new VsCodeExtensionMarketplaceClient(httpClient);
+
+        var versions = await client.GetLatestVersionsAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(new VsCodeExtensionMarketplaceVersions(null, null), versions);
+    }
+
+    [Fact]
     public async Task GetLatestVersionsAsync_SendsTheAnonymousMarketplaceQuery()
     {
         using var response = new HttpResponseMessage(HttpStatusCode.OK)

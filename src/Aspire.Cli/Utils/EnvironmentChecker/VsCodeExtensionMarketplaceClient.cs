@@ -59,44 +59,49 @@ internal sealed class VsCodeExtensionMarketplaceClient(HttpClient httpClient) : 
         SemVersion? stableVersion = null;
         SemVersion? preReleaseVersion = null;
 
-        if (root.TryGetProperty("results", out var results) && results.ValueKind == JsonValueKind.Array)
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("results", out var results) ||
+            results.ValueKind != JsonValueKind.Array)
         {
-            foreach (var result in results.EnumerateArray())
+            throw new InvalidDataException("The Marketplace response did not contain a results array.");
+        }
+
+        foreach (var result in results.EnumerateArray())
+        {
+            if (result.ValueKind != JsonValueKind.Object ||
+                !result.TryGetProperty("extensions", out var extensions) ||
+                extensions.ValueKind != JsonValueKind.Array)
             {
-                if (result.ValueKind != JsonValueKind.Object ||
-                    !result.TryGetProperty("extensions", out var extensions) ||
-                    extensions.ValueKind != JsonValueKind.Array)
+                throw new InvalidDataException("A Marketplace result did not contain an extensions array.");
+            }
+
+            foreach (var extension in extensions.EnumerateArray())
+            {
+                if (extension.ValueKind != JsonValueKind.Object ||
+                    !extension.TryGetProperty("versions", out var versions) ||
+                    versions.ValueKind != JsonValueKind.Array)
                 {
-                    continue;
+                    throw new InvalidDataException("A Marketplace extension did not contain a versions array.");
                 }
 
-                foreach (var extension in extensions.EnumerateArray())
+                foreach (var versionEntry in versions.EnumerateArray())
                 {
-                    if (extension.ValueKind != JsonValueKind.Object ||
-                        !extension.TryGetProperty("versions", out var versions) ||
-                        versions.ValueKind != JsonValueKind.Array)
+                    if (versionEntry.ValueKind != JsonValueKind.Object ||
+                        !versionEntry.TryGetProperty("version", out var versionElement) ||
+                        versionElement.ValueKind != JsonValueKind.String ||
+                        !SemVersion.TryParse(versionElement.GetString(), SemVersionStyles.Strict, out var version) ||
+                        !TryGetIsPreRelease(versionEntry, out var isPreRelease))
                     {
                         continue;
                     }
 
-                    foreach (var versionEntry in versions.EnumerateArray())
+                    if (isPreRelease)
                     {
-                        if (versionEntry.ValueKind != JsonValueKind.Object ||
-                            !versionEntry.TryGetProperty("version", out var versionElement) ||
-                            versionElement.ValueKind != JsonValueKind.String ||
-                            !SemVersion.TryParse(versionElement.GetString(), SemVersionStyles.Strict, out var version))
-                        {
-                            continue;
-                        }
-
-                        if (IsPreRelease(versionEntry))
-                        {
-                            preReleaseVersion = SelectLatest(preReleaseVersion, version);
-                        }
-                        else
-                        {
-                            stableVersion = SelectLatest(stableVersion, version);
-                        }
+                        preReleaseVersion = SelectLatest(preReleaseVersion, version);
+                    }
+                    else
+                    {
+                        stableVersion = SelectLatest(stableVersion, version);
                     }
                 }
             }
@@ -105,29 +110,53 @@ internal sealed class VsCodeExtensionMarketplaceClient(HttpClient httpClient) : 
         return new VsCodeExtensionMarketplaceVersions(stableVersion, preReleaseVersion);
     }
 
-    private static bool IsPreRelease(JsonElement versionEntry)
+    private static bool TryGetIsPreRelease(JsonElement versionEntry, out bool isPreRelease)
     {
-        if (!versionEntry.TryGetProperty("properties", out var properties) ||
-            properties.ValueKind != JsonValueKind.Array)
+        isPreRelease = false;
+        // Stable entries normally omit `properties`. When the prerelease marker is present, require
+        // the Marketplace's `{ "key": "...PreRelease", "value": "true|false" }` shape and make
+        // duplicate markers agree so response ordering cannot change the selected channel.
+        if (!versionEntry.TryGetProperty("properties", out var properties))
+        {
+            return true;
+        }
+
+        if (properties.ValueKind != JsonValueKind.Array)
         {
             return false;
         }
 
+        bool? marker = null;
         foreach (var property in properties.EnumerateArray())
         {
-            if (property.ValueKind == JsonValueKind.Object &&
-                property.TryGetProperty("key", out var key) &&
-                key.ValueKind == JsonValueKind.String &&
-                string.Equals(key.GetString(), PreReleasePropertyName, StringComparison.OrdinalIgnoreCase) &&
-                property.TryGetProperty("value", out var value) &&
-                value.ValueKind == JsonValueKind.String &&
-                bool.TryParse(value.GetString(), out var isPreRelease))
+            if (property.ValueKind != JsonValueKind.Object ||
+                !property.TryGetProperty("key", out var key) ||
+                key.ValueKind != JsonValueKind.String)
             {
-                return isPreRelease;
+                return false;
             }
+
+            if (!string.Equals(key.GetString(), PreReleasePropertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!property.TryGetProperty("value", out var value) ||
+                value.ValueKind != JsonValueKind.String ||
+                !bool.TryParse(value.GetString(), out var propertyValue) ||
+                marker is not null && marker.Value != propertyValue)
+            {
+                // Malformed or conflicting prerelease metadata makes this version entry's channel
+                // unreadable, so skip the entry. Malformed response containers invalidate the
+                // protocol response instead and are reported by the check as lookup unavailable.
+                return false;
+            }
+
+            marker = propertyValue;
         }
 
-        return false;
+        isPreRelease = marker ?? false;
+        return true;
     }
 
     private static SemVersion SelectLatest(SemVersion? current, SemVersion candidate)

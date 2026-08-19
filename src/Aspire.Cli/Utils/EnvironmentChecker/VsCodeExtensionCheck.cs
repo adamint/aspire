@@ -176,13 +176,6 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             return (versions.StableVersion, "stable");
         }
 
-        if (versions.PreReleaseVersion is null ||
-            versions.StableVersion is not null &&
-            SemVersion.ComparePrecedence(versions.StableVersion, versions.PreReleaseVersion) >= 0)
-        {
-            return (versions.StableVersion, "stable");
-        }
-
         return (versions.PreReleaseVersion, "prerelease");
     }
 
