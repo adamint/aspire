@@ -171,6 +171,54 @@ suite('cliPathEnvironment.syncAspireExtensionEnvironment tests', () => {
 
         assert.strictEqual(extensionEnvironment?.[ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR], 'other');
     });
+
+    test('marks official VS Code with a configured gallery as another extension source', () => {
+        const extensionEnvironment = getAspireExtensionEnvironment({
+            version: '1.16.0',
+        }, {
+            appName: 'Visual Studio Code',
+            uriScheme: 'vscode',
+            extensionGalleryServiceUrl: 'https://marketplace.example.test/manifest',
+        });
+
+        assert.strictEqual(extensionEnvironment?.[ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR], 'other');
+    });
+
+    test('marks official VS Code Insiders with a configured gallery as another extension source', () => {
+        const extensionEnvironment = getAspireExtensionEnvironment({
+            version: '1.16.0',
+        }, {
+            appName: 'Visual Studio Code - Insiders',
+            uriScheme: 'vscode-insiders',
+            extensionGalleryServiceUrl: 'https://marketplace.example.test/manifest',
+        });
+
+        assert.strictEqual(extensionEnvironment?.[ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR], 'other');
+    });
+
+    test('marks whitespace in the configured gallery setting as another extension source', () => {
+        const extensionEnvironment = getAspireExtensionEnvironment({
+            version: '1.16.0',
+        }, {
+            appName: 'Visual Studio Code',
+            uriScheme: 'vscode',
+            extensionGalleryServiceUrl: '   ',
+        });
+
+        assert.strictEqual(extensionEnvironment?.[ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR], 'other');
+    });
+
+    test('marks truthy malformed gallery settings as another extension source', () => {
+        const extensionEnvironment = getAspireExtensionEnvironment({
+            version: '1.16.0',
+        }, {
+            appName: 'Visual Studio Code',
+            uriScheme: 'vscode',
+            extensionGalleryServiceUrl: { serviceUrl: 'malformed' },
+        });
+
+        assert.strictEqual(extensionEnvironment?.[ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR], 'other');
+    });
 });
 
 suite('cliPathEnvironment.getForwardableAspireCliPath tests', () => {

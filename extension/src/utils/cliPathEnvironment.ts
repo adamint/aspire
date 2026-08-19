@@ -43,6 +43,7 @@ export type AspireExtensionEnvironment = Readonly<{
 export interface VsCodeProductIdentity {
     appName: string;
     uriScheme: string;
+    extensionGalleryServiceUrl?: unknown;
 }
 
 /**
@@ -558,9 +559,16 @@ function isMicrosoftVsCodeProduct(productIdentity: VsCodeProductIdentity): boole
     const appName = productIdentity.appName.trim();
     const uriScheme = productIdentity.uriScheme.trim();
 
-    // VS Code does not expose its configured extension gallery URL. Require the matching
-    // Microsoft product name and URI scheme so forks and side-loaded Code - OSS builds do not
-    // direct users to the Microsoft Marketplace.
+    // VS Code uses raw JavaScript truthiness to decide whether a configured gallery replaces the
+    // product's default Marketplace manifest after restart. Match that behavior even when manually
+    // supplied settings do not conform to the declared string schema.
+    // See https://github.com/microsoft/vscode/blob/main/src/vs/workbench/services/extensionManagement/electron-browser/extensionGalleryManifestService.ts.
+    if (productIdentity.extensionGalleryServiceUrl) {
+        return false;
+    }
+
+    // Require the matching Microsoft product name and URI scheme so forks and side-loaded
+    // Code - OSS builds do not direct users to the Microsoft Marketplace.
     return appName === 'Visual Studio Code' && uriScheme === 'vscode'
         || appName === 'Visual Studio Code - Insiders' && uriScheme === 'vscode-insiders';
 }

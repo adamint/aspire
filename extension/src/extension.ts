@@ -54,6 +54,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const extensionEnvironment = getAspireExtensionEnvironment(context.extension.packageJSON, {
     appName: vscode.env.appName,
     uriScheme: vscode.env.uriScheme,
+    extensionGalleryServiceUrl: vscode.workspace.getConfiguration().get<unknown>('extensions.gallery.serviceUrl'),
   });
   const terminalProvider = new AspireTerminalProvider(context.subscriptions, undefined, cliPathResolver, extensionEnvironment);
   const testRunSessionManager = new TestRunSessionManager();

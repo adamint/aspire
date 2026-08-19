@@ -756,6 +756,8 @@ async function executeE2eControlCommand(
         version: context.environmentVariableCollection.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR)?.value,
         channel: context.environmentVariableCollection.get(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR)?.value,
         source: context.environmentVariableCollection.get(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR)?.value,
+        hasConfiguredExtensionGallery: Boolean(
+          vscode.workspace.getConfiguration().get<unknown>('extensions.gallery.serviceUrl')),
       };
     }
     case 'getExtensionFileStatus': {

@@ -68,6 +68,7 @@ interface AspireExtensionEnvironment {
     version?: string;
     channel?: string;
     source?: string;
+    hasConfiguredExtensionGallery?: boolean;
 }
 
 type AspireExtensionChannel = 'stable' | 'prerelease';
@@ -90,12 +91,22 @@ suite('Aspire package contribution surface E2E', function () {
         const installedPackage = (await executeE2eControlCommand({ name: 'getExtensionPackageJson' })).result as PackageJson;
         const extensionEnvironment = (await executeE2eControlCommand({ name: 'getAspireExtensionEnvironment' })).result as AspireExtensionEnvironment;
         const registeredCommands = (await executeE2eControlCommand({ name: 'getRegisteredAspireCommands' })).result as string[];
+        const requireConfiguredGallery = process.env.ASPIRE_EXTENSION_E2E_USE_CONFIGURED_GALLERY === 'true';
+        const hasConfiguredExtensionGallery = extensionEnvironment.hasConfiguredExtensionGallery;
 
         assert.strictEqual(installedPackage.preRelease, false, 'Offline VSIX installation should exercise the package-time channel marker rather than Marketplace metadata.');
+        assert.strictEqual(typeof hasConfiguredExtensionGallery, 'boolean');
+        // Organization policy can configure the gallery even when the isolated user and workspace
+        // settings do not. The opt-in row must take the configured path, while the control row must
+        // remain consistent with whatever effective policy the Extension Host receives.
+        if (requireConfiguredGallery) {
+            assert.strictEqual(hasConfiguredExtensionGallery, true);
+        }
         assert.deepStrictEqual(extensionEnvironment, {
             version: installedPackage.version,
             channel: getExpectedExtensionChannel(),
-            source: 'microsoft-marketplace',
+            source: hasConfiguredExtensionGallery ? 'other' : 'microsoft-marketplace',
+            hasConfiguredExtensionGallery,
         });
         const sourceCommandIds = getPackageCommandIds(sourcePackage);
         const installedCommandIds = getPackageCommandIds(installedPackage);

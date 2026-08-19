@@ -149,6 +149,20 @@ function prepareRunDirectories() {
   }
 }
 
+function prepareCodeSettings() {
+  const defaultSettingsPath = path.join(extensionRoot, 'test-e2e', 'settings.json');
+  const useConfiguredGallery = process.env.ASPIRE_EXTENSION_E2E_USE_CONFIGURED_GALLERY === 'true';
+  if (!useConfiguredGallery) {
+    return defaultSettingsPath;
+  }
+
+  const settings = JSON.parse(fs.readFileSync(defaultSettingsPath, 'utf8'));
+  settings['extensions.gallery.serviceUrl'] = 'https://example.invalid/extension-gallery';
+  const configuredSettingsPath = path.join(shortRunRoot, 'code-settings.json');
+  fs.writeFileSync(configuredSettingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
+  return configuredSettingsPath;
+}
+
 function getRunTestsTimeoutMs() {
   const configured = Number(process.env.ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS || 2400000);
   if (!Number.isFinite(configured) || configured <= 0) {
@@ -588,6 +602,7 @@ async function main() {
 
     assertSpecMatches(testSpec);
     prepareRunDirectories();
+    const codeSettingsPath = prepareCodeSettings();
     logE2eConfiguration();
 
     const bundledCliPath = resolveCliPath();
@@ -693,7 +708,7 @@ async function main() {
     recording = startRecording();
     try {
       logStep('Running VS Code extension E2E tests');
-      const runTestsArgs = [extesterCli, 'run-tests', testSpec, '--storage', storageDir, '--extensions_dir', extensionsDir, '--code_version', vscodeVersion, '--code_settings', path.join(extensionRoot, 'test-e2e', 'settings.json'), '--mocha_config', path.join(extensionRoot, '.mocharc.e2e.js'), '--offline'];
+      const runTestsArgs = [extesterCli, 'run-tests', testSpec, '--storage', storageDir, '--extensions_dir', extensionsDir, '--code_version', vscodeVersion, '--code_settings', codeSettingsPath, '--mocha_config', path.join(extensionRoot, '.mocharc.e2e.js'), '--offline'];
       await runWithProcessTreeTimeout(process.execPath, runTestsArgs, {
         diagnosticsSuffix: ` Diagnostics are under ${path.relative(extensionRoot, resultsDir)} and ${path.relative(extensionRoot, storageDiagnosticsDir)}.`,
         quoteShellArgument: quoteWindowsShellArgument,
