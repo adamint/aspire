@@ -519,6 +519,8 @@ The Aspire VS Code extension contributes `ASPIRE_VSCODE_EXTENSION_VERSION` and `
 }
 ```
 
+The `isolated-launch.v1` capability indicates that `aspire run` accepts the `--isolated` option.
+
 ## MCP tooling
 
 ### `aspire mcp tools`

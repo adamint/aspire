@@ -1,12 +1,10 @@
 import * as vscode from 'vscode';
-import {
-    onDidChangeConfiguredCliPathRejection,
-    onDidChangeResolvedCliPathForForwarding,
-    resolveCliPath,
-} from '../utils/cliPath';
+import { CliPathResolver, cliPathResolver } from '../utils/cliPath';
+import { workspaceFolderCliPathTarget } from '../utils/cliPathVariables';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { getCmdShimSpawnCommandWithoutVerbatimArguments, shouldWrapWithCmd } from '../utils/cmdShim';
 import { getRegisterMcpServerInWorkspace, registerMcpServerInWorkspaceSetting } from '../utils/settings';
+import { ASPIRE_CLI_PATH_ENV_VAR, getForwardableResolvedAspireCliPath, ResolvedCliPathDependencies } from '../utils/cliPathEnvironment';
 import type { AspireExtensionEnvironment } from '../utils/cliPathEnvironment';
 
 const mcpServerLabel = 'Aspire';
@@ -23,16 +21,40 @@ const aspireCliExecutablePathSetting = 'aspire.aspireCliExecutablePath';
  */
 export function createAspireMcpServerDefinition(
     cliPath: string,
-    extensionEnvironment: AspireExtensionEnvironment | undefined,
+    label = mcpServerLabel,
+    cwd?: vscode.Uri,
+    deps?: ResolvedCliPathDependencies,
+    extensionEnvironment?: AspireExtensionEnvironment,
 ): vscode.McpStdioServerDefinition {
-    const env = createAspireMcpServerEnvironment(extensionEnvironment);
-
-    if (!shouldWrapWithCmd(cliPath)) {
-        return new vscode.McpStdioServerDefinition(mcpServerLabel, cliPath, [...mcpServerArgs], env);
+    // `aspire agent mcp` can build an AppHost, and that build inherits this environment. An
+    // unbundled framework-dependent CLI path makes MSBuild's ResolveAspireCliBundle bind bundle
+    // assets to a CLI that has no bundle layout (ASPIRE009), so it must not be forwarded. Every
+    // other AspireCliPath producer applies the same guard; omitting the variable lets the build
+    // fall back to PATH probing, exactly as those sites do.
+    const forwardableCliPath = deps === undefined
+        ? getForwardableResolvedAspireCliPath(cliPath)
+        : getForwardableResolvedAspireCliPath(cliPath, deps);
+    // The CLI path and the extension identity are independent contributions to the same
+    // environment: the identity names are ASPIRE_VSCODE_EXTENSION_* and never collide with
+    // ASPIRE_CLI_PATH, so both can be applied without either shadowing the other.
+    const environment = createAspireMcpServerEnvironment(extensionEnvironment);
+    if (forwardableCliPath !== undefined) {
+        environment[ASPIRE_CLI_PATH_ENV_VAR] = forwardableCliPath;
     }
 
-    const { command, args } = getCmdShimSpawnCommandWithoutVerbatimArguments(cliPath, mcpServerArgs);
-    return new vscode.McpStdioServerDefinition(mcpServerLabel, command, args, env);
+    // VS Code treats an empty map and an absent map differently only in that the empty map still
+    // clones process.env, so keep passing undefined when there is nothing to override.
+    const env = Object.keys(environment).length === 0 ? undefined : environment;
+    let definition: vscode.McpStdioServerDefinition;
+    if (!shouldWrapWithCmd(cliPath)) {
+        definition = new vscode.McpStdioServerDefinition(label, cliPath, [...mcpServerArgs], env);
+    }
+    else {
+        const { command, args } = getCmdShimSpawnCommandWithoutVerbatimArguments(cliPath, mcpServerArgs);
+        definition = new vscode.McpStdioServerDefinition(label, command, args, env);
+    }
+    definition.cwd = cwd;
+    return definition;
 }
 
 function createAspireMcpServerEnvironment(
@@ -74,15 +96,17 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
     private readonly _onDidChange = new vscode.EventEmitter<void>();
     readonly onDidChangeMcpServerDefinitions = this._onDidChange.event;
 
-    private _cliPath: string | undefined;
-    private _cliAvailable: boolean = false;
-    private _shouldProvide: boolean = false;
+    private _definitions: vscode.McpStdioServerDefinition[] = [];
     private _refreshGeneration = 0;
     private _configChangeDisposable: vscode.Disposable | undefined;
     private _workspaceFolderChangeDisposable: vscode.Disposable | undefined;
+    private _workspaceTrustGrantDisposable: vscode.Disposable | undefined;
     private _cliPathForwardingChangeDisposable: vscode.Disposable | undefined;
 
-    constructor(private readonly _extensionEnvironment: AspireExtensionEnvironment | undefined) {
+    constructor(
+        private readonly _resolver: CliPathResolver = cliPathResolver,
+        private readonly _extensionEnvironment?: AspireExtensionEnvironment,
+    ) {
         // Re-evaluate when the setting changes
         this._configChangeDisposable = vscode.workspace.onDidChangeConfiguration(e => {
             if (e.affectsConfiguration(registerMcpServerInWorkspaceSetting)
@@ -96,56 +120,93 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
             this.refresh();
         });
 
+        this._workspaceTrustGrantDisposable = vscode.workspace.onDidGrantWorkspaceTrust(() => {
+            this.refresh();
+        });
+
         // Another CLI consumer can discover that the configured path stopped
         // working or that an unpersisted fallback changed. Re-resolve the MCP
         // command so it cannot keep serving the stale path.
-        this._cliPathForwardingChangeDisposable = vscode.Disposable.from(
-            onDidChangeConfiguredCliPathRejection(() => this.refresh()),
-            onDidChangeResolvedCliPathForForwarding(() => this.refresh()),
-        );
+        this._cliPathForwardingChangeDisposable = this._resolver.onDidChangeForwarding(() => this.refresh());
     }
 
     async refresh(): Promise<void> {
         const refreshGeneration = ++this._refreshGeneration;
-        const [cliResult, shouldProvide] = await Promise.all([
-            resolveCliPath(),
-            checkShouldProvideMcpServer(),
-        ]);
+        const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+        const shouldProvide = await checkShouldProvideMcpServer();
+        const cliResults = shouldProvide
+            ? await Promise.all(workspaceFolders.map(folder => this._resolver.resolve(workspaceFolderCliPathTarget(folder))))
+            : [];
 
         if (refreshGeneration !== this._refreshGeneration) {
             return;
         }
 
-        const changed =
-            this._cliAvailable !== cliResult.available ||
-            this._cliPath !== cliResult.cliPath ||
-            this._shouldProvide !== shouldProvide;
+        const folderNameCounts = new Map<string, number>();
+        for (const folder of workspaceFolders) {
+            folderNameCounts.set(folder.name, (folderNameCounts.get(folder.name) ?? 0) + 1);
+        }
+        const reservedFolderLabels = new Set(workspaceFolders.map(folder => folder.name));
+        const allocatedFolderLabels = new Set<string>();
+        const folderNameOrdinals = new Map<string, number>();
+        const folderLabels = workspaceFolders.map(folder => {
+            let folderLabel = folder.name;
+            if ((folderNameCounts.get(folder.name) ?? 0) > 1) {
+                let ordinal = folderNameOrdinals.get(folder.name) ?? 0;
+                do {
+                    ordinal++;
+                    folderLabel = `${folder.name} ${ordinal}`;
+                } while (reservedFolderLabels.has(folderLabel) || allocatedFolderLabels.has(folderLabel));
+                folderNameOrdinals.set(folder.name, ordinal);
+            }
+            allocatedFolderLabels.add(folderLabel);
+            return folderLabel;
+        });
+        const definitions = cliResults.flatMap((result, index) => {
+            if (!result.available) {
+                return [];
+            }
 
-        this._cliAvailable = cliResult.available;
-        this._cliPath = cliResult.cliPath;
-        this._shouldProvide = shouldProvide;
+            const folder = workspaceFolders[index];
+            const label = workspaceFolders.length === 1 ? mcpServerLabel : `${mcpServerLabel} (${folderLabels[index]})`;
+            return [createAspireMcpServerDefinition(result.cliPath, label, folder.uri, undefined, this._extensionEnvironment)];
+        });
+        const changed = !areMcpDefinitionsEqual(this._definitions, definitions);
+        this._definitions = definitions;
 
         if (changed) {
-            extensionLogOutputChannel.info(`Aspire MCP server definition changed: cliAvailable=${cliResult.available}, shouldProvide=${shouldProvide}`);
+            extensionLogOutputChannel.info(`Aspire MCP server definitions changed: count=${definitions.length}, shouldProvide=${shouldProvide}`);
             this._onDidChange.fire();
         }
     }
 
     provideMcpServerDefinitions(_token: vscode.CancellationToken): vscode.ProviderResult<vscode.McpStdioServerDefinition[]> {
-        if (!this._cliAvailable || !this._shouldProvide || !this._cliPath) {
-            return [];
-        }
-
-        return [createAspireMcpServerDefinition(this._cliPath, this._extensionEnvironment)];
+        return [...this._definitions];
     }
 
     dispose(): void {
         this._refreshGeneration++;
         this._configChangeDisposable?.dispose();
         this._workspaceFolderChangeDisposable?.dispose();
+        this._workspaceTrustGrantDisposable?.dispose();
         this._cliPathForwardingChangeDisposable?.dispose();
         this._onDidChange.dispose();
     }
+}
+
+function areMcpDefinitionsEqual(
+    left: readonly vscode.McpStdioServerDefinition[],
+    right: readonly vscode.McpStdioServerDefinition[],
+): boolean {
+    return left.length === right.length && left.every((definition, index) => {
+        const other = right[index];
+        return definition.label === other.label
+            && definition.command === other.command
+            && definition.cwd?.toString() === other.cwd?.toString()
+            && definition.args.length === other.args.length
+            && definition.args.every((argument, argumentIndex) => argument === other.args[argumentIndex])
+            && JSON.stringify(definition.env) === JSON.stringify(other.env);
+    });
 }
 
 /**
@@ -155,6 +216,10 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
  * "aspire.registerMcpServerInWorkspace" setting is enabled.
  */
 async function checkShouldProvideMcpServer(): Promise<boolean> {
+    if (!vscode.workspace.isTrusted) {
+        return false;
+    }
+
     if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
         return false;
     }
