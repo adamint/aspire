@@ -1485,9 +1485,13 @@ async function runAspireCliForE2E(
       }
 
       completed = true;
+      // `getE2eErrorMessage` only forwards messages that carry the "Aspire extension E2E " marker;
+      // everything else is collapsed to a generic string so failures cannot leak user-supplied
+      // values. These two diagnostics are safe to forward because `diagnosticCommand` has already
+      // been redacted by `redactCliArgsForLogging` and neither embeds captured stdout/stderr.
       void terminateCliProcess(child, 'Aspire extension E2E CLI command', { force: true, suppressTimeoutWarning: true })
         .then(
-          () => reject(new Error(`${diagnosticCommand} timed out after ${timeoutMs}ms.`)),
+          () => reject(new Error(`Aspire extension E2E ${diagnosticCommand} timed out after ${timeoutMs}ms.`)),
           reject);
     }, timeoutMs);
 
@@ -1506,7 +1510,7 @@ async function runAspireCliForE2E(
         if (code === 0) {
           resolve(result);
         } else {
-          reject(new Error(`${diagnosticCommand} exited with code ${code}.`));
+          reject(new Error(`Aspire extension E2E ${diagnosticCommand} exited with code ${code}.`));
         }
       },
       errorCallback: error => {
