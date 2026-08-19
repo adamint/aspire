@@ -208,7 +208,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Register Aspire MCP server definition provider so the Aspire MCP server
   // appears automatically in VS Code's MCP tools list for Aspire workspaces.
-  const mcpProvider = new AspireMcpServerDefinitionProvider(cliPathResolver, extensionEnvironment);
+  const mcpProvider = new AspireMcpServerDefinitionProvider(extensionEnvironment);
   if (typeof vscode.lm?.registerMcpServerDefinitionProvider === 'function') {
     context.subscriptions.push(vscode.lm.registerMcpServerDefinitionProvider('aspire-mcp-server', mcpProvider));
     context.subscriptions.push(mcpProvider);

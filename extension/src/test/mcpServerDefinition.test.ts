@@ -39,11 +39,11 @@ suite('AspireMcpServerDefinitionProvider definition tests', () => {
             // Stub the path probing so the assertion below pins identity handling alone: this test
             // covers the cmd-shim quoting and case-insensitive alias nulling, not CLI path
             // forwarding, and a real filesystem probe would make the expected env host-dependent.
-            const definition = createAspireMcpServerDefinition(cliPath, undefined, undefined, {
+            const definition = createAspireMcpServerDefinition(cliPath, extensionEnvironment, undefined, undefined, {
                 isAbsolute: () => true,
                 fileExists: () => false,
                 realpath: () => undefined,
-            }, extensionEnvironment);
+            });
 
             assert.strictEqual(definition.label, 'Aspire');
             assert.strictEqual(definition.command, process.env.ComSpec);
@@ -94,11 +94,11 @@ suite('AspireMcpServerDefinitionProvider definition tests', () => {
             // Stub the path probing rather than letting it hit the real filesystem: the CLI path
             // and the extension identity are independent contributions to the same environment,
             // and this pins that they compose instead of one shadowing the other.
-            const definition = createAspireMcpServerDefinition(nativeCliPath, undefined, undefined, {
+            const definition = createAspireMcpServerDefinition(nativeCliPath, extensionEnvironment, undefined, undefined, {
                 isAbsolute: () => true,
                 fileExists: candidate => candidate === nativeCliPath,
                 realpath: () => undefined,
-            }, extensionEnvironment);
+            });
 
             assert.strictEqual(definition.command, nativeCliPath);
             assert.deepStrictEqual(definition.args, ['agent', 'mcp']);
@@ -117,7 +117,7 @@ suite('AspireMcpServerDefinitionProvider definition tests', () => {
 
     test('passes native executables through to the VS Code MCP launcher', () => {
         const cliPath = 'C:\\Program Files\\Aspire\\aspire.exe';
-        const definition = createAspireMcpServerDefinition(cliPath, undefined, undefined, {
+        const definition = createAspireMcpServerDefinition(cliPath, undefined, undefined, undefined, {
             isAbsolute: () => true,
             fileExists: candidate => candidate === cliPath,
             realpath: () => undefined,
@@ -138,7 +138,7 @@ suite('AspireMcpServerDefinitionProvider definition tests', () => {
         // hardcoded POSIX literal would never match there and the test would silently pass.
         const cliPath = path.join(path.sep, 'repo', 'artifacts', 'bin', 'Aspire.Cli', 'Debug', 'aspire');
         const cliAssemblyPath = path.join(path.dirname(cliPath), 'aspire.dll');
-        const definition = createAspireMcpServerDefinition(cliPath, undefined, undefined, {
+        const definition = createAspireMcpServerDefinition(cliPath, undefined, undefined, undefined, {
             isAbsolute: () => true,
             // An inner-loop `dotnet build` output: the apphost sits next to aspire.dll with no
             // install sidecar and no adjacent bundle layout.
@@ -201,7 +201,7 @@ suite('AspireMcpServerDefinitionProvider refresh tests', () => {
     });
 
     test('refreshes when workspace trust is granted', () => {
-        const provider = new AspireMcpServerDefinitionProvider();
+        const provider = new AspireMcpServerDefinitionProvider(undefined);
         const refresh = sinon.stub(provider, 'refresh').resolves();
 
         trustGrantHandler!();
@@ -218,7 +218,7 @@ suite('AspireMcpServerDefinitionProvider refresh tests', () => {
         const forwardingEmitter = new vscode.EventEmitter<CliPathResolutionTarget>();
         const resolve = sinon.stub().resolves({ available: true, cliPath: '/repo/app/aspire', source: 'configured' });
         const resolver = { resolve, onDidChangeForwarding: forwardingEmitter.event } as unknown as cliPath.CliPathResolver;
-        const provider = new AspireMcpServerDefinitionProvider(resolver);
+        const provider = new AspireMcpServerDefinitionProvider(undefined, resolver);
 
         try {
             await provider.refresh();
@@ -276,7 +276,7 @@ suite('AspireMcpServerDefinitionProvider refresh tests', () => {
             })),
             onDidChangeForwarding: forwardingEmitter.event,
         } as unknown as cliPath.CliPathResolver;
-        const provider = new AspireMcpServerDefinitionProvider(resolver);
+        const provider = new AspireMcpServerDefinitionProvider(undefined, resolver);
         const cancellationSource = new vscode.CancellationTokenSource();
 
         try {
@@ -312,7 +312,7 @@ suite('AspireMcpServerDefinitionProvider refresh tests', () => {
             }),
             onDidChangeForwarding: forwardingEmitter.event,
         } as unknown as cliPath.CliPathResolver;
-        const provider = new AspireMcpServerDefinitionProvider(resolver);
+        const provider = new AspireMcpServerDefinitionProvider(undefined, resolver);
         const cancellationSource = new vscode.CancellationTokenSource();
 
         try {
@@ -322,6 +322,40 @@ suite('AspireMcpServerDefinitionProvider refresh tests', () => {
             assert.strictEqual(definitions.length, 1);
             assert.strictEqual(definitions[0].label, 'Aspire');
             assert.strictEqual(definitions[0].cwd?.fsPath, folder.uri.fsPath);
+        }
+        finally {
+            cancellationSource.dispose();
+            forwardingEmitter.dispose();
+            provider.dispose();
+            workspaceFoldersValueStub.restore();
+        }
+    });
+
+    test('forwards extension identity to generated MCP definitions', async () => {
+        const folder = { index: 0, name: 'app', uri: vscode.Uri.file('/repo/app') };
+        const workspaceFoldersValueStub = sinon.stub(vscode.workspace, 'workspaceFolders').value([folder]);
+        const forwardingEmitter = new vscode.EventEmitter<CliPathResolutionTarget>();
+        const resolver = {
+            resolve: sinon.stub().resolves({
+                available: true,
+                cliPath: '/repo/app/aspire',
+                source: 'configured',
+            }),
+            onDidChangeForwarding: forwardingEmitter.event,
+        } as unknown as cliPath.CliPathResolver;
+        const extensionEnvironment = {
+            [ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR]: '1.18.0',
+            [ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR]: 'prerelease',
+            [ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR]: 'microsoft-marketplace',
+        } as const;
+        const provider = new AspireMcpServerDefinitionProvider(extensionEnvironment, resolver);
+        const cancellationSource = new vscode.CancellationTokenSource();
+
+        try {
+            await provider.refresh();
+            const definitions = await Promise.resolve(provider.provideMcpServerDefinitions(cancellationSource.token)) ?? [];
+
+            assert.deepStrictEqual(definitions.map(definition => definition.env), [extensionEnvironment]);
         }
         finally {
             cancellationSource.dispose();
@@ -346,7 +380,7 @@ suite('AspireMcpServerDefinitionProvider refresh tests', () => {
             })),
             onDidChangeForwarding: forwardingEmitter.event,
         } as unknown as cliPath.CliPathResolver;
-        const provider = new AspireMcpServerDefinitionProvider(resolver);
+        const provider = new AspireMcpServerDefinitionProvider(undefined, resolver);
         const cancellationSource = new vscode.CancellationTokenSource();
 
         try {
@@ -379,7 +413,7 @@ suite('AspireMcpServerDefinitionProvider refresh tests', () => {
             })),
             onDidChangeForwarding: forwardingEmitter.event,
         } as unknown as cliPath.CliPathResolver;
-        const provider = new AspireMcpServerDefinitionProvider(resolver);
+        const provider = new AspireMcpServerDefinitionProvider(undefined, resolver);
 
         try {
             await provider.refresh();
@@ -409,7 +443,7 @@ suite('AspireMcpServerDefinitionProvider refresh tests', () => {
             })),
             onDidChangeForwarding: forwardingEmitter.event,
         } as unknown as cliPath.CliPathResolver;
-        const provider = new AspireMcpServerDefinitionProvider(resolver);
+        const provider = new AspireMcpServerDefinitionProvider(undefined, resolver);
         const cancellationSource = new vscode.CancellationTokenSource();
 
         try {
@@ -447,7 +481,7 @@ suite('AspireMcpServerDefinitionProvider refresh tests', () => {
             source: 'not-found',
         });
         const resolver = { resolve, onDidChangeForwarding: forwardingEmitter.event } as unknown as cliPath.CliPathResolver;
-        const provider = new AspireMcpServerDefinitionProvider(resolver);
+        const provider = new AspireMcpServerDefinitionProvider(undefined, resolver);
         const cancellationSource = new vscode.CancellationTokenSource();
 
         try {

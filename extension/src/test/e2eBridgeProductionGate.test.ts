@@ -44,6 +44,27 @@ suite('E2E bridge production gate', () => {
         assert.ok(bridge.includes("if ('environmentVariables' in copy)"));
     });
 
+    test('reads extension identity from the synchronized VS Code environment collection', () => {
+        const bridge = fs.readFileSync(path.join(extensionRoot, 'src', 'testing', 'e2eStateFileBridge.ts'), 'utf8');
+        const extensionSource = fs.readFileSync(path.join(extensionRoot, 'src', 'extension.ts'), 'utf8');
+
+        for (const variableName of [
+            'ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR',
+            'ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR',
+            'ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR',
+        ]) {
+            assert.ok(
+                bridge.includes(`context.environmentVariableCollection.get(${variableName})?.value`),
+                `The E2E identity command must observe the synchronized ${variableName} contribution.`);
+        }
+        const bridgeFactoryCall = /createE2eStateFileBridge\(([^;]*)\)/s.exec(extensionSource);
+        assert.ok(bridgeFactoryCall, 'Expected extension.ts to create the E2E state file bridge.');
+        assert.doesNotMatch(
+            bridgeFactoryCall[1],
+            /\bextensionEnvironment\b/,
+            'The E2E bridge must observe synchronized identity instead of receiving activation-local identity.');
+    });
+
     test('replaces the E2E bridge in production builds', () => {
         const configure = loadWebpackConfig();
 
@@ -91,10 +112,16 @@ suite('E2E bridge production gate', () => {
 
     test('packages the local E2E VSIX with the bridge opt-in and pre-release marker', () => {
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const packageVsixBody = /function packageVsix\(\) \{([\s\S]*?)\n\}/.exec(runner)?.[1];
 
         assert.ok(
             runner.includes("ASPIRE_EXTENSION_E2E_INCLUDE_BRIDGE: 'true'"),
             'The local E2E runner packages in production mode, so it must opt into bundling the real bridge.');
+        assert.ok(packageVsixBody, 'Expected the local E2E runner to define packageVsix.');
+        assert.match(
+            packageVsixBody,
+            /['"]vsce['"]\s*,\s*['"]package['"]\s*,\s*['"]--pre-release['"]/,
+            'The local E2E runner must pass --pre-release to vsce package.');
         assert.ok(
             runner.includes("ASPIRE_VSCODE_EXTENSION_PACKAGE_PRERELEASE: 'true'"),
             'The local E2E runner packages a pre-release VSIX, so the generated bundle must preserve that channel.');
@@ -151,7 +178,7 @@ suite('E2E bridge production gate', () => {
 
         assert.ok(importedNames.length > 0, 'Expected extension.ts to import named bindings from the bridge.');
         assert.deepStrictEqual(
-            importedNames.filter(name => !new RegExp(`export function ${name}\\b`).test(stubSource)),
+            importedNames.filter(name => !new RegExp(`export (?:const|function) ${name}\\b`).test(stubSource)),
             [],
             'The production stub must export every binding extension.ts imports, or the production build breaks.');
     });

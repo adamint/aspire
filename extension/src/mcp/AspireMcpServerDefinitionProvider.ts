@@ -21,10 +21,10 @@ const aspireCliExecutablePathSetting = 'aspire.aspireCliExecutablePath';
  */
 export function createAspireMcpServerDefinition(
     cliPath: string,
+    extensionEnvironment: AspireExtensionEnvironment | undefined,
     label = mcpServerLabel,
     cwd?: vscode.Uri,
     deps?: ResolvedCliPathDependencies,
-    extensionEnvironment?: AspireExtensionEnvironment,
 ): vscode.McpStdioServerDefinition {
     // `aspire agent mcp` can build an AppHost, and that build inherits this environment. An
     // unbundled framework-dependent CLI path makes MSBuild's ResolveAspireCliBundle bind bundle
@@ -104,8 +104,8 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
     private _cliPathForwardingChangeDisposable: vscode.Disposable | undefined;
 
     constructor(
+        private readonly _extensionEnvironment: AspireExtensionEnvironment | undefined,
         private readonly _resolver: CliPathResolver = cliPathResolver,
-        private readonly _extensionEnvironment?: AspireExtensionEnvironment,
     ) {
         // Re-evaluate when the setting changes
         this._configChangeDisposable = vscode.workspace.onDidChangeConfiguration(e => {
@@ -169,7 +169,7 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
 
             const folder = workspaceFolders[index];
             const label = workspaceFolders.length === 1 ? mcpServerLabel : `${mcpServerLabel} (${folderLabels[index]})`;
-            return [createAspireMcpServerDefinition(result.cliPath, label, folder.uri, undefined, this._extensionEnvironment)];
+            return [createAspireMcpServerDefinition(result.cliPath, this._extensionEnvironment, label, folder.uri)];
         });
         const changed = !areMcpDefinitionsEqual(this._definitions, definitions);
         this._definitions = definitions;
