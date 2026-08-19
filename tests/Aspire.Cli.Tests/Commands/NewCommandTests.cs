@@ -171,6 +171,34 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal(CliExitCodes.Success, exitCode);
     }
 
+    [Theory]
+    [InlineData("None")]
+    [InlineData("Ninguno")]
+    public async Task NewCommandAcceptsNoneTestFrameworkUnderLocalizedUICulture(string testFramework)
+    {
+        var originalUICulture = CultureInfo.CurrentUICulture;
+
+        try
+        {
+            CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo("es-ES");
+
+            using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+            var services = CreateServiceCollection(workspace);
+            using var provider = services.BuildServiceProvider();
+
+            var command = provider.GetRequiredService<NewCommand>();
+            var result = command.Parse($"new aspire-starter --use-redis-cache --test-framework {testFramework}");
+
+            var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+            Assert.Equal(CliExitCodes.Success, exitCode);
+        }
+        finally
+        {
+            CultureInfo.CurrentUICulture = originalUICulture;
+        }
+    }
+
     [Fact]
     // Quarantined due to flakiness. See linked issue for details.
     public async Task NewCommandDerivesProjectNameFromTemplateNameForStarterTemplate()

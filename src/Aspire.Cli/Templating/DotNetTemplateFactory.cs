@@ -30,6 +30,8 @@ internal class DotNetTemplateFactory(
     IEnvironment environment)
     : ITemplateFactory
 {
+    private const string NoTestFramework = "None";
+
     // Template-specific options
     private readonly Option<bool?> _localhostTldOption = new("--localhost-tld")
     {
@@ -339,12 +341,12 @@ internal class DotNetTemplateFactory(
 
         var testFramework = await interactionService.PromptForSelectionAsync(
             TemplatingStrings.PromptForTFM_Prompt,
-            ["MSTest", "NUnit", "xUnit.net", TemplatingStrings.None],
-            choice => choice,
+            ["MSTest", "NUnit", "xUnit.net", NoTestFramework],
+            choice => string.Equals(choice, NoTestFramework, StringComparison.Ordinal) ? TemplatingStrings.None : choice,
             binding: binding,
             cancellationToken: cancellationToken);
 
-        if (!string.Equals(testFramework, TemplatingStrings.None, StringComparisons.CliInputOrOutput))
+        if (!string.Equals(testFramework, NoTestFramework, StringComparisons.CliInputOrOutput))
         {
             if (string.Equals(testFramework, "xUnit.net", StringComparison.OrdinalIgnoreCase))
             {
