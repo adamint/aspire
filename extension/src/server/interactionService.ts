@@ -11,6 +11,7 @@ import { AspireExtendedDebugConfiguration, EnvVar } from '../dcp/types';
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
 import type { DashboardLaunchBehavior } from '../debugger/AspireDebugSession';
 import { appHostSelectionOriginConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
+import type { AppHostSelectionOrigin } from '../debugger/AspireDebugConfigurationMetadata';
 import { isDirectory } from '../utils/io';
 import { sendTelemetryEvent } from '../utils/telemetry';
 import { dashboardDefaultChangedNotificationKey } from '../utils/dashboardNotificationState';
@@ -164,6 +165,7 @@ type DebugSessionOptions = {
     command?: string;
     args?: string[];
     env?: { [key: string]: string };
+    appHostSelectionOrigin?: AppHostSelectionOrigin;
 };
 
 export class InteractionService implements IInteractionService {
@@ -693,6 +695,8 @@ export class InteractionService implements IInteractionService {
         this.clearProgressNotification();
 
         const command = options?.command ?? 'run';
+        const appHostSelectionOrigin = options?.appHostSelectionOrigin
+            ?? (projectFile ? 'user-selection' : 'default-discovery');
 
         const debugConfiguration: AspireExtendedDebugConfiguration = {
             type: 'aspire',
@@ -703,7 +707,7 @@ export class InteractionService implements IInteractionService {
             args: options?.args,
             env: options?.env,
             noDebug: !debug,
-            [appHostSelectionOriginConfigKey]: projectFile ? 'user-selection' : 'default-discovery',
+            [appHostSelectionOriginConfigKey]: appHostSelectionOrigin,
         };
 
         const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(workingDirectory));
