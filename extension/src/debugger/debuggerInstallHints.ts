@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { getRustExtensionId, javaDebugExtensionId, javaLanguageExtensionId } from '../capabilities';
 import { ResourceState } from '../editor/resourceConstants';
 import {
     debuggerInstallAction,
@@ -16,7 +17,8 @@ export const launchConfigurationTypePropertyName = 'resource.launchConfiguration
 
 export interface DebuggerInstallHint {
     debuggerName: string;
-    extensionId: string;
+    debuggerType: string;
+    extensionIds: readonly string[];
 }
 
 interface DebuggerInstallFailure {
@@ -38,17 +40,50 @@ interface DebuggerInstallHintDataSource {
 }
 
 const debuggerInstallHints = new Map<string, DebuggerInstallHint>([
-    ['python', { debuggerName: 'Python', extensionId: pythonDebuggerExtension.extensionId! }],
-    ['go', { debuggerName: 'Go', extensionId: goDebuggerExtension.extensionId! }],
-    ['bun', { debuggerName: 'Bun', extensionId: bunDebuggerExtension.extensionId! }],
+    ['python', {
+        debuggerName: 'Python',
+        debuggerType: 'python',
+        extensionIds: [pythonDebuggerExtension.extensionId!],
+    }],
+    ['go', {
+        debuggerName: 'Go',
+        debuggerType: 'go',
+        extensionIds: [goDebuggerExtension.extensionId!],
+    }],
+    ['bun', {
+        debuggerName: 'Bun',
+        debuggerType: 'bun',
+        extensionIds: [bunDebuggerExtension.extensionId!],
+    }],
+    ['java', {
+        debuggerName: 'Java',
+        debuggerType: 'java',
+        extensionIds: [javaLanguageExtensionId, javaDebugExtensionId],
+    }],
 ]);
 
 const notificationSuppressedKeyPrefix = 'aspire.debuggerInstallHint.suppressed.';
 
-export function getDebuggerInstallHintForResource(resource: DebuggableResourceSnapshot): DebuggerInstallHint | undefined {
+export function getDebuggerInstallHintForResource(
+    resource: DebuggableResourceSnapshot,
+    platform: NodeJS.Platform = process.platform
+): DebuggerInstallHint | undefined {
     const launchConfigurationType = resource.properties?.[launchConfigurationTypePropertyName];
-    const hint = launchConfigurationType ? debuggerInstallHints.get(launchConfigurationType) : undefined;
-    return hint && !vscode.extensions.getExtension(hint.extensionId) ? hint : undefined;
+    let hint = launchConfigurationType ? debuggerInstallHints.get(launchConfigurationType) : undefined;
+    if (launchConfigurationType === 'rust') {
+        const extensionId = getRustExtensionId(
+            platform,
+            candidateExtensionId => !!vscode.extensions.getExtension(candidateExtensionId));
+        hint = {
+            debuggerName: 'Rust',
+            debuggerType: 'rust',
+            extensionIds: [extensionId],
+        };
+    }
+
+    return hint?.extensionIds.some(extensionId => !vscode.extensions.getExtension(extensionId))
+        ? hint
+        : undefined;
 }
 
 export class DebuggerInstallHintService {
@@ -106,13 +141,17 @@ export class DebuggerInstallHintService {
 
     async installDebuggerExtension(hint: DebuggerInstallHint): Promise<void | DebuggerInstallFailure> {
         try {
-            await vscode.commands.executeCommand('workbench.extensions.installExtension', hint.extensionId);
+            const missingExtensionIds = hint.extensionIds.filter(
+                extensionId => !vscode.extensions.getExtension(extensionId));
+            for (const extensionId of missingExtensionIds) {
+                await vscode.commands.executeCommand('workbench.extensions.installExtension', extensionId);
+            }
 
             // Installing an already-installed but disabled extension is a no-op, and disabled
             // extensions remain absent from this registry. A fresh install can also appear after
             // the command resolves, so wait for the registry change before deciding it is disabled.
             // See https://github.com/microsoft/vscode/issues/71943.
-            const registered = await this._waitForExtensionRegistration(hint.extensionId);
+            const registered = await this._waitForExtensionRegistrations(hint.extensionIds);
             const message = registered
                 ? debuggerInstalledRestartAppHost(hint.debuggerName)
                 : debuggerExtensionDisabled(hint.debuggerName);
@@ -126,8 +165,10 @@ export class DebuggerInstallHintService {
         }
     }
 
-    private async _waitForExtensionRegistration(extensionId: string): Promise<boolean> {
-        if (vscode.extensions.getExtension(extensionId)) {
+    private async _waitForExtensionRegistrations(extensionIds: readonly string[]): Promise<boolean> {
+        const areAllExtensionsRegistered = () =>
+            extensionIds.every(extensionId => !!vscode.extensions.getExtension(extensionId));
+        if (areAllExtensionsRegistered()) {
             return true;
         }
 
@@ -148,7 +189,7 @@ export class DebuggerInstallHintService {
                 resolve(registered);
             };
             subscription = vscode.extensions.onDidChange(() => {
-                if (vscode.extensions.getExtension(extensionId)) {
+                if (areAllExtensionsRegistered()) {
                     finish(true);
                 }
             });
@@ -157,22 +198,22 @@ export class DebuggerInstallHintService {
                 DebuggerInstallHintService._extensionRegistrationTimeoutMs);
 
             // Close the gap between the initial check and registering the change listener.
-            if (vscode.extensions.getExtension(extensionId)) {
+            if (areAllExtensionsRegistered()) {
                 finish(true);
             }
         });
     }
 
     private async _showNotification(hint: DebuggerInstallHint): Promise<void> {
-        const suppressionKey = `${notificationSuppressedKeyPrefix}${hint.extensionId}`;
-        if (this._notificationsShown.has(hint.extensionId)
+        const suppressionKey = `${notificationSuppressedKeyPrefix}${hint.debuggerType}`;
+        if (this._notificationsShown.has(hint.debuggerType)
             || this._globalState.get<boolean>(suppressionKey, false)) {
             return;
         }
 
-        // Mark the extension before awaiting user input so overlapping repository updates cannot
+        // Mark the debugger before awaiting user input so overlapping repository updates cannot
         // open duplicate notifications for multiple resources using the same debugger.
-        this._notificationsShown.add(hint.extensionId);
+        this._notificationsShown.add(hint.debuggerType);
 
         try {
             const selected = await vscode.window.showInformationMessage(
@@ -186,7 +227,7 @@ export class DebuggerInstallHintService {
                 await this._globalState.update(suppressionKey, true);
             }
         } catch (error) {
-            this._notificationsShown.delete(hint.extensionId);
+            this._notificationsShown.delete(hint.debuggerType);
             await vscode.window.showErrorMessage(errorMessage(error));
         }
     }
