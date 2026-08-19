@@ -113,9 +113,10 @@ internal sealed class VsCodeExtensionMarketplaceClient(HttpClient httpClient) : 
     private static bool TryGetIsPreRelease(JsonElement versionEntry, out bool isPreRelease)
     {
         isPreRelease = false;
-        // Stable entries normally omit `properties`. When the prerelease marker is present, require
-        // the Marketplace's `{ "key": "...PreRelease", "value": "true|false" }` shape and make
-        // duplicate markers agree so response ordering cannot change the selected channel.
+        // Stable entries may omit the prerelease marker while still carrying other version properties.
+        // When the prerelease marker is present, require the Marketplace's
+        // `{ "key": "...PreRelease", "value": "true|false" }` shape and make duplicate markers
+        // agree so response ordering cannot change the selected channel.
         if (!versionEntry.TryGetProperty("properties", out var properties))
         {
             return true;
@@ -133,7 +134,7 @@ internal sealed class VsCodeExtensionMarketplaceClient(HttpClient httpClient) : 
                 !property.TryGetProperty("key", out var key) ||
                 key.ValueKind != JsonValueKind.String)
             {
-                return false;
+                continue;
             }
 
             if (!string.Equals(key.GetString(), PreReleasePropertyName, StringComparison.OrdinalIgnoreCase))
