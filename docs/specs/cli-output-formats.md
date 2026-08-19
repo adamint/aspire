@@ -466,6 +466,7 @@ The JSON form includes secret values. Do not redirect it to logs or files unless
         "extensionVersion": "1.2.3",
         "extensionVersionKnown": true,
         "extensionChannel": "stable",
+        "extensionSource": "microsoft-marketplace",
         "latestVersion": "1.16.0",
         "latestVersionKnown": true,
         "latestVersionChannel": "stable",
@@ -483,11 +484,13 @@ The JSON form includes secret values. Do not redirect it to logs or files unless
 
 `status` is one of `pass`, `warning`, or `fail`. Individual checks can include `details`, `fix`, `link`, or command-specific `metadata`.
 
-The `devtools` category surfaces development-tooling recommendations. The `vscode-extension` check only appears when VS Code is detected. It reports `warning` when the [Aspire VS Code extension](https://aka.ms/aspire/vscode-extension) is missing, its version or channel cannot be determined, its installed version is behind the latest applicable Marketplace version, or the Marketplace lookup is unavailable. It reports `pass` when the installed version is current or newer.
+The `devtools` category surfaces development-tooling recommendations. The `vscode-extension` check only appears when VS Code is detected. It reports `warning` when the [Aspire VS Code extension](https://aka.ms/aspire/vscode-extension) is missing, its version or channel cannot be determined, its source is unknown or not the Microsoft Marketplace, the Marketplace does not report a version for the matching channel, its installed version is behind that version, or the Marketplace lookup is unavailable. It reports `pass` when the installed version is current or newer.
 
-Its `metadata` always exposes `vsCodeInstalled` (bool), `extensionInstalled` (bool), and `extensionId` (string). An installed extension can add `extensionVersion` (string), `extensionVersionKnown` (bool), and `extensionChannel` (`stable`, `prerelease`, or `unknown`). A Marketplace lookup adds `latestVersionKnown` (bool). A successful applicable comparison also adds `latestVersion` (string), `latestVersionChannel` (`stable` or `prerelease`), and `updateAvailable` (bool); an unavailable lookup adds `latestVersionError` with the value `unavailable`.
+Its `metadata` always exposes `vsCodeInstalled` (bool), `extensionInstalled` (bool), and `extensionId` (string). An installed extension adds `extensionVersionKnown` (bool) and can add `extensionVersion` (string), `extensionChannel` (`stable`, `prerelease`, or `unknown`), and `extensionSource` (`microsoft-marketplace`, `other`, or `unknown`). A parseable installed version also adds `latestVersionKnown` (bool). A successful applicable comparison adds `latestVersion` (string), `latestVersionChannel` (`stable` or `prerelease`), and `updateAvailable` (bool); an unavailable or timed-out lookup adds `latestVersionError` with the value `unavailable`.
 
-The Aspire VS Code extension contributes `ASPIRE_VSCODE_EXTENSION_VERSION` and `ASPIRE_VSCODE_EXTENSION_CHANNEL` to terminals created by VS Code. Those signals identify the active extension instance and select the matching Marketplace channel; Marketplace prerelease versions use ordinary `major.minor.patch` versions, so the version string alone cannot identify the channel. When the signals are unavailable, doctor falls back to the existing known extension roots and reads the version from `package.json` or the versioned extension folder, but reports the channel as `unknown`.
+The Aspire VS Code extension contributes `ASPIRE_VSCODE_EXTENSION_VERSION`, `ASPIRE_VSCODE_EXTENSION_CHANNEL`, and `ASPIRE_VSCODE_EXTENSION_SOURCE` to processes it creates. Those signals identify the active extension instance, select the matching Marketplace channel, and avoid linking to the Microsoft Marketplace for other editors or galleries. Marketplace prerelease versions use ordinary `major.minor.patch` versions, so the version string alone cannot identify the channel. When the signals are unavailable, doctor falls back to the existing known extension roots and reads the version from `package.json` or the versioned extension folder, but reports the channel and source as `unknown`.
+
+The Marketplace link and fix appear only when the extension is missing or a known Microsoft Marketplace installation is out of date. An unknown channel, an unknown or non-Microsoft Marketplace source, a missing version for the matching Marketplace channel, and an unavailable or timed-out lookup report details without a link or fix.
 
 ### `aspire config info`
 
