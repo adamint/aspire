@@ -324,7 +324,7 @@ internal sealed class TemplateNuGetConfigService(
             {
                 throw new EmptyChoicesException(
                     $"No matching local Aspire.ProjectTemplates package was found for Aspire CLI version '{executionContext.IdentitySdkVersion}'. " +
-                    "Build and stage matching packages with localhive.sh, set ASPIRE_CLI_PACKAGES to a directory containing the package, " +
+                    "Build and stage matching packages with localhive.sh (macOS/Linux) or localhive.ps1 (Windows), set ASPIRE_CLI_PACKAGES to a directory containing the package, " +
                     "or explicitly choose feed-backed templates with --channel, --source, or --version.");
             }
 

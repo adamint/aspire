@@ -665,6 +665,7 @@ public class TemplateNuGetConfigServiceTests(ITestOutputHelper outputHelper)
 
         Assert.Contains("13.6.0-dev", exception.Message);
         Assert.Contains("localhive.sh", exception.Message);
+        Assert.Contains("localhive.ps1", exception.Message);
         Assert.Contains("ASPIRE_CLI_PACKAGES", exception.Message);
         Assert.Contains("--channel", exception.Message);
     }

@@ -214,6 +214,7 @@ public class NewCommandChannelResolutionTests(ITestOutputHelper outputHelper)
         Assert.False(captured.WasApplied);
         var error = Assert.Single(captured.Errors);
         Assert.Contains("localhive.sh", error);
+        Assert.Contains("localhive.ps1", error);
         Assert.Contains("ASPIRE_CLI_PACKAGES", error);
         Assert.Contains("--channel", error);
         Assert.Contains("--source", error);
