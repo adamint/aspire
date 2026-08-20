@@ -9,12 +9,13 @@ import {
 } from '../capabilities';
 import { ResourceState } from '../editor/resourceConstants';
 import {
-    debuggerInstallAction,
-    debuggerInstallNotification,
+    debuggerSetupAction,
+    debuggerSetupNotification,
     debuggerExtensionDisabled,
     debuggerInstalledRestartAppHost,
     dontShowAgainLabel,
     errorMessage,
+    openExtensionsLabel,
 } from '../loc/strings';
 import { bunDebuggerExtension } from './languages/bun';
 import { goDebuggerExtension } from './languages/go';
@@ -174,10 +175,22 @@ export class DebuggerInstallHintService {
             // the command resolves, so wait for the registry change before deciding it is disabled.
             // See https://github.com/microsoft/vscode/issues/71943.
             const registered = await this._waitForExtensionRegistrations(hint.extensionIds);
-            const message = registered
-                ? debuggerInstalledRestartAppHost(hint.debuggerName)
-                : debuggerExtensionDisabled(hint.debuggerName);
-            await vscode.window.showInformationMessage(message);
+            if (registered) {
+                await vscode.window.showInformationMessage(debuggerInstalledRestartAppHost(hint.debuggerName));
+            } else {
+                const selected = await vscode.window.showInformationMessage(
+                    debuggerExtensionDisabled(hint.debuggerName),
+                    openExtensionsLabel);
+                if (selected === openExtensionsLabel) {
+                    const unregisteredExtensionIds = hint.extensionIds.filter(
+                        extensionId => !vscode.extensions.getExtension(extensionId));
+                    if (unregisteredExtensionIds.length > 0) {
+                        await vscode.commands.executeCommand(
+                            'workbench.extensions.search',
+                            unregisteredExtensionIds.map(extensionId => `@id:${extensionId}`).join(' '));
+                    }
+                }
+            }
         } catch (error) {
             await vscode.window.showErrorMessage(errorMessage(error));
             return {
@@ -239,11 +252,11 @@ export class DebuggerInstallHintService {
 
         try {
             const selected = await vscode.window.showInformationMessage(
-                debuggerInstallNotification(hint.debuggerName),
-                debuggerInstallAction,
+                debuggerSetupNotification(hint.debuggerName),
+                debuggerSetupAction,
                 dontShowAgainLabel);
 
-            if (selected === debuggerInstallAction) {
+            if (selected === debuggerSetupAction) {
                 await this.installDebuggerExtension(hint);
             } else if (selected === dontShowAgainLabel) {
                 await this._globalState.update(suppressionKey, true);

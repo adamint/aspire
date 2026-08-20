@@ -178,9 +178,13 @@ suite('Aspire extension edge case E2E', function () {
         const appHostSource = fs.readFileSync(appHostPath, 'utf8');
         writeFileWithRetry(
             appHostPath,
-            appHostSource.replace(
-                'builder.Build().Run();',
-                `#pragma warning disable ASPIREEXTENSION001
+            appHostSource
+                // This scenario validates the Hosting and extension changes together. The local CLI
+                // bundle can predate the repo-built packages, which would omit the debugger metadata.
+                .replace('#:property AspireUseCliBundle=true', '#:property AspireUseCliBundle=false')
+                .replace(
+                    'builder.Build().Run();',
+                    `#pragma warning disable ASPIREEXTENSION001
 builder.AddExecutable("pythonapp", OperatingSystem.IsWindows() ? "python" : "python3", "./pythonapp", "app.py")
     .WithDebugSupport(mode => new { type = "python", mode }, "python");
 #pragma warning restore ASPIREEXTENSION001
@@ -197,13 +201,13 @@ builder.Build().Run();`));
         await waitForCommandOutcome('aspire-vscode.runAppHost', 'success', 180000, runBefore);
 
         const notification = await waitForNotificationMessage(
-            'Install the Python debugger extension to debug resources in this app.',
+            'Set up Python debugging support to debug resources in this app.',
             60000);
         await notification.dismiss();
 
         await executeE2eControlCommand({ name: 'openFile', filePath: appHostPath });
         await waitForEditorTitle('apphost.cs');
-        await waitForWorkbenchText('Install Python debugger', 60000);
+        await waitForWorkbenchText('Set up Python debugger', 60000);
     });
 
     test('process-owner cleanup stops the owned CLI and AppHost process tree', async () => {

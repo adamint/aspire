@@ -659,7 +659,7 @@ suite('AspireCodeLensProvider resource lens anchoring', () => {
             const installLenses = lenses.filter(lens => lens.command?.command === 'aspire-vscode.installDebuggerExtension');
 
             assert.strictEqual(installLenses.length, 1);
-            assert.strictEqual(installLenses[0].command?.title, '$(warning)\u200A Install Python debugger');
+            assert.strictEqual(installLenses[0].command?.title, '$(warning)\u200A Set up Python debugger');
         } finally {
             harness.dispose();
             getExtensionStub.restore();
@@ -687,7 +687,7 @@ suite('AspireCodeLensProvider resource lens anchoring', () => {
             const installLenses = lenses.filter(lens => lens.command?.command === 'aspire-vscode.installDebuggerExtension');
 
             assert.strictEqual(installLenses.length, 1);
-            assert.strictEqual(installLenses[0].command?.title, '$(warning)\u200A Install Java debugger');
+            assert.strictEqual(installLenses[0].command?.title, '$(warning)\u200A Set up Java debugger');
             assert.deepStrictEqual(installLenses[0].command?.arguments?.[0], {
                 debuggerName: 'Java',
                 debuggerType: 'java',
@@ -723,7 +723,7 @@ suite('AspireCodeLensProvider resource lens anchoring', () => {
             const installLenses = lenses.filter(lens => lens.command?.command === 'aspire-vscode.installDebuggerExtension');
 
             assert.strictEqual(installLenses.length, 1);
-            assert.strictEqual(installLenses[0].command?.title, '$(warning)\u200A Install Azure Functions debugger');
+            assert.strictEqual(installLenses[0].command?.title, '$(warning)\u200A Set up Azure Functions debugger');
             assert.deepStrictEqual(installLenses[0].command?.arguments?.[0], {
                 debuggerName: 'Azure Functions',
                 debuggerType: 'azure-functions',

@@ -11,7 +11,7 @@ import {
     launchConfigurationTypePropertyName,
 } from '../debugger/debuggerInstallHints';
 import { getSupportedCapabilities } from '../capabilities';
-import { debuggerInstallAction, dontShowAgainLabel, errorMessage } from '../loc/strings';
+import { debuggerSetupAction, dontShowAgainLabel, errorMessage } from '../loc/strings';
 import { ResourceState } from '../editor/resourceConstants';
 
 function createResource(
@@ -193,7 +193,7 @@ suite('debugger install hints', () => {
         sinon.stub(vscode.extensions, 'getExtension').callsFake(extensionId =>
             installed ? { id: extensionId } as vscode.Extension<unknown> : undefined);
         const showInformationMessage = sinon.stub(vscode.window, 'showInformationMessage');
-        showInformationMessage.onFirstCall().resolves(debuggerInstallAction as any);
+        showInformationMessage.onFirstCall().resolves(debuggerSetupAction as any);
         showInformationMessage.onSecondCall().resolves(undefined);
         const executeCommand = sinon.stub(vscode.commands, 'executeCommand').callsFake(async () => {
             installed = true;
@@ -208,10 +208,12 @@ suite('debugger install hints', () => {
         ]);
 
         assert.strictEqual(showInformationMessage.callCount, 2);
-        assert.strictEqual(showInformationMessage.firstCall.args[0], 'Install the Python debugger extension to debug resources in this app.');
-        assert.deepStrictEqual(showInformationMessage.firstCall.args.slice(1), [debuggerInstallAction, dontShowAgainLabel]);
-        assert.ok(executeCommand.calledOnceWithExactly('workbench.extensions.installExtension', 'ms-python.debugpy'));
-        assert.strictEqual(showInformationMessage.secondCall.args[0], 'The Python debugger extension is installed. Restart the AppHost to enable debugging.');
+        assert.strictEqual(showInformationMessage.firstCall.args[0], 'Set up Python debugging support to debug resources in this app.');
+        assert.deepStrictEqual(showInformationMessage.firstCall.args.slice(1), [debuggerSetupAction, dontShowAgainLabel]);
+        assert.ok(executeCommand.firstCall.calledWithExactly(
+            'workbench.extensions.installExtension',
+            'ms-python.debugpy'));
+        assert.strictEqual(showInformationMessage.secondCall.args[0], 'The extensions required for Python debugging are installed. Restart the AppHost to enable debugging.');
     });
 
     test('waits for a fresh install to appear in the extension registry', async () => {
@@ -249,30 +251,40 @@ suite('debugger install hints', () => {
         assert.strictEqual(showInformationMessage.callCount, 1);
         assert.strictEqual(
             showInformationMessage.firstCall.args[0],
-            'The Python debugger extension is installed. Restart the AppHost to enable debugging.');
+            'The extensions required for Python debugging are installed. Restart the AppHost to enable debugging.');
     });
 
     test('reports a disabled debugger extension instead of claiming installation succeeded', async () => {
         const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
         const getExtension = sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
         sinon.stub(vscode.extensions, 'onDidChange').returns({ dispose: sinon.stub() });
-        const showInformationMessage = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+        const showInformationMessage = sinon.stub(vscode.window, 'showInformationMessage').resolves('Open Extensions' as any);
         const executeCommand = sinon.stub(vscode.commands, 'executeCommand').resolves();
         const service = new DebuggerInstallHintService(createMemento());
 
         const installation = service.installDebuggerExtension({
-            debuggerName: 'Python',
-            debuggerType: 'python',
-            extensionIds: ['ms-python.debugpy'],
+            debuggerName: 'Java',
+            debuggerType: 'java',
+            extensionIds: ['redhat.java', 'vscjava.vscode-java-debug'],
         });
         await clock.tickAsync(5_000);
         await installation;
 
-        assert.ok(executeCommand.calledOnceWithExactly('workbench.extensions.installExtension', 'ms-python.debugpy'));
-        assert.ok(getExtension.calledWith('ms-python.debugpy'));
+        assert.ok(executeCommand.firstCall.calledWithExactly(
+            'workbench.extensions.installExtension',
+            'redhat.java'));
+        assert.ok(executeCommand.secondCall.calledWithExactly(
+            'workbench.extensions.installExtension',
+            'vscjava.vscode-java-debug'));
+        assert.ok(getExtension.calledWith('redhat.java'));
+        assert.ok(getExtension.calledWith('vscjava.vscode-java-debug'));
         assert.strictEqual(
             showInformationMessage.firstCall.args[0],
-            'The Python debugger extension is disabled. Enable it in VS Code, then restart the AppHost to enable debugging.');
+            'One or more extensions required for Java debugging are disabled. Enable them, then restart the AppHost to enable debugging.');
+        assert.deepStrictEqual(showInformationMessage.firstCall.args.slice(1), ['Open Extensions']);
+        assert.ok(executeCommand.thirdCall.calledWithExactly(
+            'workbench.extensions.search',
+            '@id:redhat.java @id:vscjava.vscode-java-debug'));
     });
 
     test('reports debugger installation failures as handled command failures', async () => {
@@ -317,7 +329,7 @@ suite('debugger install hints', () => {
         assert.strictEqual(showInformationMessage.callCount, 1);
         assert.strictEqual(
             showInformationMessage.firstCall.args[0],
-            'The Java debugger extension is installed. Restart the AppHost to enable debugging.');
+            'The extensions required for Java debugging are installed. Restart the AppHost to enable debugging.');
     });
 
     test('installs all missing Java requirements sequentially and waits for every registration', async () => {
@@ -374,7 +386,7 @@ suite('debugger install hints', () => {
         assert.strictEqual(showInformationMessage.callCount, 1);
         assert.strictEqual(
             showInformationMessage.firstCall.args[0],
-            'The Java debugger extension is installed. Restart the AppHost to enable debugging.');
+            'The extensions required for Java debugging are installed. Restart the AppHost to enable debugging.');
     });
 
     test('starts background observation only after discovering an AppHost candidate', () => {
