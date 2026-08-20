@@ -1659,6 +1659,7 @@ function writeNuGetConfigIfLocalPackageSourcesExist() {
     return;
   }
 
+  const globalPackagesFolder = path.join(shortRunRoot, 'nuget-packages');
   const sourceEntries = packageSources
     .map((source, index) => `    <add key="e2e-source-${index}" value="${escapeXml(source)}" />`)
     .join('\n');
@@ -1667,6 +1668,9 @@ function writeNuGetConfigIfLocalPackageSourcesExist() {
     .join('\n');
   fs.writeFileSync(workspaceNuGetConfigPath, `<?xml version="1.0" encoding="utf-8"?>
 <configuration>
+  <config>
+    <add key="globalPackagesFolder" value="${escapeXml(globalPackagesFolder)}" />
+  </config>
   <packageSources>
     <clear />
 ${sourceEntries}

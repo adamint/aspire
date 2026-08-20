@@ -571,6 +571,20 @@ suite('E2E launch profile', () => {
         assert.ok(runTests.includes('extestEnv'));
     });
 
+    test('isolates E2E NuGet packages under the temporary run root', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const nuGetConfigStart = runner.indexOf('function writeNuGetConfigIfLocalPackageSourcesExist');
+        const nuGetConfigEnd = runner.indexOf('function getApprovedFallbackPackageSources');
+        const nuGetConfig = runner.slice(nuGetConfigStart, nuGetConfigEnd);
+
+        assert.ok(nuGetConfigStart >= 0);
+        assert.ok(nuGetConfigEnd > nuGetConfigStart);
+        assert.ok(nuGetConfig.includes("const globalPackagesFolder = path.join(shortRunRoot, 'nuget-packages');"));
+        assert.ok(nuGetConfig.includes('<config>'));
+        assert.ok(nuGetConfig.includes('<add key="globalPackagesFolder" value="${escapeXml(globalPackagesFolder)}" />'));
+    });
+
     test('suppresses evaluation diagnostics for intentional E2E AppHost interaction APIs', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
