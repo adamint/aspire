@@ -182,6 +182,11 @@
         <target state="new">The template installation failed with exit code {0}.</target>
         <note>{0} is a number</note>
       </trans-unit>
+      <trans-unit id="TemplateVersionNotFound">
+        <source>Template version '{0}' was not found.</source>
+        <target state="new">Template version '{0}' was not found.</target>
+        <note />
+      </trans-unit>
       <trans-unit id="Unknown">
         <source>Unknown</source>
         <target state="translated">未知</target>

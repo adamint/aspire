@@ -247,6 +247,15 @@ namespace Aspire.Cli.Resources {
         }
 
         /// <summary>
+        ///   Looks up a localized string similar to Template version &apos;{0}&apos; was not found..
+        /// </summary>
+        public static string TemplateVersionNotFound {
+            get {
+                return ResourceManager.GetString("TemplateVersionNotFound", resourceCulture);
+            }
+        }
+
+        /// <summary>
         ///   Looks up a localized string similar to None.
         /// </summary>
         public static string None {

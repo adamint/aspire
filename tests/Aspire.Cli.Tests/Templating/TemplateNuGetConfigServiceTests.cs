@@ -778,7 +778,12 @@ public class TemplateNuGetConfigServiceTests(ITestOutputHelper outputHelper)
                     IncludePrHives: true),
                 CancellationToken.None));
 
-        Assert.Contains("13.5.0-dev", exception.Message);
+        Assert.Equal(
+            string.Format(
+                CultureInfo.CurrentCulture,
+                TemplatingStrings.TemplateVersionNotFound,
+                "13.5.0-dev"),
+            exception.Message);
     }
 
     [Fact]

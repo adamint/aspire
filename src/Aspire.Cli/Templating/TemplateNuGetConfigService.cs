@@ -344,7 +344,11 @@ internal sealed class TemplateNuGetConfigService(
                 return new TemplatePackageSelection(explicitMatch.Package, explicitMatch.Channel);
             }
 
-            throw new EmptyChoicesException($"Template version '{version}' was not found.");
+            throw new EmptyChoicesException(
+                string.Format(
+                    CultureInfo.CurrentCulture,
+                    Resources.TemplatingStrings.TemplateVersionNotFound,
+                    version));
         }
 
         if (!packagesFromChannels.Any())
