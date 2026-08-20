@@ -176,9 +176,9 @@ suite('debugger install hints', () => {
         const packageNls = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.nls.json'), 'utf8')) as Record<string, string>;
 
         assert.deepStrictEqual(
-            ['pythonDebuggerName', 'goDebuggerName', 'bunDebuggerName', 'javaDebuggerName', 'rustDebuggerName'].map(name =>
+            ['pythonDebuggerName', 'goDebuggerName', 'bunDebuggerName', 'javaDebuggerName', 'rustDebuggerName', 'mauiDebuggerName', 'azureFunctionsDebuggerName'].map(name =>
                 packageNls[`aspire-vscode.strings.${name}`]),
-            [undefined, undefined, undefined, undefined, undefined]);
+            [undefined, undefined, undefined, undefined, undefined, undefined, undefined]);
     });
 
     test('recognizes the standalone debugpy extension as Python debug support', () => {
