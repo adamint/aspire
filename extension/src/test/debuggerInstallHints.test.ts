@@ -12,6 +12,7 @@ import {
 } from '../debugger/debuggerInstallHints';
 import { getSupportedCapabilities } from '../capabilities';
 import { debuggerSetupAction, dontShowAgainLabel, errorMessage } from '../loc/strings';
+import { isCommandCancellation } from '../utils/telemetry';
 import { ResourceState } from '../editor/resourceConstants';
 
 function createResource(
@@ -192,9 +193,9 @@ suite('debugger install hints', () => {
         let installed = false;
         sinon.stub(vscode.extensions, 'getExtension').callsFake(extensionId =>
             installed ? { id: extensionId } as vscode.Extension<unknown> : undefined);
-        const showInformationMessage = sinon.stub(vscode.window, 'showInformationMessage');
-        showInformationMessage.onFirstCall().resolves(debuggerSetupAction as any);
-        showInformationMessage.onSecondCall().resolves(undefined);
+        const showWarningMessage = sinon.stub(vscode.window, 'showWarningMessage');
+        showWarningMessage.onFirstCall().resolves(debuggerSetupAction as any);
+        const showInformationMessage = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
         const executeCommand = sinon.stub(vscode.commands, 'executeCommand').callsFake(async () => {
             installed = true;
         });
@@ -207,13 +208,58 @@ suite('debugger install hints', () => {
             createResource(),
         ]);
 
-        assert.strictEqual(showInformationMessage.callCount, 2);
-        assert.strictEqual(showInformationMessage.firstCall.args[0], 'Set up Python debugging support to debug resources in this app.');
-        assert.deepStrictEqual(showInformationMessage.firstCall.args.slice(1), [debuggerSetupAction, dontShowAgainLabel]);
+        assert.strictEqual(showWarningMessage.callCount, 1);
+        assert.strictEqual(showWarningMessage.firstCall.args[0], 'Set up Python debugging support to debug resources in this app.');
+        assert.deepStrictEqual(showWarningMessage.firstCall.args.slice(1), [debuggerSetupAction, dontShowAgainLabel]);
         assert.ok(executeCommand.firstCall.calledWithExactly(
             'workbench.extensions.installExtension',
             'ms-python.debugpy'));
-        assert.strictEqual(showInformationMessage.secondCall.args[0], 'The extensions required for Python debugging are installed. Restart the AppHost to enable debugging.');
+        assert.strictEqual(showInformationMessage.callCount, 1);
+        assert.strictEqual(showInformationMessage.firstCall.args[0], 'The extensions required for Python debugging are installed. Restart the AppHost to enable debugging.');
+    });
+
+    test('re-evaluates missing debuggers when extension enablement changes', async () => {
+        let goRegistered = true;
+        sinon.stub(vscode.extensions, 'getExtension').callsFake(extensionId =>
+            extensionId === 'golang.go' && goRegistered ? { id: extensionId } as vscode.Extension<unknown> : undefined);
+        let extensionChangeListener: (() => unknown) | undefined;
+        const onDidChange: vscode.Event<void> = listener => {
+            extensionChangeListener = listener;
+            return { dispose: sinon.stub() };
+        };
+        sinon.stub(vscode.extensions, 'onDidChange').get(() => onDidChange);
+        let notified!: () => void;
+        const notification = new Promise<void>(resolve => notified = resolve);
+        const showWarningMessage = sinon.stub(vscode.window, 'showWarningMessage').callsFake((async () => {
+            notified();
+            return undefined;
+        }) as any);
+        const dataChanges = new vscode.EventEmitter<void>();
+        const service = new DebuggerInstallHintService(createMemento());
+        const observation = service.watchForMissingDebuggers({
+            workspaceAppHostCandidatePaths: ['/workspace/apphost.cs'],
+            workspaceResources: [createResource('go')],
+            appHosts: [],
+            onDidChangeData: dataChanges.event,
+            keepDataActive: sinon.stub().returns({ dispose: sinon.stub() }),
+        });
+
+        try {
+            await new Promise(resolve => setImmediate(resolve));
+            assert.strictEqual(showWarningMessage.callCount, 0);
+
+            // Disabling an extension removes it from the registry without changing AppHost data.
+            goRegistered = false;
+            assert.ok(extensionChangeListener);
+            extensionChangeListener();
+            await notification;
+
+            assert.strictEqual(showWarningMessage.callCount, 1);
+            assert.strictEqual(showWarningMessage.firstCall.args[0], 'Set up Go debugging support to debug resources in this app.');
+        } finally {
+            observation.dispose();
+            dataChanges.dispose();
+        }
     });
 
     test('waits for a fresh install to appear in the extension registry', async () => {
@@ -234,9 +280,9 @@ suite('debugger install hints', () => {
         const service = new DebuggerInstallHintService(createMemento());
 
         const installation = service.installDebuggerExtension({
-            debuggerName: 'Python',
-            debuggerType: 'python',
-            extensionIds: ['ms-python.debugpy'],
+            debuggerName: 'Java',
+            debuggerType: 'java',
+            extensionIds: ['redhat.java', 'vscjava.vscode-java-debug'],
         });
         await subscriptionRegistered;
 
@@ -247,18 +293,19 @@ suite('debugger install hints', () => {
         extensionChangeListener();
         await installation;
 
-        assert.ok(getExtension.calledWith('ms-python.debugpy'));
+        assert.ok(getExtension.calledWith('redhat.java'));
+        assert.ok(getExtension.calledWith('vscjava.vscode-java-debug'));
         assert.strictEqual(showInformationMessage.callCount, 1);
         assert.strictEqual(
             showInformationMessage.firstCall.args[0],
-            'The extensions required for Python debugging are installed. Restart the AppHost to enable debugging.');
+            'The extensions required for Java debugging are installed. Restart the AppHost to enable debugging.');
     });
 
     test('reports a disabled debugger extension instead of claiming installation succeeded', async () => {
         const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
         const getExtension = sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
         sinon.stub(vscode.extensions, 'onDidChange').returns({ dispose: sinon.stub() });
-        const showInformationMessage = sinon.stub(vscode.window, 'showInformationMessage').resolves('Open Extensions' as any);
+        const showWarningMessage = sinon.stub(vscode.window, 'showWarningMessage').resolves('Open Extensions' as any);
         const executeCommand = sinon.stub(vscode.commands, 'executeCommand').resolves();
         const service = new DebuggerInstallHintService(createMemento());
 
@@ -279,9 +326,9 @@ suite('debugger install hints', () => {
         assert.ok(getExtension.calledWith('redhat.java'));
         assert.ok(getExtension.calledWith('vscjava.vscode-java-debug'));
         assert.strictEqual(
-            showInformationMessage.firstCall.args[0],
+            showWarningMessage.firstCall.args[0],
             'One or more extensions required for Java debugging are disabled. Enable them, then restart the AppHost to enable debugging.');
-        assert.deepStrictEqual(showInformationMessage.firstCall.args.slice(1), ['Open Extensions']);
+        assert.deepStrictEqual(showWarningMessage.firstCall.args.slice(1), ['Open Extensions']);
         assert.ok(executeCommand.thirdCall.calledWithExactly(
             'workbench.extensions.search',
             '@id:redhat.java @id:vscjava.vscode-java-debug'));
@@ -303,8 +350,41 @@ suite('debugger install hints', () => {
 
         assert.deepStrictEqual(result, { success: false, errorKind: 'TypeError' });
         assert.strictEqual(showErrorMessage.callCount, 1);
-        assert.strictEqual(showErrorMessage.firstCall.args[0], errorMessage(error));
+        // Asserting the literal text: comparing against errorMessage(error) passes even when the
+        // localized placeholder is never substituted.
+        assert.strictEqual(showErrorMessage.firstCall.args[0], 'Error: Debugger installation failed.');
         assert.strictEqual(showInformationMessage.callCount, 0);
+    });
+
+    test('treats a cancelled debugger setup as a dismissal rather than an error', async () => {
+        sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
+        const showInformationMessage = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+        const showErrorMessage = sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined);
+        sinon.stub(vscode.commands, 'executeCommand').rejects(new vscode.CancellationError());
+        const service = new DebuggerInstallHintService(createMemento());
+
+        await assert.rejects(
+            service.installDebuggerExtension({
+                debuggerName: 'Bun',
+                debuggerType: 'bun',
+                extensionIds: ['oven.bun-vscode'],
+            }),
+            error => isCommandCancellation(error));
+
+        assert.strictEqual(showErrorMessage.callCount, 0);
+        assert.strictEqual(showInformationMessage.callCount, 0);
+    });
+
+    test('treats cancellation from the setup notification as a dismissal rather than an error', async () => {
+        sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
+        sinon.stub(vscode.window, 'showWarningMessage').resolves(debuggerSetupAction as any);
+        const showErrorMessage = sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined);
+        sinon.stub(vscode.commands, 'executeCommand').rejects(new vscode.CancellationError());
+        const service = new DebuggerInstallHintService(createMemento());
+
+        await service.notifyMissingDebuggers([createResource('bun')]);
+
+        assert.strictEqual(showErrorMessage.callCount, 0);
     });
 
     test('installs only the missing Java debugger requirement', async () => {
@@ -447,7 +527,7 @@ suite('debugger install hints', () => {
 
     test("Don't Show Again suppresses future sessions for that debugger", async () => {
         sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
-        const showInformationMessage = sinon.stub(vscode.window, 'showInformationMessage').resolves(dontShowAgainLabel as any);
+        const showWarningMessage = sinon.stub(vscode.window, 'showWarningMessage').resolves(dontShowAgainLabel as any);
         const globalState = createMemento();
 
         const firstService = new DebuggerInstallHintService(globalState);
@@ -456,12 +536,12 @@ suite('debugger install hints', () => {
         const secondService = new DebuggerInstallHintService(globalState);
         await secondService.notifyMissingDebuggers([createResource('go')]);
 
-        assert.strictEqual(showInformationMessage.callCount, 1);
+        assert.strictEqual(showWarningMessage.callCount, 1);
     });
 
     test('uses stable logical debugger types for notification suppression', async () => {
         sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
-        const showInformationMessage = sinon.stub(vscode.window, 'showInformationMessage').resolves(dontShowAgainLabel as any);
+        const showWarningMessage = sinon.stub(vscode.window, 'showWarningMessage').resolves(dontShowAgainLabel as any);
         const globalState = createMemento();
         const service = new DebuggerInstallHintService(globalState);
 
@@ -471,7 +551,7 @@ suite('debugger install hints', () => {
             createResource('rust'),
         ]);
 
-        assert.strictEqual(showInformationMessage.callCount, 2);
+        assert.strictEqual(showWarningMessage.callCount, 2);
         assert.deepStrictEqual(
             [...globalState.keys()].sort(),
             [

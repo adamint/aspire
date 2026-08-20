@@ -287,7 +287,7 @@
   "aspire-vscode.strings.debuggerExtensionDisabled": "One or more extensions required for {0} debugging are disabled. Enable them, then restart the AppHost to enable debugging.",
   "aspire-vscode.strings.debuggerInstalledRestartAppHost": "The extensions required for {0} debugging are installed. Restart the AppHost to enable debugging.",
   "aspire-vscode.strings.openExtensionsLabel": "Open Extensions",
-  "aspire-vscode.strings.codeLensSetUpDebugger": "$(warning)\u200A Set up {0} debugger",
+  "aspire-vscode.strings.codeLensSetUpDebugger": "⚠️ Set up {0} debugger",
   "aspire-vscode.strings.workspaceAppHostLabel": "Workspace AppHost",
   "aspire-vscode.strings.dashboardUrlNotFound": "No Aspire Dashboard URL is available. Start an AppHost and try again.",
   "aspire-vscode.strings.dashboardUrlUnsupported": "The Aspire Dashboard URL must use http or https.",

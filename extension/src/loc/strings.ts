@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 
 export const noCsprojFound = vscode.l10n.t('No AppHost found in the current workspace.');
-export const errorMessage = (error: any) => vscode.l10n.t('Error: {0}', error);
+// l10n.t only substitutes primitives, so passing an Error left the message as the literal "Error: {0}".
+export const errorMessage = (error: unknown) => vscode.l10n.t('Error: {0}', error instanceof Error ? error.message : String(error));
 export const yesLabel = vscode.l10n.t('Yes');
 export const noLabel = vscode.l10n.t('No');
 export const directUrl = (url: string) => vscode.l10n.t('Direct: {0}', url);
@@ -273,7 +274,9 @@ export const codeLensViewLogs = vscode.l10n.t('$(output)\u200A Logs');
 export const codeLensCommand = (name: string) => vscode.l10n.t('$(terminal)\u200A {0}', name);
 export const codeLensOpenDashboard = vscode.l10n.t('$(dashboard)\u200A Open Dashboard');
 export const codeLensViewAppHostLogs = vscode.l10n.t('$(output)\u200A View Logs');
-export const codeLensSetUpDebugger = (debuggerName: string) => vscode.l10n.t('$(warning)\u200A Set up {0} debugger', debuggerName);
+// An emoji rather than $(warning): CodeLens titles render codicons in the lens foreground color,
+// so the codicon warning cannot be yellow.
+export const codeLensSetUpDebugger = (debuggerName: string) => vscode.l10n.t('⚠️ Set up {0} debugger', debuggerName);
 export const codeLensRustAppHostAlreadyRunning = vscode.l10n.t('⚠️ Do not click the rust-analyzer Run or Debug actions; this AppHost is already running in Aspire');
 export const codeLensRustAppHostAlreadyRunningTooltip = vscode.l10n.t('Use Aspire controls instead. rust-analyzer starts another Cargo process outside the running Aspire session.');
 export const codeLensRustAppHostUseAspire = vscode.l10n.t('⚠️ Do not click the rust-analyzer Run or Debug actions; they bypass Aspire');

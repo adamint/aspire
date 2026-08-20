@@ -20,6 +20,7 @@ import {
 import { bunDebuggerExtension } from './languages/bun';
 import { goDebuggerExtension } from './languages/go';
 import { pythonDebuggerExtension } from './languages/python';
+import { isCommandCancellation } from '../utils/telemetry';
 
 export const launchConfigurationTypePropertyName = 'resource.launchConfigurationType';
 
@@ -139,10 +140,14 @@ export class DebuggerInstallHintService {
         };
 
         const dataSubscription = dataSource.onDidChangeData(refresh);
+        // Enabling or disabling a debugger extension changes which hints apply without changing
+        // AppHost data, so the resource stream alone would never re-evaluate them.
+        const extensionSubscription = vscode.extensions.onDidChange(refresh);
         refresh();
 
         return vscode.Disposable.from(
             dataSubscription,
+            extensionSubscription,
             new vscode.Disposable(() => dataLease?.dispose()));
     }
 
@@ -178,7 +183,7 @@ export class DebuggerInstallHintService {
             if (registered) {
                 await vscode.window.showInformationMessage(debuggerInstalledRestartAppHost(hint.debuggerName));
             } else {
-                const selected = await vscode.window.showInformationMessage(
+                const selected = await vscode.window.showWarningMessage(
                     debuggerExtensionDisabled(hint.debuggerName),
                     openExtensionsLabel);
                 if (selected === openExtensionsLabel) {
@@ -192,6 +197,12 @@ export class DebuggerInstallHintService {
                 }
             }
         } catch (error) {
+            // The command wrapper turns a cancellation into a silent no-op; dismissing the install
+            // prompt is not a failure worth a notification.
+            if (isCommandCancellation(error)) {
+                throw error;
+            }
+
             await vscode.window.showErrorMessage(errorMessage(error));
             return {
                 success: false,
@@ -251,7 +262,7 @@ export class DebuggerInstallHintService {
         this._notificationsShown.add(hint.debuggerType);
 
         try {
-            const selected = await vscode.window.showInformationMessage(
+            const selected = await vscode.window.showWarningMessage(
                 debuggerSetupNotification(hint.debuggerName),
                 debuggerSetupAction,
                 dontShowAgainLabel);
@@ -263,7 +274,9 @@ export class DebuggerInstallHintService {
             }
         } catch (error) {
             this._notificationsShown.delete(hint.debuggerType);
-            await vscode.window.showErrorMessage(errorMessage(error));
+            if (!isCommandCancellation(error)) {
+                await vscode.window.showErrorMessage(errorMessage(error));
+            }
         }
     }
 }
