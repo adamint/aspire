@@ -388,6 +388,9 @@
     <trans-unit id="command.installCli">
       <source xml:lang="en">Install Aspire CLI</source>
     </trans-unit>
+    <trans-unit id="command.installDebuggerExtension">
+      <source xml:lang="en">Install debugger extension</source>
+    </trans-unit>
     <trans-unit id="walkthrough.getStarted.installCli.title">
       <source xml:lang="en">Install the Aspire CLI</source>
     </trans-unit>

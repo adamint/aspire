@@ -260,7 +260,8 @@ suite('extension/package.json', () => {
         // commandPalette "when": "false" entry so it does not leak into the palette.
         const manifest = readManifest();
         const registrationSource = fs.readFileSync(path.resolve(__dirname, '../../src/activation/registerCodeLensCommands.ts'), 'utf8');
-        const registeredCodeLensCommands = [...registrationSource.matchAll(/registerInstrumentedCommand\('(aspire-vscode\.codeLens[A-Za-z0-9]*)'/g)]
+        const registeredCodeLensCommands = [...registrationSource.matchAll(
+            /registerInstrumentedCommand\(\s*'(aspire-vscode\.(?:codeLens[A-Za-z0-9]*|installDebuggerExtension))'/g)]
             .map(match => match[1]);
 
         assert.ok(registeredCodeLensCommands.includes('aspire-vscode.codeLensRevealAppHost'), 'Expected codeLensRevealAppHost to be registered.');
