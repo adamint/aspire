@@ -2,12 +2,14 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Aspire.Cli.Packaging;
+using Aspire.Cli.Resources;
 using Aspire.Cli.Templating;
 using Aspire.Cli.Tests.Mcp;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
 using Aspire.Cli.Utils;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Globalization;
 using System.Xml.Linq;
 
 namespace Aspire.Cli.Tests.Templating;
@@ -663,11 +665,12 @@ public class TemplateNuGetConfigServiceTests(ITestOutputHelper outputHelper)
         var exception = await Assert.ThrowsAsync<Aspire.Cli.Interaction.EmptyChoicesException>(
             async () => await service.ResolveTemplatePackageAsync(query, CancellationToken.None));
 
-        Assert.Contains("13.6.0-dev", exception.Message);
-        Assert.Contains("localhive.sh", exception.Message);
-        Assert.Contains("localhive.ps1", exception.Message);
-        Assert.Contains("ASPIRE_CLI_PACKAGES", exception.Message);
-        Assert.Contains("--channel", exception.Message);
+        Assert.Equal(
+            string.Format(
+                CultureInfo.CurrentCulture,
+                TemplatingStrings.NoMatchingLocalTemplatePackage,
+                "13.6.0-dev"),
+            exception.Message);
     }
 
     [Fact]

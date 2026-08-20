@@ -240,6 +240,12 @@ namespace Aspire.Cli.Resources {
             }
         }
 
+        public static string NoMatchingLocalTemplatePackage {
+            get {
+                return ResourceManager.GetString("NoMatchingLocalTemplatePackage", resourceCulture);
+            }
+        }
+
         /// <summary>
         ///   Looks up a localized string similar to None.
         /// </summary>

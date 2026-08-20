@@ -7,6 +7,7 @@ using Aspire.Cli.Exceptions;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Packaging;
 using Aspire.Cli.Utils;
+using System.Globalization;
 using NuGetPackage = Aspire.Shared.NuGetPackageCli;
 
 namespace Aspire.Cli.Templating;
@@ -323,9 +324,10 @@ internal sealed class TemplateNuGetConfigService(
             if (localMatch.Package is null)
             {
                 throw new EmptyChoicesException(
-                    $"No matching local Aspire.ProjectTemplates package was found for Aspire CLI version '{executionContext.IdentitySdkVersion}'. " +
-                    "Build and stage matching packages with localhive.sh (macOS/Linux) or localhive.ps1 (Windows), set ASPIRE_CLI_PACKAGES to a directory containing the package, " +
-                    "or explicitly choose feed-backed templates with --channel, --source, or --version.");
+                    string.Format(
+                        CultureInfo.CurrentCulture,
+                        Resources.TemplatingStrings.NoMatchingLocalTemplatePackage,
+                        executionContext.IdentitySdkVersion));
             }
 
             return new TemplatePackageSelection(localMatch.Package, localMatch.Channel);
