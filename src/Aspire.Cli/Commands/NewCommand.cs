@@ -553,12 +553,12 @@ internal sealed class NewCommand : BaseCommand
         // An unqualified local DotNet template lets TemplateNuGetConfigService resolve the
         // identity-named local directory itself. Forwarding "local" here would make it
         // indistinguishable from an explicit `--channel local`, bypassing strict exact-version
-        // validation. Other identities and explicit source/version overrides retain the existing
-        // identity fallback.
+        // validation. Explicit `--version` also needs to defer channel selection so the downstream
+        // resolver can search eligible feed-backed channels instead of staying pinned to local.
+        // Other identities and explicit source overrides retain the existing identity fallback.
         var deferUnqualifiedLocalDotNetResolution =
             template.Runtime is TemplateRuntime.DotNet &&
             string.IsNullOrWhiteSpace(requestedChannelName) &&
-            string.IsNullOrWhiteSpace(version) &&
             string.IsNullOrWhiteSpace(source) &&
             string.Equals(ExecutionContext.IdentityChannel, PackageChannelNames.Local, StringComparisons.ChannelName);
 

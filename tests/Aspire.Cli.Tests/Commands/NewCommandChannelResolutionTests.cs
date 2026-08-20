@@ -399,6 +399,20 @@ public class NewCommandChannelResolutionTests(ITestOutputHelper outputHelper)
         Assert.Null(captured.Channel);
     }
 
+    [Fact]
+    public async Task NewCommand_DotNetRuntimeTemplate_LocalIdentityWithVersionOverride_DefersChannelResolution()
+    {
+        var captured = await CaptureTemplateInputsAsync(
+            identityChannel: PackageChannelNames.Local,
+            channelOptionArg: null,
+            identityChannelVersion: "13.6.0-dev",
+            runtime: TemplateRuntime.DotNet,
+            versionOptionArg: "13.5.0");
+
+        Assert.Equal("13.5.0", captured.Version);
+        Assert.Null(captured.Channel);
+    }
+
     /// <summary>
     /// Defensive: when the identity channel is something that isn't a registered channel
     /// (typo, future addition, locally-built CLI without the local hive installed, etc.),
