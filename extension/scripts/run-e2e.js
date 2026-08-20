@@ -123,6 +123,7 @@ const COMMAND_INERT_PATH_PATTERN = isWindows ? WINDOWS_COMMAND_INERT_PATH_PATTER
 const COMMAND_INTERPRETER_NAME = isWindows ? 'cmd.exe' : '/bin/sh';
 const COMMAND_INERT_PATH_ALPHABET = isWindows ? '._-+@~:\\/' : '._-+,=:@%/';
 const primaryAppHostProject = path.join(workspaceRoot, 'AspireE2E.AppHost', 'AspireE2E.AppHost.csproj');
+const runRootNuGetConfigPath = path.join(shortRunRoot, 'NuGet.config');
 const workspaceNuGetConfigPath = path.join(workspaceRoot, 'NuGet.config');
 const enableAzureFunctionsE2E = process.env.ASPIRE_EXTENSION_E2E_ENABLE_AZURE_FUNCTIONS === 'true';
 const advisoryIssue = process.env.ASPIRE_EXTENSION_E2E_ADVISORY_ISSUE || '';
@@ -1666,7 +1667,7 @@ function writeNuGetConfigIfLocalPackageSourcesExist() {
   const fallbackSourceEntries = getApprovedFallbackPackageSources()
     .map(source => `    <add key="${escapeXml(source.key)}" value="${escapeXml(source.value)}" />`)
     .join('\n');
-  fs.writeFileSync(workspaceNuGetConfigPath, `<?xml version="1.0" encoding="utf-8"?>
+  const nugetConfig = `<?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <packageSources>
     <clear />
@@ -1674,7 +1675,11 @@ ${sourceEntries}
 ${fallbackSourceEntries}
   </packageSources>
 </configuration>
-`);
+`;
+  // External AppHost fixtures are siblings of the workspace, while an explicitly supplied
+  // workspace may sit outside the run root. Keep both restore scopes deterministic.
+  fs.writeFileSync(runRootNuGetConfigPath, nugetConfig);
+  fs.writeFileSync(workspaceNuGetConfigPath, nugetConfig);
 }
 
 function getApprovedFallbackPackageSources() {

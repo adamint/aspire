@@ -171,6 +171,14 @@ suite('Aspire extension edge case E2E', function () {
         const appHostPath = getGeneratedAppHostPath(debuggerInstallHintProjectName);
         await createEmptyAppHostProject(debuggerInstallHintProjectName);
 
+        // This scenario does not exercise dashboard transport security. Use the generated HTTP
+        // profile so clean test machines do not need an ambient ASP.NET Core developer certificate.
+        const runSettingsPath = path.join(path.dirname(appHostPath), 'apphost.run.json');
+        const runSettings = JSON.parse(fs.readFileSync(runSettingsPath, 'utf8')) as { profiles?: Record<string, unknown> };
+        assert.ok(runSettings.profiles?.http);
+        runSettings.profiles = { http: runSettings.profiles.http };
+        writeFileWithRetry(runSettingsPath, JSON.stringify(runSettings, undefined, 2));
+
         const pythonAppDirectory = path.join(getGeneratedProjectRoot(debuggerInstallHintProjectName), 'pythonapp');
         fs.mkdirSync(pythonAppDirectory, { recursive: true });
         writeFileWithRetry(path.join(pythonAppDirectory, 'app.py'), 'import time\n\nprint("ready", flush=True)\ntime.sleep(600)\n');

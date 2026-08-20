@@ -578,6 +578,18 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes("ASPIRE_EXTENSION_E2E_NUGET_PACKAGES: path.join(shortRunRoot, 'nuget-packages')"));
     });
 
+    test('makes local NuGet sources available to external AppHosts', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const writeConfigStart = runner.indexOf('function writeNuGetConfigIfLocalPackageSourcesExist');
+        const writeConfigEnd = runner.indexOf('\nfunction ', writeConfigStart + 1);
+        const writeConfig = runner.slice(writeConfigStart, writeConfigEnd);
+
+        assert.ok(runner.includes("const runRootNuGetConfigPath = path.join(shortRunRoot, 'NuGet.config');"));
+        assert.ok(writeConfig.includes('fs.writeFileSync(runRootNuGetConfigPath, nugetConfig);'));
+        assert.ok(writeConfig.includes('fs.writeFileSync(workspaceNuGetConfigPath, nugetConfig);'));
+    });
+
     test('suppresses evaluation diagnostics for intentional E2E AppHost interaction APIs', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
