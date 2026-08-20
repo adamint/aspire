@@ -43,9 +43,15 @@ export function deleteEnvironmentVariable(environment: NodeJS.ProcessEnv, name: 
 }
 
 export function getEnvironmentWithoutE2EBridgeVariables(): NodeJS.ProcessEnv {
-    return Object.fromEntries(
+    const environment = Object.fromEntries(
         Object.entries(process.env).filter(([key]) => !key.startsWith('ASPIRE_EXTENSION_E2E_') && !filteredEnvironmentKeyCounts.has(key))
     );
+    if (process.env.ASPIRE_EXTENSION_E2E_ENABLE_BRIDGE === 'true'
+        && process.env.ASPIRE_EXTENSION_E2E_NUGET_PACKAGES) {
+        environment.NUGET_PACKAGES = process.env.ASPIRE_EXTENSION_E2E_NUGET_PACKAGES;
+    }
+
+    return environment;
 }
 
 export function addFilteredEnvironmentKeys(keys: string[]): void {

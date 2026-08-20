@@ -631,6 +631,7 @@ async function main() {
       // ignore an extension host left behind by an earlier run that is still polling them.
       ASPIRE_EXTENSION_E2E_RUN_ID: runId,
       ASPIRE_EXTENSION_E2E_ENABLE_BRIDGE: 'true',
+      ASPIRE_EXTENSION_E2E_NUGET_PACKAGES: path.join(shortRunRoot, 'nuget-packages'),
       ASPIRE_EXTENSION_E2E_SKIP_CURRENT_CLI_REGRESSIONS: process.env.ASPIRE_EXTENSION_E2E_SKIP_CURRENT_CLI_REGRESSIONS === 'true' ? 'true' : 'false',
       ASPIRE_EXTENSION_E2E_PRIMARY_APPHOST: primaryAppHostProject,
       ASPIRE_EXTENSION_E2E_APPHOST_SDK_VERSION: appHostSdkVersion,
@@ -1659,7 +1660,6 @@ function writeNuGetConfigIfLocalPackageSourcesExist() {
     return;
   }
 
-  const globalPackagesFolder = path.join(shortRunRoot, 'nuget-packages');
   const sourceEntries = packageSources
     .map((source, index) => `    <add key="e2e-source-${index}" value="${escapeXml(source)}" />`)
     .join('\n');
@@ -1668,9 +1668,6 @@ function writeNuGetConfigIfLocalPackageSourcesExist() {
     .join('\n');
   fs.writeFileSync(workspaceNuGetConfigPath, `<?xml version="1.0" encoding="utf-8"?>
 <configuration>
-  <config>
-    <add key="globalPackagesFolder" value="${escapeXml(globalPackagesFolder)}" />
-  </config>
   <packageSources>
     <clear />
 ${sourceEntries}
