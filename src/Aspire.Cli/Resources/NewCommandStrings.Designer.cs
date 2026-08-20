@@ -216,5 +216,11 @@ namespace Aspire.Cli.Resources {
                 return ResourceManager.GetString("NoChannelFoundMatching", resourceCulture);
             }
         }
+
+        public static string NoMatchingLocalTemplatePackage {
+            get {
+                return ResourceManager.GetString("NoMatchingLocalTemplatePackage", resourceCulture);
+            }
+        }
     }
 }

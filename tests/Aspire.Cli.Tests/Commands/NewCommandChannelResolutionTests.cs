@@ -1,10 +1,12 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Globalization;
 using Aspire.Cli.Commands;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Packaging;
 using Aspire.Cli.Projects;
+using Aspire.Cli.Resources;
 using Aspire.Cli.Templating;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
@@ -209,16 +211,17 @@ public class NewCommandChannelResolutionTests(ITestOutputHelper outputHelper)
             identityChannel: PackageChannelNames.Local,
             channelOptionArg: null,
             identityChannelVersion: null,
+            identitySdkVersion: "13.6.0-dev",
             expectedExitCode: CliExitCodes.InvalidCommand);
 
         Assert.False(captured.WasApplied);
         var error = Assert.Single(captured.Errors);
-        Assert.Contains("localhive.sh", error);
-        Assert.Contains("localhive.ps1", error);
-        Assert.Contains("ASPIRE_CLI_PACKAGES", error);
-        Assert.Contains("--channel", error);
-        Assert.Contains("--source", error);
-        Assert.Contains("--version", error);
+        Assert.Equal(
+            string.Format(
+                CultureInfo.CurrentCulture,
+                NewCommandStrings.NoMatchingLocalTemplatePackage,
+                "13.6.0-dev"),
+            error);
     }
 
     [Fact]

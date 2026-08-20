@@ -480,9 +480,10 @@ internal sealed class NewCommand : BaseCommand
     }
 
     private string GetMissingLocalTemplatePackageMessage() =>
-        $"No matching local Aspire.ProjectTemplates package was found for Aspire CLI version '{ExecutionContext.IdentitySdkVersion}'. " +
-        "Build and stage matching packages with localhive.sh (macOS/Linux) or localhive.ps1 (Windows), set ASPIRE_CLI_PACKAGES to a directory containing the package, " +
-        "or explicitly choose feed-backed templates with --channel, --source, or --version.";
+        string.Format(
+            CultureInfo.CurrentCulture,
+            NewCommandStrings.NoMatchingLocalTemplatePackage,
+            ExecutionContext.IdentitySdkVersion);
 
     protected override async Task<CommandResult> ExecuteAsync(ParseResult parseResult, CancellationToken cancellationToken)
     {
