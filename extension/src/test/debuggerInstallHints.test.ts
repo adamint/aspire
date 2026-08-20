@@ -45,7 +45,7 @@ suite('debugger install hints', () => {
         sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
 
         assert.deepStrictEqual(
-            ['python', 'go', 'bun', 'java'].map(type =>
+            ['python', 'go', 'bun', 'java', 'maui', 'azure-functions'].map(type =>
                 getDebuggerInstallHintForResource(createResource(type))),
             [
                 {
@@ -67,6 +67,16 @@ suite('debugger install hints', () => {
                     debuggerName: 'Java',
                     debuggerType: 'java',
                     extensionIds: ['redhat.java', 'vscjava.vscode-java-debug'],
+                },
+                {
+                    debuggerName: '.NET MAUI',
+                    debuggerType: 'maui',
+                    extensionIds: ['ms-dotnettools.dotnet-maui'],
+                },
+                {
+                    debuggerName: 'Azure Functions',
+                    debuggerType: 'azure-functions',
+                    extensionIds: ['ms-dotnettools.csharp', 'ms-azuretools.vscode-azurefunctions'],
                 },
             ]);
     });
@@ -145,6 +155,19 @@ suite('debugger install hints', () => {
                 debuggerName: 'Java',
                 debuggerType: 'java',
                 extensionIds: ['redhat.java', 'vscjava.vscode-java-debug'],
+            });
+    });
+
+    test('returns the complete Azure Functions hint when any required extension is missing', () => {
+        sinon.stub(vscode.extensions, 'getExtension').callsFake(extensionId =>
+            extensionId === 'ms-dotnettools.csharp' ? { id: extensionId } as vscode.Extension<unknown> : undefined);
+
+        assert.deepStrictEqual(
+            getDebuggerInstallHintForResource(createResource('azure-functions')),
+            {
+                debuggerName: 'Azure Functions',
+                debuggerType: 'azure-functions',
+                extensionIds: ['ms-dotnettools.csharp', 'ms-azuretools.vscode-azurefunctions'],
             });
     });
 

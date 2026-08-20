@@ -1,5 +1,12 @@
 import * as vscode from 'vscode';
-import { getRustExtensionId, javaDebugExtensionId, javaLanguageExtensionId } from '../capabilities';
+import {
+    azureFunctionsExtensionId,
+    csharpExtensionId,
+    getRustExtensionId,
+    javaDebugExtensionId,
+    javaLanguageExtensionId,
+    mauiExtensionId,
+} from '../capabilities';
 import { ResourceState } from '../editor/resourceConstants';
 import {
     debuggerInstallAction,
@@ -59,6 +66,16 @@ const debuggerInstallHints = new Map<string, DebuggerInstallHint>([
         debuggerName: 'Java',
         debuggerType: 'java',
         extensionIds: [javaLanguageExtensionId, javaDebugExtensionId],
+    }],
+    ['maui', {
+        debuggerName: '.NET MAUI',
+        debuggerType: 'maui',
+        extensionIds: [mauiExtensionId],
+    }],
+    ['azure-functions', {
+        debuggerName: 'Azure Functions',
+        debuggerType: 'azure-functions',
+        extensionIds: [csharpExtensionId, azureFunctionsExtensionId],
     }],
 ]);
 

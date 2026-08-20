@@ -39,8 +39,12 @@ export function isCsDevKitInstalled() {
     return isExtensionInstalled("ms-dotnettools.csdevkit");
 }
 
+export const csharpExtensionId = 'ms-dotnettools.csharp';
+export const azureFunctionsExtensionId = 'ms-azuretools.vscode-azurefunctions';
+export const mauiExtensionId = 'ms-dotnettools.dotnet-maui';
+
 export function isCsharpInstalled() {
-    return isExtensionInstalled("ms-dotnettools.csharp");
+    return isExtensionInstalled(csharpExtensionId);
 }
 
 export function isPythonInstalled() {
@@ -74,11 +78,11 @@ export function isRustInstalled(platform: NodeJS.Platform = process.platform) {
 }
 
 export function isAzureFunctionsExtensionInstalled() {
-    return isExtensionInstalled("ms-azuretools.vscode-azurefunctions");
+    return isExtensionInstalled(azureFunctionsExtensionId);
 }
 
 export function isMauiInstalled() {
-    return isExtensionInstalled("ms-dotnettools.dotnet-maui");
+    return isExtensionInstalled(mauiExtensionId);
 }
 
 export function isNodeInstalled() {
@@ -113,7 +117,7 @@ export function getSupportedCapabilities(platform: NodeJS.Platform = process.pla
 
     if (isCsharpInstalled()) {
         capabilities.push("project");
-        capabilities.push("ms-dotnettools.csharp");
+        capabilities.push(csharpExtensionId);
 
         // Azure Functions debugging requires both C# (coreclr attach to the worker
         // process) and the Azure Functions extension (to launch func host start).
@@ -150,7 +154,7 @@ export function getSupportedCapabilities(platform: NodeJS.Platform = process.pla
 
     if (isMauiInstalled()) {
         capabilities.push("maui");
-        capabilities.push("ms-dotnettools.dotnet-maui");
+        capabilities.push(mauiExtensionId);
     }
 
     if (isJavaInstalled()) {
