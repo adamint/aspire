@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { randomUUID } from 'crypto';
 
 import { AspireExtensionContext } from '../AspireExtensionContext';
 import { getLoggableDebugConfiguration, type AspireDebugSession } from '../debugger/AspireDebugSession';
@@ -44,6 +45,7 @@ export function createE2eStateFileBridge(
     return new vscode.Disposable(() => undefined);
   }
 
+  const extensionHostSessionId = randomUUID();
   const commandInvocations: AspireExtensionE2ECommandInvocation[] = [];
   const terminalCommands: AspireExtensionE2ETerminalCommand[] = [];
   const debugLaunches: AspireExtensionE2EDebugLaunch[] = [];
@@ -73,6 +75,7 @@ export function createE2eStateFileBridge(
     recordStoppingPathEvents(state.stoppingPaths);
 
     writeJsonFileAtomic(stateFile, {
+      extensionHostSessionId,
       updatedAt: new Date().toISOString(),
       runId,
       state,
