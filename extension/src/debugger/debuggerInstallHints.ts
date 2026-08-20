@@ -112,6 +112,7 @@ export function getDebuggerInstallHintForResource(
 
 export class DebuggerInstallHintService {
     private static readonly _extensionRegistrationTimeoutMs = 5_000;
+    private readonly _installsInProgress = new Map<string, number>();
     private readonly _notificationsShown = new Set<string>();
 
     constructor(private readonly _globalState: vscode.Memento) {
@@ -168,6 +169,9 @@ export class DebuggerInstallHintService {
     }
 
     async installDebuggerExtension(hint: DebuggerInstallHint): Promise<void | DebuggerInstallFailure> {
+        this._installsInProgress.set(
+            hint.debuggerType,
+            (this._installsInProgress.get(hint.debuggerType) ?? 0) + 1);
         try {
             const missingExtensionIds = hint.extensionIds.filter(
                 extensionId => !vscode.extensions.getExtension(extensionId));
@@ -208,6 +212,13 @@ export class DebuggerInstallHintService {
                 success: false,
                 errorKind: error instanceof Error ? error.name : 'Error',
             };
+        } finally {
+            const remainingInstalls = this._installsInProgress.get(hint.debuggerType)! - 1;
+            if (remainingInstalls === 0) {
+                this._installsInProgress.delete(hint.debuggerType);
+            } else {
+                this._installsInProgress.set(hint.debuggerType, remainingInstalls);
+            }
         }
     }
 
@@ -253,6 +264,7 @@ export class DebuggerInstallHintService {
     private async _showNotification(hint: DebuggerInstallHint): Promise<void> {
         const suppressionKey = `${notificationSuppressedKeyPrefix}${hint.debuggerType}`;
         if (this._notificationsShown.has(hint.debuggerType)
+            || this._installsInProgress.has(hint.debuggerType)
             || this._globalState.get<boolean>(suppressionKey, false)) {
             return;
         }
@@ -273,8 +285,8 @@ export class DebuggerInstallHintService {
                 await this._globalState.update(suppressionKey, true);
             }
         } catch (error) {
-            this._notificationsShown.delete(hint.debuggerType);
             if (!isCommandCancellation(error)) {
+                this._notificationsShown.delete(hint.debuggerType);
                 await vscode.window.showErrorMessage(errorMessage(error));
             }
         }

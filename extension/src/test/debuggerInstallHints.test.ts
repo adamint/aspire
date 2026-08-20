@@ -301,6 +301,76 @@ suite('debugger install hints', () => {
             'The extensions required for Java debugging are installed. Restart the AppHost to enable debugging.');
     });
 
+    test('does not show a setup notification while installing multiple debugger requirements', async () => {
+        const registeredExtensionIds = new Set(['redhat.java', 'vscjava.vscode-java-debug']);
+        sinon.stub(vscode.extensions, 'getExtension').callsFake(extensionId =>
+            registeredExtensionIds.has(extensionId) ? { id: extensionId } as vscode.Extension<unknown> : undefined);
+        const extensionChanges = new vscode.EventEmitter<void>();
+        sinon.stub(vscode.extensions, 'onDidChange').get(() => extensionChanges.event);
+        const showWarningMessage = sinon.stub(vscode.window, 'showWarningMessage').resolves(undefined);
+        sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+        sinon.stub(vscode.commands, 'executeCommand').callsFake(async (command, extensionId) => {
+            if (command === 'workbench.extensions.installExtension') {
+                registeredExtensionIds.add(extensionId as string);
+                extensionChanges.fire();
+            }
+        });
+        const dataChanges = new vscode.EventEmitter<void>();
+        const service = new DebuggerInstallHintService(createMemento());
+        const observation = service.watchForMissingDebuggers({
+            workspaceAppHostCandidatePaths: ['/workspace/apphost.cs'],
+            workspaceResources: [createResource('java')],
+            appHosts: [],
+            onDidChangeData: dataChanges.event,
+            keepDataActive: sinon.stub().returns({ dispose: sinon.stub() }),
+        });
+
+        try {
+            await new Promise(resolve => setImmediate(resolve));
+            registeredExtensionIds.clear();
+
+            await service.installDebuggerExtension({
+                debuggerName: 'Java',
+                debuggerType: 'java',
+                extensionIds: ['redhat.java', 'vscjava.vscode-java-debug'],
+            });
+
+            assert.strictEqual(showWarningMessage.callCount, 0);
+        } finally {
+            observation.dispose();
+            dataChanges.dispose();
+            extensionChanges.dispose();
+        }
+    });
+
+    test('does not show a setup notification while an overlapping install remains active', async () => {
+        sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
+        const showWarningMessage = sinon.stub(vscode.window, 'showWarningMessage').resolves(undefined);
+        sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined);
+        let rejectSecondInstall!: (reason: unknown) => void;
+        const secondInstallCommand = new Promise<never>((_, reject) => rejectSecondInstall = reject);
+        const executeCommand = sinon.stub(vscode.commands, 'executeCommand');
+        executeCommand.onFirstCall().rejects(new Error('First install failed.'));
+        executeCommand.onSecondCall().returns(secondInstallCommand);
+        const service = new DebuggerInstallHintService(createMemento());
+        const hint = {
+            debuggerName: 'Bun',
+            debuggerType: 'bun',
+            extensionIds: ['oven.bun-vscode'],
+        };
+
+        const firstInstallation = service.installDebuggerExtension(hint);
+        const secondInstallation = service.installDebuggerExtension(hint);
+        await firstInstallation;
+
+        await service.notifyMissingDebuggers([createResource('bun')]);
+
+        assert.strictEqual(showWarningMessage.callCount, 0);
+
+        rejectSecondInstall(new vscode.CancellationError());
+        await assert.rejects(secondInstallation, error => isCommandCancellation(error));
+    });
+
     test('reports a disabled debugger extension instead of claiming installation succeeded', async () => {
         const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
         const getExtension = sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
@@ -377,13 +447,15 @@ suite('debugger install hints', () => {
 
     test('treats cancellation from the setup notification as a dismissal rather than an error', async () => {
         sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
-        sinon.stub(vscode.window, 'showWarningMessage').resolves(debuggerSetupAction as any);
+        const showWarningMessage = sinon.stub(vscode.window, 'showWarningMessage').resolves(debuggerSetupAction as any);
         const showErrorMessage = sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined);
         sinon.stub(vscode.commands, 'executeCommand').rejects(new vscode.CancellationError());
         const service = new DebuggerInstallHintService(createMemento());
 
         await service.notifyMissingDebuggers([createResource('bun')]);
+        await service.notifyMissingDebuggers([createResource('bun')]);
 
+        assert.strictEqual(showWarningMessage.callCount, 1);
         assert.strictEqual(showErrorMessage.callCount, 0);
     });
 
