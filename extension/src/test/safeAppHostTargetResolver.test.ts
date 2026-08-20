@@ -16,6 +16,7 @@ import {
     createWorkspaceFolder,
     FakeDiscoveryService,
 } from './helpers/editorAssistanceTestSupport';
+import { ScriptedRealpath } from './helpers/scriptedRealpath';
 
 function createUnsafeModelTriggeredError(workspaceRoot: string): {
     readonly error: Error;
@@ -293,6 +294,79 @@ suite('Editor assistance AppHost services', () => {
             assert.deepStrictEqual(knownTargets.map(target => target.displayPath), ['AppHost/AppHost.csproj']);
         });
 
+        test('drops a candidate whose captured physical target escapes the workspace after the selector looked contained', async () => {
+            // Containment and binding are two reads of the same mutable name. A selector that
+            // resolves inside the workspace for the containment sample and outside it for the
+            // binding sample would otherwise produce a target that displays a workspace-relative
+            // path while every operation it carries runs against a file outside the workspace.
+            // The script places the retarget exactly in that window, which a real symlink cannot
+            // do because both reads happen without an await between them.
+            const outsideAppHost = path.join(outsideRoot, 'External.csproj');
+            fs.writeFileSync(outsideAppHost, appHostProjectContents);
+            const canonicalOutsideAppHost = fs.realpathSync.native(outsideAppHost);
+            const movingAppHost = path.join(workspaceRoot, 'AppHost', 'Moving.csproj');
+            fs.writeFileSync(movingAppHost, appHostProjectContents);
+            const canonicalMovingAppHost = fs.realpathSync.native(movingAppHost);
+            addCandidate(discoveryService, workspaceRoot, movingAppHost);
+
+            const scriptedRealpath = new ScriptedRealpath();
+            try {
+                scriptedRealpath.script(movingAppHost, {
+                    results: [canonicalMovingAppHost],
+                    thereafter: canonicalOutsideAppHost,
+                });
+
+                const knownTargets = await resolver.enumerateKnownAppHosts(new vscode.CancellationTokenSource().token);
+
+                assert.deepStrictEqual(knownTargets.map(target => target.displayPath), ['AppHost/AppHost.csproj']);
+                assert.deepStrictEqual(
+                    knownTargets.map(target => target.canonicalPath),
+                    [fs.realpathSync.native(appHostProjectPath)]);
+            }
+            finally {
+                scriptedRealpath.restore();
+            }
+        });
+
+        test('keeps a candidate whose captured physical target stays inside the workspace', async () => {
+            // The mirror of the rejection above: containment is decided from the captured path,
+            // so a target that never leaves the workspace still enumerates normally.
+            const stableAppHost = path.join(workspaceRoot, 'AppHost', 'Stable.csproj');
+            fs.writeFileSync(stableAppHost, appHostProjectContents);
+            const canonicalStableAppHost = fs.realpathSync.native(stableAppHost);
+            addCandidate(discoveryService, workspaceRoot, stableAppHost);
+
+            const scriptedRealpath = new ScriptedRealpath();
+            try {
+                scriptedRealpath.script(stableAppHost, { results: [canonicalStableAppHost] });
+
+                const knownTargets = await resolver.enumerateKnownAppHosts(new vscode.CancellationTokenSource().token);
+
+                assert.deepStrictEqual(
+                    knownTargets.map(target => target.displayPath),
+                    ['AppHost/AppHost.csproj', 'AppHost/Stable.csproj']);
+                assert.strictEqual(
+                    knownTargets[1].canonicalPath,
+                    canonicalStableAppHost);
+            }
+            finally {
+                scriptedRealpath.restore();
+            }
+        });
+
+        test('enumerates nothing while the workspace is not trusted', async () => {
+            const trustStub = sinon.stub(vscode.workspace, 'isTrusted').value(false);
+            try {
+                const knownTargets = await resolver.enumerateKnownAppHosts(new vscode.CancellationTokenSource().token);
+
+                assert.deepStrictEqual(knownTargets, []);
+                assert.strictEqual(discoveryService.discoverCalls, 0);
+            }
+            finally {
+                trustStub.restore();
+            }
+        });
+
         test('drops registry entries whose identity cannot be rendered faithfully', async () => {
             const invisibleAppHost = path.join(workspaceRoot, 'AppHost', 'App\u200bHost.csproj');
             fs.writeFileSync(invisibleAppHost, appHostProjectContents);
@@ -371,6 +445,115 @@ suite('Editor assistance AppHost services', () => {
             const secondResolution = await resolver.resolveTarget('AppHost/AppHost.csproj', new vscode.CancellationTokenSource().token);
             assertResolved(secondResolution);
             assert.strictEqual(firstResolution.target.identity, secondResolution.target.identity);
+        });
+
+        test('binds a resolved target to the canonical AppHost its selector currently names', async function () {
+            // Everything after resolution reads or launches asynchronously, and a selector is
+            // only a name: it can be repointed while those operations run. The target therefore
+            // carries the physical AppHost it resolved to, so an operation cannot be redirected
+            // by a later retarget even though the selector itself still decides freshness.
+            const linkedTarget = path.join(workspaceRoot, 'Linked', 'AppHost.csproj');
+            fs.mkdirSync(path.dirname(linkedTarget), { recursive: true });
+            try {
+                fs.symlinkSync(appHostProjectPath, linkedTarget);
+            }
+            catch {
+                this.skip();
+                return;
+            }
+
+            discoveryService.candidatesByFolder.set(workspaceRoot, []);
+            addCandidate(discoveryService, workspaceRoot, linkedTarget);
+            const resolution = await resolver.resolveTarget('Linked/AppHost.csproj', new vscode.CancellationTokenSource().token);
+
+            assertResolved(resolution);
+            assert.strictEqual(resolution.target.absolutePath, linkedTarget);
+            assert.strictEqual(resolution.target.canonicalPath, fs.realpathSync.native(appHostProjectPath));
+            assert.strictEqual(
+                resolver.getIdentityForAppHostPath(resolution.target.canonicalPath),
+                resolution.target.identity);
+            assert.strictEqual(resolution.target.displayPath, 'Linked/AppHost.csproj');
+        });
+
+        test('keeps a canonical bound path for a target the filesystem cannot canonicalize', async () => {
+            // A registry entry can be removed between enumeration and use. The bound path then
+            // falls back to the enumerated path so the target still names something, and the
+            // identity check is what refuses to publish anything about it.
+            const missingAppHost = path.join(workspaceRoot, 'Missing', 'AppHost.csproj');
+            discoveryService.candidatesByFolder.set(workspaceRoot, []);
+            addCandidate(discoveryService, workspaceRoot, missingAppHost);
+
+            const resolution = await resolver.resolveTarget('Missing/AppHost.csproj', new vscode.CancellationTokenSource().token);
+
+            assertResolved(resolution);
+            assert.strictEqual(resolution.target.canonicalPath, missingAppHost);
+        });
+
+        test('binds the source file of a project pair to the source file itself', async function () {
+            // A project file and its sibling AppHost source share one identity, but they are two
+            // different files. The bound path has to stay the entry the selector named, otherwise
+            // a read or launch would be pointed at the sibling the caller did not select.
+            const pairDirectory = path.join(workspaceRoot, 'Pair');
+            const pairProject = path.join(pairDirectory, 'AppHost.csproj');
+            const pairSource = path.join(pairDirectory, 'AppHost.cs');
+            fs.mkdirSync(pairDirectory, { recursive: true });
+            fs.writeFileSync(pairProject, appHostProjectContents);
+            fs.writeFileSync(pairSource, '// AppHost');
+            discoveryService.candidatesByFolder.set(workspaceRoot, []);
+            addCandidate(discoveryService, workspaceRoot, pairSource);
+
+            const resolution = await resolver.resolveTarget('Pair/AppHost.cs', new vscode.CancellationTokenSource().token);
+
+            assertResolved(resolution);
+            assert.strictEqual(resolution.target.canonicalPath, fs.realpathSync.native(pairSource));
+        });
+
+        test('keeps the canonical bound path out of every projection it hands a caller', async function () {
+            // The target itself legitimately carries the physical path - that is what makes an
+            // operation immune to a retarget. What must never carry it is anything a model or a
+            // confirmation sees, because the physical path can name a file the caller never
+            // chose a name for, and the identity a caller confirms is the workspace-relative one.
+            const hiddenDirectory = path.join(workspaceRoot, 'Hidden-Physical-Location');
+            const hiddenAppHost = path.join(hiddenDirectory, 'AppHost.csproj');
+            const aliasAppHost = path.join(workspaceRoot, 'Alias', 'AppHost.csproj');
+            fs.mkdirSync(hiddenDirectory, { recursive: true });
+            fs.mkdirSync(path.dirname(aliasAppHost), { recursive: true });
+            fs.writeFileSync(hiddenAppHost, appHostProjectContents);
+            try {
+                fs.symlinkSync(hiddenAppHost, aliasAppHost);
+            }
+            catch {
+                this.skip();
+                return;
+            }
+
+            discoveryService.candidatesByFolder.set(workspaceRoot, []);
+            addCandidate(discoveryService, workspaceRoot, aliasAppHost);
+            const token = new vscode.CancellationTokenSource().token;
+
+            const resolution = await resolver.resolveTarget('Alias/AppHost.csproj', token);
+            const missing = await resolver.resolveTarget('Missing/AppHost.csproj', token);
+
+            assertResolved(resolution);
+            const canonicalPath = resolution.target.canonicalPath;
+            assert.strictEqual(canonicalPath, fs.realpathSync.native(hiddenAppHost));
+            // Everything a caller is allowed to show or return: the confirmation identity, the
+            // workspace-relative path a tool result reports, and the recovery list a failed
+            // resolution offers the model.
+            const callerFacingProjections = JSON.stringify({
+                confirmation: resolution.target.displayPath,
+                result: resolution.target.relativePath,
+                knownAppHosts: missing.resolved ? [] : missing.knownAppHosts,
+            });
+
+            assert.strictEqual(callerFacingProjections.includes(canonicalPath), false);
+            assert.strictEqual(callerFacingProjections.includes('Hidden-Physical-Location'), false);
+            assert.strictEqual(callerFacingProjections.includes(workspaceRoot), false);
+            assert.deepStrictEqual(JSON.parse(callerFacingProjections), {
+                confirmation: 'Alias/AppHost.csproj',
+                result: 'Alias/AppHost.csproj',
+                knownAppHosts: ['Alias/AppHost.csproj'],
+            });
         });
 
         test('bounds known AppHosts on not-found results', async () => {

@@ -15,6 +15,7 @@ import * as configInfoProvider from '../utils/configInfoProvider';
 import { describeIncludeDisabledCommandsCapability, lsJsonStreamCapability } from '../types/configInfo';
 import { errorFetchingAppHosts } from '../loc/strings';
 import { windowCliPathTarget, workspaceFolderCliPathTarget } from '../utils/cliPathVariables';
+import { createAppHostOperationTarget } from '../utils/appHostOperationTarget';
 
 import { removeDirectorySafely } from './testHelpers';
 class TestChildProcess extends EventEmitter {
@@ -237,187 +238,6 @@ suite('AppHostDataRepository', () => {
         assert.strictEqual(spawnStub.called, false);
 
         repository.dispose();
-    });
-
-    test('editor assistance temporarily activates repository data while the panel is hidden', async () => {
-        const repository = new AppHostDataRepository(terminalProvider);
-        const cancellationSource = new vscode.CancellationTokenSource();
-
-        try {
-            repository.activate();
-            repository.setViewMode('global');
-            const resourcesPromise = repository.getAppHostResources(
-                '/workspace/AppHost.csproj',
-                'api',
-                true,
-                cancellationSource.token);
-            let resourcesResolved = false;
-            void resourcesPromise.then(() => {
-                resourcesResolved = true;
-            });
-            await waitForMicrotasks();
-
-            const snapshotCall = spawnStub.getCalls().find(call => {
-                const args = call.args[2] as string[];
-                return args[0] === 'ps' && !args.includes('--follow');
-            });
-            assert.ok(snapshotCall, 'expected an authoritative ps snapshot for the temporary consumer');
-            snapshotCall.args[3].stdoutCallback(JSON.stringify([{
-                appHostPath: '/workspace/AppHost.csproj',
-                appHostPid: 1234,
-                status: 'running',
-            }]));
-            snapshotCall.args[3].exitCallback(0);
-            await waitForMicrotasks();
-
-            const describeCall = spawnStub.getCalls().find(call => {
-                const args = call.args[2] as string[];
-                return args[0] === 'describe' && args[args.length - 1] === '/workspace/AppHost.csproj';
-            });
-            assert.ok(describeCall, 'expected describe follow for the temporary consumer');
-            describeCall.args[3].lineCallback(JSON.stringify({
-                name: 'aspire-dashboard',
-                resourceType: 'Executable',
-                state: 'Running',
-            }));
-            await waitForMicrotasks();
-            assert.strictEqual(resourcesResolved, false, 'an unrelated resource must not complete the exact lookup');
-
-            describeCall.args[3].lineCallback(JSON.stringify({
-                name: 'api-abc123',
-                displayName: 'api',
-                resourceType: 'Project',
-                state: 'Running',
-            }));
-
-            assert.deepStrictEqual(await resourcesPromise, [{
-                name: 'aspire-dashboard',
-                resourceType: 'Executable',
-                state: 'Running',
-            }, {
-                name: 'api-abc123',
-                displayName: 'api',
-                resourceType: 'Project',
-                state: 'Running',
-            }]);
-        } finally {
-            cancellationSource.dispose();
-            repository.dispose();
-        }
-    });
-
-    test('editor assistance reads stopped AppHost resources without activating repository data', async () => {
-        const repository = new AppHostDataRepository(terminalProvider);
-        const cancellationSource = new vscode.CancellationTokenSource();
-
-        try {
-            repository.activate();
-            repository.setViewMode('global');
-
-            assert.deepStrictEqual(
-                await repository.getAppHostResources(
-                    '/workspace/AppHost.csproj',
-                    'api',
-                    false,
-                    cancellationSource.token),
-                []);
-            sinon.assert.notCalled(spawnStub);
-        } finally {
-            cancellationSource.dispose();
-            repository.dispose();
-        }
-    });
-
-    test('editor assistance does not adopt an ambiguous project-source describe stream', async () => {
-        const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-editor-assistance-'));
-        const firstProject = path.join(workspaceRoot, 'First.AppHost.csproj');
-        const secondProject = path.join(workspaceRoot, 'Second.AppHost.csproj');
-        const sourcePath = path.join(workspaceRoot, 'Program.cs');
-        fs.writeFileSync(firstProject, '<Project />');
-        fs.writeFileSync(secondProject, '<Project />');
-        fs.writeFileSync(sourcePath, '');
-        const repository = new AppHostDataRepository(terminalProvider);
-        const cancellationSource = new vscode.CancellationTokenSource();
-
-        try {
-            const describeStreams = (repository as any)._describeStreams as Map<string, any>;
-            describeStreams.set(sourcePath, {
-                resources: new Map([['api', {
-                    name: 'api',
-                    resourceType: 'Project',
-                    state: 'Running',
-                }]]),
-            });
-
-            assert.deepStrictEqual(
-                await repository.getAppHostResources(
-                    firstProject,
-                    'api',
-                    false,
-                    cancellationSource.token),
-                []);
-        }
-        finally {
-            cancellationSource.dispose();
-            repository.dispose();
-            fs.rmSync(workspaceRoot, { recursive: true, force: true });
-        }
-    });
-
-    test('editor assistance falls back to one-shot describe when follow has no initial resource', async () => {
-        const clock = sinon.useFakeTimers();
-        const repository = new AppHostDataRepository(terminalProvider);
-        const cancellationSource = new vscode.CancellationTokenSource();
-
-        try {
-            repository.activate();
-            repository.setViewMode('global');
-            const resourcesPromise = repository.getAppHostResources(
-                '/workspace/AppHost.csproj',
-                'api',
-                true,
-                cancellationSource.token);
-            await waitForMicrotasks();
-
-            const snapshotCall = spawnStub.getCalls().find(call => {
-                const args = call.args[2] as string[];
-                return args[0] === 'ps' && !args.includes('--follow');
-            });
-            assert.ok(snapshotCall, 'expected an authoritative ps snapshot for the temporary consumer');
-            snapshotCall.args[3].stdoutCallback(JSON.stringify([{
-                appHostPath: '/workspace/AppHost.csproj',
-                appHostPid: 1234,
-                status: 'running',
-            }]));
-            snapshotCall.args[3].exitCallback(0);
-            await waitForMicrotasks();
-
-            await clock.tickAsync(10_000);
-            const oneShotDescribeCall = spawnStub.getCalls().find(call => {
-                const args = call.args[2] as string[];
-                return args[0] === 'describe' && !args.includes('--follow');
-            });
-            assert.ok(oneShotDescribeCall, 'expected one-shot describe fallback for an older CLI');
-            oneShotDescribeCall.args[3].stdoutCallback(JSON.stringify({
-                resources: [{
-                    name: 'api',
-                    resourceType: 'Project',
-                    state: 'Running',
-                }],
-            }));
-            oneShotDescribeCall.args[3].exitCallback(0);
-
-            assert.deepStrictEqual(await resourcesPromise, [{
-                name: 'api',
-                resourceType: 'Project',
-                state: 'Running',
-            }]);
-        }
-        finally {
-            clock.restore();
-            cancellationSource.dispose();
-            repository.dispose();
-        }
     });
 
     test('keeps ps polling active after a workspace-folder change while discovery is stuck', async () => {
@@ -1614,7 +1434,7 @@ suite('AppHostDataRepository', () => {
         const cancellationSource = new vscode.CancellationTokenSource();
 
         try {
-            const fetchPromise = repository.fetchAppHostResourcesOnce('/workspace/Exact/AppHost.csproj', cancellationSource.token);
+            const fetchPromise = repository.fetchAppHostResourcesOnce(createAppHostOperationTarget('/workspace/Exact/AppHost.csproj', '/workspace/Exact/AppHost.csproj'), cancellationSource.token);
             await waitForMicrotasks();
 
             assert.deepStrictEqual(spawnStub.firstCall.args[2], [
@@ -1656,13 +1476,52 @@ suite('AppHostDataRepository', () => {
         }
     });
 
+    test('fetchAppHostResourcesOnce uses the canonical operation path and selector workspace scope', async () => {
+        const describeProcess = new TestChildProcess();
+        spawnStub.returns(describeProcess);
+        const folder = {
+            uri: vscode.Uri.file('/workspace/selector'),
+            name: 'selector',
+            index: 0,
+        } as vscode.WorkspaceFolder;
+        const getWorkspaceFolderStub = sinon.stub(vscode.workspace, 'getWorkspaceFolder')
+            .callsFake(uri => uri.fsPath.startsWith(folder.uri.fsPath) ? folder : undefined);
+        const repository = new AppHostDataRepository(terminalProvider);
+        const operationPath = '/physical/AppHost/AppHost.csproj';
+        const scopePath = '/workspace/selector/AppHost/AppHost.csproj';
+
+        try {
+            const fetchPromise = repository.fetchAppHostResourcesOnce(
+                createAppHostOperationTarget(operationPath, scopePath));
+            await waitForMicrotasks();
+
+            assert.deepStrictEqual(spawnStub.firstCall.args[2], [
+                'describe',
+                '--format',
+                'json',
+                '--nologo',
+                '--apphost',
+                operationPath,
+            ]);
+            assert.deepStrictEqual(getCliPathStub.firstCall.args, [workspaceFolderCliPathTarget(folder)]);
+
+            spawnStub.firstCall.args[3].stdoutCallback(JSON.stringify({ resources: [] }));
+            spawnStub.firstCall.args[3].exitCallback(0);
+            assert.deepStrictEqual(await fetchPromise, []);
+        }
+        finally {
+            repository.dispose();
+            getWorkspaceFolderStub.restore();
+        }
+    });
+
     test('fetchAppHostResourcesOnce reports empty stopped-AppHost output as an aspire describe parse failure', async () => {
         const describeProcess = new TestChildProcess();
         spawnStub.returns(describeProcess);
         const repository = new AppHostDataRepository(terminalProvider);
 
         try {
-            const fetchPromise = repository.fetchAppHostResourcesOnce('/workspace/Stopped/AppHost.csproj');
+            const fetchPromise = repository.fetchAppHostResourcesOnce(createAppHostOperationTarget('/workspace/Stopped/AppHost.csproj', '/workspace/Stopped/AppHost.csproj'));
             await waitForMicrotasks();
 
             spawnStub.firstCall.args[3].exitCallback(0);
@@ -1686,7 +1545,7 @@ suite('AppHostDataRepository', () => {
         const cancellationSource = new vscode.CancellationTokenSource();
 
         try {
-            const fetchPromise = repository.fetchAppHostResourcesOnce('/workspace/Exact/AppHost.csproj', cancellationSource.token);
+            const fetchPromise = repository.fetchAppHostResourcesOnce(createAppHostOperationTarget('/workspace/Exact/AppHost.csproj', '/workspace/Exact/AppHost.csproj'), cancellationSource.token);
             await waitForMicrotasks();
 
             cancellationSource.cancel();
@@ -3818,27 +3677,12 @@ suite('AppHostDataRepository', () => {
             assert.strictEqual(selectedAppHost.resources![0].name, 'api');
             assert.strictEqual(repository.workspaceResources.length, 1);
             assert.strictEqual(repository.workspaceResources[0].name, 'api');
-            assert.deepStrictEqual(
-                await repository.getAppHostResources(
-                    '/workspace/apps/Store/AppHost.csproj',
-                    'api',
-                    true,
-                    new vscode.CancellationTokenSource().token),
-                [{ name: 'api', resourceType: 'Project', state: 'Running' }]);
-
             // The non-selected host is populated the same way, from its own stream.
             const nonSelectedAppHost = repository.appHosts.find((a: any) => a.appHostPath === '/workspace/samples/Store/AppHost.csproj');
             assert.ok(nonSelectedAppHost);
             assert.ok(nonSelectedAppHost.resources);
             assert.strictEqual(nonSelectedAppHost.resources!.length, 1);
             assert.strictEqual(nonSelectedAppHost.resources![0].name, 'redis');
-            assert.deepStrictEqual(
-                await repository.getAppHostResources(
-                    '/workspace/samples/Store/AppHost.csproj',
-                    'redis',
-                    true,
-                    new vscode.CancellationTokenSource().token),
-                [{ name: 'redis', resourceType: 'Container', state: 'Running' }]);
         } finally {
             repository.dispose();
             workspaceFoldersStub.restore();

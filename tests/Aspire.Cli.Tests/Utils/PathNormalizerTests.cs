@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Text;
 using Aspire.Hosting.Utils;
 
 namespace Aspire.Cli.Tests.Utils;
@@ -91,6 +92,28 @@ public class PathNormalizerTests(ITestOutputHelper outputHelper)
         var resolved = PathNormalizer.ResolveSymlinks(linkPath);
 
         Assert.False(string.IsNullOrEmpty(resolved));
+    }
+
+    [Fact]
+    public void ResolveToFilesystemPath_UsesEnumeratedUnicodeNormalization()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var testRoot = workspace.WorkspaceRoot.CreateSubdirectory("unicode-normalization");
+        var decomposedName = "Cafe\u0301";
+        var composedName = decomposedName.Normalize(NormalizationForm.FormC);
+        var decomposedPath = Path.Combine(testRoot.FullName, decomposedName);
+        Directory.CreateDirectory(decomposedPath);
+
+        var enumeratedPath = Assert.Single(Directory.EnumerateDirectories(testRoot.FullName));
+        var composedPath = Path.Combine(testRoot.FullName, composedName);
+        Assert.SkipUnless(
+            Directory.Exists(composedPath),
+            "The current filesystem does not resolve normalization-equivalent path segments.");
+        Assert.SkipWhen(
+            enumeratedPath.Equals(composedPath, StringComparison.Ordinal),
+            "The current filesystem enumerates the candidate with the same normalization form.");
+
+        Assert.Equal(enumeratedPath, PathNormalizer.ResolveToFilesystemPath(composedPath));
     }
 
     private static void TryCreateSymlink(string linkPath, string targetPath, bool isDirectory)

@@ -21,7 +21,7 @@ import {
     type AppHostStartToolInput,
     type AppHostStopToolInput,
 } from './appHostLifecycleToolContracts';
-import { type ResolvedAppHostTarget, SafeAppHostTargetResolver } from './safeAppHostTargetResolver';
+import { type ResolvedAppHostTarget, SafeAppHostTargetResolver, toAppHostLaunchTarget } from './safeAppHostTargetResolver';
 
 type AppHostTargetResolution =
     | { resolved: true; target: ResolvedAppHostTarget }
@@ -111,7 +111,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         // `prepareInvocation` receives unvalidated model input, so only a real boolean counts as
         // an explicit choice; anything else is rejected by `isValidStartInput` at invoke time.
         const explicitIsolation = typeof input?.isolated === 'boolean' ? input.isolated : undefined;
-        const isolated = explicitIsolation ?? isLinkedGitWorktree(resolution.target.absolutePath);
+        const isolated = explicitIsolation ?? isLinkedGitWorktree(resolution.target.canonicalPath);
         return { displayPath: resolution.target.displayPath, isolated };
     }
 
@@ -126,6 +126,12 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             return preflight.result;
         }
 
+        // Every decision below is addressed to `canonicalPath`, the physical AppHost the selector
+        // resolved to, rather than to the selector itself. Ownership probes, the lifecycle lock,
+        // the launching claim, and the launch all cross awaits, and a selector is only a name: an
+        // alias repointed while one of those steps runs would move the operation onto a different
+        // AppHost while the result still reports the relative path that was confirmed. The
+        // selector remains what the result displays and what re-resolution validates.
         try {
             // Probe for a process this extension does not own *before* taking the
             // lifecycle lock, and return early when the answer is "yes".
@@ -138,15 +144,15 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             // discarded: it is only a fast path, never the authority, because an AppHost
             // started from a terminal while this call waited up to 10s for the lock would
             // leave a stale `false` behind and allow a duplicate launch.
-            if (!this.hasEditorSession(preflight.target.absolutePath) &&
-                await this.isRunningOutsideEditor(preflight.target.absolutePath, token)) {
+            if (!this.hasEditorSession(preflight.target.canonicalPath) &&
+                await this.isRunningOutsideEditor(preflight.target.canonicalPath, token)) {
                 // Launching again would start a second AppHost against the same project.
                 // Report it instead so the agent can decide, and never adopt or kill a
                 // process this extension does not own.
                 return createResult(aspireAppHostStartToolName, 'alreadyRunning', preflight.target.relativePath, 'external', requestedMode, undefined);
             }
 
-            return await this._dependencies.launchService.runWithAppHostLifecycleLock(preflight.target.absolutePath, token, async lockToken => {
+            return await this._dependencies.launchService.runWithAppHostLifecycleLock(preflight.target.canonicalPath, token, async lockToken => {
                 // Re-resolve after the confirmation and after waiting on the shared lock:
                 // the file can be deleted or replaced, and an editor command may already
                 // have launched this AppHost while this call was queued.
@@ -155,8 +161,12 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                     return recheck.result;
                 }
 
+                if (!this.isSameConfirmedAppHost(aspireAppHostStartToolName, preflight.target, recheck.target)) {
+                    return createResult(aspireAppHostStartToolName, 'failed', preflight.target.relativePath, 'none', requestedMode, undefined);
+                }
+
                 const current = recheck.target;
-                const owned = this.findEditorSessions(current.absolutePath);
+                const owned = this.findEditorSessions(current.canonicalPath);
                 // These outcomes observe an existing launch rather than creating one. The
                 // tool therefore knows only that *some* process owns the AppHost, not
                 // which effective isolation its launcher negotiated, so `isolated` stays
@@ -175,7 +185,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                         getSessionMode(runningSession));
                 }
 
-                if (this._dependencies.launchService.isLaunching(current.absolutePath) || owned.sessions.length > 0) {
+                if (this._dependencies.launchService.isLaunching(current.canonicalPath) || owned.sessions.length > 0) {
                     return createResult(aspireAppHostStartToolName, 'alreadyStarting', current.relativePath, 'editor', requestedMode, undefined);
                 }
 
@@ -189,7 +199,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
 
                 // Authoritative ownership check immediately before launching. This is the
                 // one that matters: everything before it could be stale by now.
-                if (await this.isRunningOutsideEditor(current.absolutePath, lockToken)) {
+                if (await this.isRunningOutsideEditor(current.canonicalPath, lockToken)) {
                     return createResult(aspireAppHostStartToolName, 'alreadyRunning', current.relativePath, 'external', requestedMode, undefined);
                 }
 
@@ -197,15 +207,21 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 // serializes callers that take it, and `launch.json`/F5 reaches
                 // `startDebugging` without it, so this claim - not the checks above - is
                 // what makes "no second AppHost" hold against a concurrent editor launch.
-                if (!this._dependencies.launchService.tryReserveLaunch(current.absolutePath)) {
+                if (!this._dependencies.launchService.tryReserveLaunch(current.canonicalPath)) {
                     return createResult(aspireAppHostStartToolName, 'alreadyStarting', current.relativePath, 'editor', requestedMode, undefined);
                 }
 
                 try {
                     // `noDebug` is the only lever the tool exposes; the Aspire command is pinned
                     // to `run` so an agent can never reach deploy/publish/do through this surface.
+                    //
+                    // The whole bound target travels into the launch: the physical AppHost the
+                    // launch runs, the selector it is validated against and scoped by, and the
+                    // identity that ties the two together. Passing only the physical path would
+                    // drop the selector, and the launch's own pre-start freshness check would
+                    // then compare that path with itself.
                     const launchedIsolation = await this._dependencies.launchService.launchFromLifecycleOwner(
-                        current.absolutePath,
+                        toAppHostLaunchTarget(current),
                         'run',
                         requestedMode === 'run',
                         input.isolated,
@@ -216,7 +232,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                     // The launch path clears its own reservation once it owns it, but a
                     // failure before that point (a disposed service, for example) would
                     // otherwise leave this AppHost reported as launching forever.
-                    this._dependencies.launchService.clearLaunching(current.absolutePath);
+                    this._dependencies.launchService.clearLaunching(current.canonicalPath);
                     return this.createErrorResult(aspireAppHostStartToolName, error, current.relativePath, 'editor', requestedMode, undefined);
                 }
             });
@@ -237,13 +253,19 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         }
 
         try {
-            return await this._dependencies.launchService.runWithAppHostLifecycleLock(preflight.target.absolutePath, token, async lockToken => {
+            return await this._dependencies.launchService.runWithAppHostLifecycleLock(preflight.target.canonicalPath, token, async lockToken => {
                 const recheck = await this.preflight(aspireAppHostStopToolName, input.appHostPath, lockToken, undefined);
                 if (recheck.rejected) {
                     return recheck.result;
                 }
 
-                const result = await this._dependencies.launchService.stopAppHostFromLifecycleOwner(recheck.target.absolutePath, lockToken);
+                if (!this.isSameConfirmedAppHost(aspireAppHostStopToolName, preflight.target, recheck.target)) {
+                    return createResult(aspireAppHostStopToolName, 'failed', preflight.target.relativePath, 'none', undefined, undefined);
+                }
+
+                const result = await this._dependencies.launchService.stopAppHostFromLifecycleOwner(
+                    toAppHostLaunchTarget(recheck.target),
+                    lockToken);
                 return this.createStopResult(recheck.target.relativePath, result);
             });
         }
@@ -270,6 +292,27 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             result.controller,
             undefined,
             effectiveMode);
+    }
+
+    /**
+     * Reports whether the AppHost this operation now owns is the one the call resolved - and, for
+     * a confirmed tool call, the one the user approved.
+     *
+     * Resolution happens before the lifecycle lock and again after it, and the selector between
+     * them is mutable. If it now names a different AppHost, continuing would act on something
+     * nobody chose while the result still reported the confirmed workspace-relative path, so the
+     * operation fails closed instead. Re-resolving is what makes this detectable at all; the
+     * identity is the only value that survives a name being repointed and back.
+     */
+    private isSameConfirmedAppHost(tool: string, resolved: ResolvedAppHostTarget, owned: ResolvedAppHostTarget): boolean {
+        if (resolved.identity === owned.identity) {
+            return true;
+        }
+
+        // Bounded on purpose: the paths involved are exactly what must not reach a model-visible
+        // channel, and the tool name is enough to locate this in the output log.
+        extensionLogOutputChannel.warn(`Aspire language model tool ${tool} refused an AppHost that changed between confirmation and ownership.`);
+        return false;
     }
 
     private async resolveTarget(rawAppHost: unknown, token: vscode.CancellationToken): Promise<AppHostTargetResolution> {

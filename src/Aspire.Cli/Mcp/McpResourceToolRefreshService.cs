@@ -21,7 +21,7 @@ internal sealed class McpResourceToolRefreshService : IMcpResourceToolRefreshSer
     private McpServer? _server;
     private Dictionary<string, ResourceToolEntry> _resourceToolMap = new(StringComparer.Ordinal);
     private bool _invalidated = true;
-    private string? _lastRefreshedAppHostPath;
+    private string? _lastRefreshedConnectionSocketPath;
 
     public McpResourceToolRefreshService(
         IAuxiliaryBackchannelMonitor auxiliaryBackchannelMonitor,
@@ -32,11 +32,13 @@ internal sealed class McpResourceToolRefreshService : IMcpResourceToolRefreshSer
     }
 
     /// <inheritdoc/>
-    public bool TryGetResourceToolMap(out IReadOnlyDictionary<string, ResourceToolEntry> resourceToolMap)
+    public bool TryGetResourceToolMap(
+        IAppHostAuxiliaryBackchannel? connection,
+        out IReadOnlyDictionary<string, ResourceToolEntry> resourceToolMap)
     {
         lock (_lock)
         {
-            if (_invalidated || _lastRefreshedAppHostPath != _auxiliaryBackchannelMonitor.ResolvedAppHostPath)
+            if (_invalidated || !IsSameConnection(connection))
             {
                 resourceToolMap = null!;
                 return false;
@@ -46,6 +48,9 @@ internal sealed class McpResourceToolRefreshService : IMcpResourceToolRefreshSer
             return true;
         }
     }
+
+    private bool IsSameConnection(IAppHostAuxiliaryBackchannel? connection)
+        => string.Equals(_lastRefreshedConnectionSocketPath, connection?.SocketPath, StringComparison.Ordinal);
 
     /// <inheritdoc/>
     public void InvalidateToolMap()
@@ -78,15 +83,12 @@ internal sealed class McpResourceToolRefreshService : IMcpResourceToolRefreshSer
 
         var refreshedMap = new Dictionary<string, ResourceToolEntry>(StringComparer.Ordinal);
 
-        string? selectedAppHostPath = null;
-        try
+        var connection = await AppHostConnectionHelper.GetSelectedConnectionAsync(_auxiliaryBackchannelMonitor, _logger, cancellationToken).ConfigureAwait(false);
+
+        if (connection is not null)
         {
-            var connection = await AppHostConnectionHelper.GetSelectedConnectionAsync(_auxiliaryBackchannelMonitor, _logger, cancellationToken).ConfigureAwait(false);
-
-            if (connection is not null)
+            try
             {
-                selectedAppHostPath = connection.AppHostInfo?.AppHostPath;
-
                 var allResources = await connection.GetResourceSnapshotsAsync(includeHidden: true, cancellationToken).ConfigureAwait(false);
                 var resourcesWithTools = allResources.Where(r => r.McpServer is not null && !McpToolHelpers.IsExcludedFromMcp(r)).ToList();
 
@@ -110,15 +112,19 @@ internal sealed class McpResourceToolRefreshService : IMcpResourceToolRefreshSer
                     }
                 }
             }
-            else
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                _logger.LogDebug("Unable to refresh resource tool map because there's no selected connection.");
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // Resource discovery failures should not hide the CLI's built-in MCP tools.
+                _logger.LogDebug(ex, "Failed to refresh resource MCP tool routing map.");
             }
         }
-        catch (Exception ex)
+        else
         {
-            // Don't fail refresh_tools if resource discovery fails; still emit notification.
-            _logger.LogDebug(ex, "Failed to refresh resource MCP tool routing map.");
+            _logger.LogDebug("Unable to refresh resource tool map because there's no selected connection.");
         }
 
         lock (_lock)
@@ -151,7 +157,7 @@ internal sealed class McpResourceToolRefreshService : IMcpResourceToolRefreshSer
             }
 
             _resourceToolMap = refreshedMap;
-            _lastRefreshedAppHostPath = selectedAppHostPath;
+            _lastRefreshedConnectionSocketPath = connection?.SocketPath;
             _invalidated = false;
             return (_resourceToolMap, changed);
         }

@@ -4681,6 +4681,53 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         });
     });
 
+    test('records Java AppHost configuration failures with the Java provider kind', async () => {
+        const appHostPath = join(makeTempDir(), 'AppHost.java');
+        writeFileSync(appHostPath, 'class AppHost {}');
+        sinon.stub(vscode.extensions, 'getExtension').callsFake((extensionId: string) =>
+            extensionId === 'vscjava.vscode-java-debug'
+                ? { id: extensionId } as vscode.Extension<unknown>
+                : undefined);
+        sinon.stub(debuggerExtensionsModule, 'createDebugSessionConfiguration')
+            .rejects(new Error('raw-java-configuration-error'));
+        sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined);
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const parentDebugSession = {
+            id: 'aspire-session',
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: appHostPath,
+                command: 'run',
+                noDebug: false,
+            },
+        } as unknown as vscode.DebugSession;
+        const aspireDebugSession = new AspireDebugSession(
+            parentDebugSession,
+            {} as any,
+            {} as any,
+            {} as any,
+            () => { });
+        sinon.stub(aspireDebugSession, 'createDebugAdapterTrackerCore');
+
+        await aspireDebugSession.startAppHost(
+            appHostPath,
+            ['java', '-cp', 'target/classes', 'AppHost'],
+            [],
+            true,
+            { forceBuild: false });
+
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+            stage: 'debugSession',
+            category: 'unknown',
+            controller: 'editor',
+            mode: 'debug',
+            providerKind: 'java',
+            exitCodeBucket: 'none',
+        });
+    });
+
     test('launches a Rust AppHost with the Rust debugger', async () => {
         const appHostPath = join(makeTempDir(), 'apphost.rs');
         writeFileSync(appHostPath, '');

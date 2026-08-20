@@ -10,6 +10,7 @@ import { extensionLogOutputChannel } from '../utils/logging';
 import {
     aspireDebugSessionStatusToolName,
     aspireExplainLaunchFailureToolName,
+    aspireHotReloadStatusToolName,
     aspireListDebugSessionsToolName,
     aspireOpenDashboardToolName,
     aspireOpenOutputToolName,
@@ -17,6 +18,7 @@ import {
     type EditorAssistanceToolRegistration,
     type EditorAssistanceToolResult,
     type ExplainLaunchFailureToolInput,
+    type HotReloadStatusToolInput,
     type ListDebugSessionsToolInput,
     type OpenDashboardToolInput,
     type OpenOutputToolInput,
@@ -125,12 +127,27 @@ export class AspireListDebugSessionsLanguageModelTool implements vscode.Language
     }
 }
 
+export class AspireHotReloadStatusLanguageModelTool implements vscode.LanguageModelTool<HotReloadStatusToolInput> {
+    constructor(
+        private readonly _service: EditorAssistanceToolService,
+        private readonly _telemetry: EditorAssistanceTelemetry = new EditorAssistanceTelemetry()) {
+    }
+
+    async invoke(
+        options: vscode.LanguageModelToolInvocationOptions<HotReloadStatusToolInput>,
+        token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
+        return createToolResult(await this._telemetry.capture(
+            aspireHotReloadStatusToolName,
+            () => this._service.getHotReloadStatus(options.input, token)));
+    }
+}
+
 /**
  * Registers editor-assistance tools when the stable language model tool API exists.
  *
- * Status, explanation, and session listing are read-only and intentionally expose only
- * `invoke`. Dashboard and Output handoff change editor UI, so those two adapters also
- * implement `prepareInvocation`.
+ * Status, explanation, session listing, and Hot Reload reporting are read-only and
+ * intentionally expose only `invoke`. Dashboard and Output handoff change editor UI, so
+ * those two adapters also implement `prepareInvocation`.
  *
  * Only Output confirms. The rule is what the handoff reveals: opening the Dashboard is a
  * read-only handoff to a surface the user already owns a command and a tree-view button for,
@@ -146,12 +163,14 @@ export function registerEditorAssistanceTools(
     const dashboardTool = new AspireOpenDashboardLanguageModelTool(service, telemetry);
     const outputTool = new AspireOpenOutputLanguageModelTool(service, telemetry);
     const listTool = new AspireListDebugSessionsLanguageModelTool(service, telemetry);
+    const hotReloadTool = new AspireHotReloadStatusLanguageModelTool(service, telemetry);
     const tools = new Map<string, vscode.LanguageModelTool<unknown>>([
         [aspireDebugSessionStatusToolName, statusTool as vscode.LanguageModelTool<unknown>],
         [aspireExplainLaunchFailureToolName, explainTool as vscode.LanguageModelTool<unknown>],
         [aspireOpenDashboardToolName, dashboardTool as vscode.LanguageModelTool<unknown>],
         [aspireOpenOutputToolName, outputTool as vscode.LanguageModelTool<unknown>],
         [aspireListDebugSessionsToolName, listTool as vscode.LanguageModelTool<unknown>],
+        [aspireHotReloadStatusToolName, hotReloadTool as vscode.LanguageModelTool<unknown>],
     ]);
 
     if (typeof vscode.lm?.registerTool !== 'function') {
@@ -163,7 +182,8 @@ export function registerEditorAssistanceTools(
             vscode.lm.registerTool(aspireExplainLaunchFailureToolName, explainTool),
             vscode.lm.registerTool(aspireOpenDashboardToolName, dashboardTool),
             vscode.lm.registerTool(aspireOpenOutputToolName, outputTool),
-            vscode.lm.registerTool(aspireListDebugSessionsToolName, listTool));
+            vscode.lm.registerTool(aspireListDebugSessionsToolName, listTool),
+            vscode.lm.registerTool(aspireHotReloadStatusToolName, hotReloadTool));
         extensionLogOutputChannel.info('Registered Aspire editor assistance language model tools.');
     }
 

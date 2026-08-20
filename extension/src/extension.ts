@@ -44,6 +44,7 @@ import { EditorAssistanceToolService } from './lm/editorAssistanceToolService';
 import { registerEditorAssistanceTools } from './lm/editorAssistanceToolAdapters';
 import { EditorUiHandoffService } from './lm/editorUiHandoffService';
 import { readLatestLaunchFailures } from './services/launchFailureJournal';
+import { getHotReloadDiagnostics } from './debugger/hotReload';
 
 let aspireExtensionContext = new AspireExtensionContext();
 
@@ -132,8 +133,8 @@ export async function activate(context: vscode.ExtensionContext) {
     const appHosts = await dataRepository.fetchRunningAppHostsOnce(token);
     return appHosts.map(appHost => ({ appHostPath: appHost.appHostPath }));
   });
-  appHostLaunchService.setExternalAppHostStopper((appHostPath, token) =>
-    stopExternalAppHost(terminalProvider, appHostPath, token));
+  appHostLaunchService.setExternalAppHostStopper((appHost, token) =>
+    stopExternalAppHost(terminalProvider, appHost, token));
   const appHostTreeProvider = new AspireAppHostTreeProvider(dataRepository, terminalProvider, appHostLaunchService, context.globalState);
   const appHostTreeView = vscode.window.createTreeView('aspire-vscode.appHosts', {
     treeDataProvider: appHostTreeProvider,
@@ -209,13 +210,19 @@ export async function activate(context: vscode.ExtensionContext) {
 
   aspireExtensionContext.initialize(rpcServer, context, dynamicDebugConfigProvider, dcpServer, terminalProvider, editorCommandProvider);
 
-  // Register Aspire MCP server definition provider so the Aspire MCP server
-  // appears automatically in VS Code's MCP tools list for Aspire workspaces.
-  const mcpProvider = new AspireMcpServerDefinitionProvider(cliPathResolver);
+  // Register Aspire MCP server definition provider so one Aspire MCP server per discovered
+  // AppHost appears automatically in VS Code's MCP tools list for Aspire workspaces.
+  // The provider subscribes to discovery and configuration events in its constructor, so it is
+  // only built when the MCP API exists to dispose it; otherwise those subscriptions would outlive
+  // the extension on VS Code versions that cannot host the provider at all.
   if (typeof vscode.lm?.registerMcpServerDefinitionProvider === 'function') {
-    context.subscriptions.push(vscode.lm.registerMcpServerDefinitionProvider('aspire-mcp-server', mcpProvider));
+    const mcpProvider = new AspireMcpServerDefinitionProvider({
+      appHostDiscovery: appHostDiscoveryService,
+      capabilityProbe: configInfoProvider,
+    }, cliPathResolver);
     context.subscriptions.push(mcpProvider);
-    mcpProvider.refresh();
+    context.subscriptions.push(vscode.lm.registerMcpServerDefinitionProvider('aspire-mcp-server', mcpProvider));
+    void mcpProvider.refresh();
   }
 
   // Language model tools that let an agent use the same AppHost lifecycle service as the
@@ -248,6 +255,7 @@ export async function activate(context: vscode.ExtensionContext) {
     resourceRepository: dataRepository,
     getEditorResourceSessions: () => aspireExtensionContext.editorResourceSessions,
     readLatestLaunchFailures,
+    readHotReloadDiagnostics: getHotReloadDiagnostics,
     uiHandoffService: editorUiHandoffService,
   });
   const editorAssistanceToolRegistration = registerEditorAssistanceTools(editorAssistanceToolService);

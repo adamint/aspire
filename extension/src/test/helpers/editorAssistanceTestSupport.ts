@@ -9,6 +9,7 @@ import {
     type AppHostEditorStateLaunchService,
     type AppHostLifecycleDiscoveryService,
     type AppHostLifecycleEditorSessions,
+    type AppHostLifecycleRunningAppHost,
 } from '../../lm/appHostLifecycleToolContracts';
 import { type CandidateAppHostDisplayInfo } from '../../utils/appHostDiscovery';
 import { compareAppHostIdentity, type OpaqueAppHostIdentity } from '../../utils/appHostIdentity';
@@ -28,6 +29,14 @@ class FakeDiscoveryService implements AppHostLifecycleDiscoveryService {
     readonly discoverErrorsByFolder = new Map<string, Error>();
     discoverCalls = 0;
     discoverError: Error | undefined;
+    /**
+     * Runs once a `discover` call has produced its candidates.
+     *
+     * Discovery is the asynchronous step every snapshot crosses, so mutating the registry from
+     * here reproduces an AppHost joining or leaving it between the snapshot and everything that
+     * reads afterwards, deterministically and without a timer.
+     */
+    afterDiscover: ((workspaceFolder: vscode.WorkspaceFolder) => void) | undefined;
 
     async discover(workspaceFolder: vscode.WorkspaceFolder, _forceRefresh?: boolean, cancellationToken?: vscode.CancellationToken): Promise<readonly CandidateAppHostDisplayInfo[]> {
         this.discoverCalls++;
@@ -44,7 +53,11 @@ class FakeDiscoveryService implements AppHostLifecycleDiscoveryService {
             throw folderError;
         }
 
-        return this.candidatesByFolder.get(workspaceFolder.uri.fsPath) ?? [];
+        // Read before the hook runs so a hook that replaces the registry entry cannot retroactively
+        // change what this call already enumerated.
+        const candidates = this.candidatesByFolder.get(workspaceFolder.uri.fsPath) ?? [];
+        this.afterDiscover?.(workspaceFolder);
+        return candidates;
     }
 }
 
@@ -52,6 +65,16 @@ class FakeEditorStateLaunchService implements AppHostEditorStateLaunchService {
     readonly launchingPaths = new Set<string>();
     readonly pendingOrActiveRunLaunchPaths = new Set<string>();
     readonly editorSessions: TestEditorSession[] = [];
+    readonly runningAppHosts: AppHostLifecycleRunningAppHost[] = [];
+    runningAppHostRequests = 0;
+    /**
+     * Runs while a running-AppHost read is in flight.
+     *
+     * Callers use it to mutate the workspace at the exact point a caller is awaiting this
+     * service, so a race between resolution and publication is reproduced by the read itself
+     * rather than by a timer.
+     */
+    beforeGetRunningAppHosts: (() => Promise<void> | void) | undefined;
 
     isLaunching(appHostPath: string): boolean {
         return this.launchingPaths.has(path.resolve(appHostPath));
@@ -95,6 +118,16 @@ class FakeEditorStateLaunchService implements AppHostEditorStateLaunchService {
     getEditorSessions(): readonly TestEditorSession[] {
         return this.editorSessions;
     }
+
+    async getRunningAppHosts(token: vscode.CancellationToken): Promise<readonly AppHostLifecycleRunningAppHost[]> {
+        this.runningAppHostRequests++;
+        if (token.isCancellationRequested) {
+            throw new vscode.CancellationError();
+        }
+
+        await this.beforeGetRunningAppHosts?.();
+        return this.runningAppHosts;
+    }
 }
 
 const appHostProjectContents = `<Project Sdk="Microsoft.NET.Sdk">
@@ -122,14 +155,53 @@ function addCandidate(discoveryService: FakeDiscoveryService, folderRoot: string
     discoveryService.candidatesByFolder.set(folderRoot, existing);
 }
 
-function assertResolved<T extends { resolved: boolean }>(resolution: T): asserts resolution is T & { resolved: true; target: { absolutePath: string; relativePath: string; displayPath: string; identity: string } } {
+function assertResolved<T extends { resolved: boolean }>(resolution: T): asserts resolution is T & { resolved: true; target: { absolutePath: string; canonicalPath: string; relativePath: string; displayPath: string; identity: string } } {
     assert.strictEqual(resolution.resolved, true, `Expected a resolved target but got ${JSON.stringify(resolution)}`);
+}
+
+// Minimal `vscode.WorkspaceConfiguration` fake for the `aspire` configuration section. Callers under
+// test (dashboardLauncher.ts's resolvers, editor-assistance tools) only call `get`/`inspect`/`has`,
+// so those are the only members that need real behavior; `update` is a no-op.
+function createAspireConfiguration(values: Readonly<Record<string, unknown>> = {}): vscode.WorkspaceConfiguration {
+    return {
+        get<T>(section: string, defaultValue?: T): T | undefined {
+            return Object.prototype.hasOwnProperty.call(values, section)
+                ? values[section] as T
+                : defaultValue;
+        },
+        inspect<T>(section: string): {
+            key: string;
+            defaultValue?: T;
+            globalValue?: T;
+            workspaceValue?: T;
+            workspaceFolderValue?: T;
+            defaultLanguageValue?: T;
+            globalLanguageValue?: T;
+            workspaceLanguageValue?: T;
+            workspaceFolderLanguageValue?: T;
+            languageIds?: string[];
+        } | undefined {
+            if (!Object.prototype.hasOwnProperty.call(values, section)) {
+                return undefined;
+            }
+
+            return {
+                key: section,
+                globalValue: values[section] as T,
+            };
+        },
+        has(section: string): boolean {
+            return Object.prototype.hasOwnProperty.call(values, section);
+        },
+        update: async () => { },
+    };
 }
 
 export {
     addCandidate,
     appHostProjectContents,
     assertResolved,
+    createAspireConfiguration,
     createFixtureDirectory,
     createWorkspaceFolder,
     FakeDiscoveryService,

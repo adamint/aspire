@@ -1,6 +1,7 @@
 import {
     aspireDebugSessionStatusToolName,
     aspireExplainLaunchFailureToolName,
+    aspireHotReloadStatusToolName,
     aspireOpenDashboardToolName,
     type EditorAssistanceToolName,
     type EditorAssistanceToolResult,
@@ -89,6 +90,22 @@ const outcomesByTool: Readonly<Record<EditorAssistanceToolName, ReadonlySet<stri
     aspire_list_debug_sessions: new Set([
         'sessionsFound',
         'noSessions',
+        'ambiguousAppHost',
+        'workspaceNotTrusted',
+        'invalidInput',
+        'canceled',
+        'error',
+    ]),
+    aspire_hot_reload_status: new Set([
+        'applicable',
+        'notApplicable',
+        'noEditorControlledResource',
+        'appHostNotRunning',
+        'resourceNotFound',
+        'resourceAmbiguous',
+        'tooManyActiveAppHosts',
+        'appHostNotFound',
+        'ambiguousAppHost',
         'workspaceNotTrusted',
         'invalidInput',
         'canceled',
@@ -104,7 +121,11 @@ const statusStateBuckets = new Set([
     'multipleSessions',
 ]);
 const scopes = new Set(['appHost', 'resource']);
-const controllers = new Set(launchFailureControllers);
+// Editor-assistance results describe who controls an AppHost (`editor`/`external`), while a
+// recorded launch failure describes who launched it (`editor`/`cli`). Both reach this one
+// `controller` property, so the allowed set is their union; narrowing it to either side alone
+// would silently drop the property for the other and attribute those invocations to nothing.
+const controllers = new Set<string>([...launchFailureControllers, 'editor', 'external']);
 const modes = new Set(launchFailureModes);
 const launchFailureStageSet = new Set(launchFailureStages);
 const launchFailureCategorySet = new Set(launchFailureCategories);
@@ -177,6 +198,13 @@ export class EditorAssistanceTelemetry {
         }
         else if (tool === aspireOpenDashboardToolName && result?.outcome === 'opened') {
             copyIfBounded(properties, 'presentation', result, 'presentation', dashboardPresentations);
+        }
+        else if (tool === aspireHotReloadStatusToolName && result?.success) {
+            // Only who controls the AppHost is recorded. The evidence identifiers, the enabled
+            // state, and the fallback are all derivable from the reported outcome plus this
+            // window's own configuration, so recording them would add cardinality without
+            // adding a question this event can answer.
+            copyIfBounded(properties, 'controller', result, 'controller', controllers);
         }
 
         this._sendEvent(

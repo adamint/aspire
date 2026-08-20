@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 
 import { type AppHostEditorSessionSnapshot } from '../services/AppHostLaunchService';
-import { type AppHostEditorStateLaunchService } from './appHostLifecycleToolContracts';
+import { type AppHostEditorStateLaunchService, type AppHostLifecycleRunningAppHost } from './appHostLifecycleToolContracts';
 import { type AppHostTargetIdentity, type ResolvedAppHostTarget, SafeAppHostTargetResolver } from './safeAppHostTargetResolver';
 
 const maxSummaries = 20;
@@ -13,21 +13,62 @@ export interface EditorAppHostSummary {
     readonly appHost: string;
     readonly state: EditorAppHostState;
     readonly mode: EditorAppHostMode;
-    readonly controller: 'editor';
+    readonly controller: 'editor' | 'external';
 }
 
 export interface EditorStateSnapshot {
     readonly appHosts: readonly EditorAppHostSummary[];
 }
 
+/**
+ * One active AppHost, paired with the target it was summarized from.
+ *
+ * Callers read each AppHost asynchronously after the snapshot is taken, and re-resolving a
+ * summary by its display path would let a registry change in between turn a known AppHost
+ * into an unknown one. Carrying the resolved target keeps every AppHost the snapshot
+ * observed in scope for the whole lookup, so nothing can be silently dropped from an
+ * absence or uniqueness decision.
+ */
+export interface ActiveEditorAppHost {
+    readonly target: ResolvedAppHostTarget;
+    readonly summary: EditorAppHostSummary;
+}
+
 export interface ActiveEditorStateSnapshot {
-    readonly appHosts: readonly EditorAppHostSummary[];
+    readonly appHosts: readonly ActiveEditorAppHost[];
+    /**
+     * Every target this snapshot enumerated, including the idle ones no summary is published for.
+     *
+     * Callers keep reading asynchronously after the snapshot returns, and an idle AppHost can be
+     * repointed during one of those reads. It is carried here rather than dropped because it is
+     * part of what makes the published answer complete: which AppHosts existed decides whether a
+     * resource name is unique and whether the listed sessions are all of them. Revalidating the
+     * whole captured set at the final barrier keeps a change to the enumerated scope from passing
+     * unnoticed just because that AppHost had nothing active to report.
+     */
+    readonly observedTargets: readonly ResolvedAppHostTarget[];
     readonly truncated?: true;
 }
 
 export interface EditorStateSnapshotServiceDependencies {
     readonly launchService: AppHostEditorStateLaunchService;
     readonly targetResolver: SafeAppHostTargetResolver;
+}
+
+/**
+ * Raised when the relationship between a known AppHost and a running one could not be
+ * decided, so who runs it was never established.
+ *
+ * An undecidable relationship is not the absence of one: reporting it as idle would deny a
+ * run that may exist, and reporting it as externally running would claim one that may not.
+ * `EditorUiHandoffService` already refuses the same relationship, so every editor-assistance
+ * surface answers `ambiguousAppHost` rather than disagreeing about the same AppHost.
+ */
+export class AmbiguousAppHostOwnershipError extends Error {
+    constructor() {
+        super('The relationship between an Aspire AppHost and a running AppHost could not be decided.');
+        this.name = 'AmbiguousAppHostOwnershipError';
+    }
 }
 
 /**
@@ -49,19 +90,23 @@ export class EditorStateSnapshotService {
         const representativeTargets = await this.enumerateRepresentativeTargets(token, maxSummaries);
 
         return {
-            appHosts: this.projectSummaries(representativeTargets, token),
+            appHosts: await this.projectSummaries(representativeTargets, token),
         };
     }
 
     async createActiveSessionSnapshot(token: vscode.CancellationToken): Promise<ActiveEditorStateSnapshot> {
         const representativeTargets = await this.enumerateRepresentativeTargets(token);
-        const activeSummaries = this.projectSummaries(representativeTargets, token)
-            .filter(summary => summary.state !== 'notDebugging');
-        const appHosts = activeSummaries.slice(0, maxSummaries);
+        const activeAppHosts = (await this.projectSummaries(representativeTargets, token))
+            .map((summary, index) => ({ target: representativeTargets[index], summary }))
+            .filter(entry => entry.summary.state !== 'notDebugging');
+        const appHosts = activeAppHosts.slice(0, maxSummaries);
 
-        return activeSummaries.length > maxSummaries
-            ? { appHosts, truncated: true }
-            : { appHosts };
+        // Only active AppHosts are summarized, but every enumerated target is carried out so the
+        // caller's own freshness barrier covers the scope this snapshot was taken over rather than
+        // just the subset that had something to say.
+        return activeAppHosts.length > maxSummaries
+            ? { appHosts, observedTargets: representativeTargets, truncated: true }
+            : { appHosts, observedTargets: representativeTargets };
     }
 
     private async enumerateRepresentativeTargets(
@@ -76,9 +121,39 @@ export class EditorStateSnapshotService {
         return representativeTargets;
     }
 
-    private projectSummaries(
+    /**
+     * Summarizes every target, reading the running registry only when it can change an answer.
+     *
+     * `aspire ps` is a live CLI call that can fail or time out, and it only decides whether
+     * something outside this window runs an AppHost. Reading it for every target would let
+     * that failure erase states this window already knows for certain, so it is read once, and
+     * only when at least one target has no editor session and no pending editor launch.
+     */
+    private async projectSummaries(
         targets: readonly ResolvedAppHostTarget[],
-        token: vscode.CancellationToken): readonly EditorAppHostSummary[] {
+        token: vscode.CancellationToken): Promise<readonly EditorAppHostSummary[]> {
+        const sessionsByIdentity = this.groupEditorRunSessions(targets);
+        throwIfCanceled(token);
+
+        const editorStateSummaries = targets.map(target =>
+            this.createEditorStateSummary(target, sessionsByIdentity.get(target.identity) ?? []));
+        const runningAppHosts = editorStateSummaries.some(summary => summary === undefined)
+            ? await this._dependencies.launchService.getRunningAppHosts(token)
+            : [];
+        const summaries = targets.map((target, index) =>
+            editorStateSummaries[index] ?? this.createExternalSummary(target, runningAppHosts));
+        throwIfCanceled(token);
+        // The running-AppHost read is the only asynchronous step between capturing these
+        // targets and publishing their states, so revalidating here covers both that boundary
+        // and publication itself. A target that changed can neither be described nor dropped:
+        // the answer would be about a different file than the one that was resolved.
+        this._dependencies.targetResolver.assertTargetsCurrent(targets);
+
+        return summaries;
+    }
+
+    private groupEditorRunSessions(
+        targets: readonly ResolvedAppHostTarget[]): ReadonlyMap<AppHostTargetIdentity, readonly AppHostEditorSessionSnapshot[]> {
         const knownIdentities = new Set(targets.map(target => target.identity));
         const sessionsByIdentity = new Map<AppHostTargetIdentity, AppHostEditorSessionSnapshot[]>();
 
@@ -106,10 +181,8 @@ export class EditorStateSnapshotService {
                 sessionsByIdentity.set(identity, [session]);
             }
         }
-        throwIfCanceled(token);
 
-        return targets.map(target =>
-            this.createSummary(target, sessionsByIdentity.get(target.identity) ?? []));
+        return sessionsByIdentity;
     }
 
     /**
@@ -122,10 +195,23 @@ export class EditorStateSnapshotService {
      */
     async getAppHostSummary(target: ResolvedAppHostTarget, token: vscode.CancellationToken): Promise<EditorAppHostSummary> {
         throwIfCanceled(token);
-        return this.projectSummaries([target], token)[0];
+
+        return (await this.projectSummaries([target], token))[0];
     }
 
-    private createSummary(target: ResolvedAppHostTarget, sessions: readonly AppHostEditorSessionSnapshot[]): EditorAppHostSummary {
+    /**
+     * Summarizes what this window knows on its own, or reports that it knows nothing.
+     *
+     * `undefined` means the editor neither runs nor is starting the AppHost, which is the only
+     * case where who else might be running it still has to be established.
+     *
+     * The pending-launch question is asked about the AppHost this target was bound to rather
+     * than about its selector, so a selector repointed after resolution cannot inherit the
+     * launch state of the AppHost it used to name.
+     */
+    private createEditorStateSummary(
+        target: ResolvedAppHostTarget,
+        sessions: readonly AppHostEditorSessionSnapshot[]): EditorAppHostSummary | undefined {
         if (sessions.length > 1) {
             // Once more than one editor session could claim the AppHost there is no honest
             // single-session summary to return. Report that multiplicity instead of
@@ -139,10 +225,36 @@ export class EditorStateSnapshotService {
             return describeTrackedSession(target.displayPath, resolvedSession);
         }
 
-        return createSummary(
-            target.displayPath,
-            this._dependencies.launchService.hasPendingOrActiveRunLaunch(target.absolutePath) ? 'starting' : 'notDebugging',
-            'other');
+        if (this._dependencies.launchService.hasPendingOrActiveRunLaunch(target.canonicalPath)) {
+            return createSummary(target.displayPath, 'starting', 'other');
+        }
+
+        return undefined;
+    }
+
+    private createExternalSummary(
+        target: ResolvedAppHostTarget,
+        runningAppHosts: readonly AppHostLifecycleRunningAppHost[]): EditorAppHostSummary {
+        // Every relation is classified explicitly, and all of them are inspected before any
+        // answer is formed. Folding `ambiguous` in with `same` would turn "this may or may
+        // not be the AppHost that is running" into a definite external run, and stopping at
+        // the first `same` would make the answer depend on the order the CLI listed rows in.
+        let isRunningExternally = false;
+        for (const runningAppHost of runningAppHosts) {
+            switch (this._dependencies.targetResolver.compareTargetToAppHostPath(target, runningAppHost.appHostPath)) {
+                case 'same':
+                    isRunningExternally = true;
+                    break;
+                case 'ambiguous':
+                    throw new AmbiguousAppHostOwnershipError();
+                case 'different':
+                    break;
+            }
+        }
+
+        return isRunningExternally
+            ? createSummary(target.displayPath, 'running', 'other', 'external')
+            : createSummary(target.displayPath, 'notDebugging', 'other');
     }
 }
 
@@ -169,12 +281,16 @@ function getNoDebugMode(noDebug: unknown): EditorAppHostMode {
             : 'other';
 }
 
-function createSummary(appHost: string, state: EditorAppHostState, mode: EditorAppHostMode): EditorAppHostSummary {
+function createSummary(
+    appHost: string,
+    state: EditorAppHostState,
+    mode: EditorAppHostMode,
+    controller: EditorAppHostSummary['controller'] = 'editor'): EditorAppHostSummary {
     return {
         appHost,
         state,
         mode,
-        controller: 'editor',
+        controller,
     };
 }
 

@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using Aspire.Cli.Backchannel;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
@@ -12,11 +13,14 @@ namespace Aspire.Cli.Mcp;
 internal interface IMcpResourceToolRefreshService
 {
     /// <summary>
-    /// Attempts to get the current resource tool map if it is valid (not invalidated and AppHost hasn't changed).
+    /// Attempts to get the current resource tool map if it is valid for the resolved AppHost connection.
     /// </summary>
+    /// <param name="connection">The resolved AppHost connection whose resource tools are requested.</param>
     /// <param name="resourceToolMap">When this method returns <c>true</c>, contains the current resource tool map.</param>
     /// <returns><c>true</c> if the tool map is valid and no refresh is needed; otherwise, <c>false</c>.</returns>
-    bool TryGetResourceToolMap(out IReadOnlyDictionary<string, ResourceToolEntry> resourceToolMap);
+    bool TryGetResourceToolMap(
+        IAppHostAuxiliaryBackchannel? connection,
+        out IReadOnlyDictionary<string, ResourceToolEntry> resourceToolMap);
 
     /// <summary>
     /// Marks the resource tool map as needing a refresh.

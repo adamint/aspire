@@ -29,7 +29,7 @@ import { classifyAppHostPath, classifyAppHostDirectory, type AppHostLanguage } f
 import { bucketAspireCommand } from "../utils/telemetryBuckets";
 import { getAppHostTargetVersion } from "../utils/appHostTargetVersion";
 import type { AspireDebugConsoleOutputEvent } from "../types/extensionApi";
-import { recordLaunchFailureForAppHostIdentity, recordLaunchFailureForAppHostPath, recordSanitizedLaunchFailureForAppHostIdentity, recordSanitizedLaunchFailureForAppHostPath, type LaunchFailureMode, type LaunchFailureProviderKind, type SanitizedLaunchFailure } from "../services/launchFailureJournal";
+import { getLaunchFailureProviderKindForAppHostPath, recordLaunchFailureForAppHostIdentity, recordLaunchFailureForAppHostPath, recordSanitizedLaunchFailureForAppHostIdentity, recordSanitizedLaunchFailureForAppHostPath, type LaunchFailureMode, type SanitizedLaunchFailure } from "../services/launchFailureJournal";
 import { appHostRestartSourceSessionIdConfigKey, appHostSelectionOriginConfigKey, appHostTelemetryTargetPathConfigKey } from "./AspireDebugConfigurationMetadata";
 import { markAspireDebugConfigurationWithResolvedCliPath, markAspireDebugConfigurationWithResolvedCliPathScope } from "./AspireDebugConfigurationProviderInternal";
 import { AppHostParentOutputFilter } from "./session/appHostParentOutputFilter";
@@ -1271,7 +1271,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
               category: 'processExited',
               controller: 'cli',
               mode: getLaunchFailureMode(this.operationKind, noDebug),
-              providerKind: getAppHostProviderKind(this.resolvedAppHostPath ?? this.appHostPath),
+              providerKind: getLaunchFailureProviderKindForAppHostPath(this.resolvedAppHostPath ?? this.appHostPath),
               exitCode: code,
               signal,
             });
@@ -1369,7 +1369,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
         stage: 'cliLaunch',
         controller: 'cli',
         mode: getLaunchFailureMode(this.operationKind, noDebug),
-        providerKind: getAppHostProviderKind(this.resolvedAppHostPath ?? this.appHostPath),
+        providerKind: getLaunchFailureProviderKindForAppHostPath(this.resolvedAppHostPath ?? this.appHostPath),
         error,
       });
     }
@@ -1571,7 +1571,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
               category: 'processExited',
               controller: 'editor',
               mode: getLaunchFailureMode(this.operationKind, !debug),
-              providerKind: getAppHostProviderKind(projectFile),
+              providerKind: getLaunchFailureProviderKindForAppHostPath(projectFile),
             });
           }
 
@@ -1644,7 +1644,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
           category: buildFailure ? 'buildFailed' : undefined,
           controller: 'editor',
           mode: getLaunchFailureMode(this.operationKind, !debug),
-          providerKind: getAppHostProviderKind(projectFile),
+          providerKind: getLaunchFailureProviderKindForAppHostPath(projectFile),
           error: err,
         });
       }
@@ -2129,19 +2129,6 @@ function getLaunchFailureMode(operationKind: AspireOperationKind, noDebug: boole
   }
 
   return 'other';
-}
-
-function getAppHostProviderKind(appHostPath: string | undefined): LaunchFailureProviderKind {
-  switch (classifyAppHostPath(appHostPath)) {
-    case 'csharp':
-      return 'dotnet';
-    case 'typescript':
-      return 'node';
-    case 'rust':
-      return 'rust';
-    default:
-      return 'other';
-  }
 }
 
 export function buildAspireCommandArgs(command: string, commandArgs: string[], extensionArgs: string[], step?: string): string[] {

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { AspireCommandType, AspireOperationKind } from '../dcp/types';
-import { appHostLifecycleBusy } from '../loc/strings';
+import { appHostLaunchTargetChanged, appHostLifecycleBusy } from '../loc/strings';
 import { type OpaqueAppHostIdentity } from '../utils/appHostIdentity';
 
 export interface AppHostLaunchRequestedEvent {
@@ -80,6 +80,30 @@ export interface RunningAppHost {
     readonly appHostPath: string;
 }
 
+/**
+ * One lifecycle operation's AppHost, resolved once into the name the caller chose and the
+ * physical AppHost that name selected.
+ *
+ * The two are kept apart on purpose. `selectorPath` is provenance: it is what the caller chose,
+ * what a workspace-relative display renders, which workspace folder's CLI and settings apply,
+ * and what is checked again before the operation commits. `canonicalPath` is what the operation
+ * is actually performed against - reservations, CLI probes, and the debug configuration - because
+ * a name can be repointed while any of those steps is in flight, and an operation that followed
+ * the name would then act on an AppHost the caller never selected while `identity` still
+ * attributes it to the one they did.
+ *
+ * Callers resolve this once, before taking the lifecycle lock, and carry the whole value through.
+ * Passing only the canonical path forward loses the selector, which silently turns the freshness
+ * check into a comparison of the physical path against itself - a check that can no longer fail.
+ */
+export interface AppHostLaunchTarget {
+    readonly selectorPath: string;
+    readonly canonicalPath: string;
+    readonly identity: OpaqueAppHostIdentity;
+    /** Stable workspace-relative identity used for user-facing launch presentation. */
+    readonly displayPath: string;
+}
+
 export type AppHostStopResult =
     | { readonly outcome: 'stopped'; readonly controller: 'editor'; readonly noDebug: boolean }
     | { readonly outcome: 'stopped'; readonly controller: 'external' }
@@ -127,6 +151,16 @@ export class AppHostLifecycleLockTimeoutError extends Error {
         // localized, unlike the tool path where the timeout only maps to a `busy` outcome.
         super(appHostLifecycleBusy);
         this.name = 'AppHostLifecycleLockTimeoutError';
+    }
+}
+
+export class AppHostLaunchTargetChangedError extends Error {
+    constructor() {
+        // `AppHostLaunchService.launch` is the editor's own run/debug path, so this message can
+        // reach a notification via showErrorMessage and has to be localized. The tool path maps
+        // it to a generic failure outcome, which keeps the AppHost identity out of tool output.
+        super(appHostLaunchTargetChanged);
+        this.name = 'AppHostLaunchTargetChangedError';
     }
 }
 

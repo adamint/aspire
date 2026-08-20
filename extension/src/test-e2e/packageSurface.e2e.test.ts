@@ -85,6 +85,13 @@ suite('Aspire package contribution surface E2E', function () {
         assert.deepStrictEqual(sourcePackage.activationEvents, expectedActivationEvents);
         assert.deepStrictEqual(getLanguageModelTools(sourcePackage), expectedSourceLanguageModelTools);
         assert.deepStrictEqual(getLanguageModelTools(installedPackage), expectedInstalledLanguageModelTools);
+        // Guard against `expectedInstalledLanguageModelTools` drifting from package.nls.json: resolve every
+        // `%key%` placeholder in `expectedSourceLanguageModelTools` against the real nls bundle and assert the
+        // result is identical to the hardcoded installed expectations above, so a translated string that isn't
+        // mirrored into this test file fails immediately instead of silently passing.
+        assert.deepStrictEqual(
+            resolveNlsPlaceholders(expectedSourceLanguageModelTools, readSourcePackageNlsJson()),
+            expectedInstalledLanguageModelTools);
         assert.deepStrictEqual(sourcePackage.contributes?.mcpServerDefinitionProviders, [{
             id: 'aspire-mcp-server',
             label: 'Aspire',
@@ -380,6 +387,38 @@ function readSourcePackageJson(): PackageJson {
     return JSON.parse(fs.readFileSync(path.join(getExtensionRoot(), 'package.json'), 'utf8')) as PackageJson;
 }
 
+function readSourcePackageNlsJson(): Record<string, string> {
+    return JSON.parse(fs.readFileSync(path.join(getExtensionRoot(), 'package.nls.json'), 'utf8')) as Record<string, string>;
+}
+
+// Recursively replaces any string of the form '%key%' with `nls[key]`, leaving every other value
+// (including strings that are not a bare '%key%' placeholder) untouched. Used to turn the
+// %key%-based `expectedSourceLanguageModelTools` fixture into the fully-resolved shape VS Code
+// produces once package.nls.json substitution runs, so it can be diffed against the hardcoded
+// `expectedInstalledLanguageModelTools` fixture without maintaining the two by hand.
+function resolveNlsPlaceholders<T>(value: T, nls: Record<string, string>): T {
+    if (typeof value === 'string') {
+        const match = /^%(.+)%$/.exec(value);
+        if (match) {
+            const key = match[1];
+            assert.ok(Object.prototype.hasOwnProperty.call(nls, key), `Missing package.nls.json key referenced by test fixture: ${key}`);
+            return nls[key] as unknown as T;
+        }
+        return value;
+    }
+    if (Array.isArray(value)) {
+        return value.map(item => resolveNlsPlaceholders(item, nls)) as unknown as T;
+    }
+    if (value !== null && typeof value === 'object') {
+        const result: Record<string, unknown> = {};
+        for (const [key, entryValue] of Object.entries(value as Record<string, unknown>)) {
+            result[key] = resolveNlsPlaceholders(entryValue, nls);
+        }
+        return result as unknown as T;
+    }
+    return value;
+}
+
 function getPackageCommandIds(packageJson: PackageJson): string[] {
     return (packageJson.contributes?.commands ?? [])
         .map(command => command.command)
@@ -489,6 +528,7 @@ const expectedActivationEvents = [
     'onLanguageModelTool:aspire_open_dashboard',
     'onLanguageModelTool:aspire_open_output',
     'onLanguageModelTool:aspire_list_debug_sessions',
+    'onLanguageModelTool:aspire_hot_reload_status',
 ];
 
 const expectedSourceLanguageModelTools = createExpectedLanguageModelTools({
@@ -517,6 +557,11 @@ const expectedSourceLanguageModelTools = createExpectedLanguageModelTools({
     listDisplayName: '%languageModelTool.aspireListDebugSessions.displayName%',
     listModelDescription: '%languageModelTool.aspireListDebugSessions.modelDescription%',
     listUserDescription: '%languageModelTool.aspireListDebugSessions.userDescription%',
+    hotReloadDisplayName: '%languageModelTool.aspireHotReloadStatus.displayName%',
+    hotReloadModelDescription: '%languageModelTool.aspireHotReloadStatus.modelDescription%',
+    hotReloadUserDescription: '%languageModelTool.aspireHotReloadStatus.userDescription%',
+    hotReloadResourceNameDescription: '%languageModelTool.aspireHotReloadStatus.resourceName.description%',
+    hotReloadAppHostPathDescription: '%languageModelTool.aspireHotReloadStatus.appHostPath.description%',
 });
 
 const expectedInstalledLanguageModelTools = createExpectedLanguageModelTools({
@@ -530,21 +575,26 @@ const expectedInstalledLanguageModelTools = createExpectedLanguageModelTools({
     stopUserDescription: 'Stop a running Aspire AppHost from this workspace.',
     appHostPathDescription: 'Workspace-relative path of an AppHost that Aspire has already discovered in this workspace, for example \'AppHost/AppHost.csproj\' or \'apphost.cs\'. The value must match one of the discovered AppHosts exactly; arbitrary paths, absolute paths, and files Aspire did not discover are rejected. In a multi-root workspace, always prefix the path with the workspace folder name (for example \'backend/AppHost/AppHost.csproj\').',
     statusDisplayName: 'Get Aspire debug session status',
-    statusModelDescription: 'Inspect the bounded status of an editor-owned Aspire debug session for one discovered AppHost, optionally scoped to an exact resource name. The result contains safe state fields only and never returns logs, output, process identifiers, debug configurations, or arbitrary resource data.',
-    statusUserDescription: 'Get the safe editor-owned debug status for an Aspire AppHost or resource.',
+    statusModelDescription: 'Inspect the bounded status of one discovered Aspire AppHost controlled by the editor or an external process, optionally scoped to an exact resource name. Resource results include only resource type, runtime state, health status, exit code, and source; the tool never returns logs, output, process identifiers, debug configurations, URLs, or arbitrary resource data.',
+    statusUserDescription: 'Get bounded status for an Aspire AppHost or resource.',
     resourceNameDescription: 'Optional exact Aspire resource name within the selected AppHost. The resource must already exist in the AppHost model.',
     explainDisplayName: 'Explain Aspire launch failure',
     explainModelDescription: 'Explain the latest sanitized launch failure recorded for one discovered AppHost. The result contains bounded failure categories and fixed recommended actions only; it never returns raw errors, logs, output, arguments, environment variables, URLs, process identifiers, or debug configurations.',
     explainUserDescription: 'Explain the latest safely recorded launch failure for an Aspire AppHost.',
     dashboardDisplayName: 'Open Aspire Dashboard',
-    dashboardModelDescription: 'Open the Aspire Dashboard for a running discovered AppHost using the editor-configured presentation. This changes editor or browser UI. The result reports only whether it opened and the bounded presentation; it never returns the Dashboard URL.',
+    dashboardModelDescription: 'Open the Aspire Dashboard for a running discovered AppHost using any explicitly configured browser or notification presentation, or the external browser by default when none is configured. This changes editor or browser UI. The result reports only whether it opened and the bounded presentation; it never returns the Dashboard URL.',
     dashboardUserDescription: 'Open the Aspire Dashboard for a running AppHost.',
-    outputDisplayName: 'Show Aspire Output',
-    outputModelDescription: 'Show the Aspire Output view in Visual Studio Code after confirmation without reading or returning its content.',
-    outputUserDescription: 'Show the Aspire Output view without returning its content.',
+    outputDisplayName: 'Open Aspire Output',
+    outputModelDescription: 'Open the VS Code Output panel and select the Aspire Extension output channel in Visual Studio Code after confirmation, without reading or returning its content.',
+    outputUserDescription: 'Open the VS Code Output panel and select the Aspire Extension output channel, without returning its content.',
     listDisplayName: 'List Aspire debug sessions',
-    listModelDescription: 'List editor-owned active Aspire debug sessions as bounded safe summaries. Results are capped and omit process identifiers, raw debug configurations, output, logs, URLs, environment variables, arguments, and arbitrary session data.',
-    listUserDescription: 'List bounded safe summaries of editor-owned active Aspire debug sessions.',
+    listModelDescription: 'List active discovered Aspire AppHosts controlled by the editor or an external process as bounded summaries, including only unambiguously correlated editor child resource sessions with bounded runtime state. Results are capped and omit process identifiers, raw debug configurations, output, logs, URLs, environment variables, arguments, and arbitrary session or resource data.',
+    listUserDescription: 'List bounded active Aspire AppHosts and editor child resource sessions.',
+    hotReloadDisplayName: 'Get Aspire Hot Reload status',
+    hotReloadModelDescription: 'Report whether C# Dev Kit Hot Reload is enabled in this window and whether it is potentially applicable to one Aspire resource, and what to do instead when it is not. Read-only: it never applies, triggers, or verifies a code edit, and never reports that an edit reached a running process. Optionally takes an exact Aspire resource name and the workspace-relative path of a discovered AppHost. When the name is omitted, the tool answers only if exactly one resource is unambiguously debugged by this editor, and otherwise reports that the target is unavailable instead of guessing. When the AppHost path is omitted, every active AppHost is considered, so pass it to disambiguate a resource name that several AppHosts use. Resources this editor does not debug, including externally started ones, are never Hot Reload applicable. The result contains the enabled state, whether Hot Reload is potentially applicable, who controls the AppHost, bounded evidence identifiers, and an ordered fallback that restarts the affected resource first and rebuilds and restarts the AppHost only when restarting the resource is not enough. It never returns setting values, file paths, URLs, environment variables, process identifiers, logs, debug configurations, or arbitrary resource data.',
+    hotReloadUserDescription: 'Report whether Hot Reload is enabled and could apply to an Aspire resource, and what to restart when it cannot.',
+    hotReloadResourceNameDescription: 'Optional exact Aspire resource name to report on. The resource must already exist in an active AppHost. When omitted, the tool reports only when exactly one resource is unambiguously debugged by this editor.',
+    hotReloadAppHostPathDescription: 'Optional workspace-relative path of an AppHost that Aspire has already discovered in this workspace, for example \'AppHost/AppHost.csproj\' or \'apphost.cs\'. The value must match one of the discovered AppHosts exactly; arbitrary paths, absolute paths, and files Aspire did not discover are rejected. In a multi-root workspace, always prefix the path with the workspace folder name (for example \'backend/AppHost/AppHost.csproj\'). When omitted, the tool looks across every active AppHost.',
 });
 
 function createExpectedLanguageModelTools(strings: {
@@ -573,6 +623,11 @@ function createExpectedLanguageModelTools(strings: {
     listDisplayName: string;
     listModelDescription: string;
     listUserDescription: string;
+    hotReloadDisplayName: string;
+    hotReloadModelDescription: string;
+    hotReloadUserDescription: string;
+    hotReloadResourceNameDescription: string;
+    hotReloadAppHostPathDescription: string;
 }) {
     return [
         {
@@ -709,6 +764,25 @@ function createExpectedLanguageModelTools(strings: {
             inputSchema: {
                 type: 'object',
                 properties: {},
+                additionalProperties: false,
+            },
+        },
+        {
+            name: 'aspire_hot_reload_status',
+            toolReferenceName: 'aspireHotReloadStatus',
+            displayName: strings.hotReloadDisplayName,
+            modelDescription: strings.hotReloadModelDescription,
+            userDescription: strings.hotReloadUserDescription,
+            icon: '$(flame)',
+            canBeReferencedInPrompt: true,
+            when: 'isWorkspaceTrusted',
+            tags: ['aspire', 'apphost', 'debug'],
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    resourceName: { type: 'string', description: strings.hotReloadResourceNameDescription },
+                    appHostPath: { type: 'string', description: strings.hotReloadAppHostPathDescription },
+                },
                 additionalProperties: false,
             },
         },

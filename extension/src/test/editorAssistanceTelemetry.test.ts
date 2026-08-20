@@ -3,6 +3,7 @@ import * as assert from 'assert';
 import {
     aspireDebugSessionStatusToolName,
     aspireExplainLaunchFailureToolName,
+    aspireHotReloadStatusToolName,
     aspireListDebugSessionsToolName,
     aspireOpenDashboardToolName,
     aspireOpenOutputToolName,
@@ -510,6 +511,125 @@ suite('editor assistance telemetry', () => {
             measurements: { duration_ms: 4 },
         }]);
         assertTelemetryOmits(events, sentinels);
+    });
+
+    test('records an undecidable AppHost relationship as its own list outcome', async () => {
+        // The list refuses whenever one of its AppHosts cannot be related to a running one.
+        // Reporting that as a generic failure would make an undecidable relationship
+        // indistinguishable from an extension fault in the recorded telemetry.
+        const events: EditorAssistanceTelemetryEvent[] = [];
+        const telemetry = createTelemetry([10, 12], events);
+
+        await telemetry.capture(aspireListDebugSessionsToolName, async () => ({
+            success: false,
+            tool: aspireListDebugSessionsToolName,
+            outcome: 'ambiguousAppHost',
+            sessions: [],
+        } as unknown as EditorAssistanceToolResult));
+
+        assert.deepStrictEqual(
+            events.map(event => event.properties.outcome),
+            ['ambiguousAppHost']);
+    });
+    test('records the Hot Reload controller and outcome without evidence, names, or paths', async () => {
+        const events: EditorAssistanceTelemetryEvent[] = [];
+        const telemetry = createTelemetry([10, 21], events);
+        const sentinels = [
+            '/private/hotreload/AppHost.csproj',
+            'hot-reload-resource-secret',
+            'csharp.experimental.debug.hotReload',
+        ];
+
+        await telemetry.capture(aspireHotReloadStatusToolName, async () => ({
+            success: true,
+            tool: aspireHotReloadStatusToolName,
+            outcome: 'applicable',
+            appHost: sentinels[0],
+            resourceName: sentinels[1],
+            controller: 'editor',
+            hotReloadEnabled: true,
+            evidence: ['devKitInstalled', 'hotReloadSettingEnabled', sentinels[2]],
+            fallback: ['restartResource', 'rebuildAndRestartAppHost'],
+        } as unknown as EditorAssistanceToolResult));
+
+        assert.deepStrictEqual(events, [{
+            eventName: 'aspire/vscode/editorassistance/result',
+            properties: {
+                tool: aspireHotReloadStatusToolName,
+                outcome: 'applicable',
+                source: 'languageModelTool',
+                controller: 'editor',
+            },
+            measurements: { duration_ms: 11 },
+        }]);
+        assertTelemetryOmits(events, sentinels);
+    });
+
+    test('records every bounded Hot Reload outcome and drops unknown ones', async () => {
+        const events: EditorAssistanceTelemetryEvent[] = [];
+        const boundedOutcomes = [
+            'applicable',
+            'notApplicable',
+            'noEditorControlledResource',
+            'appHostNotRunning',
+            'resourceNotFound',
+            'resourceAmbiguous',
+            'tooManyActiveAppHosts',
+            'appHostNotFound',
+            'ambiguousAppHost',
+            'workspaceNotTrusted',
+            'invalidInput',
+            'canceled',
+            'error',
+        ];
+        const telemetry = createTelemetry(
+            Array.from({ length: (boundedOutcomes.length + 1) * 2 }, () => 0),
+            events);
+
+        for (const outcome of [...boundedOutcomes, 'hotReloadApplied']) {
+            await telemetry.capture(aspireHotReloadStatusToolName, async () => ({
+                success: false,
+                tool: aspireHotReloadStatusToolName,
+                outcome,
+            } as unknown as EditorAssistanceToolResult));
+        }
+
+        assert.deepStrictEqual(
+            events.map(event => event.properties.outcome),
+            // An outcome the tool cannot produce is reported as `error` rather than forwarded,
+            // so a future result shape cannot widen this event's value set on its own.
+            [...boundedOutcomes, 'error']);
+        assertTelemetryOmits(events, ['hotReloadApplied']);
+    });
+
+    test('records an externally controlled AppHost as its own controller value', async () => {
+        const events: EditorAssistanceTelemetryEvent[] = [];
+        const telemetry = createTelemetry([0, 1, 1, 2], events);
+
+        // `external` is a controller the editor-assistance results really produce. Dropping it
+        // would silently attribute those invocations to no controller at all.
+        await telemetry.capture(aspireDebugSessionStatusToolName, async () => ({
+            success: true,
+            tool: aspireDebugSessionStatusToolName,
+            outcome: 'running',
+            scope: 'appHost',
+            controller: 'external',
+            mode: 'other',
+            appHost: 'AppHost/AppHost.csproj',
+        } as unknown as EditorAssistanceToolResult));
+        await telemetry.capture(aspireHotReloadStatusToolName, async () => ({
+            success: true,
+            tool: aspireHotReloadStatusToolName,
+            outcome: 'notApplicable',
+            appHost: 'AppHost/AppHost.csproj',
+            resourceName: 'api',
+            controller: 'external',
+            hotReloadEnabled: true,
+            evidence: [],
+            fallback: [],
+        } as unknown as EditorAssistanceToolResult));
+
+        assert.deepStrictEqual(events.map(event => event.properties.controller), ['external', 'external']);
     });
 });
 

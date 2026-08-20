@@ -69,9 +69,9 @@ suite('utils/strings tests', () => {
         const xlf = fs.readFileSync(path.join(extensionRoot, 'loc', 'xlf', 'aspire-vscode.xlf'), 'utf8');
         const expectedStrings = {
             editorAssistanceOpenDashboardInvocationMessage: 'Opening Aspire Dashboard for {0}...',
-            editorAssistanceOpenOutputConfirmationTitle: 'Show Aspire Output',
-            editorAssistanceOpenOutputConfirmationMessage: 'The Aspire Output view will be shown.',
-            editorAssistanceOpenOutputInvocationMessage: 'Showing Aspire Output...',
+            editorAssistanceOpenOutputConfirmationTitle: 'Open the VS Code Output panel and select the Aspire Extension output channel',
+            editorAssistanceOpenOutputConfirmationMessage: 'This opens the VS Code Output panel and selects the Aspire Extension output channel.',
+            editorAssistanceOpenOutputInvocationMessage: 'Opening the VS Code Output panel and selecting the Aspire Extension output channel...',
         };
 
         for (const [name, value] of Object.entries(expectedStrings)) {
@@ -86,6 +86,22 @@ suite('utils/strings tests', () => {
 
         assert.strictEqual(expectedStrings.editorAssistanceOpenOutputConfirmationMessage.includes('focused'), false);
         assert.strictEqual(expectedStrings.editorAssistanceOpenOutputInvocationMessage.includes('focused'), false);
+
+        // Every Open Output surface must say exactly what happens: the VS Code Output panel opens
+        // and the Aspire Extension output channel is selected within it. Guard both TypeScript-side
+        // surfaces (invocation and confirmation) and the package.nls.json model/user descriptions so
+        // none of the five drift back to the older, vaguer "Aspire Output view" wording.
+        const openOutputCopy = {
+            editorAssistanceOpenOutputConfirmationTitle: expectedStrings.editorAssistanceOpenOutputConfirmationTitle,
+            editorAssistanceOpenOutputConfirmationMessage: expectedStrings.editorAssistanceOpenOutputConfirmationMessage,
+            editorAssistanceOpenOutputInvocationMessage: expectedStrings.editorAssistanceOpenOutputInvocationMessage,
+            'languageModelTool.aspireOpenOutput.modelDescription': packageNls['languageModelTool.aspireOpenOutput.modelDescription'],
+            'languageModelTool.aspireOpenOutput.userDescription': packageNls['languageModelTool.aspireOpenOutput.userDescription'],
+        };
+        for (const [name, value] of Object.entries(openOutputCopy)) {
+            assert.ok(value.includes('VS Code Output panel'), `Expected ${name} to mention the VS Code Output panel.`);
+            assert.ok(value.includes('Aspire Extension output channel'), `Expected ${name} to mention the Aspire Extension output channel.`);
+        }
     });
 
     test('AppHost isolation compatibility loc strings are present in package.nls.json and the generated XLF catalog', () => {

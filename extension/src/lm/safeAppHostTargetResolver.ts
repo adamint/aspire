@@ -3,13 +3,16 @@ import * as vscode from 'vscode';
 
 import { extensionLogOutputChannel } from '../utils/logging';
 import {
+    bindCurrentAppHostTarget,
+    canonicalizeAppHostPath,
     compareAppHostIdentity,
     getOrCreateIdentityForCurrentAppHostTarget,
-    isAppHostPathWithinDirectory,
+    isCapturedAppHostPathWithinDirectory,
     type AppHostIdentityRelation,
     type OpaqueAppHostIdentity,
 } from '../utils/appHostIdentity';
 import { isCommandCancellation } from '../utils/telemetry';
+import { type AppHostLaunchTarget } from '../services/appHostLaunchContracts';
 import { type AppHostLifecycleDiscoveryService } from './appHostLifecycleToolContracts';
 
 /**
@@ -45,6 +48,21 @@ const identityChangingCharacters = /[\u0000-\u001F\u007F-\u009F]|\p{Cf}/u;
 export type AppHostTargetIdentity = OpaqueAppHostIdentity;
 
 /**
+ * Raised when a resolved target no longer names the filesystem entry it was resolved from,
+ * so a result assembled from it would describe a different file than the caller named.
+ *
+ * Every editor-assistance surface reads asynchronously after resolving, and an alias can be
+ * repointed across any of those reads. Sharing one error keeps "the target changed" a single
+ * fail-closed outcome instead of a per-surface judgement call.
+ */
+export class StaleAppHostTargetError extends Error {
+    constructor() {
+        super('The resolved Aspire AppHost target changed while the result was being assembled.');
+        this.name = 'StaleAppHostTargetError';
+    }
+}
+
+/**
  * One entry of the AppHost registry, projected into the form the editor-assistance
  * surfaces speak.
  *
@@ -55,6 +73,20 @@ export type AppHostTargetIdentity = OpaqueAppHostIdentity;
 export interface ResolvedAppHostTarget {
     /** Absolute path exactly as the registry enumerated it, used for editor-owned actions. */
     readonly absolutePath: string;
+    /**
+     * Physical AppHost path the selector named when this target was resolved, bound to
+     * {@link identity}.
+     *
+     * Every asynchronous read and every launch uses this rather than {@link absolutePath},
+     * because the enumerated path can be an alias and an alias can be repointed while the
+     * operation runs. Freshness is still decided from the selector: the two together are what
+     * make an alias that is moved and moved back unable to publish one AppHost's data, or start
+     * one AppHost's process, under another one's identity.
+     *
+     * It is deliberately absent from every model-facing and user-facing projection. It can name
+     * a file outside the workspace, and the identity a caller confirms is {@link displayPath}.
+     */
+    readonly canonicalPath: string;
     /** Path relative to the containing workspace folder, always with `/` separators. */
     readonly relativePath: string;
     /**
@@ -68,6 +100,24 @@ export interface ResolvedAppHostTarget {
      * AppHost but never exposes the absolute path in model-facing contracts.
      */
     readonly identity: AppHostTargetIdentity;
+}
+
+/**
+ * Projects a resolved registry target into the target lifecycle operations travel as.
+ *
+ * The mapping is deliberately explicit rather than structural: the resolver's `absolutePath` is
+ * the selector - the entry the caller named and the confirmation displayed - and it must arrive
+ * at the launch service as the selector, not as an interchangeable "path". Losing that
+ * distinction is what turns the pre-launch freshness check into a comparison of the physical path
+ * against itself.
+ */
+export function toAppHostLaunchTarget(target: ResolvedAppHostTarget): AppHostLaunchTarget {
+    return {
+        selectorPath: target.absolutePath,
+        canonicalPath: target.canonicalPath,
+        identity: target.identity,
+        displayPath: target.displayPath,
+    };
 }
 
 export type SafeAppHostTargetResolverOutcome =
@@ -110,13 +160,31 @@ export class SafeAppHostTargetResolver {
     }
 
     /**
+     * Rejects every target that no longer names the entry it was resolved from.
+     *
+     * Results are assembled across several asynchronous reads, and any of them can be crossed
+     * by a symlink retarget or a registry entry replaced in place. Callers revalidate the whole
+     * set they are about to publish rather than each target as it is used, because a target
+     * checked early can still go stale while a later one is read.
+     */
+    assertTargetsCurrent(targets: readonly ResolvedAppHostTarget[]): void {
+        if (!targets.every(target => this.isTargetCurrent(target))) {
+            throw new StaleAppHostTargetError();
+        }
+    }
+
+    /**
      * Compares a fresh CLI-reported AppHost path to a resolved registry target using the
      * same filesystem and project/source equivalence rules as editor lifecycle ownership.
+     *
+     * The comparison is made against the target's bound physical path, not its selector: the
+     * CLI row is read asynchronously, and re-following an alias here would let a retarget
+     * decide whether a running AppHost is "this one".
      */
     compareTargetToAppHostPath(
         target: ResolvedAppHostTarget,
         appHostPath: string | undefined): AppHostIdentityRelation {
-        return compareAppHostIdentity(target.absolutePath, appHostPath);
+        return compareAppHostIdentity(target.canonicalPath, appHostPath);
     }
 
     /**
@@ -207,27 +275,47 @@ export class SafeAppHostTargetResolver {
      * containing folder has no such path to offer or display.
      */
     async enumerateKnownAppHosts(token: vscode.CancellationToken): Promise<readonly ResolvedAppHostTarget[]> {
+        // Enumeration is what turns a registry entry into something a model can name and a
+        // launcher can run, and discovery itself shells out to `aspire ls`. Restricted Mode has
+        // to stop here too, not only at the surfaces that call in.
+        if (!vscode.workspace.isTrusted) {
+            return [];
+        }
+
         const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
         const folderQualifiers = createWorkspaceFolderQualifiers(workspaceFolders, this._toSelectorKey);
         const candidatesByFolder = await Promise.all(workspaceFolders.map(async (folder, index) => ({
             folder,
             folderQualifier: folderQualifiers[index],
+            // The trust boundary is the folder the editor currently owns, captured once as a
+            // physical path so every candidate in this enumeration is judged against the same
+            // boundary. A workspace root can itself be an alias - a linked worktree, or a
+            // symlinked mount - so the comparison has to be physical rather than lexical.
+            canonicalFolderPath: canonicalizeAppHostPath(path.normalize(path.resolve(folder.uri.fsPath))),
             candidates: await this._discoveryService.discover(folder, false, token),
         })));
 
         const targets = new Map<string, ResolvedAppHostTarget>();
-        for (const { folder, folderQualifier, candidates } of candidatesByFolder) {
+        for (const { folder, folderQualifier, canonicalFolderPath, candidates } of candidatesByFolder) {
             for (const candidate of candidates) {
+                // The lexical path is what the caller sees in the explorer and passes back to the
+                // tool, so a candidate that is not even lexically inside its folder has no
+                // relative path to offer or display and is refused before anything else runs.
                 const relativePath = toContainedPosixRelativePath(folder.uri.fsPath, candidate.path);
                 if (relativePath === undefined) {
                     continue;
                 }
 
-                // The lexical path is what the caller sees in the explorer and passes back
-                // to the tool, but containment has to be checked on the real target too so
-                // an in-workspace symlink cannot smuggle an external file across the trust
-                // boundary under an in-workspace name.
-                if (!isAppHostPathWithinDirectory(candidate.path, folder.uri.fsPath)) {
+                // The identity and the physical path are captured together, and the capture
+                // happens *before* containment is decided, so the file this target carries is
+                // the file that was checked. Checking first and binding afterwards leaves a
+                // window in which the entry is repointed in between: the check would pass for a
+                // file inside the workspace while the bound path names one outside it, and the
+                // target would then display a workspace-relative identity for an external file.
+                const binding = bindCurrentAppHostTarget(candidate.path);
+                // This is the check that actually keeps the trust boundary: an in-workspace
+                // symlink must not smuggle an external file across it under an in-workspace name.
+                if (!isCapturedAppHostPathWithinDirectory(binding.canonicalPath, canonicalFolderPath)) {
                     continue;
                 }
 
@@ -245,9 +333,10 @@ export class SafeAppHostTargetResolver {
 
                 targets.set(key, {
                     absolutePath: candidate.path,
+                    canonicalPath: binding.canonicalPath,
                     relativePath,
                     displayPath,
-                    identity: this.getIdentityForAppHostPath(candidate.path),
+                    identity: binding.identity,
                 });
             }
         }

@@ -32,6 +32,12 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public void ConfigInfo_AdvertisesAgentMcp()
+    {
+        Assert.Contains(KnownCapabilities.AgentMcp, KnownCapabilities.GetAdvertisedCapabilities());
+    }
+
+    [Fact]
     public void ConfigInfoJson_UsesCamelCasePropertyNames()
     {
         var info = new Aspire.Cli.Commands.ConfigInfo(

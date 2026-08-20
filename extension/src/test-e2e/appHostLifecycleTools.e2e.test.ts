@@ -7,7 +7,7 @@ import { executeE2eControlCommand, getCliWrapperInvocations, restoreE2eCliPathFo
 import { runProcess, terminateProcessTree } from './helpers/process';
 import { getProcessEntry, listProcessEntries, type ProcessEntry } from './helpers/processArguments';
 import { ensureDiagnosticsDir, getCliPath, getPrimaryAppHostProjectPath, getRepoRoot, getRunRoot, getWorkspaceRoot } from './helpers/paths';
-import { captureScreenshot, closeAllEditors, getOpenEditorTitles, interactWithModalDialog, openAspireView, setPanelVisible, waitForOpenEditorCount, waitForPanelVisibility, type ModalDialogInteraction } from './helpers/vscode';
+import { captureScreenshot, closeAllEditors, getOpenEditorTitles, hideAspireView, interactWithModalDialog, openAspireView, setPanelVisible, waitForOpenEditorCount, waitForPanelVisibility, type ModalDialogInteraction } from './helpers/vscode';
 import { assertLinkedAppHostCliLaunch, commandLineArgumentEquals } from '../test/helpers/processArguments';
 import { getCmdShimSpawnCommand, shouldWrapWithCmd } from '../utils/cmdShimCommand';
 
@@ -73,11 +73,13 @@ const explainToolName = 'aspire_explain_launch_failure';
 const listToolName = 'aspire_list_debug_sessions';
 const dashboardToolName = 'aspire_open_dashboard';
 const outputToolName = 'aspire_open_output';
+const hotReloadToolName = 'aspire_hot_reload_status';
 const expectedToolNames = [
     startToolName,
     stopToolName,
     statusToolName,
     explainToolName,
+    hotReloadToolName,
     listToolName,
     dashboardToolName,
     outputToolName,
@@ -150,6 +152,11 @@ suite('Aspire AppHost lifecycle E2E', function () {
             toolName: outputToolName,
             input: {},
         });
+        const preparedHotReload = await invokeControlCommand<PreparedInvocation>({
+            name: 'prepareLanguageModelToolInvocation',
+            toolName: hotReloadToolName,
+            input: {},
+        });
 
         assert.strictEqual(preparedStart.confirmationTitle, 'Start Aspire AppHost');
         assert.strictEqual(preparedStart.confirmationMessage, `Start the Aspire AppHost ${relativeAppHostPath} in debug mode?`);
@@ -158,6 +165,8 @@ suite('Aspire AppHost lifecycle E2E', function () {
         assert.deepStrictEqual(preparedStatus, { registered: true, supportsPreparation: false });
         assert.deepStrictEqual(preparedExplain, { registered: true, supportsPreparation: false });
         assert.deepStrictEqual(preparedList, { registered: true, supportsPreparation: false });
+        // Hot Reload only reports, so it neither confirms nor announces an editor change.
+        assert.deepStrictEqual(preparedHotReload, { registered: true, supportsPreparation: false });
         assert.deepStrictEqual(preparedDashboard, {
             registered: true,
             supportsPreparation: true,
@@ -166,9 +175,9 @@ suite('Aspire AppHost lifecycle E2E', function () {
         assert.deepStrictEqual(preparedOutput, {
             registered: true,
             supportsPreparation: true,
-            invocationMessage: 'Showing Aspire Output...',
-            confirmationTitle: 'Show Aspire Output',
-            confirmationMessage: 'The Aspire Output view will be shown.',
+            invocationMessage: 'Opening the VS Code Output panel and selecting the Aspire Extension output channel...',
+            confirmationTitle: 'Open the VS Code Output panel and select the Aspire Extension output channel',
+            confirmationMessage: 'This opens the VS Code Output panel and selects the Aspire Extension output channel.',
         });
 
         const beforeLaunchStatus = await invokeToolWithoutConfirmation<Record<string, unknown>>({
@@ -211,6 +220,32 @@ suite('Aspire AppHost lifecycle E2E', function () {
             appHost: relativeAppHostPath,
         });
         assertSafeEditorAssistanceResult(beforeLaunchExplanation);
+
+        // Nothing is running yet, so there is no editor-debugged resource to report on and no
+        // active AppHost that could contain a named one. Both fail closed rather than guessing.
+        const beforeLaunchHotReload = await invokeToolWithoutConfirmation<Record<string, unknown>>({
+            name: 'invokeLanguageModelTool',
+            toolName: hotReloadToolName,
+            input: {},
+        });
+        assert.deepStrictEqual(beforeLaunchHotReload, {
+            success: false,
+            tool: hotReloadToolName,
+            outcome: 'noEditorControlledResource',
+        });
+        assertSafeEditorAssistanceResult(beforeLaunchHotReload);
+
+        const beforeLaunchNamedHotReload = await invokeToolWithoutConfirmation<Record<string, unknown>>({
+            name: 'invokeLanguageModelTool',
+            toolName: hotReloadToolName,
+            input: { resourceName: 'e2e-worker' },
+        });
+        assert.deepStrictEqual(beforeLaunchNamedHotReload, {
+            success: false,
+            tool: hotReloadToolName,
+            outcome: 'resourceNotFound',
+        });
+        assertSafeEditorAssistanceResult(beforeLaunchNamedHotReload);
 
         const editorsBeforeNotRunningDashboard = await getOpenEditorTitles();
         const beforeLaunchDashboard = await invokeToolWithoutConfirmation<Record<string, unknown>>({
@@ -308,11 +343,18 @@ suite('Aspire AppHost lifecycle E2E', function () {
         // the editor-owned AppHost without creating an editor-owned child debug session.
         // This still exercises real CLI resource discovery, including the generated
         // instance name whose logical display name remains "e2e-worker".
-        const resourceStatus = await invokeToolWithoutConfirmation<Record<string, unknown>>({
-            name: 'invokeLanguageModelTool',
-            toolName: statusToolName,
-            input: { appHostPath: relativeAppHostPath, resourceName: 'e2e-worker' },
-        });
+        //
+        // The bounded resource projection reports whatever the CLI has published, so the call is
+        // repeated until the worker is running and healthy rather than asserting against whichever
+        // intermediate snapshot the first call happened to observe.
+        const resourceStatus = await waitForToolResult<Record<string, unknown>>(
+            {
+                name: 'invokeLanguageModelTool',
+                toolName: statusToolName,
+                input: { appHostPath: relativeAppHostPath, resourceName: 'e2e-worker' },
+            },
+            result => (result.resource as Record<string, unknown> | undefined)?.healthStatus === 'Healthy',
+            'a running, healthy e2e-worker resource projection');
         assert.deepStrictEqual(resourceStatus, {
             success: true,
             tool: statusToolName,
@@ -321,6 +363,14 @@ suite('Aspire AppHost lifecycle E2E', function () {
             controller: 'editor',
             appHost: relativeAppHostPath,
             resourceName: 'e2e-worker',
+            // `exitCode` is absent because the CLI only reports one for a resource that has
+            // exited, and `source` is the project file name rather than its path.
+            resource: {
+                resourceType: 'Project',
+                state: 'Running',
+                healthStatus: 'Healthy',
+                source: 'AspireE2E.Worker.csproj',
+            },
         });
         assertSafeEditorAssistanceResult(resourceStatus);
 
@@ -339,6 +389,94 @@ suite('Aspire AppHost lifecycle E2E', function () {
             resourceName: 'missing-resource',
         });
         assertSafeEditorAssistanceResult(missingResourceStatus);
+
+        // The E2E extension host installs neither C# Dev Kit nor the C# extension, so Hot Reload
+        // is unavailable in this window and `e2e-worker` runs without an editor debug session.
+        // Both are reported as bounded evidence while the editor still owns the AppHost.
+        //
+        // The Aspire view is hidden first, which stops the repository's `describe --follow`
+        // streams and leaves it in the cold state a window that never opened the view is in.
+        // Answering from that state is the point: the read-only reporters resolve resources with
+        // an authoritative read, so no UI has to be shown to make a resource observable.
+        await hideAspireView();
+        const hotReloadStatus = await invokeToolWithoutConfirmation<Record<string, unknown>>({
+            name: 'invokeLanguageModelTool',
+            toolName: hotReloadToolName,
+            input: { resourceName: 'e2e-worker' },
+        });
+        assert.deepStrictEqual(
+            { ...hotReloadStatus, resourceName: undefined },
+            {
+                success: true,
+                tool: hotReloadToolName,
+                outcome: 'notApplicable',
+                appHost: relativeAppHostPath,
+                resourceName: undefined,
+                controller: 'editor',
+                hotReloadEnabled: false,
+                evidence: [
+                    'devKitNotInstalled',
+                    'hotReloadSettingUnavailable',
+                    'hotReloadOnSaveEnabled',
+                    'notEditorDebuggedResource',
+                    'dotnetProjectResource',
+                ],
+                fallback: ['restartResource', 'rebuildAndRestartAppHost'],
+            });
+        // The registry name carries a generated instance suffix, so only its stable logical
+        // prefix can be asserted. It is the registry's own name, never the requested selector.
+        assert.match(hotReloadStatus.resourceName as string, /^e2e-worker/);
+        assertSafeEditorAssistanceResult(hotReloadStatus);
+
+        // Narrowing to the AppHost that owns the resource must produce the same answer, which is
+        // what makes the selector usable to disambiguate a name several AppHosts share.
+        const narrowedHotReloadStatus = await invokeToolWithoutConfirmation<Record<string, unknown>>({
+            name: 'invokeLanguageModelTool',
+            toolName: hotReloadToolName,
+            input: { resourceName: 'e2e-worker', appHostPath: relativeAppHostPath },
+        });
+        assert.deepStrictEqual(narrowedHotReloadStatus, hotReloadStatus);
+        assertSafeEditorAssistanceResult(narrowedHotReloadStatus);
+
+        const missingAppHostHotReload = await invokeToolWithoutConfirmation<Record<string, unknown>>({
+            name: 'invokeLanguageModelTool',
+            toolName: hotReloadToolName,
+            input: { resourceName: 'e2e-worker', appHostPath: 'Missing/AppHost.csproj' },
+        });
+        assert.deepStrictEqual(missingAppHostHotReload, {
+            success: false,
+            tool: hotReloadToolName,
+            outcome: 'appHostNotFound',
+        });
+        assertSafeEditorAssistanceResult(missingAppHostHotReload);
+
+        const missingResourceHotReload = await invokeToolWithoutConfirmation<Record<string, unknown>>({
+            name: 'invokeLanguageModelTool',
+            toolName: hotReloadToolName,
+            input: { resourceName: 'missing-resource' },
+        });
+        assert.deepStrictEqual(missingResourceHotReload, {
+            success: false,
+            tool: hotReloadToolName,
+            outcome: 'resourceNotFound',
+        });
+        assertSafeEditorAssistanceResult(missingResourceHotReload);
+
+        const hotReloadInputValidation = await invokeLanguageModelTool({
+            name: 'invokeLanguageModelTool',
+            toolName: hotReloadToolName,
+            input: { resourceName: 'e2e-worker', unexpected: true },
+            invokeRegisteredToolDirectly: true,
+        });
+        assertInvocationCompleted(hotReloadInputValidation);
+        const [hotReloadInputValidationEvidence] = hotReloadInputValidation.results
+            .map(result => JSON.parse(result) as Record<string, unknown>);
+        assert.deepStrictEqual(hotReloadInputValidationEvidence, {
+            success: false,
+            tool: hotReloadToolName,
+            outcome: 'invalidInput',
+        });
+        assertSafeEditorAssistanceResult(hotReloadInputValidationEvidence);
 
         const explanation = await invokeToolWithoutConfirmation<Record<string, unknown>>({
             name: 'invokeLanguageModelTool',
@@ -369,7 +507,14 @@ suite('Aspire AppHost lifecycle E2E', function () {
         assert.strictEqual(sessions.outcome, 'sessionsFound');
         assert.ok(sessions.sessions.length > 0 && sessions.sessions.length <= 20);
         for (const session of sessions.sessions) {
-            assert.deepStrictEqual(Object.keys(session).sort(), ['appHost', 'controller', 'mode', 'state']);
+            assert.deepStrictEqual(Object.keys(session).sort(), ['appHost', 'controller', 'mode', 'resources', 'state']);
+            // The fixture installs no C# debugger, so the AppHost has no editor-owned child
+            // resource session to correlate and the bounded resource list stays empty. With
+            // nothing cut, the bounded indicator is absent rather than reported as false.
+            assert.deepStrictEqual(session.resources, []);
+            assert.strictEqual(
+                Object.prototype.hasOwnProperty.call(session, 'resourcesTruncated'),
+                false);
         }
         assertSafeEditorAssistanceResult(sessions);
 
@@ -419,8 +564,8 @@ suite('Aspire AppHost lifecycle E2E', function () {
             toolName: outputToolName,
             input: {},
         }, 120000, 1, 'editor-assistance-output-confirmation');
-        assert.strictEqual(outputInvocation.dialogs[0].message, 'Show Aspire Output');
-        assert.strictEqual(outputInvocation.dialogs[0].details, 'The Aspire Output view will be shown.');
+        assert.strictEqual(outputInvocation.dialogs[0].message, 'Open the VS Code Output panel and select the Aspire Extension output channel');
+        assert.strictEqual(outputInvocation.dialogs[0].details, 'This opens the VS Code Output panel and selects the Aspire Extension output channel.');
         assert.deepStrictEqual(outputInvocation.results, [{
             success: true,
             tool: outputToolName,
@@ -526,15 +671,23 @@ suite('Aspire AppHost lifecycle E2E', function () {
             preparedList,
             preparedDashboard,
             preparedOutput,
+            preparedHotReload,
             beforeLaunchStatus,
             beforeLaunchSessions,
             beforeLaunchExplanation,
             beforeLaunchDashboard,
+            beforeLaunchHotReload,
+            beforeLaunchNamedHotReload,
             missingAppHost,
             additionalPropertyValidation: additionalPropertyValidationEvidence,
             status,
             resourceStatus,
             missingResourceStatus,
+            hotReloadStatus,
+            narrowedHotReloadStatus,
+            missingAppHostHotReload,
+            missingResourceHotReload,
+            hotReloadInputValidation: hotReloadInputValidationEvidence,
             explanation,
             sessions,
             canceledStatus,
@@ -1834,6 +1987,32 @@ async function invokeToolWithoutConfirmation<T>(
     assertInvocationCompleted(response);
     assert.strictEqual(response.results.length, 1);
     return JSON.parse(response.results[0]) as T;
+}
+
+/**
+ * Re-invokes a read-only tool until its result satisfies `isSettled`.
+ *
+ * Resource projections report whatever the CLI has published so far, so a single call can observe
+ * a resource mid-startup. Polling the tool is the only condition available here: the E2E state file
+ * projects neither health status nor the bounded resource shape the tool returns.
+ */
+async function waitForToolResult<T extends Record<string, unknown>>(
+    command: Parameters<typeof executeE2eControlCommand>[0],
+    isSettled: (result: T) => boolean,
+    description: string,
+    timeoutMs = 120000): Promise<T> {
+    const started = Date.now();
+    let lastResult: T | undefined;
+    while (Date.now() - started < timeoutMs) {
+        lastResult = await invokeToolWithoutConfirmation<T>(command);
+        if (isSettled(lastResult)) {
+            return lastResult;
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    throw new Error(`Timed out after ${timeoutMs}ms waiting for ${description}. Last result: ${JSON.stringify(lastResult)}`);
 }
 
 async function invokeLanguageModelTool(

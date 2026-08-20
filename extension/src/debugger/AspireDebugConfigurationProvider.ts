@@ -8,7 +8,7 @@ import { compareAppHostIdentity, isAppHostProjectFile } from '../utils/appHostId
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
 import { getCliPathTargetForUri, getCliPathTargetKey, windowCliPathTarget, workspaceFolderCliPathTarget, type CliPathResolutionTarget } from '../utils/cliPathVariables';
 import { extensionLogOutputChannel } from '../utils/logging';
-import { recordLaunchFailureForAppHostPath, type LaunchFailureMode, type LaunchFailureProviderKind } from '../services/launchFailureJournal';
+import { getLaunchFailureProviderKindForAppHostPath, recordLaunchFailureForAppHostPath, type LaunchFailureMode } from '../services/launchFailureJournal';
 import { isAppHostSourceFile } from '../utils/paths/comparison';
 import { doesFileExist } from '../utils/io';
 import { isCommandCancellation } from '../utils/telemetry';
@@ -273,7 +273,7 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
                             category: 'invalidConfiguration',
                             controller: 'editor',
                             mode: getLaunchFailureMode(aspireConfig),
-                            providerKind: getAppHostProviderKind(claimedPath),
+                            providerKind: getLaunchFailureProviderKindForAppHostPath(claimedPath),
                         });
                     }
                     void vscode.window.showInformationMessage(appHostLifecycleLaunchAlreadyClaimed);
@@ -313,7 +313,7 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
                     stage: 'discovery',
                     controller: 'editor',
                     mode: getLaunchFailureMode(config),
-                    providerKind: getAppHostProviderKind(filePath),
+                    providerKind: getLaunchFailureProviderKindForAppHostPath(filePath),
                     error,
                 });
                 this._launchReservation.markLaunchAttemptFailureRecorded(config);
@@ -464,23 +464,10 @@ function getLaunchFailureMode(config: AspireExtendedDebugConfiguration): LaunchF
     return 'other';
 }
 
-function getAppHostProviderKind(appHostPath: string): LaunchFailureProviderKind {
-    switch (classifyAppHostPath(appHostPath)) {
-        case 'csharp':
-            return 'dotnet';
-        case 'typescript':
-            return 'node';
-        case 'rust':
-            return 'rust';
-        default:
-            return 'other';
-    }
-}
-
 function isConcreteAppHostTarget(appHostPath: string): boolean {
     if (isAppHostProjectFile(appHostPath) || isAppHostSourceFile(appHostPath)) {
         return true;
     }
 
-    return /^apphost\.(?:[cm]?[jt]s|rs)$/i.test(path.basename(appHostPath));
+    return classifyAppHostPath(appHostPath) !== 'unknown';
 }

@@ -60,7 +60,8 @@
     "onLanguageModelTool:aspire_explain_launch_failure",
     "onLanguageModelTool:aspire_open_dashboard",
     "onLanguageModelTool:aspire_open_output",
-    "onLanguageModelTool:aspire_list_debug_sessions"
+    "onLanguageModelTool:aspire_list_debug_sessions",
+    "onLanguageModelTool:aspire_hot_reload_status"
   ],
   "main": "./dist/extension.js",
   "l10n": "./l10n",
@@ -257,6 +258,35 @@
         "inputSchema": {
           "type": "object",
           "properties": {},
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "aspire_hot_reload_status",
+        "toolReferenceName": "aspireHotReloadStatus",
+        "displayName": "%languageModelTool.aspireHotReloadStatus.displayName%",
+        "modelDescription": "%languageModelTool.aspireHotReloadStatus.modelDescription%",
+        "userDescription": "%languageModelTool.aspireHotReloadStatus.userDescription%",
+        "icon": "$(flame)",
+        "canBeReferencedInPrompt": true,
+        "when": "isWorkspaceTrusted",
+        "tags": [
+          "aspire",
+          "apphost",
+          "debug"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "resourceName": {
+              "type": "string",
+              "description": "%languageModelTool.aspireHotReloadStatus.resourceName.description%"
+            },
+            "appHostPath": {
+              "type": "string",
+              "description": "%languageModelTool.aspireHotReloadStatus.appHostPath.description%"
+            }
+          },
           "additionalProperties": false
         }
       }

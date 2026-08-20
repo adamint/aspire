@@ -1,4 +1,5 @@
 import { getOrCreateIdentityForCurrentAppHostTarget, type OpaqueAppHostIdentity } from '../utils/appHostIdentity';
+import { classifyAppHostPath } from '../utils/appHostLanguage';
 import {
     isCommandCancellation,
     sendTelemetryEvent,
@@ -52,6 +53,21 @@ export const launchFailureProviderKinds = Object.freeze([
     'other',
 ] as const);
 export type LaunchFailureProviderKind = typeof launchFailureProviderKinds[number];
+
+export function getLaunchFailureProviderKindForAppHostPath(appHostPath: string | undefined): LaunchFailureProviderKind {
+    switch (classifyAppHostPath(appHostPath)) {
+        case 'csharp':
+            return 'dotnet';
+        case 'typescript':
+            return 'node';
+        case 'java':
+            return 'java';
+        case 'rust':
+            return 'rust';
+        default:
+            return 'other';
+    }
+}
 
 export const launchFailureExitCodeBuckets = Object.freeze(['none', 'zero', 'one', 'signal', 'other'] as const);
 export type LaunchFailureExitCodeBucket = typeof launchFailureExitCodeBuckets[number];

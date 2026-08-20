@@ -352,6 +352,32 @@ suite('AspireDebugConfigurationProvider', () => {
         });
     });
 
+    test('records validation when a lifecycle-owned launch already claimed AppHost.java', async () => {
+        const appHostPath = path.join(tempDir, 'AppHost.java');
+        fs.writeFileSync(appHostPath, 'class AppHost {}');
+        launchReservation.claimedByLifecycle = true;
+        const message = sandbox.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+
+        const provider = createProvider(createAppHostDiscoveryService(appHostPath), launchReservation);
+        const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined, {
+            name: 'Debug Java AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: appHostPath,
+        });
+
+        assert.strictEqual(config, undefined);
+        assert.strictEqual(message.calledOnce, true);
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+            stage: 'validation',
+            category: 'invalidConfiguration',
+            controller: 'editor',
+            mode: 'debug',
+            providerKind: 'java',
+            exitCodeBucket: 'none',
+        });
+    });
+
     test('does not trust a launch.json launchedByExtension property as lifecycle-owned', async () => {
         const appHostPath = path.join(tempDir, 'AppHost.csproj');
         fs.writeFileSync(appHostPath, '<Project Sdk="Aspire.AppHost.Sdk" />');
@@ -1098,6 +1124,31 @@ suite('AspireDebugConfigurationProvider', () => {
             controller: 'editor',
             mode: 'run',
             providerKind: 'dotnet',
+            exitCodeBucket: 'none',
+        });
+    });
+
+    test('records AppHost.java discovery cancellation as a Java failure', async () => {
+        const programPath = path.join(tempDir, 'Missing', 'AppHost.java');
+        const provider = createProvider(
+            createFailingAppHostDiscoveryService(new vscode.CancellationError()),
+            launchReservation);
+
+        const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined, {
+            name: 'Run Java AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: programPath,
+            noDebug: true,
+        });
+
+        assert.strictEqual(config, undefined);
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(programPath)[0]), {
+            stage: 'discovery',
+            category: 'canceled',
+            controller: 'editor',
+            mode: 'run',
+            providerKind: 'java',
             exitCodeBucket: 'none',
         });
     });

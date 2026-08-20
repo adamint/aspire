@@ -17,8 +17,11 @@ import * as locStrings from '../loc/strings';
 import { appHostLifecycleBusy } from '../loc/strings';
 import { AppHostLaunchService, AppHostLifecycleLockTimeoutError, AppHostStopCancellationError, appHostLifecycleLockMaxHoldMs, appHostLifecycleLockWaitTimeoutMs, externalLaunchReservationTimeoutMs, type AppHostLaunchCapabilityProvider, type AppHostLaunchSession } from '../services/AppHostLaunchService';
 import { __resetAppHostIdentityRegistryForTests, getAppHostIdentityKey, getOrCreateIdentityForCurrentAppHostTarget } from '../utils/appHostIdentity';
+import { bindAppHostLaunchTarget } from '../services/AppHostLaunchService';
+import { AppHostLifecycleToolService } from '../lm/appHostLifecycleToolService';
 import { AppHostDiscoveryService } from '../utils/appHostDiscovery';
 import * as cliPathModule from '../utils/cliPath';
+import * as workspaceModule from '../utils/workspace';
 import { isolatedLaunchCapability, type CapabilityStatus } from '../types/configInfo';
 import { windowCliPathTarget, workspaceFolderCliPathTarget } from '../utils/cliPathVariables';
 import { __resetCommonPropertiesForTests, __setReporterForTests } from '../utils/telemetry';
@@ -81,12 +84,21 @@ class FakeCapabilityProvider implements AppHostLaunchCapabilityProvider {
         options: { suppressErrors?: boolean; forceRefresh?: boolean; cliPath?: string; cancellationToken?: vscode.CancellationToken; minimumVersion?: string; target?: import('../utils/cliPathVariables').CliPathResolutionTarget } | undefined;
     }> = [];
     capabilityStatus: CapabilityStatus = 'supported';
+    /**
+     * Runs while the CLI capability probe is in flight.
+     *
+     * The probe is the last await a `run` launch crosses before it commits to
+     * `startDebugging`, so mutating the workspace from here reproduces a retarget at exactly
+     * that point without a timer.
+     */
+    beforeGetCapabilityStatus: (() => void) | undefined;
 
     async getCapabilityStatus(
         capability: string,
         options?: { suppressErrors?: boolean; forceRefresh?: boolean; cliPath?: string; cancellationToken?: vscode.CancellationToken; minimumVersion?: string; target?: import('../utils/cliPathVariables').CliPathResolutionTarget },
     ): Promise<CapabilityStatus> {
         this.calls.push({ capability, options });
+        this.beforeGetCapabilityStatus?.();
         return capability === isolatedLaunchCapability ? this.capabilityStatus : 'unsupported';
     }
 }
@@ -193,6 +205,161 @@ suite('AppHostLaunchService', () => {
         assert.strictEqual(service.hasPendingOrActiveRunLaunch('/repo/Unresolved/AppHost.csproj'), false);
     });
 
+    test('keeps a pending run launch bound to the AppHost it was captured for when an alias retargets', async function () {
+        // Launch state is captured when the launch is requested, but it was compared by resolving
+        // the stored path again. A symlink repointed after the launch started therefore moved the
+        // whole launch: the AppHost that is actually starting stopped being reported, and an
+        // unrelated AppHost the link now names started being reported as starting instead.
+        const firstDirectory = createAppHostDirectory('AppHost.csproj');
+        const secondDirectory = createAppHostDirectory('AppHost.csproj');
+        const linkDirectory = createAppHostDirectory();
+        const firstTarget = path.join(firstDirectory, 'AppHost.csproj');
+        const secondTarget = path.join(secondDirectory, 'AppHost.csproj');
+        const linkedAppHostPath = path.join(linkDirectory, 'AppHost.csproj');
+        try {
+            fs.symlinkSync(firstTarget, linkedAppHostPath);
+        }
+        catch {
+            this.skip();
+            return;
+        }
+
+        await service.launch(linkedAppHostPath, 'run', true);
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(firstTarget), true);
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(secondTarget), false);
+
+        fs.rmSync(linkedAppHostPath);
+        fs.symlinkSync(secondTarget, linkedAppHostPath);
+
+        // The launch that is in flight is still the one that was started against the first
+        // AppHost, and nothing was ever started against the second one.
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(firstTarget), true);
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(secondTarget), false);
+    });
+
+    test('keeps an active run debug session bound to the AppHost it was captured for when an alias retargets', async function () {
+        const firstDirectory = createAppHostDirectory('AppHost.csproj');
+        const secondDirectory = createAppHostDirectory('AppHost.csproj');
+        const linkDirectory = createAppHostDirectory();
+        const firstTarget = path.join(firstDirectory, 'AppHost.csproj');
+        const secondTarget = path.join(secondDirectory, 'AppHost.csproj');
+        const linkedAppHostPath = path.join(linkDirectory, 'AppHost.csproj');
+        try {
+            fs.symlinkSync(firstTarget, linkedAppHostPath);
+        }
+        catch {
+            this.skip();
+            return;
+        }
+
+        await service.launch(linkedAppHostPath, 'run', true);
+        const runConfiguration = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
+        assert.ok(onDidStartDebugSessionCallback);
+        // Once the debug session starts, the pending entry is replaced by the active one, so the
+        // active entry has to carry the same captured identity forward.
+        onDidStartDebugSessionCallback({
+            id: 'run-session',
+            configuration: runConfiguration,
+        } as unknown as vscode.DebugSession);
+
+        fs.rmSync(linkedAppHostPath);
+        fs.symlinkSync(secondTarget, linkedAppHostPath);
+
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(firstTarget), true);
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(secondTarget), false);
+    });
+
+    test('stops answering for a launch through an alias that no longer names the AppHost it started', async function () {
+        // The alias is only a name. Once it points at another file, a caller asking about the
+        // alias is asking about that other file, and nothing was ever started against it.
+        // Matching the stored launch path lexically would answer for the first AppHost under a
+        // name that has stopped meaning it, which is the same misattribution the captured
+        // identity exists to prevent.
+        const firstDirectory = createAppHostDirectory('AppHost.csproj');
+        const secondDirectory = createAppHostDirectory('AppHost.csproj');
+        const linkDirectory = createAppHostDirectory();
+        const firstTarget = path.join(firstDirectory, 'AppHost.csproj');
+        const secondTarget = path.join(secondDirectory, 'AppHost.csproj');
+        const linkedAppHostPath = path.join(linkDirectory, 'AppHost.csproj');
+        try {
+            fs.symlinkSync(firstTarget, linkedAppHostPath);
+        }
+        catch {
+            this.skip();
+            return;
+        }
+
+        await service.launch(linkedAppHostPath, 'run', true);
+        // Before the retarget the alias resolves to the AppHost that was launched, so the
+        // captured identity has to keep answering through it.
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(linkedAppHostPath), true);
+
+        fs.rmSync(linkedAppHostPath);
+        fs.symlinkSync(secondTarget, linkedAppHostPath);
+
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(firstTarget), true);
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(linkedAppHostPath), false);
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(secondTarget), false);
+    });
+
+    test('stops answering for an active session through an alias that no longer names its AppHost', async function () {
+        const firstDirectory = createAppHostDirectory('AppHost.csproj');
+        const secondDirectory = createAppHostDirectory('AppHost.csproj');
+        const linkDirectory = createAppHostDirectory();
+        const firstTarget = path.join(firstDirectory, 'AppHost.csproj');
+        const secondTarget = path.join(secondDirectory, 'AppHost.csproj');
+        const linkedAppHostPath = path.join(linkDirectory, 'AppHost.csproj');
+        try {
+            fs.symlinkSync(firstTarget, linkedAppHostPath);
+        }
+        catch {
+            this.skip();
+            return;
+        }
+
+        await service.launch(linkedAppHostPath, 'run', true);
+        const runConfiguration = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
+        assert.ok(onDidStartDebugSessionCallback);
+        onDidStartDebugSessionCallback({
+            id: 'run-session',
+            configuration: runConfiguration,
+        } as unknown as vscode.DebugSession);
+
+        fs.rmSync(linkedAppHostPath);
+        fs.symlinkSync(secondTarget, linkedAppHostPath);
+
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(firstTarget), true);
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(linkedAppHostPath), false);
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(secondTarget), false);
+    });
+
+    test('reports a pending run launch through every equivalent spelling of the same AppHost', async () => {
+        // Identity comparison has to keep the ordinary answers intact: the same file named
+        // differently is the same launch, the sibling of a single project/source pair is the same
+        // AppHost, and an unrelated AppHost is never starting because another one is.
+        const directory = createAppHostDirectory('AppHost.csproj', 'AppHost.cs');
+        const appHostPath = path.join(directory, 'AppHost.csproj');
+        const sourcePath = path.join(directory, 'AppHost.cs');
+        const unrelatedPath = path.join(createAppHostDirectory('AppHost.csproj'), 'AppHost.csproj');
+        // Built by concatenation so the `..` segment survives into the service, where the
+        // comparison - not the test - has to normalize it.
+        const unnormalizedPath = `${directory}${path.sep}Nested${path.sep}..${path.sep}AppHost.csproj`;
+
+        await service.launch(appHostPath, 'run', true);
+
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(appHostPath), true);
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(unnormalizedPath), true);
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(sourcePath), true);
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(unrelatedPath), false);
+
+        // Only a case-insensitive filesystem makes the differently-cased name the same file, so
+        // the expectation is read off the filesystem rather than assumed per platform.
+        const upperCaseVariant = path.join(directory, 'APPHOST.CSPROJ');
+        assert.strictEqual(
+            service.hasPendingOrActiveRunLaunch(upperCaseVariant),
+            fs.existsSync(upperCaseVariant));
+    });
+
     test('launch fires onDidChangeLaunchingState event', async () => {
         let fired = false;
         service.onDidChangeLaunchingState(() => { fired = true; });
@@ -218,6 +385,239 @@ suite('AppHostLaunchService', () => {
         assert.strictEqual(config.__aspireAppHostSelectionOrigin, 'user-selection');
     });
 
+    /**
+     * Creates a symlinked AppHost alias plus the two real AppHosts it can name.
+     *
+     * `retarget` repoints the alias without a timer, so a test can move it at the exact
+     * moment a launch is awaiting one of its pre-launch steps.
+     */
+    function createRetargetableAppHostAlias(): {
+        readonly firstTarget: string;
+        readonly secondTarget: string;
+        readonly linkedAppHostPath: string;
+        readonly retargetTo: (target: string) => void;
+    } | undefined {
+        const firstTarget = path.join(createAppHostDirectory('AppHost.csproj'), 'AppHost.csproj');
+        const secondTarget = path.join(createAppHostDirectory('AppHost.csproj'), 'AppHost.csproj');
+        const linkedAppHostPath = path.join(createAppHostDirectory(), 'AppHost.csproj');
+        const retargetTo = (target: string) => {
+            fs.rmSync(linkedAppHostPath, { force: true });
+            fs.symlinkSync(target, linkedAppHostPath);
+        };
+        try {
+            fs.symlinkSync(firstTarget, linkedAppHostPath);
+        }
+        catch {
+            return undefined;
+        }
+
+        return { firstTarget, secondTarget, linkedAppHostPath, retargetTo };
+    }
+
+    test('scopes CLI and capability resolution to the workspace folder that owns the selector', async function () {
+        // The alias lives inside a workspace folder while the AppHost it names does not, which is
+        // what a symlinked root or a linked worktree produces. The launch has to run the physical
+        // AppHost and still resolve the CLI, capabilities, and settings from the folder that owns
+        // the path the caller named - scoping from the physical path would silently fall back to
+        // window settings and run a different `aspire`.
+        const alias = createRetargetableAppHostAlias();
+        if (!alias) {
+            this.skip();
+            return;
+        }
+
+        const folder = {
+            name: 'workspace',
+            index: 0,
+            uri: vscode.Uri.file(path.dirname(alias.linkedAppHostPath)),
+        } as vscode.WorkspaceFolder;
+        const getWorkspaceFolderStub = sinon.stub(vscode.workspace, 'getWorkspaceFolder')
+            .callsFake(uri => uri.fsPath === alias.linkedAppHostPath ? folder : undefined);
+        const checkCliStub = sinon.stub(workspaceModule, 'checkCliAvailableOrRedirect')
+            .resolves({ cliPath: '/path/bin/aspire', available: true });
+        try {
+            await service.launchFromLifecycleOwner(
+                bindAppHostLaunchTarget(alias.linkedAppHostPath),
+                'run',
+                true,
+                true,
+                new vscode.CancellationTokenSource().token);
+
+            assert.deepStrictEqual(
+                checkCliStub.getCalls().map(call => call.args[1]),
+                [workspaceFolderCliPathTarget(folder)]);
+            assert.deepStrictEqual(
+                capabilityProvider.calls.map(call => call.options?.target),
+                [workspaceFolderCliPathTarget(folder)]);
+            const config = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
+            assert.strictEqual(config.program, alias.firstTarget);
+            assert.strictEqual(config.name, `Aspire run: ${vscode.workspace.asRelativePath(alias.linkedAppHostPath)}`);
+        }
+        finally {
+            checkCliStub.restore();
+            getWorkspaceFolderStub.restore();
+        }
+    });
+
+    test('binds a lifecycle launch to the AppHost it captured when an alias retargets while the launch is prepared', async function () {        // Capturing the identity only records which AppHost the launch belongs to. The launch
+        // itself still travels as a path, so an alias repointed while the pre-launch steps are
+        // awaited - and repointed back before anything checks - hands the debugger a different
+        // AppHost under the captured identity. Nothing after the fact can tell the two apart,
+        // so the configuration has to carry the physical AppHost the launch resolved.
+        const alias = createRetargetableAppHostAlias();
+        if (!alias) {
+            this.skip();
+            return;
+        }
+
+        capabilityProvider.beforeGetCapabilityStatus = () => {
+            alias.retargetTo(alias.secondTarget);
+            alias.retargetTo(alias.firstTarget);
+        };
+        startDebuggingStub.callsFake(async () => {
+            // VS Code resolves the configuration after `startDebugging` is called, so an alias
+            // still standing in for the AppHost here can be redirected before the session starts.
+            alias.retargetTo(alias.secondTarget);
+            return true;
+        });
+
+        await service.launchFromLifecycleOwner(
+            bindAppHostLaunchTarget(alias.linkedAppHostPath),
+            'run',
+            true,
+            false,
+            new vscode.CancellationTokenSource().token);
+
+        assert.ok(startDebuggingStub.calledOnce);
+        const config = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
+        assert.strictEqual(config.program, alias.firstTarget);
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(alias.firstTarget), true);
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(alias.secondTarget), false);
+    });
+
+    test('refuses a lifecycle launch whose alias names another AppHost by the time it commits', async function () {
+        const alias = createRetargetableAppHostAlias();
+        if (!alias) {
+            this.skip();
+            return;
+        }
+
+        capabilityProvider.beforeGetCapabilityStatus = () => alias.retargetTo(alias.secondTarget);
+
+        await assert.rejects(
+            () => service.launchFromLifecycleOwner(
+                bindAppHostLaunchTarget(alias.linkedAppHostPath),
+                'run',
+                true,
+                false,
+                new vscode.CancellationTokenSource().token),
+            (error: unknown) => error instanceof Error && error.name === 'AppHostLaunchTargetChangedError');
+
+        assert.strictEqual(startDebuggingStub.called, false);
+        assert.strictEqual(service.isLaunching(alias.firstTarget), false);
+        assert.strictEqual(service.isLaunching(alias.secondTarget), false);
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(alias.firstTarget), false);
+        assert.strictEqual(service.hasPendingOrActiveRunLaunch(alias.secondTarget), false);
+    });
+
+    test('refuses a lifecycle-tool start whose alias names another AppHost by the time the launch commits', async function () {
+        // The tool path is what an agent actually drives: resolve a registry selector, take the
+        // lifecycle lock, then launch. This runs it against the real launch service so the
+        // freshness check that raises AppHostLaunchTargetChangedError is exercised where it
+        // matters, not only through a direct launch call. Handing the launch only the physical
+        // path would leave nothing for that check to compare, and the retarget would go unnoticed.
+        const alias = createRetargetableAppHostAlias();
+        if (!alias) {
+            this.skip();
+            return;
+        }
+
+        const workspaceRoot = path.dirname(path.dirname(alias.linkedAppHostPath));
+        const selector = path.relative(workspaceRoot, alias.linkedAppHostPath).split(path.sep).join('/');
+        const workspaceFoldersStub = sinon.stub(vscode.workspace, 'workspaceFolders').value([
+            { uri: vscode.Uri.file(workspaceRoot), name: 'workspace', index: 0 },
+        ]);
+        const isTrustedStub = sinon.stub(vscode.workspace, 'isTrusted').value(true);
+        const checkCliStub = sinon.stub(workspaceModule, 'checkCliAvailableOrRedirect')
+            .callsFake(async () => {
+                alias.retargetTo(alias.secondTarget);
+                return { cliPath: '/path/bin/aspire', available: true } as const;
+            });
+        const toolService = new AppHostLifecycleToolService({
+            launchService: service,
+            discoveryService: {
+                discover: async () => [{ path: alias.linkedAppHostPath, language: 'csharp', status: 'buildable' }],
+            },
+        });
+        try {
+            const result = await toolService.start(
+                { appHostPath: selector, mode: 'run' },
+                new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'failed');
+            assert.strictEqual(startDebuggingStub.called, false);
+            assert.strictEqual(service.isLaunching(alias.firstTarget), false);
+            assert.strictEqual(service.isLaunching(alias.secondTarget), false);
+            assert.strictEqual(service.hasPendingOrActiveRunLaunch(alias.firstTarget), false);
+            assert.strictEqual(service.hasPendingOrActiveRunLaunch(alias.secondTarget), false);
+        }
+        finally {
+            toolService.dispose();
+            checkCliStub.restore();
+            isTrustedStub.restore();
+            workspaceFoldersStub.restore();
+        }
+    });
+
+    test('binds a user-initiated launch to the AppHost it captured when an alias retargets during the CLI gate', async function () {
+        const alias = createRetargetableAppHostAlias();
+        if (!alias) {
+            this.skip();
+            return;
+        }
+
+        const checkCliStub = sinon.stub(workspaceModule, 'checkCliAvailableOrRedirect').callsFake(async () => {
+            alias.retargetTo(alias.secondTarget);
+            alias.retargetTo(alias.firstTarget);
+            return { cliPath: '/path/bin/aspire', available: true };
+        });
+        try {
+            await service.launch(alias.linkedAppHostPath, 'run', true);
+
+            assert.ok(startDebuggingStub.calledOnce);
+            const config = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
+            assert.strictEqual(config.program, alias.firstTarget);
+        }
+        finally {
+            checkCliStub.restore();
+        }
+    });
+
+    test('refuses a user-initiated launch whose alias names another AppHost by the time it commits', async function () {
+        const alias = createRetargetableAppHostAlias();
+        if (!alias) {
+            this.skip();
+            return;
+        }
+
+        const checkCliStub = sinon.stub(workspaceModule, 'checkCliAvailableOrRedirect').callsFake(async () => {
+            alias.retargetTo(alias.secondTarget);
+            return { cliPath: '/path/bin/aspire', available: true };
+        });
+        try {
+            await assert.rejects(
+                () => service.launch(alias.linkedAppHostPath, 'run', true),
+                (error: unknown) => error instanceof Error && error.name === 'AppHostLaunchTargetChangedError');
+
+            assert.strictEqual(startDebuggingStub.called, false);
+            assert.strictEqual(service.isLaunching(alias.firstTarget), false);
+            assert.strictEqual(service.isLaunching(alias.secondTarget), false);
+        }
+        finally {
+            checkCliStub.restore();
+        }
+    });
+
     test('suppressed lifecycle launch does not report verified isolation', async () => {
         const environmentVariables = [
             'ASPIRE_EXTENSION_E2E_ENABLE_BRIDGE',
@@ -234,7 +634,7 @@ suite('AppHostLaunchService', () => {
             process.env.ASPIRE_EXTENSION_E2E_SUPPRESS_DEBUG_LAUNCH = 'true';
 
             const isolation = await service.launchFromLifecycleOwner(
-                '/repo/AppHost.csproj',
+                bindAppHostLaunchTarget('/repo/AppHost.csproj'),
                 'run',
                 true,
                 true,
@@ -271,7 +671,7 @@ suite('AppHostLaunchService', () => {
         const appHostPath = '/repo/AppHost.csproj';
         assert.strictEqual(service.tryReserveLaunch(appHostPath), true);
 
-        await service.launchFromLifecycleOwner(appHostPath, 'run', true, undefined, new vscode.CancellationTokenSource().token);
+        await service.launchFromLifecycleOwner(bindAppHostLaunchTarget(appHostPath), 'run', true, undefined, new vscode.CancellationTokenSource().token);
 
         const config = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
         assert.strictEqual(config.__aspireAppHostSelectionOrigin, 'explicit-launch-configuration');
@@ -282,7 +682,7 @@ suite('AppHostLaunchService', () => {
         const appHostPath = '/repo/AppHost.csproj';
         assert.strictEqual(service.tryReserveLaunch(appHostPath), true);
 
-        await service.launchFromLifecycleOwner(appHostPath, 'run', true, false, new vscode.CancellationTokenSource().token);
+        await service.launchFromLifecycleOwner(bindAppHostLaunchTarget(appHostPath), 'run', true, false, new vscode.CancellationTokenSource().token);
 
         const config = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
         assert.strictEqual(config.__aspireAppHostSelectionOrigin, 'explicit-launch-configuration');
@@ -293,7 +693,7 @@ suite('AppHostLaunchService', () => {
         const appHostPath = '/repo/AppHost.csproj';
         assert.strictEqual(service.tryReserveLaunch(appHostPath), true);
 
-        await service.launchFromLifecycleOwner(appHostPath, 'run', true, true, new vscode.CancellationTokenSource().token);
+        await service.launchFromLifecycleOwner(bindAppHostLaunchTarget(appHostPath), 'run', true, true, new vscode.CancellationTokenSource().token);
 
         const config = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
         assert.deepStrictEqual(config.args, ['--isolated']);
@@ -410,18 +810,18 @@ suite('AppHostLaunchService', () => {
         const inferredCancellation = new vscode.CancellationTokenSource();
 
         const explicitTrue = await service.launchFromLifecycleOwner(
-            explicitTruePath,
+            bindAppHostLaunchTarget(explicitTruePath),
             'run',
             true,
             true,
             new vscode.CancellationTokenSource().token);
         const explicitFalse = await service.launchFromLifecycleOwner(
-            explicitFalsePath,
+            bindAppHostLaunchTarget(explicitFalsePath),
             'run',
             true,
             false,
             new vscode.CancellationTokenSource().token);
-        await service.launchFromLifecycleOwner(inferredPath, 'run', true, undefined, inferredCancellation.token);
+        await service.launchFromLifecycleOwner(bindAppHostLaunchTarget(inferredPath), 'run', true, undefined, inferredCancellation.token);
 
         assert.deepStrictEqual(explicitTrue, { effective: true, option: true });
         assert.deepStrictEqual(explicitFalse, { effective: false, option: false });
@@ -449,7 +849,7 @@ suite('AppHostLaunchService', () => {
         const cancellation = new vscode.CancellationTokenSource();
         assert.strictEqual(service.tryReserveLaunch(appHostPath), true);
 
-        const isolation = await service.launchFromLifecycleOwner(appHostPath, 'run', true, undefined, cancellation.token);
+        const isolation = await service.launchFromLifecycleOwner(bindAppHostLaunchTarget(appHostPath), 'run', true, undefined, cancellation.token);
 
         const config = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
         assert.strictEqual(config.args, undefined);
@@ -477,7 +877,7 @@ suite('AppHostLaunchService', () => {
         assert.strictEqual(service.tryReserveLaunch(appHostPath), true);
 
         const isolation = await service.launchFromLifecycleOwner(
-            appHostPath,
+            bindAppHostLaunchTarget(appHostPath),
             'run',
             true,
             false,
@@ -498,7 +898,7 @@ suite('AppHostLaunchService', () => {
 
         await assert.rejects(
             service.launchFromLifecycleOwner(
-                appHostPath,
+                bindAppHostLaunchTarget(appHostPath),
                 'run',
                 true,
                 true,
@@ -525,7 +925,7 @@ suite('AppHostLaunchService', () => {
             assert.strictEqual(service.tryReserveLaunch(appHostPath), true);
             await assert.rejects(
                 service.launchFromLifecycleOwner(
-                    appHostPath,
+                    bindAppHostLaunchTarget(appHostPath),
                     'run',
                     true,
                     isolated,
@@ -1786,7 +2186,7 @@ suite('AppHostLaunchService', () => {
         const appHostPath = path.resolve('/repo/AppHost/AppHost.csproj');
         const stopRequests: string[] = [];
         service.setRunningAppHostProvider(async () => [{ appHostPath }]);
-        service.setExternalAppHostStopper(async requestedPath => { stopRequests.push(requestedPath); });
+        service.setExternalAppHostStopper(async requested => { stopRequests.push(requested.operationPath); });
 
         const result = await service.stopAppHost(appHostPath, new vscode.CancellationTokenSource().token);
 
@@ -1794,12 +2194,59 @@ suite('AppHostLaunchService', () => {
         assert.deepStrictEqual(stopRequests, [appHostPath]);
     });
 
+    test('refuses an external stop when the selector changes before the stop commits', async function () {
+        const alias = createRetargetableAppHostAlias();
+        if (!alias) {
+            this.skip();
+            return;
+        }
+
+        const stopRequests: string[] = [];
+        service.setRunningAppHostProvider(async () => {
+            alias.retargetTo(alias.secondTarget);
+            return [{ appHostPath: alias.firstTarget }];
+        });
+        service.setExternalAppHostStopper(async requested => { stopRequests.push(requested.operationPath); });
+
+        await assert.rejects(
+            service.stopAppHost(alias.linkedAppHostPath, new vscode.CancellationTokenSource().token),
+            (error: unknown) => error instanceof Error && error.name === 'AppHostLaunchTargetChangedError');
+
+        assert.deepStrictEqual(stopRequests, []);
+    });
+
+    test('allows an external stop when the selector moves away and back to the captured identity', async function () {
+        const alias = createRetargetableAppHostAlias();
+        if (!alias) {
+            this.skip();
+            return;
+        }
+
+        const stopRequests: { operationPath: string; scopePath: string }[] = [];
+        service.setRunningAppHostProvider(async () => {
+            alias.retargetTo(alias.secondTarget);
+            alias.retargetTo(alias.firstTarget);
+            return [{ appHostPath: alias.firstTarget }];
+        });
+        service.setExternalAppHostStopper(async requested => { stopRequests.push(requested); });
+
+        const result = await service.stopAppHost(
+            alias.linkedAppHostPath,
+            new vscode.CancellationTokenSource().token);
+
+        assert.deepStrictEqual(result, { outcome: 'stopped', controller: 'external' });
+        assert.deepStrictEqual(stopRequests, [{
+            operationPath: fs.realpathSync.native(alias.firstTarget),
+            scopePath: alias.linkedAppHostPath,
+        }]);
+    });
+
     test('refuses to stop an external AppHost whose identity is ambiguous', async () => {
         const directory = createAppHostDirectory('First.csproj', 'Second.csproj', 'Program.cs');
         const requestedPath = path.join(directory, 'First.csproj');
         const stopRequests: string[] = [];
         service.setRunningAppHostProvider(async () => [{ appHostPath: path.join(directory, 'Program.cs') }]);
-        service.setExternalAppHostStopper(async requestedPath => { stopRequests.push(requestedPath); });
+        service.setExternalAppHostStopper(async requested => { stopRequests.push(requested.operationPath); });
 
         const result = await service.stopAppHost(requestedPath, new vscode.CancellationTokenSource().token);
 
@@ -1825,7 +2272,7 @@ suite('AppHostLaunchService', () => {
             editorSessions = [session];
             return [{ appHostPath }];
         });
-        service.setExternalAppHostStopper(async requestedPath => { stopRequests.push(requestedPath); });
+        service.setExternalAppHostStopper(async requested => { stopRequests.push(requested.operationPath); });
 
         const result = await service.stopAppHost(appHostPath, new vscode.CancellationTokenSource().token);
 
@@ -1859,7 +2306,7 @@ suite('AppHostLaunchService', () => {
         let signalStopStarted: (() => void) | undefined;
         const stopStarted = new Promise<void>(resolve => { signalStopStarted = resolve; });
         service.setRunningAppHostProvider(async () => [{ appHostPath }]);
-        service.setExternalAppHostStopper(async (_requestedPath, token) => {
+        service.setExternalAppHostStopper(async (_requested, token) => {
             signalStopStarted?.();
             await new Promise<void>((_resolve, reject) => {
                 token.onCancellationRequested(() => reject(new vscode.CancellationError()));
@@ -1879,8 +2326,8 @@ suite('AppHostLaunchService', () => {
         let resolveFirstStop: (() => void) | undefined;
         const stopRequests: string[] = [];
         service.setRunningAppHostProvider(async () => running ? [{ appHostPath }] : []);
-        service.setExternalAppHostStopper(async requestedPath => {
-            stopRequests.push(requestedPath);
+        service.setExternalAppHostStopper(async requested => {
+            stopRequests.push(requested.operationPath);
             if (stopRequests.length === 1) {
                 await new Promise<void>(resolve => { resolveFirstStop = resolve; });
                 running = false;
@@ -1985,6 +2432,22 @@ suite('AppHostLaunchService', () => {
             controller: 'editor',
             mode: 'run',
             providerKind: 'dotnet',
+            exitCodeBucket: 'none',
+        });
+    });
+
+    test('records failed Java AppHost launches with the Java provider kind', async () => {
+        const appHostPath = path.join(createAppHostDirectory('AppHost.java'), 'AppHost.java');
+        startDebuggingStub.resolves(false);
+
+        await assert.rejects(service.launch(appHostPath, 'run', true), /did not start the Aspire run session/);
+
+        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+            stage: 'cliLaunch',
+            category: 'unknown',
+            controller: 'editor',
+            mode: 'run',
+            providerKind: 'java',
             exitCodeBucket: 'none',
         });
     });

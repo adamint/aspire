@@ -12,13 +12,13 @@ import { nonInteractiveCliEnvironment } from '../utils/environment';
 import { getComparisonKey, isAppHostPathUnderFolder, isSameAppHostPath } from '../utils/paths/comparison';
 import { FileSystemEntryDescriptor, FileSystemEntryDescriptorIndex, getFileSystemEntryDescriptor } from '../utils/paths/fileSystemIdentity';
 import { shortenPath, shortenPaths } from '../utils/paths/shortening';
-import { compareAppHostIdentity } from '../utils/appHostIdentity';
-import { AppHostDisplayInfo, AspireCliFailedError, AspireCliParseError, DescribeSnapshotJson, isResourceNameMatch, ResourceCommandExecutionOutput, ResourceJson, ViewMode } from './appHostCliContracts';
+import { AppHostDisplayInfo, AspireCliFailedError, AspireCliParseError, DescribeSnapshotJson, ResourceCommandExecutionOutput, ResourceJson, ViewMode } from './appHostCliContracts';
 import { AppHostCliRunner, isDescribeUnsupportedOutput, isIncludeDisabledCommandsUnsupportedOutput, oneShotOutputBufferLimit, parseCliJsonOutput, RunCliCommandOptions } from './appHostCliRunner';
 import { isMatchingAppHostInstance, isMatchingAppHostPath, isPathInWorkspace } from './appHostPathMatching';
 import { AppHostPsPoller } from './appHostPsPoller';
 import { filterResourceCommandStatusOutput } from './resourceCommandStatusOutput';
 import { getCliPathTargetForUri } from '../utils/cliPathVariables';
+import { createAppHostOperationTarget, getCliPathTargetForAppHostOperation, type AppHostOperationTarget } from '../utils/appHostOperationTarget';
 
 export * from './appHostCliContracts';
 export { shortenPath, shortenPaths };
@@ -81,7 +81,6 @@ export class AppHostDataRepository {
     private static readonly _streamedCandidateUpdateDebounceMs = 50;
     private static readonly _streamedCandidateUpdateMaxWaitMs = 250;
     private static readonly _workspaceAppHostDiscoveryConcurrency = 4;
-    private static readonly _editorAssistanceResourceWaitMs = 10_000;
 
     private readonly _onDidChangeData = new vscode.EventEmitter<void>();
     readonly onDidChangeData = this._onDidChangeData.event;
@@ -90,7 +89,6 @@ export class AppHostDataRepository {
     private _viewMode: ViewMode = 'workspace';
     private _panelVisible = false;
     private _openAppHostPaths: readonly string[] = [];
-    private _editorAssistanceConsumers = 0;
     private _hasEverBeenDataActive = false;
 
     private readonly _configInfoProvider: ConfigInfoProvider;
@@ -463,7 +461,8 @@ export class AppHostDataRepository {
         const appHostList = await this.fetchRunningAppHostsOnce();
         const appHostsWithResources = await Promise.allSettled(appHostList.map(async appHost => ({
             ...appHost,
-            resources: await this.fetchAppHostResourcesOnce(appHost.appHostPath),
+            resources: await this.fetchAppHostResourcesOnce(
+                createAppHostOperationTarget(appHost.appHostPath, appHost.appHostPath)),
         })));
 
         return appHostsWithResources.map((result, index) => {
@@ -479,49 +478,22 @@ export class AppHostDataRepository {
         });
     }
 
-    async fetchAppHostResourcesOnce(appHostPath: string, cancellationToken?: vscode.CancellationToken): Promise<ResourceJson[]> {
+    /**
+     * Describes one AppHost.
+     *
+     * The operation runs against `appHost.operationPath` while the CLI it runs is resolved from
+     * `appHost.scopePath`. Callers that resolved an alias hand the physical file as the operation
+     * and the entry they named as the scope, so `aspire describe` cannot be redirected by a
+     * retarget and still resolves the CLI the owning workspace folder configured - which the
+     * physical path alone cannot answer when the workspace root is itself a symlink or a linked
+     * worktree, because that path can fall outside every open folder.
+     */
+    async fetchAppHostResourcesOnce(appHost: AppHostOperationTarget, cancellationToken?: vscode.CancellationToken): Promise<ResourceJson[]> {
         const snapshot = await this._runCliJson<DescribeSnapshotJson>(
             'aspire describe',
-            this._cliRunner.withNoLogo(['describe', '--format', 'json', '--apphost', appHostPath]),
-            { target: getCliPathTargetForUri(vscode.Uri.file(appHostPath)), cancellationToken });
+            this._cliRunner.withNoLogo(['describe', '--format', 'json', '--apphost', appHost.operationPath]),
+            { target: getCliPathTargetForAppHostOperation(appHost), cancellationToken });
         return snapshot.resources ?? [];
-    }
-
-    async getAppHostResources(
-        appHostPath: string,
-        resourceName: string,
-        waitForResource: boolean,
-        cancellationToken: vscode.CancellationToken): Promise<ResourceJson[]> {
-        if (cancellationToken.isCancellationRequested) {
-            throw new vscode.CancellationError();
-        }
-
-        const currentResources = this._getAppHostResources(appHostPath);
-        if (currentResources.some(resource => isResourceNameMatch(resource, resourceName))) {
-            return currentResources;
-        }
-        if (!waitForResource) {
-            return currentResources;
-        }
-
-        this._editorAssistanceConsumers++;
-        this._syncPolling();
-        try {
-            this.refreshRuntimeState();
-            const streamedResources = await this._waitForAppHostResources(appHostPath, resourceName, cancellationToken);
-            if (streamedResources.some(resource => isResourceNameMatch(resource, resourceName))) {
-                return streamedResources;
-            }
-
-            // Older supported CLIs do not emit the initial state from `describe --follow`.
-            // Keep the stream as the fast path, then use the existing one-shot command to
-            // distinguish an unchanged resource from an exact-name miss.
-            return await this.fetchAppHostResourcesOnce(appHostPath, cancellationToken);
-        }
-        finally {
-            this._editorAssistanceConsumers--;
-            this._syncPolling();
-        }
     }
 
     /**
@@ -607,68 +579,7 @@ export class AppHostDataRepository {
      * (visible or backgrounded).
      */
     private get _dataActive(): boolean {
-        return this._panelVisible || this._openAppHostPaths.length > 0 || this._editorAssistanceConsumers > 0;
-    }
-
-    private _getAppHostResources(appHostPath: string): ResourceJson[] {
-        const matchingStreams = Array.from(this._describeStreams.entries())
-            .filter(([currentAppHostPath]) => compareAppHostIdentity(currentAppHostPath, appHostPath) === 'same');
-        return matchingStreams.length === 1
-            ? Array.from(matchingStreams[0][1].resources.values())
-            : [];
-    }
-
-    private _waitForAppHostResources(
-        appHostPath: string,
-        resourceName: string,
-        cancellationToken: vscode.CancellationToken): Promise<ResourceJson[]> {
-        return new Promise((resolve, reject) => {
-            let completed = false;
-            let changeDisposable: vscode.Disposable | undefined;
-            let cancellationDisposable: vscode.Disposable | undefined;
-            let timeout: NodeJS.Timeout | undefined;
-
-            const finish = (resources?: ResourceJson[], error?: Error) => {
-                if (completed) {
-                    return;
-                }
-
-                completed = true;
-                changeDisposable?.dispose();
-                cancellationDisposable?.dispose();
-                if (timeout) {
-                    clearTimeout(timeout);
-                }
-
-                if (error) {
-                    reject(error);
-                }
-                else {
-                    resolve(resources ?? []);
-                }
-            };
-
-            const checkResources = () => {
-                if (cancellationToken.isCancellationRequested) {
-                    finish(undefined, new vscode.CancellationError());
-                    return;
-                }
-
-                const resources = this._getAppHostResources(appHostPath);
-                if (resources.some(resource => isResourceNameMatch(resource, resourceName))) {
-                    finish(resources);
-                }
-            };
-
-            changeDisposable = this.onDidChangeData(checkResources);
-            cancellationDisposable = cancellationToken.onCancellationRequested(
-                () => finish(undefined, new vscode.CancellationError()));
-            timeout = setTimeout(
-                () => finish(this._getAppHostResources(appHostPath)),
-                AppHostDataRepository._editorAssistanceResourceWaitMs);
-            timeout.unref();
-            checkResources();
-        });
+        return this._panelVisible || this._openAppHostPaths.length > 0;
     }
 
     private _syncPolling(refreshBeforeFollowOnResume = false): void {

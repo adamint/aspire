@@ -57,8 +57,30 @@ export async function openAspireView(): Promise<TreeSection> {
     }, 30000, `Timed out waiting for '${aspireAppHostsSectionTitle}' section. Visible sections: ${lastSectionTitles.join(', ') || '<none>'}.`);
 }
 
-export async function waitForTreeItem(section: TreeSection, label: string, timeoutMs = 30000): Promise<TreeItem> {
-    return await VSBrowser.instance.driver.wait(async () => {
+/**
+ * Switches the side bar away from the Aspire container so the AppHosts view is hidden.
+ *
+ * The extension keeps its `aspire describe --follow` resource streams alive only while this
+ * view is visible, so hiding it puts the repository back into the cold state a window that
+ * has never opened the view is in. Tests use it to prove a read-only surface answers from an
+ * authoritative read rather than from whatever a stream happened to leave behind.
+ */
+export async function hideAspireView(timeoutMs = 30000): Promise<void> {
+    await executeCommandFromPalette('workbench.view.explorer');
+    await VSBrowser.instance.driver.wait(async () => {
+        try {
+            const sections = await new SideBarView().getContent().getSections();
+            const titles = await Promise.all(sections.map(section => section.getTitle()));
+            return !titles.includes(aspireAppHostsSectionTitle);
+        }
+        catch (error) {
+            throwIfWebDriverSessionFailure(error);
+            return false;
+        }
+    }, timeoutMs, `Timed out waiting for the '${aspireAppHostsSectionTitle}' section to be hidden.`);
+}
+
+export async function waitForTreeItem(section: TreeSection, label: string, timeoutMs = 30000): Promise<TreeItem> {    return await VSBrowser.instance.driver.wait(async () => {
         try {
             const item = await section.findItem(label, 4);
             if (item) {

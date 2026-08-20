@@ -102,9 +102,22 @@ export function resolveExplicitDashboardLaunchBehavior(
 
   // `none` suppresses automatic launch; it is not a browser presentation. Explicit
   // handoff still honors any separately configured browser or notification preference,
-  // then falls back to the integrated browser.
+  // then falls back to the external browser rather than the integrated one: the model
+  // asked to open the Dashboard right now, so a user who left the setting unset or
+  // explicitly opted out of the automatic popup should still see a normal, full-featured
+  // browser tab instead of the more constrained Simple Browser. This matches the existing
+  // "open in browser" tree command, which always opens the Dashboard externally and never
+  // routes through this resolver at all.
+  //
+  // `source` here is provenance, not a presentation selector: it names the most specific
+  // layer the user actually configured and this fallback did not honor. The returned
+  // behavior is the same fixed fallback for all four cases, so the source can never change
+  // what is opened. Only a `notification` behavior feeds `source` into
+  // `openDashboardLaunchBehaviorSettings`, and that case has already returned above with the
+  // legacy setting that really selected it, so this fallback cannot send a user to a setting
+  // that does not control what they just saw.
   return {
-    behavior: 'integratedBrowser',
+    behavior: 'openExternalBrowser',
     source: debugPreference === 'none'
       ? 'debugConfiguration'
       : configuredPreference === 'none'

@@ -2,22 +2,23 @@ import * as vscode from 'vscode';
 import { AspireCommandType, AspireExtendedDebugConfiguration, type AspireResourceDebugSession } from '../dcp/types';
 import { appHostLifecycleIsolationCapabilityCouldNotBeVerified, appHostLifecycleIsolationModeNotSupported, startDebuggingDeclined } from '../loc/strings';
 import { ensureIsolatedCliArg, getRootIsolatedCliArg, isLinkedGitWorktree } from '../utils/gitWorktree';
-import { recordLaunchFailureForAppHostIdentity, type LaunchFailureCategory, type LaunchFailureMode, type LaunchFailureProviderKind } from './launchFailureJournal';
-import { compareAppHostIdentity, getAppHostIdentityKeyInfo, getOrCreateIdentityForCurrentAppHostTarget, isAppHostPathWithinDirectory, type AppHostIdentityKeyInfo, type AppHostIdentityRelation } from '../utils/appHostIdentity';
-import { classifyAppHostPath } from '../utils/appHostLanguage';
+import { getLaunchFailureProviderKindForAppHostPath, recordLaunchFailureForAppHostIdentity, type LaunchFailureCategory, type LaunchFailureMode } from './launchFailureJournal';
+import { bindCurrentAppHostTarget, compareAppHostIdentity, getAppHostIdentityKeyInfo, getOrCreateIdentityForCurrentAppHostTarget, isAppHostPathWithinDirectory, type AppHostIdentityKeyInfo, type AppHostIdentityRelation, type OpaqueAppHostIdentity } from '../utils/appHostIdentity';
+import { isSameAppHostPath } from '../utils/paths/comparison';
 import { classifyError, isCommandCancellation, sendTelemetryEvent, type EventProperties } from '../utils/telemetry';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
 import { CliPathResolutionTarget, getCliPathTargetForUri } from '../utils/cliPathVariables';
+import { createAppHostOperationTarget, type AppHostOperationTarget } from '../utils/appHostOperationTarget';
 import { appHostLaunchReservationIdConfigKey, appHostLaunchTokenConfigKey, appHostRestartSourceSessionIdConfigKey, appHostSelectionOriginConfigKey, appHostTelemetryTargetPathConfigKey, type AppHostSelectionOrigin } from '../debugger/AspireDebugConfigurationMetadata';
 import { isAspireDebugConfigurationExtensionOwned, markAspireDebugConfigurationAsExtensionOwned } from '../debugger/AspireDebugConfigurationProviderInternal';
-import { AppHostLifecycleLockTimeoutError, AppHostStopCancellationError, AppHostStopError, appHostLifecycleLockMaxHoldMs, appHostLifecycleLockWaitTimeoutMs, type AppHostDebugSessionTerminatedEvent, type AppHostEditorSessionSnapshot, type AppHostEditorSessions, type AppHostLaunchRequestedEvent, type AppHostLaunchSession, type AppHostStopResult, type RunningAppHost } from './appHostLaunchContracts';
+import { AppHostLaunchTargetChangedError, AppHostLifecycleLockTimeoutError, AppHostStopCancellationError, AppHostStopError, appHostLifecycleLockMaxHoldMs, appHostLifecycleLockWaitTimeoutMs, type AppHostDebugSessionTerminatedEvent, type AppHostEditorSessionSnapshot, type AppHostEditorSessions, type AppHostLaunchRequestedEvent, type AppHostLaunchSession, type AppHostLaunchTarget, type AppHostStopResult, type RunningAppHost } from './appHostLaunchContracts';
 import { AppHostLaunchReservations } from './appHostLaunchReservations';
 import { getLaunchTelemetryProperties, isE2eDebugLaunchSuppressed } from './appHostLaunchTelemetry';
 import { isolatedLaunchCapability, isolatedLaunchMinimumVersion, type CapabilityStatus } from '../types/configInfo';
 
-export { AppHostLifecycleLockTimeoutError, AppHostStopCancellationError, AppHostStopError, appHostLifecycleLockMaxHoldMs, appHostLifecycleLockWaitTimeoutMs, externalLaunchReservationTimeoutMs } from './appHostLaunchContracts';
-export type { AppHostDebugSessionTerminatedEvent, AppHostEditorSessionSnapshot, AppHostEditorSessions, AppHostLaunchRequestedEvent, AppHostLaunchSession, AppHostStopResult, RunningAppHost } from './appHostLaunchContracts';
+export { AppHostLaunchTargetChangedError, AppHostLifecycleLockTimeoutError, AppHostStopCancellationError, AppHostStopError, appHostLifecycleLockMaxHoldMs, appHostLifecycleLockWaitTimeoutMs, externalLaunchReservationTimeoutMs } from './appHostLaunchContracts';
+export type { AppHostDebugSessionTerminatedEvent, AppHostEditorSessionSnapshot, AppHostEditorSessions, AppHostLaunchRequestedEvent, AppHostLaunchSession, AppHostLaunchTarget, AppHostStopResult, RunningAppHost } from './appHostLaunchContracts';
 
 export interface AppHostLaunchCapabilityProvider {
     getCapabilityStatus(capability: string, options?: {
@@ -73,6 +74,24 @@ interface TrackedAppHostDebugSession {
     readonly session: AppHostLaunchSession;
 }
 
+/**
+ * One editor-owned `run` launch that is pending or active, with the AppHost identity captured
+ * when the launch was tracked.
+ *
+ * The identity is captured rather than re-derived on each query because a path is only a name:
+ * an alias repointed after the launch started resolves to a different file, which would move the
+ * launch onto an AppHost nothing was ever started against while the AppHost that is genuinely
+ * starting stopped being reported. The captured identity is bound to the file that was launched
+ * and cannot be changed afterwards; the physical path it was captured from is kept alongside it
+ * so the debug session that starts can be matched back to the launch that requested it without
+ * re-following a name that may have moved.
+ */
+interface TrackedRunLaunch {
+    readonly appHostPath: string;
+    readonly canonicalAppHostPath: string;
+    readonly appHostIdentity: OpaqueAppHostIdentity;
+}
+
 type AppHostTrackedSession = AppHostLaunchSession & {
     readonly isStopAttemptInProgress?: boolean;
     readonly isShuttingDown?: boolean;
@@ -100,10 +119,10 @@ export class AppHostLaunchService implements vscode.Disposable {
     private readonly _lifecycleCancellationSource = new vscode.CancellationTokenSource();
     private _getEditorSessions: () => readonly AppHostLaunchSession[] = () => [];
     private _getRunningAppHosts: (token: vscode.CancellationToken) => Promise<readonly RunningAppHost[]> = async () => [];
-    private _stopExternalAppHost: ((appHostPath: string, token: vscode.CancellationToken) => Promise<void>) | undefined;
+    private _stopExternalAppHost: ((target: AppHostOperationTarget, token: vscode.CancellationToken) => Promise<void>) | undefined;
     private _disposed = false;
-    private readonly _activeRunDebugSessionPaths = new Map<string, string>();
-    private readonly _pendingRunPathByToken = new Map<number, string>();
+    private readonly _activeRunLaunchBySessionId = new Map<string, TrackedRunLaunch>();
+    private readonly _pendingRunLaunchByToken = new Map<number, TrackedRunLaunch>();
     // Attempt correlation stays process-local. These tokens must never be projected into
     // the launch failure journal, telemetry, logs, tool results, or E2E state.
     private readonly _appHostPathAwaitingDebugStartByToken = new Map<number, string>();
@@ -123,8 +142,14 @@ export class AppHostLaunchService implements vscode.Disposable {
     constructor(private readonly _capabilityProvider: AppHostLaunchCapabilityProvider) {
         const startSubscription = vscode.debug.onDidStartDebugSession(session => {
             const launchToken = session.configuration?.[appHostLaunchTokenConfigKey];
+            // The pending entry is read before it is removed so the debug session inherits the
+            // identity captured when the launch was requested, instead of resolving the path
+            // again at a point an alias may already have been repointed.
+            const pendingLaunch = typeof launchToken === 'number'
+                ? this._pendingRunLaunchByToken.get(launchToken)
+                : undefined;
             if (typeof launchToken === 'number') {
-                this._pendingRunPathByToken.delete(launchToken);
+                this._pendingRunLaunchByToken.delete(launchToken);
             }
 
             const appHostPath = getDebugConfigurationAppHostPath(session.configuration);
@@ -135,17 +160,17 @@ export class AppHostLaunchService implements vscode.Disposable {
             if (appHostPath &&
                 session.configuration?.type === 'aspire' &&
                 getAspireDebugConfigurationCommand(session.configuration) === 'run') {
-                this._activeRunDebugSessionPaths.set(session.id, appHostPath);
+                this._activeRunLaunchBySessionId.set(session.id, createTrackedRunLaunch(appHostPath, pendingLaunch));
             }
         });
 
         // When a debug session terminates, clear launching state for that AppHost
         // so the tree reverts from "Starting..." if the launch failed or was cancelled.
         const terminateSubscription = vscode.debug.onDidTerminateDebugSession(session => {
-            this._activeRunDebugSessionPaths.delete(session.id);
+            this._activeRunLaunchBySessionId.delete(session.id);
             const launchToken = session.configuration?.[appHostLaunchTokenConfigKey];
             if (typeof launchToken === 'number') {
-                this._pendingRunPathByToken.delete(launchToken);
+                this._pendingRunLaunchByToken.delete(launchToken);
             }
 
             this._appHostDebugSessions.delete(session.id);
@@ -184,8 +209,8 @@ export class AppHostLaunchService implements vscode.Disposable {
         this._lifecycleLockPathKeys.clear();
         this._appHostDebugSessions.clear();
         this._reservations.dispose();
-        this._activeRunDebugSessionPaths.clear();
-        this._pendingRunPathByToken.clear();
+        this._activeRunLaunchBySessionId.clear();
+        this._pendingRunLaunchByToken.clear();
         this._appHostPathAwaitingDebugStartByToken.clear();
         this._launchTokensWithSpecificFailure.clear();
         this._onDidTerminateAppHostDebugSession.dispose();
@@ -208,7 +233,7 @@ export class AppHostLaunchService implements vscode.Disposable {
         this._getRunningAppHosts = provider;
     }
 
-    setExternalAppHostStopper(stopper: (appHostPath: string, token: vscode.CancellationToken) => Promise<void>): void {
+    setExternalAppHostStopper(stopper: (target: AppHostOperationTarget, token: vscode.CancellationToken) => Promise<void>): void {
         this._stopExternalAppHost = stopper;
     }
 
@@ -340,19 +365,30 @@ export class AppHostLaunchService implements vscode.Disposable {
     async stopAppHost(appHostPath: string, token: vscode.CancellationToken = this._lifecycleCancellationSource.token): Promise<AppHostStopResult> {
         throwIfCancelled(token);
 
-        return await this.runWithAppHostLifecycleLock(appHostPath, token, lockToken =>
-            this.stopAppHostFromLifecycleOwner(appHostPath, lockToken));
+        // The stop is bound once, before the lock is waited on, so the AppHost that is stopped is
+        // the one this call selected rather than whatever the name reaches after the wait.
+        const stopTarget = bindAppHostLaunchTarget(appHostPath);
+        return await this.runWithAppHostLifecycleLock(stopTarget.canonicalPath, token, lockToken =>
+            this.stopAppHostFromLifecycleOwner(stopTarget, lockToken));
     }
 
-    async stopAppHostFromLifecycleOwner(appHostPath: string, token: vscode.CancellationToken): Promise<AppHostStopResult> {
+    /**
+     * Stops an AppHost on behalf of a caller that already owns the lifecycle lock for it.
+     *
+     * The whole bound target is required rather than a path: the editor-session and running-CLI
+     * comparisons are made against the physical AppHost, while the external stop still has to run
+     * under the workspace folder the caller named so it resolves that folder's CLI.
+     */
+    async stopAppHostFromLifecycleOwner(stopTarget: AppHostLaunchTarget, token: vscode.CancellationToken): Promise<AppHostStopResult> {
         throwIfCancelled(token);
-        const initialEditorResult = await this.stopEditorAppHostIfControlled(appHostPath, token);
+        const appHostPath = stopTarget.canonicalPath;
+        const initialEditorResult = await this.stopEditorAppHostIfControlled(stopTarget, token);
         if (initialEditorResult) {
             return initialEditorResult;
         }
 
         const externalRelation = await this.getRunningAppHostRelation(appHostPath, token);
-        const currentEditorResult = await this.stopEditorAppHostIfControlled(appHostPath, token);
+        const currentEditorResult = await this.stopEditorAppHostIfControlled(stopTarget, token);
         if (currentEditorResult) {
             return currentEditorResult;
         }
@@ -369,8 +405,11 @@ export class AppHostLaunchService implements vscode.Disposable {
         }
 
         throwIfCancelled(token);
+        this.assertAppHostLaunchTargetCurrent(stopTarget);
         try {
-            await this._stopExternalAppHost(appHostPath, token);
+            await this._stopExternalAppHost(
+                createAppHostOperationTarget(stopTarget.canonicalPath, stopTarget.selectorPath),
+                token);
         }
         catch (error) {
             if (isCommandCancellation(error)) {
@@ -381,7 +420,8 @@ export class AppHostLaunchService implements vscode.Disposable {
         return { outcome: 'stopped', controller: 'external' };
     }
 
-    private async stopEditorAppHostIfControlled(appHostPath: string, token: vscode.CancellationToken): Promise<AppHostStopResult | undefined> {
+    private async stopEditorAppHostIfControlled(stopTarget: AppHostLaunchTarget, token: vscode.CancellationToken): Promise<AppHostStopResult | undefined> {
+        const appHostPath = stopTarget.canonicalPath;
         const editorSessions = this.getEditorRunSessions(appHostPath);
         if (editorSessions.sessions.length > 1 ||
             (editorSessions.sessions.length === 0 && editorSessions.ambiguous)) {
@@ -392,6 +432,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             const session = editorSessions.sessions[0];
             const noDebug = session.configuration.noDebug === true;
             throwIfCancelled(token);
+            this.assertAppHostLaunchTargetCurrent(stopTarget);
             try {
                 await session.stopDebugging();
             }
@@ -411,6 +452,12 @@ export class AppHostLaunchService implements vscode.Disposable {
         return this.isLaunching(appHostPath)
             ? { outcome: 'alreadyStarting', controller: 'editor' }
             : undefined;
+    }
+
+    private assertAppHostLaunchTargetCurrent(target: AppHostLaunchTarget): void {
+        if (getOrCreateIdentityForCurrentAppHostTarget(target.selectorPath) !== target.identity) {
+            throw new AppHostLaunchTargetChangedError();
+        }
     }
 
     private async getRunningAppHostRelation(appHostPath: string, token: vscode.CancellationToken): Promise<AppHostIdentityRelation> {
@@ -574,12 +621,19 @@ export class AppHostLaunchService implements vscode.Disposable {
     /**
      * Returns whether an editor-owned `run` launch is pending or active for this AppHost.
      *
+     * The comparison is made only against the identity each launch captured, never against a
+     * stored path. Matching paths as well would answer for the AppHost a name used to mean:
+     * after an alias is repointed, a caller naming that alias is asking about the file it names
+     * now, and nothing was started against that file. Equivalent spellings of the AppHost that
+     * *was* launched - the same file named differently, or the sibling of a single
+     * project/source pair - still resolve to the captured identity, so they keep their answer.
+     *
      * This intentionally exposes only a boolean. Editor-assistance callers do not need
      * launch arguments, configurations, or debug session identifiers.
      */
     hasPendingOrActiveRunLaunch(appHostPath: string): boolean {
-        return [...this._pendingRunPathByToken.values(), ...this._activeRunDebugSessionPaths.values()]
-            .some(runPath => compareAppHostIdentity(runPath, appHostPath) === 'same') ||
+        const requestedIdentity = getOrCreateIdentityForCurrentAppHostTarget(appHostPath);
+        return this.getTrackedRunLaunches().some(launch => launch.appHostIdentity === requestedIdentity) ||
             this._reservations.hasPendingExternalRunLaunch(appHostPath);
     }
 
@@ -670,15 +724,21 @@ export class AppHostLaunchService implements vscode.Disposable {
                     throw new vscode.CancellationError();
                 }
 
-                if (!this.tryReserveLaunch(appHostPath)) {
+                // The AppHost is resolved once, inside the lock, and the claim is made against the
+                // physical AppHost that resolution selected. Claiming the selector instead would
+                // let a retarget between the claim and the launch leave the claim on one AppHost
+                // while the launch belongs to another, which would report an AppHost as starting
+                // that nothing is starting.
+                const launchTarget = bindAppHostLaunchTarget(appHostPath);
+                if (!this.tryReserveLaunch(launchTarget.canonicalPath)) {
                     throw new vscode.CancellationError();
                 }
 
-                await this.launchCore(appHostPath, command, noDebug, doStep, 'user-selection', launchToken, lockToken, undefined, target, cliPath);
+                await this.launchCore(launchTarget, command, noDebug, doStep, 'user-selection', launchToken, lockToken, undefined, target, cliPath);
             });
         }
         catch (error) {
-            this._pendingRunPathByToken.delete(launchToken);
+            this._pendingRunLaunchByToken.delete(launchToken);
             throw error;
         }
         finally {
@@ -686,19 +746,38 @@ export class AppHostLaunchService implements vscode.Disposable {
         }
     }
 
-    async launchFromLifecycleOwner(appHostPath: string, command: 'run', noDebug: boolean, isolated: boolean | undefined, token: vscode.CancellationToken): Promise<AppHostLaunchIsolation | undefined> {
+    /**
+     * Launches on behalf of a caller that resolved the AppHost and owns the lifecycle lock for it.
+     *
+     * The caller's own binding is used as-is. Re-resolving here would discard the selector the
+     * caller confirmed - the only value a retarget can be detected against - and would re-follow
+     * a name the caller already resolved, so a launch could commit against an AppHost that was
+     * never confirmed while every later check compared the physical path with itself.
+     */
+    async launchFromLifecycleOwner(launchTarget: AppHostLaunchTarget, command: 'run', noDebug: boolean, isolated: boolean | undefined, token: vscode.CancellationToken): Promise<AppHostLaunchIsolation | undefined> {
         if (this._disposed) {
             throw new vscode.CancellationError();
         }
 
         // The CLI treats this origin as invocation-scoped: an agent-selected target may
         // establish a missing default, but must not replace an existing workspace choice.
-        const launchToken = this.trackPendingRun(appHostPath, command);
+        const launchToken = this.trackPendingRun(launchTarget.selectorPath, command);
         try {
-            return await this.launchCore(appHostPath, command, noDebug, undefined, 'explicit-launch-configuration', launchToken, token, isolated, undefined, undefined, 'linked-worktree-default');
+            return await this.launchCore(
+                launchTarget,
+                command,
+                noDebug,
+                undefined,
+                'explicit-launch-configuration',
+                launchToken,
+                token,
+                isolated,
+                undefined,
+                undefined,
+                'linked-worktree-default');
         }
         catch (error) {
-            this._pendingRunPathByToken.delete(launchToken);
+            this._pendingRunLaunchByToken.delete(launchToken);
             throw error;
         }
         finally {
@@ -792,7 +871,7 @@ export class AppHostLaunchService implements vscode.Disposable {
     }
 
     private async launchCore(
-        appHostPath: string,
+        launchTarget: AppHostLaunchTarget,
         command: AspireCommandType,
         noDebug: boolean,
         doStep: string | undefined,
@@ -810,8 +889,29 @@ export class AppHostLaunchService implements vscode.Disposable {
         // The tree also shows "Starting..." from here, and every pre-start failure path
         // clears it because VS Code emits no terminate event for a launch that never
         // started. See https://code.visualstudio.com/api/references/vscode-api#debug.startDebugging
-        const reservationId = this.reserveLaunch(appHostPath);
-        const appHostIdentity = getOrCreateIdentityForCurrentAppHostTarget(appHostPath);
+        //
+        // The caller resolved this AppHost once, before entering, into the selector it named and
+        // the physical file that selector pointed at. Everything this launch does - the
+        // reservation, the CLI gate, the isolation negotiation, and the configuration handed to
+        // `startDebugging` - is addressed to that file rather than to the selector, which may be
+        // an alias another process can repoint while those steps are in flight. The selector is
+        // still what the display renders and what is checked again before the launch commits.
+        const appHostPath = launchTarget.selectorPath;
+        const canonicalAppHostPath = launchTarget.canonicalPath;
+        const appHostIdentity = launchTarget.identity;
+        // Which CLI runs, and whose settings apply, is a scope question about the path the caller
+        // named: it decides which workspace folder's `aspire.cliPath` and capability data are
+        // used, not which AppHost is started. It is computed once here and passed explicitly to
+        // every step below, because the bound physical path can resolve outside every open folder
+        // - a symlinked root or a linked worktree - and letting a step derive scope from it would
+        // silently fall back to window settings, or to another root's settings in a multi-root
+        // workspace, and run a different `aspire` than the folder configured.
+        const scopeTarget = target ?? getCliPathTargetForUri(vscode.Uri.file(appHostPath));
+        const reservationId = this.reserveLaunch(canonicalAppHostPath);
+        // The pending entry was tracked before the lifecycle lock was taken, so it is rebound to
+        // the AppHost this attempt actually launches. Reporting one AppHost as starting while
+        // another one is started is the same misattribution this binding exists to prevent.
+        this.rebindPendingRun(launchToken, launchTarget);
         // Everything between the reservation and the main try/catch below has to release
         // the reservation itself, otherwise a cancelled or failed launch would leave this
         // AppHost permanently reported as launching.
@@ -820,7 +920,7 @@ export class AppHostLaunchService implements vscode.Disposable {
                 return;
             }
 
-            this.clearLaunching(appHostPath);
+            this.clearLaunching(canonicalAppHostPath);
             throw new vscode.CancellationError();
         };
         const releaseReservationOnFailure = async <T>(work: () => Promise<T>): Promise<T> => {
@@ -829,32 +929,34 @@ export class AppHostLaunchService implements vscode.Disposable {
                 return await work();
             }
             catch (error) {
-                this.clearLaunching(appHostPath);
+                this.clearLaunching(canonicalAppHostPath);
                 throw error;
             }
         };
         const startTime = Date.now();
         const executionSuppressed = isE2eDebugLaunchSuppressed();
         if (executionSuppressed) {
-            this._pendingRunPathByToken.delete(launchToken);
+            this._pendingRunLaunchByToken.delete(launchToken);
         }
 
         let telemetryProperties: Awaited<ReturnType<typeof getLaunchTelemetryProperties>>;
         try {
             telemetryProperties = await releaseReservationOnFailure(
-                () => getLaunchTelemetryProperties(appHostPath, command, noDebug, executionSuppressed));
+                () => getLaunchTelemetryProperties(canonicalAppHostPath, command, noDebug, executionSuppressed));
             abortIfCancelled();
         }
         catch (err) {
-            this._pendingRunPathByToken.delete(launchToken);
+            this._pendingRunLaunchByToken.delete(launchToken);
             throw err;
         }
 
         const config: AspireExtendedDebugConfiguration = {
             type: 'aspire',
-            name: `Aspire ${command}: ${vscode.workspace.asRelativePath(appHostPath)}`,
+            // The name is presentation, so it keeps the selector: it is workspace-relative for
+            // the path the caller named, while the bound path can resolve outside the workspace.
+            name: `Aspire ${command}: ${launchTarget.displayPath}`,
             request: 'launch',
-            program: appHostPath,
+            program: canonicalAppHostPath,
             command,
             noDebug,
             [appHostSelectionOriginConfigKey]: selectionOrigin,
@@ -878,8 +980,8 @@ export class AppHostLaunchService implements vscode.Disposable {
         abortIfCancelled();
         if (executionSuppressed) {
             await releaseReservationOnFailure(
-                () => this.prepareLaunchArguments(appHostPath, command, config.args, token, undefined, target, isolated, isolationPolicy));
-            this.clearMatchingLaunching(appHostPath, reservationId);
+                () => this.prepareLaunchArguments(canonicalAppHostPath, command, config.args, token, undefined, scopeTarget, isolated, isolationPolicy));
+            this.clearMatchingLaunching(canonicalAppHostPath, reservationId);
             sendTelemetryEvent('aspire/vscode/apphost/launch/result', {
                 ...telemetryProperties,
                 outcome: 'suppressed',
@@ -895,7 +997,7 @@ export class AppHostLaunchService implements vscode.Disposable {
         try {
             let resolvedCliPath = cliPath;
             if (!resolvedCliPath) {
-                const cliAvailability = await checkCliAvailableOrRedirect('debug_gate', target ?? getCliPathTargetForUri(vscode.Uri.file(appHostPath)));
+                const cliAvailability = await checkCliAvailableOrRedirect('debug_gate', scopeTarget);
                 if (!cliAvailability.available) {
                     failureCategory = 'cliUnavailable';
                     throw new vscode.CancellationError();
@@ -905,12 +1007,12 @@ export class AppHostLaunchService implements vscode.Disposable {
             throwIfCancelled(token);
             config.skipCliAvailabilityCheck = true;
             const launchPreparation = await this.prepareLaunchArguments(
-                appHostPath,
+                canonicalAppHostPath,
                 command,
                 config.args,
                 token,
                 resolvedCliPath,
-                target,
+                scopeTarget,
                 isolated,
                 isolationPolicy);
             if (launchPreparation.args === undefined) {
@@ -921,7 +1023,16 @@ export class AppHostLaunchService implements vscode.Disposable {
             }
             config.resolvedCliPath = resolvedCliPath;
 
-            this._appHostPathAwaitingDebugStartByToken.set(launchToken, appHostPath);
+            // Last check before the launch becomes irreversible: the selector must still name the
+            // AppHost this attempt was bound to. Everything above was awaited, so the entry the
+            // caller chose can have been replaced in the meantime, and starting anyway would run
+            // an AppHost the caller never selected - or the one they did select while the tree,
+            // the journal, and the tools all attribute it to something else. The configuration
+            // already carries the bound physical path, so a retarget after this point can no
+            // longer redirect the process VS Code starts.
+            this.assertAppHostLaunchTargetCurrent(launchTarget);
+
+            this._appHostPathAwaitingDebugStartByToken.set(launchToken, canonicalAppHostPath);
             const started = await vscode.debug.startDebugging(undefined, config);
             if (!started) {
                 // A false result means VS Code declined the launch before the
@@ -941,8 +1052,8 @@ export class AppHostLaunchService implements vscode.Disposable {
             });
             return launchPreparation.isolation;
         } catch (err) {
-            this._pendingRunPathByToken.delete(launchToken);
-            this.clearMatchingLaunching(appHostPath, reservationId);
+            this._pendingRunLaunchByToken.delete(launchToken);
+            this.clearMatchingLaunching(canonicalAppHostPath, reservationId);
             const hasSpecificFailureForAttempt = this._launchTokensWithSpecificFailure.delete(launchToken);
             if (!hasSpecificFailureForAttempt) {
                 recordLaunchFailureForAppHostIdentity(appHostIdentity, {
@@ -950,7 +1061,7 @@ export class AppHostLaunchService implements vscode.Disposable {
                     category: failureCategory,
                     controller: 'editor',
                     mode: getLaunchFailureMode(command, noDebug),
-                    providerKind: getAppHostProviderKind(appHostPath),
+                    providerKind: getLaunchFailureProviderKindForAppHostPath(canonicalAppHostPath),
                     error: err,
                 });
             }
@@ -974,19 +1085,96 @@ export class AppHostLaunchService implements vscode.Disposable {
         this._launchTokensWithSpecificFailure.delete(launchToken);
     }
 
+    private getTrackedRunLaunches(): readonly TrackedRunLaunch[] {
+        return [...this._pendingRunLaunchByToken.values(), ...this._activeRunLaunchBySessionId.values()];
+    }
+
+    /**
+     * Reports whether anything might still be running this AppHost, so the tree is not told an
+     * AppHost stopped while another attempt for it is in flight.
+     *
+     * This keeps the current-path relation - including `ambiguous` - because it decides whether to
+     * *withhold* a "stopping" claim: an association that cannot be disproven has to count. The
+     * captured identity is checked as well, so a launch whose alias was repointed still answers
+     * for the file it was actually started against.
+     */
     private hasPendingOrActiveRunDebugSession(appHostPath: string): boolean {
-        return [...this._pendingRunPathByToken.values(), ...this._activeRunDebugSessionPaths.values()]
-            .some(runPath => compareAppHostIdentity(runPath, appHostPath) !== 'different');
+        const requestedIdentity = getOrCreateIdentityForCurrentAppHostTarget(appHostPath);
+        return this.getTrackedRunLaunches().some(launch =>
+            launch.appHostIdentity === requestedIdentity ||
+            compareAppHostIdentity(launch.appHostPath, appHostPath) !== 'different');
     }
 
     private trackPendingRun(appHostPath: string, command: AspireCommandType): number {
         const launchToken = ++this._nextLaunchToken;
         if (command === 'run' && !isE2eDebugLaunchSuppressed()) {
-            this._pendingRunPathByToken.set(launchToken, appHostPath);
+            this._pendingRunLaunchByToken.set(launchToken, createTrackedRunLaunch(appHostPath));
         }
 
         return launchToken;
     }
+
+    /**
+     * Moves an already tracked pending `run` launch onto the AppHost the launch was bound to.
+     *
+     * The pending entry is created when the launch is requested, which is before the lifecycle
+     * lock is waited on. An alias repointed during that wait would leave the tree and the
+     * editor-assistance surfaces reporting the AppHost that was named at request time while the
+     * launch that follows belongs to a different one.
+     */
+    private rebindPendingRun(launchToken: number, launchTarget: AppHostLaunchTarget): void {
+        if (!this._pendingRunLaunchByToken.has(launchToken)) {
+            return;
+        }
+
+        this._pendingRunLaunchByToken.set(launchToken, {
+            appHostPath: launchTarget.selectorPath,
+            canonicalAppHostPath: launchTarget.canonicalPath,
+            appHostIdentity: launchTarget.identity,
+        });
+    }
+}
+
+/**
+ * Captures the AppHost a lifecycle operation will act on: the name the caller used, the physical
+ * file that name currently selects, and the identity both were captured under.
+ *
+ * Callers bind once - before waiting on the lifecycle lock, or before confirming with a user -
+ * and then carry the whole value. That is what lets every later step act on the AppHost that was
+ * chosen while still detecting that the name stopped pointing at it.
+ */
+export function bindAppHostLaunchTarget(appHostPath: string): AppHostLaunchTarget {
+    const binding = bindCurrentAppHostTarget(appHostPath);
+    return {
+        selectorPath: appHostPath,
+        canonicalPath: binding.canonicalPath,
+        identity: binding.identity,
+        displayPath: vscode.workspace.asRelativePath(appHostPath),
+    };
+}
+
+/**
+ * Binds a `run` launch to the AppHost identity in effect when it was tracked.
+ *
+ * A launch that already captured an identity keeps it: the debug session that starts belongs to
+ * the launch that requested it, so resolving the path a second time could only replace a correct
+ * capture with whatever the path names by then. The configuration's path is matched against the
+ * physical path the pending launch was bound to, because that comparison is lexical and is
+ * therefore the one comparison a retarget cannot influence.
+ */
+function createTrackedRunLaunch(appHostPath: string, pendingLaunch?: TrackedRunLaunch): TrackedRunLaunch {
+    if (pendingLaunch &&
+        (isSameAppHostPath(pendingLaunch.canonicalAppHostPath, appHostPath) ||
+            isSameAppHostPath(pendingLaunch.appHostPath, appHostPath))) {
+        return pendingLaunch;
+    }
+
+    const binding = bindCurrentAppHostTarget(appHostPath);
+    return {
+        appHostPath,
+        canonicalAppHostPath: binding.canonicalPath,
+        appHostIdentity: binding.identity,
+    };
 }
 
 function getLaunchFailureMode(command: AspireCommandType, noDebug: boolean): LaunchFailureMode {
@@ -1000,18 +1188,6 @@ function getLaunchFailureMode(command: AspireCommandType, noDebug: boolean): Lau
     return 'other';
 }
 
-function getAppHostProviderKind(appHostPath: string): LaunchFailureProviderKind {
-    switch (classifyAppHostPath(appHostPath)) {
-        case 'csharp':
-            return 'dotnet';
-        case 'typescript':
-            return 'node';
-        case 'rust':
-            return 'rust';
-        default:
-            return 'other';
-    }
-}
 
 function throwIfCancelled(token: vscode.CancellationToken): void {
     if (token.isCancellationRequested) {

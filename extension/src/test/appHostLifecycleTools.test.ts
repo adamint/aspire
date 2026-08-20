@@ -22,9 +22,9 @@ import {
     type AppHostLifecycleRunningAppHost,
     type AppHostLifecycleToolResult,
 } from '../lm/appHostLifecycleTools';
-import { AppHostLifecycleLockTimeoutError, AppHostStopCancellationError, AppHostStopError, type AppHostStopResult } from '../services/AppHostLaunchService';
+import { AppHostLifecycleLockTimeoutError, AppHostStopCancellationError, AppHostStopError, type AppHostLaunchTarget, type AppHostStopResult } from '../services/AppHostLaunchService';
 import { type CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
-import { compareAppHostIdentity, type AppHostIdentityRelation } from '../utils/appHostIdentity';
+import { compareAppHostIdentity, getOrCreateIdentityForCurrentAppHostTarget, type AppHostIdentityRelation } from '../utils/appHostIdentity';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { SafeAppHostTargetResolver } from '../lm/safeAppHostTargetResolver';
 import { resolveIsolated } from '../utils/gitWorktree';
@@ -40,6 +40,9 @@ interface LaunchCall {
 
 class FakeLaunchService implements AppHostLifecycleLaunchService {
     readonly launchCalls: LaunchCall[] = [];
+    /** The whole bound target each launch/stop received, so tests can assert what was carried. */
+    readonly launchTargets: AppHostLaunchTarget[] = [];
+    readonly stopTargets: AppHostLaunchTarget[] = [];
     readonly launchInputIsolations: Array<boolean | undefined> = [];
     readonly stopCalls: string[] = [];
     launchingPaths = new Set<string>();
@@ -185,7 +188,11 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
         return { effective: false, option: undefined };
     }
 
-    async launchFromLifecycleOwner(appHostPath: string, command: 'run', noDebug: boolean, isolated: boolean | undefined, token: vscode.CancellationToken): Promise<{ effective: boolean; option: boolean | undefined }> {
+    async launchFromLifecycleOwner(launchTarget: AppHostLaunchTarget, command: 'run', noDebug: boolean, isolated: boolean | undefined, token: vscode.CancellationToken): Promise<{ effective: boolean; option: boolean | undefined }> {
+        this.launchTargets.push(launchTarget);
+        // Production performs the launch against the bound physical AppHost, so the fake keeps
+        // recording that path as the launched one.
+        const appHostPath = launchTarget.canonicalPath;
         this.launchInputIsolations.push(isolated);
         this.onBeforeLaunch?.();
         const launchIsolation = await this.resolveLaunchIsolation(appHostPath, isolated, token);
@@ -213,11 +220,19 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
     }
 
     async stopAppHost(appHostPath: string, token: vscode.CancellationToken): Promise<AppHostStopResult> {
+        const stopTarget: AppHostLaunchTarget = {
+            selectorPath: appHostPath,
+            canonicalPath: appHostPath,
+            identity: getOrCreateIdentityForCurrentAppHostTarget(appHostPath),
+            displayPath: vscode.workspace.asRelativePath(appHostPath),
+        };
         return await this.runWithAppHostLifecycleLock(appHostPath, token, lockToken =>
-            this.stopAppHostFromLifecycleOwner(appHostPath, lockToken));
+            this.stopAppHostFromLifecycleOwner(stopTarget, lockToken));
     }
 
-    async stopAppHostFromLifecycleOwner(appHostPath: string, token: vscode.CancellationToken): Promise<AppHostStopResult> {
+    async stopAppHostFromLifecycleOwner(stopTarget: AppHostLaunchTarget, token: vscode.CancellationToken): Promise<AppHostStopResult> {
+        this.stopTargets.push(stopTarget);
+        const appHostPath = stopTarget.canonicalPath;
         this.stopCalls.push(appHostPath);
         if (this.stopError) {
             throw this.stopError;
@@ -408,6 +423,44 @@ suite('AppHost lifecycle language model tools', () => {
         removeDirectorySafely(workspaceRoot);
         removeDirectorySafely(outsideRoot);
     });
+
+    /**
+     * Registers one registry entry that is a symlink, plus the two AppHosts it can point at.
+     *
+     * Returns `undefined` when the platform refuses to create the link, which is how the tests
+     * that need a retargetable selector skip on a Windows agent without developer mode.
+     */
+    function createRetargetableAlias(): {
+        readonly firstProject: string;
+        readonly secondProject: string;
+        readonly aliasProject: string;
+        readonly retargetTo: (target: string) => void;
+    } | undefined {
+        const directory = path.join(workspaceRoot, 'Aliased');
+        fs.mkdirSync(directory, { recursive: true });
+        const firstProject = path.join(directory, 'First.csproj');
+        const secondProject = path.join(directory, 'Second.csproj');
+        const aliasProject = path.join(directory, 'Alias.csproj');
+        fs.writeFileSync(firstProject, appHostProjectContents);
+        fs.writeFileSync(secondProject, appHostProjectContents);
+        try {
+            fs.symlinkSync(firstProject, aliasProject);
+        }
+        catch {
+            return undefined;
+        }
+
+        discoveryService.registeredPaths.push(aliasProject);
+        return {
+            firstProject,
+            secondProject,
+            aliasProject,
+            retargetTo: (target: string) => {
+                fs.rmSync(aliasProject, { force: true });
+                fs.symlinkSync(target, aliasProject);
+            },
+        };
+    }
 
     suite('manifest and localization', () => {
         test('contributes both AppHost lifecycle tools with localized, schema-bound definitions', () => {
@@ -895,6 +948,71 @@ suite('AppHost lifecycle language model tools', () => {
     });
 
     suite('start behavior', () => {
+        test('carries the confirmed selector and the AppHost it was bound to into the launch', async function () {
+            // The launch needs both halves: the physical AppHost it runs, and the selector it is
+            // validated against and scoped by. Handing it only the physical path would leave the
+            // launch's own pre-start freshness check comparing that path with itself, and would
+            // resolve the CLI from a path that can sit outside every open workspace folder.
+            const alias = createRetargetableAlias();
+            if (!alias) {
+                this.skip();
+                return;
+            }
+
+            const result = await service.start({ appHostPath: 'Aliased/Alias.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'started');
+            assert.strictEqual(result.appHostPath, 'Aliased/Alias.csproj');
+            assert.deepStrictEqual(launchService.launchTargets, [{
+                selectorPath: alias.aliasProject,
+                canonicalPath: fs.realpathSync.native(alias.firstProject),
+                identity: launchService.launchTargets[0]?.identity,
+                displayPath: 'Aliased/Alias.csproj',
+            }]);
+            assert.strictEqual(
+                launchService.launchTargets[0].identity,
+                new SafeAppHostTargetResolver(discoveryService).getIdentityForAppHostPath(alias.firstProject));
+        });
+
+        test('keeps the launch on the AppHost it captured when the selector moves during the launch', async function () {
+            // The retarget lands after ownership was taken and while the launch is running, which
+            // is the window a captured physical path exists for. Whatever the name reaches now,
+            // the launch has to stay on the file the caller confirmed.
+            const alias = createRetargetableAlias();
+            if (!alias) {
+                this.skip();
+                return;
+            }
+
+            const canonicalFirstProject = fs.realpathSync.native(alias.firstProject);
+            launchService.onBeforeLaunch = () => alias.retargetTo(alias.secondProject);
+
+            const result = await service.start({ appHostPath: 'Aliased/Alias.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'started');
+            assert.deepStrictEqual(launchService.launchTargets.map(target => target.canonicalPath), [canonicalFirstProject]);
+            assert.deepStrictEqual(launchService.launchCalls.map(call => call.appHostPath), [canonicalFirstProject]);
+        });
+
+        test('refuses to start when the confirmed selector names a different AppHost by the time ownership is taken', async function () {
+            // The caller confirmed one AppHost. Resolution runs again inside the lifecycle lock,
+            // and if the selector has been repointed in between, launching the entry it names
+            // now would start an AppHost nobody approved under the identity that was approved.
+            const alias = createRetargetableAlias();
+            if (!alias) {
+                this.skip();
+                return;
+            }
+
+            launchService.onLifecycleLockHeld = () => alias.retargetTo(alias.secondProject);
+
+            const result = await service.start({ appHostPath: 'Aliased/Alias.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'failed');
+            assert.deepStrictEqual(launchService.launchCalls, []);
+            assert.strictEqual(launchService.launchingPaths.size, 0);
+        });
+
         test('maps run mode to a non-debug aspire run launch', async () => {
             const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
 
@@ -1426,6 +1544,47 @@ suite('AppHost lifecycle language model tools', () => {
     });
 
     suite('stop behavior', () => {
+        test('carries the confirmed selector and the AppHost it was bound to into the stop', async function () {
+            const alias = createRetargetableAlias();
+            if (!alias) {
+                this.skip();
+                return;
+            }
+
+            launchService.runningAppHosts = [{ appHostPath: alias.firstProject }];
+
+            const result = await service.stop({ appHostPath: 'Aliased/Alias.csproj' }, new vscode.CancellationTokenSource().token);
+
+            assert.deepStrictEqual(
+                { outcome: result.outcome, controller: result.controller },
+                { outcome: 'stopped', controller: 'external' });
+            assert.deepStrictEqual(launchService.stopTargets.map(target => ({
+                selectorPath: target.selectorPath,
+                canonicalPath: target.canonicalPath,
+                displayPath: target.displayPath,
+            })), [{
+                selectorPath: alias.aliasProject,
+                canonicalPath: fs.realpathSync.native(alias.firstProject),
+                displayPath: 'Aliased/Alias.csproj',
+            }]);
+        });
+
+        test('refuses to stop when the confirmed selector names a different AppHost by the time ownership is taken', async function () {
+            const alias = createRetargetableAlias();
+            if (!alias) {
+                this.skip();
+                return;
+            }
+
+            launchService.runningAppHosts = [{ appHostPath: alias.firstProject }, { appHostPath: alias.secondProject }];
+            launchService.onLifecycleLockHeld = () => alias.retargetTo(alias.secondProject);
+
+            const result = await service.stop({ appHostPath: 'Aliased/Alias.csproj' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'failed');
+            assert.deepStrictEqual(launchService.stopCalls, []);
+        });
+
         test('stops only the matching editor-owned session', async () => {
             const otherAppHost = path.join(workspaceRoot, 'AppHost', 'Other.csproj');
             fs.writeFileSync(otherAppHost, appHostProjectContents);
@@ -1842,6 +2001,7 @@ suite('AppHost lifecycle language model tools', () => {
                 resolved: true,
                 target: {
                     absolutePath: appHostProjectPath,
+                    canonicalPath: fs.realpathSync.native(appHostProjectPath),
                     relativePath: 'Injected/AppHost.csproj',
                     displayPath: 'Injected/AppHost.csproj',
                     identity: injectedResolver.getIdentityForAppHostPath(appHostProjectPath),
@@ -1918,6 +2078,28 @@ suite('AppHost lifecycle language model tools', () => {
             assert.strictEqual(payload.appHostPath, 'AppHost/AppHost.csproj');
             assert.strictEqual(JSON.stringify(payload).includes(workspaceRoot), false);
             assert.strictEqual(JSON.stringify(payload).includes(realWorkspaceRoot), false);
+        });
+
+        test('a resolved aliased target never exposes its canonical path to the model', async function () {
+            const alias = createRetargetableAlias();
+            if (!alias) {
+                this.skip();
+                return;
+            }
+
+            const canonicalPath = fs.realpathSync.native(alias.firstProject);
+            const tool = new AppHostStartLanguageModelTool(service);
+
+            const result = await tool.invoke(
+                { input: { appHostPath: 'Aliased/Alias.csproj', mode: 'run' }, toolInvocationToken: undefined },
+                new vscode.CancellationTokenSource().token);
+            const payload = readToolResultPayload(result);
+            const serialized = JSON.stringify(payload);
+
+            assert.strictEqual(payload.appHostPath, 'Aliased/Alias.csproj');
+            assert.strictEqual(serialized.includes(canonicalPath), false);
+            assert.strictEqual(serialized.includes(path.dirname(alias.firstProject)), false);
+            assert.strictEqual(Object.prototype.hasOwnProperty.call(payload, 'canonicalPath'), false);
         });
 
         test('stop returns only bounded, non-sensitive fields', async () => {

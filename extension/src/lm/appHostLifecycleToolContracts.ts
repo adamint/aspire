@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 
 import { type CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
 import { type AppHostIdentityRelation } from '../utils/appHostIdentity';
-import { type AppHostEditorSessionSnapshot, type AppHostLaunchIsolation, type AppHostStopResult } from '../services/AppHostLaunchService';
+import { type AppHostEditorSessionSnapshot, type AppHostLaunchIsolation, type AppHostLaunchTarget, type AppHostStopResult } from '../services/AppHostLaunchService';
 
 /**
  * Names of the contributed language model tools. These must match the `name`
@@ -82,19 +82,21 @@ export interface AppHostLifecycleToolResult {
 }
 
 /**
- * Narrow view of `AppHostLaunchService` shared by editor-assistance surfaces that only
- * need to summarize or correlate editor-owned AppHost sessions.
+ * Narrow view of `AppHostLaunchService` shared by editor-assistance surfaces that
+ * summarize editor-owned sessions and correlate them with the bounded running registry.
  *
  * `getEditorRunSessions` preserves the same path-comparison semantics the lifecycle
  * tools already depend on, while `getEditorSessions` exposes a bounded, safe projection
  * for callers that need to distinguish non-`run` sessions without inheriting VS Code's
  * raw session identifiers or full launch configurations. Pending launch state is exposed
  * only for `run`, so publish/deploy/do reservations cannot look like AppHost startup.
+ * Running AppHosts expose only their path identity, never process or endpoint details.
  */
 export interface AppHostEditorStateLaunchService {
     hasPendingOrActiveRunLaunch(appHostPath: string): boolean;
     getEditorRunSessions(appHostPath: string): AppHostLifecycleEditorSessions;
     getEditorSessions(): readonly AppHostEditorSessionSnapshot[];
+    getRunningAppHosts(token: vscode.CancellationToken): Promise<readonly AppHostLifecycleRunningAppHost[]>;
 }
 
 /**
@@ -110,13 +112,21 @@ export interface AppHostLifecycleLaunchService extends AppHostEditorStateLaunchS
      */
     tryReserveLaunch(appHostPath: string): boolean;
     clearLaunching(appHostPath: string): void;
-    getRunningAppHosts(token: vscode.CancellationToken): Promise<readonly AppHostLifecycleRunningAppHost[]>;
     compareAppHostIdentity(left: string | undefined, right: string | undefined): AppHostIdentityRelation;
     runWithAppHostLifecycleLock<T>(appHostPath: string, token: vscode.CancellationToken, action: (token: vscode.CancellationToken) => Promise<T>): Promise<T>;
     resolveLaunchIsolation(appHostPath: string, isolated: boolean | undefined, token: vscode.CancellationToken): Promise<AppHostLaunchIsolation>;
-    launchFromLifecycleOwner(appHostPath: string, command: 'run', noDebug: boolean, isolated: boolean | undefined, token: vscode.CancellationToken): Promise<AppHostLaunchIsolation | undefined>;
+    /**
+     * Launches and stops take the whole bound target rather than a path.
+     *
+     * The physical path decides *what* runs and the selector decides what the launch is checked
+     * against and which workspace folder's CLI and settings apply. Handing these operations a
+     * single path forces one of those two answers to be wrong, and passing the canonical path as
+     * if it were the selector is the failure that hides itself: the freshness check then compares
+     * the physical path with itself and can never fail.
+     */
+    launchFromLifecycleOwner(launchTarget: AppHostLaunchTarget, command: 'run', noDebug: boolean, isolated: boolean | undefined, token: vscode.CancellationToken): Promise<AppHostLaunchIsolation | undefined>;
     stopAppHost(appHostPath: string, token: vscode.CancellationToken): Promise<AppHostStopResult>;
-    stopAppHostFromLifecycleOwner(appHostPath: string, token: vscode.CancellationToken): Promise<AppHostStopResult>;
+    stopAppHostFromLifecycleOwner(stopTarget: AppHostLaunchTarget, token: vscode.CancellationToken): Promise<AppHostStopResult>;
 }
 
 /**
