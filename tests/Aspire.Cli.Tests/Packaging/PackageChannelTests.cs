@@ -133,6 +133,94 @@ public class PackageChannelTests(ITestOutputHelper outputHelper)
         Assert.Equal(channelSource, channel.SourceDetails);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GetTemplatePackagesAsync_PinnedLocalChannel_RequiresMatchingPackageFile(bool packageFileExists)
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var packagesDirectory = workspace.CreateDirectory("packages");
+        const string pinnedVersion = "13.6.0-dev";
+        var packageSource = packagesDirectory.FullName.Replace('\\', '/');
+
+        File.WriteAllText(Path.Combine(packagesDirectory.FullName, "Aspire.ProjectTemplates.13.5.0.nupkg"), string.Empty);
+
+        if (packageFileExists)
+        {
+            File.WriteAllText(Path.Combine(packagesDirectory.FullName, $"Aspire.ProjectTemplates.{pinnedVersion}.nupkg"), string.Empty);
+        }
+
+        var cache = new FakeNuGetPackageCache
+        {
+            GetTemplatePackagesAsyncCallback = (_, _, _, _) => throw new InvalidOperationException("Local package sources should be enumerated directly.")
+        };
+        var channel = PackageChannel.CreateExplicitChannel(
+            "local",
+            PackageChannelQuality.Both,
+            [
+                new PackageMapping("Aspire*", packageSource),
+                new PackageMapping(PackageMapping.AllPackages, PackageSources.NuGetOrg)
+            ],
+            cache,
+            new TestFeatures(),
+            NullLogger.Instance,
+            pinnedVersion: pinnedVersion);
+
+        var packages = (await channel.GetTemplatePackagesAsync(workspace.WorkspaceRoot, CancellationToken.None).DefaultTimeout()).ToArray();
+
+        if (!packageFileExists)
+        {
+            Assert.Empty(packages);
+            return;
+        }
+
+        var package = Assert.Single(packages);
+        Assert.Equal("Aspire.ProjectTemplates", package.Id);
+        Assert.Equal(pinnedVersion, package.Version);
+        Assert.Equal(packageSource, package.Source);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GetTemplatePackagesAsync_PinnedRemoteChannelWithLocalMappingsOverride_RequiresMatchingPackageFile(bool packageFileExists)
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var packagesDirectory = workspace.CreateDirectory("packages");
+        const string pinnedVersion = "13.6.0-dev";
+        var packageSource = packagesDirectory.FullName.Replace('\\', '/');
+
+        File.WriteAllText(Path.Combine(packagesDirectory.FullName, "Aspire.ProjectTemplates.13.5.0.nupkg"), string.Empty);
+        if (packageFileExists)
+        {
+            File.WriteAllText(Path.Combine(packagesDirectory.FullName, $"Aspire.ProjectTemplates.{pinnedVersion}.nupkg"), string.Empty);
+        }
+
+        var channel = PackageChannel.CreateExplicitChannel(
+            "staging",
+            PackageChannelQuality.Prerelease,
+            [new PackageMapping("Aspire*", "https://example.invalid/staging/v3/index.json")],
+            new FakeNuGetPackageCache(),
+            new TestFeatures(),
+            NullLogger.Instance,
+            pinnedVersion: pinnedVersion);
+
+        var packages = (await channel.GetTemplatePackagesAsync(
+            workspace.WorkspaceRoot,
+            PackageSourceOverrideMappings.CreateForTemplateOperations(packageSource),
+            CancellationToken.None).DefaultTimeout()).ToArray();
+
+        if (!packageFileExists)
+        {
+            Assert.Empty(packages);
+            return;
+        }
+
+        var package = Assert.Single(packages);
+        Assert.Equal(pinnedVersion, package.Version);
+        Assert.Equal(packageSource, package.Source);
+    }
+
     [Fact]
     public async Task GetTemplatePackagesAsync_UnpinnedChannelWithLocalMappingsOverride_EnumeratesOverrideDirectory()
     {

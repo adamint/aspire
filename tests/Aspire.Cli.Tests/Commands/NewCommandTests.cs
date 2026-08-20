@@ -719,6 +719,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
     {
         return CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
         {
+            options.CliExecutionContextFactory = _ => workspace.CreateExecutionContext(identityChannel: PackageChannelNames.Stable);
             options.DotNetCliRunnerFactory = _ => CreateTestRunnerWithStandardPackages();
             configure?.Invoke(options);
         });
@@ -1333,6 +1334,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var sourceOverride = Path.Combine(workspace.WorkspaceRoot.FullName, "source-feed");
         Directory.CreateDirectory(sourceOverride);
+        File.WriteAllText(Path.Combine(sourceOverride, "Aspire.ProjectTemplates.9.2.0.nupkg"), string.Empty);
         string? capturedPackageSourceOverride = null;
         TestInteractionService? interactionService = null;
 
@@ -1380,6 +1382,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var sourceOverride = Path.Combine(workspace.WorkspaceRoot.FullName, "source-feed");
         Directory.CreateDirectory(sourceOverride);
+        File.WriteAllText(Path.Combine(sourceOverride, "Aspire.ProjectTemplates.9.2.0.nupkg"), string.Empty);
 
         var services = CreateServiceCollection(workspace);
 
@@ -3459,7 +3462,8 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
                 // Use projectDir as the working directory but root the .aspire/*
                 // directories under the workspace so test infra doesn't pollute the project dir.
                 return TestExecutionContextHelper.CreateExecutionContext(
-                    projectDir);
+                    projectDir,
+                    identityChannel: PackageChannelNames.Stable);
             };
 
             options.DotNetCliRunnerFactory = _ =>

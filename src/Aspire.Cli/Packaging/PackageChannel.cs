@@ -134,20 +134,36 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
     /// <summary>
     /// Gets template packages using the specified mappings without changing this channel's identity.
     /// </summary>
-    public async Task<IEnumerable<NuGetPackage>> GetTemplatePackagesAsync(DirectoryInfo workingDirectory, PackageMapping[]? mappings, CancellationToken cancellationToken)
+    public Task<IEnumerable<NuGetPackage>> GetTemplatePackagesAsync(DirectoryInfo workingDirectory, PackageMapping[]? mappings, CancellationToken cancellationToken)
+    {
+        return GetTemplatePackagesAsync(workingDirectory, mappings, filterLocalPackagesToPinnedVersion: true, cancellationToken);
+    }
+
+    /// <summary>
+    /// Gets template packages using the specified mappings, optionally retaining every version
+    /// found in a local package directory instead of applying this channel's pinned version.
+    /// </summary>
+    public async Task<IEnumerable<NuGetPackage>> GetTemplatePackagesAsync(
+        DirectoryInfo workingDirectory,
+        PackageMapping[]? mappings,
+        bool filterLocalPackagesToPinnedVersion,
+        CancellationToken cancellationToken)
     {
         validateTemplatePackageMetadataPrefetching?.Invoke();
-
-        if (PinnedVersion is not null)
-        {
-            return [new NuGetPackage { Id = TemplatePackageId, Version = PinnedVersion, Source = ComputeSourceDetails(mappings) }];
-        }
 
         // Local directory discovery must follow the caller-supplied mappings (e.g. `--source <dir>`),
         // not this channel's own mappings, otherwise the override is silently ignored.
         if (GetLocalAspirePackageSource(mappings) is { } localPackageSource)
         {
-            return GetTemplatePackagesFromLocalPackageSource(localPackageSource.Source, localPackageSource.PackageSource, cancellationToken);
+            var localPackages = GetTemplatePackagesFromLocalPackageSource(localPackageSource.Source, localPackageSource.PackageSource, cancellationToken);
+            return PinnedVersion is null || !filterLocalPackagesToPinnedVersion
+                ? localPackages
+                : localPackages.Where(package => string.Equals(package.Version, PinnedVersion, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (PinnedVersion is not null)
+        {
+            return [new NuGetPackage { Id = TemplatePackageId, Version = PinnedVersion, Source = ComputeSourceDetails(mappings) }];
         }
 
         var tasks = new List<Task<IEnumerable<NuGetPackage>>>();
