@@ -25,6 +25,7 @@ using NuGetPackage = Aspire.Shared.NuGetPackageCli;
 
 namespace Aspire.Cli.Tests.Commands;
 
+[Collection(LocalizedResourceMutatingTestCollection.Name)]
 public class NewCommandTests(ITestOutputHelper outputHelper)
 {
     [Fact]
@@ -205,6 +206,12 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         {
             TemplatingStrings.Culture = originalCulture;
         }
+    }
+
+    [CollectionDefinition(Name, DisableParallelization = true)]
+    public sealed class LocalizedResourceMutatingTestCollection
+    {
+        public const string Name = nameof(LocalizedResourceMutatingTestCollection);
     }
 
     [Fact]
