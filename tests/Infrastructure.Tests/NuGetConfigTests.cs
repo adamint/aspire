@@ -10,9 +10,14 @@ namespace Infrastructure.Tests;
 public sealed class NuGetConfigTests
 {
     [Fact]
-    public void DotNetToolsSourceIsScopedToRequiredDiagnosticsPackages()
+    public void DiagnosticsPackagesAreMappedToPublicAndToolsFeeds()
     {
         var document = XDocument.Load(Path.Combine(RepoRoot.Path, "NuGet.config"));
+        string[] diagnosticsPackages =
+        [
+            "Microsoft.Diagnostics.NETCore.Client",
+            "Microsoft.Diagnostics.Runtime",
+        ];
 
         var source = Assert.Single(
             document.Root!.Element("packageSources")!.Elements("add"),
@@ -28,11 +33,17 @@ public sealed class NuGetConfigTests
             .Select(element => element.Attribute("pattern")!.Value)
             .ToArray();
 
-        Assert.Equal(
-            [
-                "Microsoft.Diagnostics.NETCore.Client",
-                "Microsoft.Diagnostics.Runtime",
-            ],
-            patterns);
+        Assert.Equal(diagnosticsPackages, patterns);
+
+        var publicMapping = Assert.Single(
+            document.Root.Element("packageSourceMapping")!.Elements("packageSource"),
+            element => (string?)element.Attribute("key") == "dotnet-public");
+        var publicPatterns = publicMapping.Elements("package")
+            .Select(element => element.Attribute("pattern")!.Value);
+
+        foreach (var package in diagnosticsPackages)
+        {
+            Assert.Contains(package, publicPatterns);
+        }
     }
 }
