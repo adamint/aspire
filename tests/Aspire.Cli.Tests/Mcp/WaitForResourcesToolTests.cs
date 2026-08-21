@@ -132,9 +132,8 @@ public class WaitForResourcesToolTests
 
         using var json = GetWaitResult(result);
         Assert.Equal(
-            ["app_host_path", "outcome", "target_state", "resources"],
+            ["outcome", "target_state", "resources"],
             json.RootElement.EnumerateObject().Select(static property => property.Name));
-        Assert.Equal(AppHostPath, json.RootElement.GetProperty("app_host_path").GetString());
         Assert.Equal("success", json.RootElement.GetProperty("outcome").GetString());
         Assert.Equal("healthy", json.RootElement.GetProperty("target_state").GetString());
 
@@ -199,9 +198,8 @@ public class WaitForResourcesToolTests
 
         using var json = GetWaitResult(result);
         Assert.Equal(
-            ["app_host_path", "outcome", "target_state", "error", "resources"],
+            ["outcome", "target_state", "error", "resources"],
             json.RootElement.EnumerateObject().Select(static property => property.Name));
-        Assert.Equal(AppHostPath, json.RootElement.GetProperty("app_host_path").GetString());
         Assert.Equal("failure", json.RootElement.GetProperty("outcome").GetString());
         Assert.Equal("healthy", json.RootElement.GetProperty("target_state").GetString());
         Assert.Equal(
@@ -593,7 +591,8 @@ public class WaitForResourcesToolTests
                 CancellationToken.None).AsTask());
 
         Assert.Equal(McpErrorCode.InternalError, exception.ErrorCode);
-        Assert.Equal($"Unable to retrieve resources for AppHost '{AppHostPath}'.", exception.Message);
+        Assert.Equal("Unable to retrieve resources from the selected AppHost.", exception.Message);
+        Assert.DoesNotContain(AppHostPath, exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -695,36 +694,6 @@ public class WaitForResourcesToolTests
                 cancellationSource.Token).AsTask());
 
         Assert.Equal(cancellationSource.Token, exception.CancellationToken);
-    }
-
-    [Fact]
-    public async Task WaitForResourcesTool_PreservesSelectedAppHostPathSpelling()
-    {
-        var canonicalPath = Path.GetFullPath(
-            Path.Combine("tests", "Aspire.Cli.Tests", "Aspire.Cli.Tests.csproj"));
-        var selectedPath = Path.Combine(
-            Path.GetDirectoryName(canonicalPath)!,
-            ".",
-            Path.GetFileName(canonicalPath));
-        var connection = CreateConnection();
-        connection.AppHostInfo = new AppHostInformation
-        {
-            AppHostPath = canonicalPath,
-            ProcessId = 4242
-        };
-        var monitor = new TestAuxiliaryBackchannelMonitor
-        {
-            SelectedAppHostPath = selectedPath
-        };
-        monitor.AddConnection(connection.Hash, connection.SocketPath, connection);
-        var tool = CreateTool(monitor);
-
-        var result = await tool.CallToolAsync(
-            CallToolContextTestHelper.Create(),
-            CancellationToken.None).DefaultTimeout();
-
-        using var json = GetWaitResult(result);
-        Assert.Equal(selectedPath, json.RootElement.GetProperty("app_host_path").GetString());
     }
 
     private static IReadOnlyDictionary<string, JsonElement> ParseArguments(string json)

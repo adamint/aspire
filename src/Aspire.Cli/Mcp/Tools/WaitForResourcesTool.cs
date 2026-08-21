@@ -12,7 +12,6 @@ using ModelContextProtocol.Protocol;
 namespace Aspire.Cli.Mcp.Tools;
 
 internal sealed record WaitForResourcesResult(
-    string AppHostPath,
     string Outcome,
     string TargetState,
     string? Error,
@@ -113,19 +112,10 @@ internal sealed class WaitForResourcesTool(
             throw new McpProtocolException(McpErrorMessages.NoAppHostRunning, McpErrorCode.InternalError);
         }
 
-        if (connection.AppHostInfo?.AppHostPath is not { Length: > 0 } appHostPath)
+        if (connection.AppHostInfo?.AppHostPath is not { Length: > 0 })
         {
             logger.LogWarning("The selected AppHost connection does not have a project path");
             throw new McpProtocolException("The selected AppHost project path is not available.", McpErrorCode.InternalError);
-        }
-
-        var selectedAppHostPath = auxiliaryBackchannelMonitor.SelectedAppHostPath;
-        if (selectedAppHostPath is not null &&
-            AppHostPathComparer.PathsEqual(selectedAppHostPath, appHostPath))
-        {
-            // Preserve the explicit caller spelling, including symlink and case identity, after
-            // the shared comparer confirms it addresses the selected connection.
-            appHostPath = selectedAppHostPath;
         }
 
         List<ResourceSnapshot> snapshots;
@@ -138,11 +128,10 @@ internal sealed class WaitForResourcesTool(
         catch (Exception ex) when (ex is not McpProtocolException and not OperationCanceledException)
         {
             logger.LogError(
-                "Error retrieving resources for AppHost {AppHostPath}: {Diagnostic}",
-                appHostPath,
+                "Error retrieving resources from the selected AppHost: {Diagnostic}",
                 McpToolHelpers.GetBoundedExceptionDiagnostic(ex));
             throw new McpProtocolException(
-                $"Unable to retrieve resources for AppHost '{appHostPath}'.",
+                "Unable to retrieve resources from the selected AppHost.",
                 McpErrorCode.InternalError);
         }
 
@@ -175,7 +164,6 @@ internal sealed class WaitForResourcesTool(
             target.Failure ?? MapWaitResult(waitResultsByName[target.Resource!.Name])).ToArray();
 
         var result = new WaitForResourcesResult(
-            appHostPath,
             noEligibleResources ? "failure" : GetOverallOutcome(resources),
             ResourceWaitService.GetProtocolValue(arguments.TargetState),
             noEligibleResources ? NoEligibleResourcesError : null,

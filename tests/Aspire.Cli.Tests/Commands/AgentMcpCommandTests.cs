@@ -888,7 +888,7 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
         using var waitJson = GetMarkedJson(wait, "# WAIT RESULT");
         using var secondListJson = GetMarkedJson(secondList, "# RESOURCE DATA");
         Assert.Equal(appHostPath, firstListJson.RootElement.GetProperty("app_host_path").GetString());
-        Assert.Equal(appHostPath, waitJson.RootElement.GetProperty("app_host_path").GetString());
+        Assert.False(waitJson.RootElement.TryGetProperty("app_host_path", out _));
         Assert.Equal(appHostPath, secondListJson.RootElement.GetProperty("app_host_path").GetString());
         Assert.Equal(
             "Starting",
