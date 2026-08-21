@@ -75,10 +75,39 @@ internal static class PathNormalizer
                 return false;
             }
 
+            // Directory enumeration restores the spelling of child segments, but it cannot
+            // restore the drive root. Windows exposes drive letters in uppercase on disk.
+            if (OperatingSystem.IsWindows())
+            {
+                var driveLetterIndex = root.Length >= 3 &&
+                    root[1] == ':' &&
+                    char.IsAsciiLetter(root[0])
+                        ? 0
+                        : root.Length >= 7 &&
+                            root[0] is '\\' or '/' &&
+                            root[1] is '\\' or '/' &&
+                            root[2] is '?' or '.' &&
+                            root[3] is '\\' or '/' &&
+                            root[5] == ':' &&
+                            root[6] is '\\' or '/' &&
+                            char.IsAsciiLetter(root[4])
+                                ? 4
+                                : -1;
+
+                if (driveLetterIndex >= 0)
+                {
+                    root = $"{root[..driveLetterIndex]}{char.ToUpperInvariant(root[driveLetterIndex])}{root[(driveLetterIndex + 1)..]}";
+                }
+            }
+
             var segments = fullPath[root.Length..].Split(
                 [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
                 StringSplitOptions.RemoveEmptyEntries);
             var current = root;
+            if (!Directory.Exists(current))
+            {
+                return false;
+            }
 
             foreach (var segment in segments)
             {

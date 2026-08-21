@@ -250,6 +250,7 @@ suite('InteractionService endpoints', () => {
 					tryReserveExternalLaunch: () => 'reservation-1',
 					validateOrReacquireExternalLaunchReservation: (_appHostPath, reservationId) => reservationId,
 					replaceExternalLaunchReservation: () => 'reservation-1',
+					markLaunchAttemptFailureRecorded: () => { },
 					releaseExternalLaunchReservation: () => { },
 					prepareLaunchArguments: async (_appHostPath, _command, args) => ({ args }),
 				},

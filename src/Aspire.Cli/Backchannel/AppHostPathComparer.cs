@@ -33,11 +33,11 @@ internal static class AppHostPathComparer
             }
 
             // Stored filesystem spelling is authoritative even on Windows because an individual
-            // directory can opt into case-sensitive semantics. The drive letter is volume identity,
-            // not a directory segment, so canonicalize only that root before the ordinal comparison.
+            // directory can opt into case-sensitive semantics. The volume root is identity rather
+            // than a directory segment, so canonicalize only that root before the ordinal comparison.
             return StringComparer.Ordinal.Equals(
-                NormalizeDriveRootIdentity(canonicalLeftPath),
-                NormalizeDriveRootIdentity(canonicalRightPath));
+                NormalizeRootIdentity(canonicalLeftPath),
+                NormalizeRootIdentity(canonicalRightPath));
         }
 
         return fallbackComparer.Equals(
@@ -45,20 +45,76 @@ internal static class AppHostPathComparer
             PathNormalizer.ResolveToFilesystemPath(PathNormalizer.ResolveSymlinks(rightPath)));
     }
 
-    internal static string NormalizeDriveRootIdentity(string path)
+    internal static string NormalizeRootIdentity(string path)
     {
-        if (path.Length < 3 ||
-            path[1] != ':' ||
-            path[2] is not ('\\' or '/') ||
-            !char.IsAsciiLetter(path[0]))
+        var driveLetterIndex = path.Length >= 3 &&
+            path[1] == ':' &&
+            path[2] is '\\' or '/' &&
+            char.IsAsciiLetter(path[0])
+                ? 0
+                : path.Length >= 7 &&
+                    path[0] is '\\' or '/' &&
+                    path[1] is '\\' or '/' &&
+                    path[2] is '?' or '.' &&
+                    path[3] is '\\' or '/' &&
+                    path[5] == ':' &&
+                    path[6] is '\\' or '/' &&
+                    char.IsAsciiLetter(path[4])
+                        ? 4
+                        : -1;
+
+        if (driveLetterIndex >= 0)
+        {
+            var normalizedDriveLetter = char.ToUpperInvariant(path[driveLetterIndex]);
+            return normalizedDriveLetter == path[driveLetterIndex]
+                ? path
+                : $"{path[..driveLetterIndex]}{normalizedDriveLetter}{path[(driveLetterIndex + 1)..]}";
+        }
+
+        var rootSegmentStart = path.Length >= 8 &&
+            path[0] is '\\' or '/' &&
+            path[1] is '\\' or '/' &&
+            path[2] is '?' or '.' &&
+            path[3] is '\\' or '/' &&
+            path.AsSpan(4, 3).Equals("UNC", StringComparison.OrdinalIgnoreCase) &&
+            path[7] is '\\' or '/'
+                ? 8
+                : path.Length >= 2 &&
+                    path[0] is '\\' or '/' &&
+                    path[1] is '\\' or '/'
+                        ? 2
+                        : -1;
+
+        if (rootSegmentStart < 0)
         {
             return path;
         }
 
-        var normalizedDriveLetter = char.ToUpperInvariant(path[0]);
-        return normalizedDriveLetter == path[0]
+        var serverSeparator = FindSeparator(path, rootSegmentStart);
+        if (serverSeparator < 0 || serverSeparator == path.Length - 1)
+        {
+            return path;
+        }
+
+        var shareSeparator = FindSeparator(path, serverSeparator + 1);
+        var rootEnd = shareSeparator >= 0 ? shareSeparator : path.Length;
+        var normalizedRoot = path[..rootEnd].ToUpperInvariant();
+        return normalizedRoot.Equals(path.AsSpan(0, rootEnd), StringComparison.Ordinal)
             ? path
-            : $"{normalizedDriveLetter}{path[1..]}";
+            : string.Concat(normalizedRoot, path.AsSpan(rootEnd));
+    }
+
+    private static int FindSeparator(string path, int startIndex)
+    {
+        for (var i = startIndex; i < path.Length; i++)
+        {
+            if (path[i] is '\\' or '/')
+            {
+                return i;
+            }
+        }
+
+        return -1;
     }
 
     private static bool TryGetCanonicalPath(string path, out string canonicalPath)

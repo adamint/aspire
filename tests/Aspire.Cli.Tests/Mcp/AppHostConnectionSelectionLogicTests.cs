@@ -25,13 +25,18 @@ public class AppHostConnectionSelectionLogicTests(ITestOutputHelper outputHelper
     [InlineData(@"c:\Repo\AppHost.csproj", @"C:\Repo\AppHost.csproj")]
     [InlineData("d:/Repo/AppHost.csproj", "D:/Repo/AppHost.csproj")]
     [InlineData(@"C:\repo\AppHost.csproj", @"C:\repo\AppHost.csproj")]
+    [InlineData(@"\\?\c:\Repo\AppHost.csproj", @"\\?\C:\Repo\AppHost.csproj")]
+    [InlineData(@"\\.\d:\Repo\AppHost.csproj", @"\\.\D:\Repo\AppHost.csproj")]
+    [InlineData(@"\\server\share\Repo\AppHost.csproj", @"\\SERVER\SHARE\Repo\AppHost.csproj")]
+    [InlineData(@"\\?\UNC\server\share\Repo\AppHost.csproj", @"\\?\UNC\SERVER\SHARE\Repo\AppHost.csproj")]
+    [InlineData(@"\\.\UNC\server\share\Repo\AppHost.csproj", @"\\.\UNC\SERVER\SHARE\Repo\AppHost.csproj")]
     [InlineData(@"c:relative\AppHost.csproj", @"c:relative\AppHost.csproj")]
     [InlineData("/repo/AppHost.csproj", "/repo/AppHost.csproj")]
-    public void NormalizeDriveRootIdentity_OnlyCanonicalizesDriveLetter(
+    public void NormalizeRootIdentity_OnlyCanonicalizesVolumeRoot(
         string path,
         string expected)
     {
-        Assert.Equal(expected, AppHostPathComparer.NormalizeDriveRootIdentity(path));
+        Assert.Equal(expected, AppHostPathComparer.NormalizeRootIdentity(path));
     }
 
     [Fact]
