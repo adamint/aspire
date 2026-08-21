@@ -4283,8 +4283,8 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             {} as any,
             { isDebugConfigEnvironmentLoggingEnabled: () => false } as any,
             () => { });
-        sinon.stub(aspireDebugSession, 'createDebugAdapterTrackerCore').callsFake((_debugAdapter, onRestart) => {
-            restartHandler = onRestart;
+        sinon.stub(aspireDebugSession, 'createDebugAdapterTrackerCore').callsFake((_debugAdapter, appHostTracker) => {
+            restartHandler = appHostTracker?.onRestartRequested;
         });
         sinon.stub(aspireDebugSession, 'startAndGetDebugSession').resolves(appHostResourceSession);
         sinon.stub(aspireDebugSession, 'stopDebugging').resolves();
