@@ -172,9 +172,10 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Theory]
-    [InlineData("None")]
-    [InlineData("Ninguno")]
-    public async Task NewCommandAcceptsNoneTestFrameworkUnderLocalizedUICulture(string testFramework)
+    [InlineData("None", null)]
+    [InlineData("Ninguno", null)]
+    [InlineData("MSTest", "MSTest")]
+    public async Task NewCommandForwardsTestFrameworkUnderLocalizedUICulture(string testFramework, string? expectedTestFramework)
     {
         var originalUICulture = CultureInfo.CurrentUICulture;
 
@@ -183,7 +184,8 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo("es-ES");
 
             using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-            var services = CreateServiceCollection(workspace);
+            var runner = CreateTestRunnerWithStandardPackages();
+            var services = CreateServiceCollection(workspace, options => options.DotNetCliRunnerFactory = _ => runner);
             using var provider = services.BuildServiceProvider();
 
             var command = provider.GetRequiredService<NewCommand>();
@@ -192,6 +194,12 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             var exitCode = await result.InvokeAsync().DefaultTimeout();
 
             Assert.Equal(CliExitCodes.Success, exitCode);
+            var extraArgs = Assert.IsType<string[]>(runner.LastNewProjectExtraArgs);
+            var testFrameworkArgumentIndex = Array.IndexOf(extraArgs, "--test-framework");
+            var forwardedTestFramework = testFrameworkArgumentIndex >= 0
+                ? extraArgs[testFrameworkArgumentIndex + 1]
+                : null;
+            Assert.Equal(expectedTestFramework, forwardedTestFramework);
         }
         finally
         {

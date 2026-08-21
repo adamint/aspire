@@ -436,11 +436,11 @@ internal sealed class NewCommand : BaseCommand
 
                 try
                 {
-                        var packages = (await selectedChannel.GetTemplatePackagesAsync(
-                            ExecutionContext.WorkingDirectory,
-                            templateDiscoveryMappings,
-                            filterLocalPackagesToPinnedVersion: !isUnqualifiedLocalResolution,
-                            cancellationToken))
+                    var packages = (await selectedChannel.GetTemplatePackagesAsync(
+                        ExecutionContext.WorkingDirectory,
+                        templateDiscoveryMappings,
+                        filterLocalPackagesToPinnedVersion: !isUnqualifiedLocalResolution,
+                        cancellationToken))
                         .Where(p => Semver.SemVersion.TryParse(p.Version, Semver.SemVersionStyles.Strict, out _))
                         .ToArray();
                     var hasPrHives = ExecutionContext.GetHiveCount() > 0;
@@ -460,7 +460,10 @@ internal sealed class NewCommand : BaseCommand
                     {
                         var errorMessage = isUnqualifiedLocalResolution
                             ? GetMissingLocalTemplatePackageMessage()
-                            : $"No template versions found in channel '{selectedChannel.Name}'.";
+                            : string.Format(
+                                CultureInfo.CurrentCulture,
+                                NewCommandStrings.NoTemplateVersionsFoundInChannel,
+                                selectedChannel.Name);
                         return new ResolveTemplateVersionResult { ErrorMessage = errorMessage };
                     }
 

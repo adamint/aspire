@@ -67,6 +67,11 @@
         <target state="new">No package channels are available.</target>
         <note />
       </trans-unit>
+      <trans-unit id="NoTemplateVersionsFoundInChannel">
+        <source>No template versions found in channel '{0}'.</source>
+        <target state="new">No template versions found in channel '{0}'.</target>
+        <note />
+      </trans-unit>
       <trans-unit id="NonInteractiveTemplateRequired">
         <source>A template must be specified when running in non-interactive mode. Use 'aspire new &lt;template&gt;'.</source>
         <target state="new">A template must be specified when running in non-interactive mode. Use 'aspire new &lt;template&gt;'.</target>
