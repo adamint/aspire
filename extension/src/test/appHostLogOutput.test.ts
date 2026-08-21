@@ -112,6 +112,39 @@ suite('AppHost log output coordinator', () => {
             []);
     });
 
+    test('completed low-level pairs do not evict a pending record', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(coordinator, 'Pending.Category: Debug: Still pending.\n', 'console'),
+            [{
+                output: '\x1b[2mPending.Category: Debug: Still pending.\x1b[0m\n',
+                category: 'stdout'
+            }]);
+
+        for (let index = 0; index < 129; index++) {
+            assert.strictEqual(
+                renderConsole(
+                    coordinator,
+                    `Noise.Category.${index}: Debug: Detail ${index}.\n`,
+                    'console').length,
+                1);
+            assert.deepStrictEqual(
+                renderConsole(
+                    coordinator,
+                    `dbug: Noise.Category.${index}[7]\n      Detail ${index}.\n`,
+                    'stdout'),
+                []);
+        }
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'dbug: Pending.Category[7]\n      Still pending.\n',
+                'stdout'),
+            []);
+    });
+
     test('colors warnings and preserves error stream identity', () => {
         const coordinator = new AppHostLogOutputCoordinator();
 

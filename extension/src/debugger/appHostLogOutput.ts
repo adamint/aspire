@@ -56,6 +56,7 @@ export class AppHostLogOutputCoordinator {
     private static readonly _maxCorrelatedRecords = 1024;
     private static readonly _maxLowLevelCorrelatedRecords = 128;
     private static readonly _allSources: readonly LogSource[] = ['backchannel', 'consoleLogger', 'debugLogger'];
+    private static readonly _lowLevelSources: readonly LogSource[] = ['consoleLogger', 'debugLogger'];
     private static readonly _maxRememberedBackchannelSequences = 1024;
     private static readonly _idleFlushDelayMs = 250;
 
@@ -316,7 +317,10 @@ export class AppHostLogOutputCoordinator {
 
         const existing = records[index];
         existing.sources.add(source);
-        if (existing.sources.size === AppHostLogOutputCoordinator._allSources.length) {
+        const expectedSources = isLowLevel(record)
+            ? AppHostLogOutputCoordinator._lowLevelSources
+            : AppHostLogOutputCoordinator._allSources;
+        if (expectedSources.every(expectedSource => existing.sources.has(expectedSource))) {
             records.splice(index, 1);
         }
 
