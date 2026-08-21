@@ -490,6 +490,9 @@
     <trans-unit id="languageModelTool.aspireListDebugSessions.userDescription">
       <source xml:lang="en">List bounded active Aspire AppHosts and editor child resource sessions.</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.selectAppHostToLaunch">
+      <source xml:lang="en">Multiple AppHosts were found. Select the one to launch</source>
+    </trans-unit>
     <trans-unit id="command.new">
       <source xml:lang="en">New Aspire project</source>
     </trans-unit>
