@@ -3631,6 +3631,8 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
         Assert.Collection(forwarded,
             entry => Assert.Equal((1L, "Warning", "Warning message", (string?)null), (entry.SequenceNumber, entry.LogLevel, entry.Message, entry.Exception)),
             entry => Assert.Equal((2L, "Error", "Error message", "System.InvalidOperationException: boom"), (entry.SequenceNumber, entry.LogLevel, entry.Message, entry.Exception)));
+        var logFileContents = await File.ReadAllTextAsync(logFilePath);
+        Assert.Contains($"Error message{Environment.NewLine}System.InvalidOperationException: boom", logFileContents);
 
         static async IAsyncEnumerable<BackchannelLogEntry> YieldEntries([EnumeratorCancellation] CancellationToken cancellationToken)
         {

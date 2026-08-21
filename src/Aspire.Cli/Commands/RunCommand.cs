@@ -1121,7 +1121,10 @@ internal sealed class RunCommand : BaseCommand
             await foreach (var entry in logEntries.WithCancellation(cancellationToken))
             {
                 var shortCategory = FileLoggerProvider.GetShortCategoryName(entry.CategoryName);
-                fileLoggerProvider.WriteLog(entry.Timestamp, entry.LogLevel, $"AppHost/{shortCategory}", entry.Message);
+                var message = string.IsNullOrEmpty(entry.Exception)
+                    ? entry.Message
+                    : $"{entry.Message}{Environment.NewLine}{entry.Exception}";
+                fileLoggerProvider.WriteLog(entry.Timestamp, entry.LogLevel, $"AppHost/{shortCategory}", message);
 
                 // Preserve the previous RPC volume. Trace and Debug still arrive through the
                 // AppHost console provider and are styled by the extension.
