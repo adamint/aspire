@@ -917,6 +917,35 @@ suite('E2E launch profile', () => {
         assert.ok(cleanup.includes('() => cancelAppHostsSectionTextTransition()'), 'The transition tracker must be disposed even when the E2E fails before observing the rendered row.');
     });
 
+    test('derives AppHost tree cold-start budgets from the effective CLI startup timeout', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const appHostTree = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'appHostTree.e2e.test.ts'), 'utf8');
+        const runningBeforeDiscoveryTest = getTestBlock(appHostTree, 'running AppHosts appear before slow discovery results');
+
+        assert.ok(runner.includes("ASPIRE_CLI_START_TIMEOUT: process.env.ASPIRE_EXTENSION_E2E_CLI_START_TIMEOUT || '300'"));
+        assert.ok(appHostTree.includes('const cliStartupTimeoutMs = getCliStartupTimeoutMs();'));
+        assert.ok(appHostTree.includes('const configuredSeconds = Number(process.env.ASPIRE_CLI_START_TIMEOUT);'));
+        assert.ok(appHostTree.includes('this.timeout(cliStartupTimeoutMs * 2);'));
+        assert.ok(runningBeforeDiscoveryTest.includes('waitForRunningAppHost(cliStartupTimeoutMs)'));
+        assert.ok(!appHostTree.includes('this.timeout(600000);'));
+        assert.ok(!runningBeforeDiscoveryTest.includes('waitForRunningAppHost(300000)'));
+    });
+
+    test('starts the running-before-discovery scenario through the deterministic control bridge', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const appHostTree = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'appHostTree.e2e.test.ts'), 'utf8');
+        const runningBeforeDiscoveryTest = getTestBlock(appHostTree, 'running AppHosts appear before slow discovery results');
+
+        assert.ok(runningBeforeDiscoveryTest.includes('const appHostPath = discovered.state.workspaceAppHostPath ?? getPrimaryAppHostProjectPath();'));
+        assert.ok(runningBeforeDiscoveryTest.includes("const runInvocationBefore = getCommandInvocationCount('aspire-vscode.runAppHost');"));
+        assert.ok(runningBeforeDiscoveryTest.includes("await executeE2eControlCommand({ name: 'runAppHost', appHostPath }, { waitFor: 'started' });"));
+        assert.ok(runningBeforeDiscoveryTest.includes("await waitForCommandOutcome('aspire-vscode.runAppHost', 'success', 60000, runInvocationBefore);"));
+        assert.ok(!runningBeforeDiscoveryTest.includes('waitForTreeItem('));
+        assert.ok(!runningBeforeDiscoveryTest.includes('.expand()'));
+        assert.ok(!runningBeforeDiscoveryTest.includes('clickTreeItem('));
+    });
+
     test('patches ExTester launch arguments without version-specific assumptions or replacement-token expansion', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
@@ -1089,13 +1118,17 @@ suite('E2E launch profile', () => {
         assert.ok(zeroToRunning.indexOf('() => appHostPidBeforeStop ??= getRunningAppHostPid(appHostPath)') > zeroToRunning.indexOf('await runE2eTeardown(['));
         assert.ok(zeroToRunning.indexOf('appHostPidBeforeStop = await waitForRunningAppHostPid(appHostPath, 30000);') < zeroToRunning.lastIndexOf("executeE2eControlCommand({ name: 'stopDebugging' })"));
         assert.ok(zeroToRunning.includes('removeGeneratedProject(projectName, appHostPidBeforeStop)'));
-        assert.ok(dynamicDebugConfiguration.includes('let appHostPidBeforeStop: number | undefined;'));
-        assert.ok(dynamicDebugConfiguration.includes('() => appHostPidBeforeStop ??= getRunningAppHostPid(appHostPath)'));
-        assert.ok(dynamicDebugConfiguration.includes('() => appHostPidBeforeStop ??= getRunningAppHostPid(firstAppHostPath)'));
-        assert.ok(dynamicDebugConfiguration.includes('() => stopAppHostIfRunning(appHostPath)'));
-        assert.ok(dynamicDebugConfiguration.includes('() => stopAppHostIfRunning(firstAppHostPath)'));
-        assert.ok(dynamicDebugConfiguration.includes("waitForKnownProcessExit(appHostPidBeforeStop, 'the dynamic debug configuration AppHost process', 30000)"));
-        assert.ok(dynamicDebugConfiguration.indexOf("waitForKnownProcessExit(appHostPidBeforeStop, 'the dynamic debug configuration AppHost process', 30000)") < dynamicDebugConfiguration.indexOf('removePath(fixtureRoot, { recursive: true, force: true })'));
+        assert.ok(dynamicDebugConfiguration.includes('let appHostPidsBeforeStop: number[];'));
+        assert.ok(dynamicDebugConfiguration.includes('appHostPidsBeforeStop = [];'));
+        const captureFixtureAppHostPids = dynamicDebugConfiguration.indexOf('appHostPidsBeforeStop = fixtureAppHostPaths');
+        const stopFixtureAppHosts = dynamicDebugConfiguration.indexOf('...fixtureAppHostPaths.map(appHostPath => () => fs.existsSync(appHostPath) ? stopAppHostIfRunning(appHostPath) : undefined)');
+        const waitForFixtureAppHostPids = dynamicDebugConfiguration.indexOf('Promise.all(appHostPidsBeforeStop.map(appHostPid =>');
+        const removeFixtureRoot = dynamicDebugConfiguration.indexOf('removePath(fixtureRoot, { recursive: true, force: true })');
+        assert.ok(captureFixtureAppHostPids >= 0);
+        assert.ok(stopFixtureAppHosts > captureFixtureAppHostPids);
+        assert.ok(dynamicDebugConfiguration.includes("waitForKnownProcessExit(appHostPid, 'a dynamic debug configuration AppHost process', 30000)"));
+        assert.ok(waitForFixtureAppHostPids > stopFixtureAppHosts);
+        assert.ok(removeFixtureRoot > waitForFixtureAppHostPids);
         assert.ok(commandPalette.includes('runE2eTeardown'));
         assert.ok(discoveryConfiguration.includes('runE2eTeardown'));
         assert.ok(!commandPalette.includes('throw new AggregateError'));
@@ -1119,6 +1152,32 @@ suite('E2E launch profile', () => {
         assert.ok(fixtures.includes("code === 'ENOTEMPTY'"));
         assert.ok(fixtures.includes("error.code === 'EPERM'"));
         assert.ok(fixtures.includes("const maxAttempts = process.platform === 'win32' ? 40 : 1;"));
+    });
+
+    test('keeps the gated deploy test-controlled and cleans its fixture in finally', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const fixtures = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'helpers', 'fixtures.ts'), 'utf8');
+        const treeActions = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'treeActions.e2e.test.ts'), 'utf8');
+        const gatedDeployFixture = fixtures.slice(
+            fixtures.indexOf('export function writeGatedDeployActionCliWrapper'),
+            fixtures.indexOf('export function writeLegacyPipelineActionCliWrapper'));
+        const durableOperationTest = getTestBlock(treeActions, 'keeps one durable operation per AppHost while a deploy session is in flight');
+
+        assert.ok(gatedDeployFixture.includes('cleanup: () => void;'));
+        assert.ok(gatedDeployFixture.includes('removePath(gateDirectory, { recursive: true, force: true });'));
+        assert.ok(gatedDeployFixture.includes('removePath(cliPath, { force: true });'));
+        assert.ok(gatedDeployFixture.includes('removePath(scriptPath, { force: true });'));
+        assert.ok(fixtures.includes("waitForReleaseFile(${JSON.stringify(options.deployReleaseFilePath)}, 'gated deploy', 900000, ${JSON.stringify(options.deployGateDirectory)});"));
+        assert.ok(fixtures.includes('if (releaseDirectory !== undefined && !fs.existsSync(releaseDirectory)) {'));
+        assert.ok(durableOperationTest.replace(/\r\n/g, '\n').includes(`finally {
+            try {
+                gatedCli.releaseDeploy();
+            }
+            finally {
+                gatedCli.cleanup();
+            }
+            await waitForNoDebugSessions(120000);
+        }`));
     });
 
     test('keeps tree action resource lifecycle commands as terminal routing assertions', () => {
