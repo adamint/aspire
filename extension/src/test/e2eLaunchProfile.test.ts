@@ -656,12 +656,21 @@ suite('E2E launch profile', () => {
         const extestEnvironmentStart = runner.indexOf('const extestEnv = getAspireCliEnvironment({');
         const extestEnvironmentEnd = runner.indexOf('\n    });', extestEnvironmentStart);
         const extestEnvironment = runner.slice(extestEnvironmentStart, extestEnvironmentEnd);
+        const javaSdkGenerationStart = runner.indexOf('function ensureJavaAppHostSdkGenerated');
+        const javaSdkGenerationEnd = runner.indexOf('\nfunction ', javaSdkGenerationStart + 1);
+        const javaSdkGeneration = runner.slice(javaSdkGenerationStart, javaSdkGenerationEnd);
+        const javaRestoreStart = javaSdkGeneration.indexOf("spawnSync(bundledCliPath, ['restore'], {");
+        const javaRestoreEnd = javaSdkGeneration.indexOf('\n  });', javaRestoreStart);
+        const javaRestore = javaSdkGeneration.slice(javaRestoreStart, javaRestoreEnd);
 
         assert.ok(nuGetPathIndex >= 0);
         assert.ok(nuGetPathIndex < restoreWorkspaceIndex);
         assert.ok(cliEnvironment.includes('NUGET_PACKAGES: isolatedNuGetPackages,'));
         assert.ok(extestEnvironment.includes('NUGET_PACKAGES: isolatedNuGetPackages,'));
         assert.ok(extestEnvironment.includes('ASPIRE_EXTENSION_E2E_NUGET_PACKAGES: isolatedNuGetPackages,'));
+        assert.ok(javaRestoreStart >= 0);
+        assert.ok(javaRestoreEnd > javaRestoreStart);
+        assert.ok(javaRestore.includes('env: getAspireCliEnvironment(),'));
     });
 
     test('makes local NuGet sources available to external AppHosts', () => {

@@ -973,6 +973,7 @@ function ensureJavaAppHostSdkGenerated(bundledCliPath, playgroundRoot) {
   logStep('Generating the Aspire Java SDK in the playground');
   const result = spawnSync(bundledCliPath, ['restore'], {
     cwd: appHostDirectory,
+    env: getAspireCliEnvironment(),
     shell: false,
     encoding: 'utf8',
     timeout: 600000,
