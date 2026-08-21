@@ -3304,7 +3304,7 @@ suite('AppHostLaunchService', () => {
     });
 
     test('a Run termination still requests stop refresh while a later Publish stays active', async () => {
-        const appHostPath = '/repo/AppHost.csproj';
+        const appHostPath = path.resolve('/repo/AppHost.csproj');
         const terminationEvents: Array<{ command?: string; shouldRequestStopRefresh: boolean; shouldMarkAppHostStopping: boolean }> = [];
         service.onDidTerminateAppHostDebugSession(event => {
             terminationEvents.push(event);
@@ -3335,7 +3335,7 @@ suite('AppHostLaunchService', () => {
     });
 
     test('a non-Run launch reports a pending then active operation and clears on termination', async () => {
-        const appHostPath = '/repo/AppHost.csproj';
+        const appHostPath = path.resolve('/repo/AppHost.csproj');
         let changeCount = 0;
         let signalCliResolutionStarted: (() => void) | undefined;
         let releaseCliResolution: (() => void) | undefined;
@@ -3409,7 +3409,7 @@ suite('AppHostLaunchService', () => {
     });
 
     test('an external non-Run reservation blocks duplicate operations but not Run', async () => {
-        const appHostPath = '/repo/AppHost.csproj';
+        const appHostPath = path.resolve('/repo/AppHost.csproj');
         const reservationId = service.tryReserveExternalOperation(appHostPath, 'deploy', true, 'infra');
         assert.strictEqual(typeof reservationId, 'string');
         assert.deepStrictEqual(service.getActiveOperation(appHostPath), {
@@ -3787,7 +3787,7 @@ suite('AppHostLaunchService', () => {
     });
 
     test('a Publish launched while a Run is active does not advance the Run generation', async () => {
-        const appHostPath = '/repo/AppHost.csproj';
+        const appHostPath = path.resolve('/repo/AppHost.csproj');
         const terminationEvents: Array<{ appHostPath: string; command?: string; shouldRequestStopRefresh: boolean; shouldMarkAppHostStopping: boolean }> = [];
         service.onDidTerminateAppHostDebugSession(event => {
             terminationEvents.push(event);
