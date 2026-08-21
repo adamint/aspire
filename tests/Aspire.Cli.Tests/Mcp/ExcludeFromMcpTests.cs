@@ -190,7 +190,7 @@ public class ExcludeFromMcpTests
         Assert.StartsWith("{", jsonText, StringComparison.Ordinal);
         using var json = JsonDocument.Parse(jsonText);
 
-        Assert.Equal(AppHostPath, json.RootElement.GetProperty("app_host_path").GetString());
+        Assert.False(json.RootElement.TryGetProperty("app_host_path", out _));
         Assert.Empty(json.RootElement.GetProperty("resources").EnumerateArray());
     }
 

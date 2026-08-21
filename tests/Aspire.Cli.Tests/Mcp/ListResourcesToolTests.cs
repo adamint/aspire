@@ -51,7 +51,7 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task ListResourcesTool_ReturnsExplicitEmptyResultWithAppHostPath_WhenSnapshotsAreEmpty()
+    public async Task ListResourcesTool_ReturnsExplicitEmptyResult_WhenSnapshotsAreEmpty()
     {
         var monitor = new TestAuxiliaryBackchannelMonitor();
         monitor.AddConnection("hash1", "socket.hash1", CreateConnection());
@@ -62,8 +62,8 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
         Assert.True(result.IsError is null or false);
         using var json = GetResourceData(result);
 
-        Assert.Equal(["app_host_path", "resources"], json.RootElement.EnumerateObject().Select(p => p.Name));
-        Assert.Equal(AppHostPath, json.RootElement.GetProperty("app_host_path").GetString());
+        Assert.Equal(["resources"], json.RootElement.EnumerateObject().Select(p => p.Name));
+        Assert.False(json.RootElement.TryGetProperty("app_host_path", out _));
         Assert.Empty(json.RootElement.GetProperty("resources").EnumerateArray());
     }
 
@@ -269,7 +269,7 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task ListResourcesTool_PreservesMatchingExplicitSymlinkedAppHostPath()
+    public async Task ListResourcesTool_DoesNotExposeMatchingExplicitSymlinkedAppHostPath()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var realDirectory = workspace.WorkspaceRoot.CreateSubdirectory("real");
@@ -298,11 +298,11 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
         var result = await tool.CallToolAsync(CallToolContextTestHelper.Create(), CancellationToken.None).DefaultTimeout();
 
         using var json = GetResourceData(result);
-        Assert.Equal(symlinkedAppHostPath, json.RootElement.GetProperty("app_host_path").GetString());
+        Assert.False(json.RootElement.TryGetProperty("app_host_path", out _));
     }
 
     [Fact]
-    public async Task ListResourcesTool_ReturnsMultipleResourcesWithAppHostPath()
+    public async Task ListResourcesTool_ReturnsMultipleResources()
     {
         var monitor = new TestAuxiliaryBackchannelMonitor();
         var connection = CreateConnection(
@@ -335,7 +335,7 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
         using var json = GetResourceData(result);
         var resources = json.RootElement.GetProperty("resources");
 
-        Assert.Equal(AppHostPath, json.RootElement.GetProperty("app_host_path").GetString());
+        Assert.False(json.RootElement.TryGetProperty("app_host_path", out _));
         Assert.Equal(["api-service", "redis", "postgres"], resources.EnumerateArray().Select(r => r.GetProperty("name").GetString()));
     }
 
@@ -633,7 +633,8 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
             () => tool.CallToolAsync(CallToolContextTestHelper.Create(), CancellationToken.None).AsTask()).DefaultTimeout();
 
         Assert.Equal(McpErrorCode.InternalError, exception.ErrorCode);
-        Assert.Equal($"Unable to retrieve resources for AppHost '{AppHostPath}'.", exception.Message);
+        Assert.Equal("Unable to retrieve resources from the selected AppHost.", exception.Message);
+        Assert.DoesNotContain(AppHostPath, exception.Message, StringComparison.Ordinal);
         Assert.Collection(
             sink.Writes,
             write =>
@@ -707,8 +708,9 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
 
         Assert.Equal(McpErrorCode.InternalError, exception.ErrorCode);
         Assert.Equal(
-            $"The selected AppHost '{pinnedAppHostPath}' is not available. Start that AppHost and retry.",
+            "The selected AppHost is not available. Start that AppHost and retry.",
             exception.Message);
+        Assert.DoesNotContain(pinnedAppHostPath, exception.Message, StringComparison.Ordinal);
     }
 
     private static TestAppHostAuxiliaryBackchannel CreateConnection(params ResourceSnapshot[] snapshots)

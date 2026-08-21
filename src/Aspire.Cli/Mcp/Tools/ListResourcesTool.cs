@@ -14,7 +14,7 @@ using ModelContextProtocol.Protocol;
 
 namespace Aspire.Cli.Mcp.Tools;
 
-internal sealed record ListResourcesResult(string AppHostPath, McpResourceJson[] Resources);
+internal sealed record ListResourcesResult(McpResourceJson[] Resources);
 
 internal sealed class McpResourceUrlJson
 {
@@ -87,7 +87,22 @@ internal sealed class ListResourcesTool(IAuxiliaryBackchannelMonitor auxiliaryBa
 
     public override async ValueTask<CallToolResult> CallToolAsync(CallToolContext context, CancellationToken cancellationToken)
     {
-        var connection = await AppHostConnectionHelper.GetSelectedConnectionAsync(auxiliaryBackchannelMonitor, logger, cancellationToken).ConfigureAwait(false);
+        IAppHostAuxiliaryBackchannel? connection;
+        try
+        {
+            connection = await AppHostConnectionHelper.GetSelectedConnectionAsync(
+                auxiliaryBackchannelMonitor,
+                logger,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (McpProtocolException) when (auxiliaryBackchannelMonitor.SelectedAppHostPath is not null)
+        {
+            // The selector is internal routing state. AppHostConnectionHelper logs the unavailable
+            // identity for maintainers, but model-facing errors must not echo its absolute path.
+            throw new McpProtocolException(
+                "The selected AppHost is not available. Start that AppHost and retry.",
+                McpErrorCode.InternalError);
+        }
 
         if (connection is null)
         {
@@ -158,7 +173,7 @@ internal sealed class ListResourcesTool(IAuxiliaryBackchannelMonitor auxiliaryBa
                 }).ToArray(),
                 Relationships = GetBoundedRelationships(snapshot, relationshipTargets)
             }).ToArray();
-            var responseData = new ListResourcesResult(appHostPath, boundedResources);
+            var responseData = new ListResourcesResult(boundedResources);
             var resourceGraphData = JsonSerializer.Serialize(responseData, ListResourcesToolJsonContext.RelaxedEscaping.ListResourcesResult);
 
             var response = $"""
@@ -182,7 +197,7 @@ internal sealed class ListResourcesTool(IAuxiliaryBackchannelMonitor auxiliaryBa
                 appHostPath,
                 McpToolHelpers.GetBoundedExceptionDiagnostic(ex));
             throw new McpProtocolException(
-                $"Unable to retrieve resources for AppHost '{appHostPath}'.",
+                "Unable to retrieve resources from the selected AppHost.",
                 McpErrorCode.InternalError);
         }
     }

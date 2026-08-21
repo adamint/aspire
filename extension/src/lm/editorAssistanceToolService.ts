@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 
 import { resolveResourceNameMatches, type ResourceJson } from '../data/appHostCliContracts';
 import { type HotReloadDiagnostics } from '../debugger/hotReload';
-import { ResourceState } from '../editor/resourceConstants';
+import { ResourceState, ResourceType } from '../editor/resourceConstants';
 import { appHostLifecycleUnresolvedPath } from '../loc/strings';
 import { type EditorResourceSessionSnapshot } from '../services/appHostLaunchContracts';
 import { createAppHostOperationTarget } from '../utils/appHostOperationTarget';
@@ -919,69 +919,40 @@ function isModeMeaningful(outcome: DebugSessionStatusResult['outcome']): boolean
     return outcome === 'running' || outcome === 'starting' || outcome === 'stopping';
 }
 
-// Model-facing results need a smaller privacy boundary than the tree view: preserve opaque
-// identifiers, reduce filesystem and file URI sources to terminal names, and reject other URI
-// schemes so paths, authorities, queries, fragments, and opaque payloads cannot reach the model.
+const maxModelSafeResourceSourceLength = 256;
+
+// Model-facing results need a smaller privacy boundary than the tree view. Rebuild source values
+// from properties tied to known resource kinds so a custom resource cannot place arbitrary text in
+// the canonical source field and have it copied into a tool result.
 function getModelSafeResourceSource(resource: ResourceJson): string | null {
-    if (typeof resource.source === 'string' && resource.source.trim().length > 0) {
-        const trimmedSource = resource.source.trim();
-        if (/^file:/i.test(trimmedSource)) {
-            const sourceFileName = getFileUriFileName(trimmedSource);
-            if (sourceFileName !== undefined) {
-                return sourceFileName;
-            }
-        } else if (trimmedSource.startsWith('/') ||
-            trimmedSource.startsWith('\\') ||
-            (/^[a-z]:[\\/](?![\\/])/i.test(trimmedSource) && !/[?#]/.test(trimmedSource))) {
-            const sourceFileName = getPortableFileName(trimmedSource);
-            if (sourceFileName !== undefined) {
-                return sourceFileName;
-            }
-        } else if (!/^[a-z][a-z0-9+.-]*:/i.test(trimmedSource)) {
-            return resource.source;
-        }
+    let source: string | null | undefined;
+    let useFileName = false;
+    switch (resource.resourceType) {
+        case ResourceType.Project:
+            source = resource.properties?.['project.path'];
+            useFileName = true;
+            break;
+        case ResourceType.Executable:
+            source = resource.properties?.['executable.path'];
+            useFileName = true;
+            break;
+        case ResourceType.Container:
+            source = resource.properties?.['container.image'];
+            break;
+        default:
+            return null;
     }
 
-    const containerImage = resource.properties?.['container.image'];
-    if (typeof containerImage === 'string' && containerImage.trim().length > 0) {
-        return containerImage;
+    if (typeof source !== 'string') {
+        return null;
     }
 
-    const executablePath = resource.properties?.['executable.path'];
-    if (typeof executablePath === 'string' && executablePath.trim().length > 0) {
-        const executableFileName = getPortableFileName(executablePath);
-        if (executableFileName !== undefined) {
-            return executableFileName;
-        }
-    }
-
-    const projectPath = resource.properties?.['project.path'];
-    if (typeof projectPath === 'string' && projectPath.trim().length > 0) {
-        const projectFileName = getPortableFileName(projectPath);
-        if (projectFileName !== undefined) {
-            return projectFileName;
-        }
-    }
-
-    return null;
-}
-
-function getFileUriFileName(value: string): string | undefined {
-    try {
-        // File URIs can include an authority, query, and fragment:
-        //   file://private-host/share/Api.csproj?token=secret#fragment
-        // Only the pathname is model-safe; authority-only and root URIs must use a fallback.
-        const parsed = new URL(value);
-        if (parsed.protocol !== 'file:') {
-            return undefined;
-        }
-
-        // URL pathnames remain percent-encoded, including separators such as `%2F` and `%5C`.
-        // Malformed encoding throws here and must use a safer resource fallback.
-        return getPortableFileName(decodeURIComponent(parsed.pathname));
-    } catch {
-        return undefined;
-    }
+    const boundedSource = useFileName ? getPortableFileName(source) : source.trim();
+    return boundedSource !== undefined &&
+        boundedSource.length > 0 &&
+        [...boundedSource].length <= maxModelSafeResourceSourceLength
+        ? boundedSource
+        : null;
 }
 
 function getPortableFileName(value: string): string | undefined {
