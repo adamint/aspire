@@ -38,6 +38,9 @@ export function createDebugAdapterTracker(dcpServer: AspireDcpServer, debugAdapt
             }
             const debugSessionId = configuration.debugSessionId;
             const isOwnedAppHostSession = configuration.isApphost && appHostTracker?.debugSessionId === debugSessionId;
+            if (configuration.isApphost && !isOwnedAppHostSession) {
+                return undefined;
+            }
 
             let debuggeeExitCode: number | undefined;
 
