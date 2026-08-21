@@ -437,6 +437,46 @@ public class TemplateNuGetConfigServiceTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task ResolveTemplatePackageAsync_LocalSourceOverrideDoesNotFilterToChannelPin()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var packagesDirectory = workspace.CreateDirectory("packages");
+        var nestedDirectory = Directory.CreateDirectory(Path.Combine(
+            packagesDirectory.FullName,
+            "aspire.projecttemplates",
+            "13.5.0"));
+        File.WriteAllText(
+            Path.Combine(nestedDirectory.FullName, "Aspire.ProjectTemplates.13.5.0.nupkg"),
+            string.Empty);
+
+        var sourceOverride = packagesDirectory.FullName.Replace('\\', '/');
+        var channel = PackageChannel.CreateExplicitChannel(
+            "staging",
+            PackageChannelQuality.Both,
+            [new PackageMapping("Aspire*", "https://example.invalid/staging/v3/index.json")],
+            new FakeNuGetPackageCache(),
+            new TestFeatures(),
+            NullLogger.Instance,
+            pinnedVersion: "13.6.0");
+        var packagingService = new TestPackagingService
+        {
+            GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>([channel])
+        };
+        var service = CreateService(packagingService: packagingService);
+
+        var selection = await service.ResolveTemplatePackageAsync(
+            new TemplatePackageQuery(
+                RequestedChannel: "staging",
+                VersionOverride: null,
+                SourceOverride: sourceOverride,
+                IncludePrHives: true),
+            CancellationToken.None);
+
+        Assert.Equal("13.5.0", selection.Package.Version);
+        Assert.Equal(sourceOverride, selection.Package.Source);
+    }
+
+    [Fact]
     public async Task InstallTemplatePackageAsync_SourceOverride_UsesExclusiveSource()
     {
         const string channelSource = "https://channel.example/v3/index.json";
@@ -679,6 +719,7 @@ public class TemplateNuGetConfigServiceTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var packagesDirectory = workspace.CreateDirectory("packages");
         File.WriteAllText(Path.Combine(packagesDirectory.FullName, "Aspire.ProjectTemplates.13.5.0.nupkg"), string.Empty);
+        File.WriteAllText(Path.Combine(packagesDirectory.FullName, "Aspire.ProjectTemplates.13.6.0.nupkg"), string.Empty);
         var executionContext = TestExecutionContextHelper.CreateExecutionContext(
             workspace.WorkspaceRoot,
             identityChannel: PackageChannelNames.Local,

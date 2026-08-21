@@ -305,10 +305,15 @@ internal sealed class TemplateNuGetConfigService(
                 var templatePackages = await channel.GetTemplatePackagesAsync(
                     executionContext.WorkingDirectory,
                     templateSearchMappings,
-                    // This service applies exact-version, channel, and highest-version selection
-                    // after collecting candidates. Filtering here would make init fail when a
-                    // local channel's pin comes from a different package than ProjectTemplates.
-                    filterLocalPackagesToPinnedVersion: false,
+                    // Init and explicit source/version overrides historically enumerate the source
+                    // before this service selects a version. Keep pin filtering only for channel
+                    // resolution in `aspire new`; unqualified local resolution selects the exact
+                    // CLI identity version below from the complete candidate set.
+                    filterLocalPackagesToPinnedVersion:
+                        query.IncludePrHives &&
+                        !isUnqualifiedLocalResolution &&
+                        string.IsNullOrWhiteSpace(query.VersionOverride) &&
+                        string.IsNullOrWhiteSpace(query.SourceOverride),
                     ct);
                 lock (resultsLock)
                 {
