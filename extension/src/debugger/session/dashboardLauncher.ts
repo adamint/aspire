@@ -148,7 +148,7 @@ export class DashboardLauncher implements vscode.Disposable {
     });
 
     let didStart: boolean;
-    const start = Promise.resolve(vscode.debug.startDebugging(
+    const start = startStop(() => vscode.debug.startDebugging(
       undefined,
       debugConfig,
       this._host.parentSession));
