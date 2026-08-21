@@ -251,6 +251,23 @@ suite('AppHost log output coordinator', () => {
             []);
     });
 
+    test('deduplicates unindented multiline DebugLogger messages', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message: 'first\nsecond' })),
+            {
+                output: 'Example.Category: Information: first\nsecond\n',
+                category: 'stdout'
+            });
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Information: first\nsecond\n',
+                'console'),
+            []);
+    });
+
     test('matches timestamped multiline output with scopes', () => {
         const coordinator = new AppHostLogOutputCoordinator();
         const raw = '2026-08-10 17:40:09 warn: Example.Category[7]\n'

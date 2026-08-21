@@ -255,7 +255,8 @@ export class AppHostLogOutputCoordinator {
             }
 
             if (startsUnrelatedDebuggerOutput(line)
-                || !isDebugLoggerContinuation(line)) {
+                || (!isDebugLoggerContinuation(line)
+                    && !this.continuesPendingDebugRecord(pending, line))) {
                 this.flushPendingDebugRecord(category, outputs);
                 return false;
             }
