@@ -175,13 +175,13 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
     [InlineData("None", null)]
     [InlineData("Ninguno", null)]
     [InlineData("MSTest", "MSTest")]
-    public async Task NewCommandForwardsTestFrameworkUnderLocalizedUICulture(string testFramework, string? expectedTestFramework)
+    public async Task NewCommandForwardsLocalizedTestFrameworkSelection(string testFramework, string? expectedTestFramework)
     {
-        var originalUICulture = CultureInfo.CurrentUICulture;
+        var originalCulture = TemplatingStrings.Culture;
 
         try
         {
-            CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo("es-ES");
+            TemplatingStrings.Culture = CultureInfo.GetCultureInfo("es-ES");
 
             using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
             var runner = CreateTestRunnerWithStandardPackages();
@@ -203,7 +203,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         }
         finally
         {
-            CultureInfo.CurrentUICulture = originalUICulture;
+            TemplatingStrings.Culture = originalCulture;
         }
     }
 
