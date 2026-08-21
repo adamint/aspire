@@ -1690,7 +1690,7 @@ suite('Editor assistance AppHost services', () => {
             });
 
             const serialized = JSON.stringify([starting, stopping, multiple]);
-            assert.strictEqual(serialized.includes(projectPath), true);
+            assert.strictEqual(serialized.includes(JSON.stringify(projectPath)), true);
             assert.strictEqual(serialized.includes('targetPath'), false);
             assert.strictEqual(serialized.includes('resourceExecutablePaths'), false);
             assert.strictEqual(serialized.includes('project.path'), false);
@@ -3317,8 +3317,8 @@ suite('Editor assistance AppHost services', () => {
             });
             assert.deepStrictEqual(Object.keys(result), ['success', 'tool', 'outcome', 'sessions']);
             const serialized = JSON.stringify(result);
-            assert.strictEqual(serialized.includes(apiProjectPath), true);
-            assert.strictEqual(serialized.includes(workerExecutablePath), true);
+            assert.strictEqual(serialized.includes(JSON.stringify(apiProjectPath)), true);
+            assert.strictEqual(serialized.includes(JSON.stringify(workerExecutablePath)), true);
             assert.strictEqual(serialized.includes('ambiguous-api'), false);
             assert.strictEqual(serialized.includes('ambiguous-worker'), false);
             assert.strictEqual(serialized.includes('properties'), false);
