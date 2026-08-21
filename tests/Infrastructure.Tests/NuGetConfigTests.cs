@@ -13,6 +13,8 @@ public sealed class NuGetConfigTests
     public void DiagnosticsPackagesAreMappedToPublicAndToolsFeeds()
     {
         var document = XDocument.Load(Path.Combine(RepoRoot.Path, "NuGet.config"));
+        var root = document.Root;
+        Assert.NotNull(root);
         string[] diagnosticsPackages =
         [
             "Microsoft.Diagnostics.NETCore.Client",
@@ -20,14 +22,14 @@ public sealed class NuGetConfigTests
         ];
 
         var source = Assert.Single(
-            document.Root!.Element("packageSources")!.Elements("add"),
+            root.Element("packageSources")!.Elements("add"),
             element => (string?)element.Attribute("key") == "dotnet-tools");
         Assert.Equal(
             "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-tools/nuget/v3/index.json",
             (string?)source.Attribute("value"));
 
         var mapping = Assert.Single(
-            document.Root.Element("packageSourceMapping")!.Elements("packageSource"),
+            root.Element("packageSourceMapping")!.Elements("packageSource"),
             element => (string?)element.Attribute("key") == "dotnet-tools");
         var patterns = mapping.Elements("package")
             .Select(element => element.Attribute("pattern")!.Value)
@@ -36,7 +38,7 @@ public sealed class NuGetConfigTests
         Assert.Equal(diagnosticsPackages, patterns);
 
         var publicMapping = Assert.Single(
-            document.Root.Element("packageSourceMapping")!.Elements("packageSource"),
+            root.Element("packageSourceMapping")!.Elements("packageSource"),
             element => (string?)element.Attribute("key") == "dotnet-public");
         var publicPatterns = publicMapping.Elements("package")
             .Select(element => element.Attribute("pattern")!.Value);
