@@ -1159,8 +1159,13 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
         TaskCompletionSource watchStopped,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        var callbackInvoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var registration = cancellationToken.Register(
-            () => throw new InvalidOperationException("Cancellation callback failed."));
+            () =>
+            {
+                callbackInvoked.TrySetResult();
+                throw new InvalidOperationException("Cancellation callback failed.");
+            });
         watchStarted.TrySetResult();
         try
         {
@@ -1168,6 +1173,10 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
         }
         finally
         {
+            // Keep the throwing registration alive until cancellation invokes it. Otherwise, the
+            // delay continuation can race CancellationTokenSource.Cancel and dispose the registration
+            // before Cancel reaches it, causing this test to pass without exercising the callback failure.
+            await callbackInvoked.Task.DefaultTimeout();
             watchStopped.TrySetResult();
         }
 
@@ -1178,8 +1187,13 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
         TaskCompletionSource watchStarted,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        var callbackInvoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var registration = cancellationToken.Register(
-            () => throw new InvalidOperationException("Cancellation callback failed."));
+            () =>
+            {
+                callbackInvoked.TrySetResult();
+                throw new InvalidOperationException("Cancellation callback failed.");
+            });
         watchStarted.TrySetResult();
         try
         {
@@ -1187,6 +1201,7 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            await callbackInvoked.Task.DefaultTimeout();
             throw new IOException("Watch failed.");
         }
 
