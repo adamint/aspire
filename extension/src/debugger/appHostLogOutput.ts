@@ -32,7 +32,9 @@ interface LogRecord {
 }
 
 interface CorrelatedRecord {
-    record: LogRecord;
+    // IncludeScopes gives one ConsoleLogger record both scope-inclusive and scope-free
+    // identities. They share sources so either identity advances the same logical record.
+    records: LogRecord[];
     sources: Set<LogSource>;
 }
 
@@ -226,13 +228,14 @@ export class AppHostLogOutputCoordinator {
             return;
         }
 
+        this.clearIdleFlushTimer(category);
         this._pendingRecords.delete(category);
 
         const candidates = createPendingRecords(pending);
         const record = candidates.find(candidate => this.hasCorrelatedTwin(candidate, 'consoleLogger'))
             ?? candidates[0];
 
-        const output = this.correlate(record, 'consoleLogger');
+        const output = this.correlate(record, 'consoleLogger', candidates);
         if (output) {
             outputs.push(output);
         }
@@ -245,7 +248,7 @@ export class AppHostLogOutputCoordinator {
         const pending = this._pendingDebugRecords.get(category);
         if (pending) {
             if (isDebugLoggerHeader(line)) {
-                if (this.continuesPendingDebugRecord(pending, line)) {
+                if (this.mergedDebugRecordHasTwin(pending, line)) {
                     pending.raw += line;
                     return true;
                 }
@@ -257,7 +260,7 @@ export class AppHostLogOutputCoordinator {
 
             if (startsUnrelatedDebuggerOutput(line)
                 || (!isDebugLoggerContinuation(line)
-                    && !this.continuesPendingDebugRecord(pending, line))) {
+                    && !this.canAppendAmbiguousDebugLine(pending, line))) {
                 this.flushPendingDebugRecord(category, outputs);
                 return false;
             }
@@ -274,9 +277,26 @@ export class AppHostLogOutputCoordinator {
         return true;
     }
 
-    private continuesPendingDebugRecord(pending: PendingDebugRecord, line: string): boolean {
+    private mergedDebugRecordHasTwin(pending: PendingDebugRecord, line: string): boolean {
         const merged = parseDebugLoggerRecord(`${pending.raw}${line}`);
         return !!merged && this.hasCorrelatedTwin(merged, 'debugLogger');
+    }
+
+    private canAppendAmbiguousDebugLine(pending: PendingDebugRecord, line: string): boolean {
+        // Before another source establishes the identity, preserve ambiguous unindented
+        // lines so a DAP-first multiline record can correlate later. Once the pending
+        // record has a twin, only append a line when the merged identity also has one.
+        const merged = parseDebugLoggerRecord(`${pending.raw}${line}`);
+        if (!merged) {
+            return false;
+        }
+
+        if (this.hasCorrelatedTwin(merged, 'debugLogger')) {
+            return true;
+        }
+
+        const current = parseDebugLoggerRecord(pending.raw);
+        return !!current && !this.hasCorrelatedTwin(current, 'debugLogger');
     }
 
     private flushPendingDebugRecord(category: string, outputs: AppHostParentOutput[]): void {
@@ -285,6 +305,7 @@ export class AppHostLogOutputCoordinator {
             return;
         }
 
+        this.clearIdleFlushTimer(category);
         this._pendingDebugRecords.delete(category);
 
         const record = parseDebugLoggerRecord(pending.raw);
@@ -299,12 +320,16 @@ export class AppHostLogOutputCoordinator {
         }
     }
 
-    private correlate(record: LogRecord, source: LogSource): AppHostParentOutput | undefined {
+    private correlate(
+        record: LogRecord,
+        source: LogSource,
+        aliases: readonly LogRecord[] = [record]): AppHostParentOutput | undefined {
         const records = this.correlatedRecordsFor(record);
         const index = records.findIndex(candidate =>
-            !candidate.sources.has(source) && recordsMatch(candidate.record, record));
+            !candidate.sources.has(source)
+            && candidate.records.some(candidateRecord => recordsMatch(candidateRecord, record)));
         if (index < 0) {
-            records.push({ record, sources: new Set([source]) });
+            records.push({ records: [...aliases], sources: new Set([source]) });
             const limit = isLowLevel(record)
                 ? AppHostLogOutputCoordinator._maxLowLevelCorrelatedRecords
                 : AppHostLogOutputCoordinator._maxCorrelatedRecords;
@@ -317,6 +342,12 @@ export class AppHostLogOutputCoordinator {
 
         const existing = records[index];
         existing.sources.add(source);
+        for (const alias of aliases) {
+            if (!existing.records.some(existingRecord => recordsMatch(existingRecord, alias))) {
+                existing.records.push(alias);
+            }
+        }
+
         const expectedSources = isLowLevel(record)
             ? AppHostLogOutputCoordinator._lowLevelSources
             : AppHostLogOutputCoordinator._allSources;
@@ -329,7 +360,8 @@ export class AppHostLogOutputCoordinator {
 
     private hasCorrelatedTwin(record: LogRecord, source: LogSource): boolean {
         return this.correlatedRecordsFor(record).some(candidate =>
-            !candidate.sources.has(source) && recordsMatch(candidate.record, record));
+            !candidate.sources.has(source)
+            && candidate.records.some(candidateRecord => recordsMatch(candidateRecord, record)));
     }
 
     private correlatedRecordsFor(record: LogRecord): CorrelatedRecord[] {

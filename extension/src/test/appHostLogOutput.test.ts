@@ -301,6 +301,23 @@ suite('AppHost log output coordinator', () => {
             []);
     });
 
+    test('deduplicates unindented multiline DebugLogger messages when it arrives first', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Information: first\nsecond\n',
+                'console'),
+            [{
+                output: 'Example.Category: Information: first\nsecond\n',
+                category: 'stdout'
+            }]);
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message: 'first\nsecond' })),
+            undefined);
+    });
+
     test('matches timestamped multiline output with scopes', () => {
         const coordinator = new AppHostLogOutputCoordinator();
         const raw = '2026-08-10 17:40:09 warn: Example.Category[7]\n'
@@ -317,6 +334,40 @@ suite('AppHost log output coordinator', () => {
                 category: 'stdout'
             });
         assert.deepStrictEqual(coordinator.flush(), []);
+    });
+
+    test('deduplicates a scope-free structured record after scoped ConsoleLogger output arrives first', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'info: Example.Category[7]\n'
+                    + '      => RequestPath:/health\n'
+                    + '      Scoped message.\n',
+                'stdout'),
+            [{
+                output: 'Example.Category: Information: => RequestPath:/health\nScoped message.\n',
+                category: 'stdout'
+            }]);
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message: 'Scoped message.' })),
+            undefined);
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Information: Scoped message.\n',
+                'console'),
+            []);
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({
+                sequenceNumber: 2,
+                message: 'Scoped message.'
+            })),
+            {
+                output: 'Example.Category: Information: Scoped message.\n',
+                category: 'stdout'
+            });
     });
 
     test('keeps a message that begins with the scope marker', () => {
@@ -381,21 +432,21 @@ suite('AppHost log output coordinator', () => {
         assert.deepStrictEqual(renderConsole(coordinator, 'step 3: Debug: cache miss\n', 'console'), []);
     });
 
-    test('does not append unrelated console output to a pending DebugLogger record', () => {
+    test('does not append unrelated console output when the pending DebugLogger record has a twin', () => {
         const coordinator = new AppHostLogOutputCoordinator();
 
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message: 'Logged.' })),
+            {
+                output: 'Example.Category: Information: Logged.\n',
+                category: 'stdout'
+            });
         assert.deepStrictEqual(
             renderConsole(
                 coordinator,
                 'Example.Category: Information: Logged.\nprocessing\n',
                 'console'),
-            [{
-                output: 'Example.Category: Information: Logged.\n',
-                category: 'stdout'
-            }]);
-        assert.strictEqual(
-            coordinator.handleBackchannelEntry(createEntry({ message: 'Logged.' })),
-            undefined);
+            []);
     });
 
     test('keeps an exception-shaped one-line DebugLogger message intact', () => {
@@ -509,6 +560,80 @@ suite('AppHost log output coordinator', () => {
                 output: 'continuous partial output',
                 category: 'stderr'
             }]);
+        }
+        finally {
+            coordinator.reset();
+            clock.restore();
+        }
+    });
+
+    test('restarts idle deadlines for replacements but not continuations', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const emitted: AppHostParentOutput[] = [];
+        const coordinator = new AppHostLogOutputCoordinator(output => emitted.push(output));
+
+        try {
+            assert.deepStrictEqual(
+                coordinator.handleDebugAdapterOutput(
+                    'info: Extended.Category[7]\n      first\n',
+                    'stdout'),
+                []);
+            assert.deepStrictEqual(
+                coordinator.handleDebugAdapterOutput(
+                    'info: Replaced.Category[7]\n      old\n',
+                    'stderr'),
+                []);
+            assert.deepStrictEqual(
+                coordinator.handleDebugAdapterOutput(
+                    'Replaced.DebugCategory: Information: old\n',
+                    'console'),
+                []);
+
+            await clock.tickAsync(100);
+
+            assert.deepStrictEqual(
+                coordinator.handleDebugAdapterOutput('      second\n', 'stdout'),
+                []);
+            assert.deepStrictEqual(
+                coordinator.handleDebugAdapterOutput(
+                    'info: Replacement.Category[7]\n      replacement\n',
+                    'stderr'),
+                [{
+                    output: 'Replaced.Category: Information: old\n',
+                    category: 'stdout'
+                }]);
+            assert.deepStrictEqual(
+                coordinator.handleDebugAdapterOutput(
+                    'Replacement.DebugCategory: Information: replacement\n',
+                    'console'),
+                [{
+                    output: 'Replaced.DebugCategory: Information: old\n',
+                    category: 'stdout'
+                }]);
+
+            await clock.tickAsync(150);
+
+            assert.deepStrictEqual(emitted, [{
+                output: 'Extended.Category: Information: first\nsecond\n',
+                category: 'stdout'
+            }]);
+
+            await clock.tickAsync(100);
+
+            assert.deepStrictEqual(emitted, [
+                {
+                    output: 'Extended.Category: Information: first\nsecond\n',
+                    category: 'stdout'
+                },
+                {
+                    output: 'Replacement.Category: Information: replacement\n',
+                    category: 'stdout'
+                },
+                {
+                    output: 'Replacement.DebugCategory: Information: replacement\n',
+                    category: 'stdout'
+                }
+            ]);
         }
         finally {
             coordinator.reset();
