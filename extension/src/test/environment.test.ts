@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { getEnvironmentWithoutE2EBridgeVariables } from '../utils/environment';
+import { getEnvironmentForChildProcess } from '../utils/environment';
 
 suite('environment', () => {
     const enableBridgeVariable = 'ASPIRE_EXTENSION_E2E_ENABLE_BRIDGE';
@@ -25,7 +25,7 @@ suite('environment', () => {
         process.env[e2eNuGetPackagesVariable] = '/isolated/e2e/packages';
         process.env.NUGET_PACKAGES = '/shared/packages';
 
-        const environment = getEnvironmentWithoutE2EBridgeVariables();
+        const environment = getEnvironmentForChildProcess();
 
         assert.strictEqual(environment.NUGET_PACKAGES, '/isolated/e2e/packages');
         assert.strictEqual(environment[e2eNuGetPackagesVariable], undefined);
@@ -36,7 +36,7 @@ suite('environment', () => {
         process.env[e2eNuGetPackagesVariable] = '/isolated/e2e/packages';
         process.env.NUGET_PACKAGES = '/shared/packages';
 
-        const environment = getEnvironmentWithoutE2EBridgeVariables();
+        const environment = getEnvironmentForChildProcess();
 
         assert.strictEqual(environment.NUGET_PACKAGES, '/shared/packages');
         assert.strictEqual(environment[e2eNuGetPackagesVariable], undefined);

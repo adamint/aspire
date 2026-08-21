@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import {
     azureFunctionsExtensionId,
+    codeLldbExtensionId,
     csharpExtensionId,
     getRustExtensionId,
     javaDebugExtensionId,
@@ -96,7 +97,7 @@ export function getDebuggerInstallHintForResource(
         // Preserve either installed Windows adapter, but recommend CodeLLDB when neither is installed
         // because GNU targets require it and it also supports MSVC targets.
         const extensionId = platform === 'win32' && !vscode.extensions.getExtension(selectedExtensionId)
-            ? 'vadimcn.vscode-lldb'
+            ? codeLldbExtensionId
             : selectedExtensionId;
         hint = {
             debuggerName: 'Rust',

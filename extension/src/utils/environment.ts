@@ -42,7 +42,7 @@ export function deleteEnvironmentVariable(environment: NodeJS.ProcessEnv, name: 
     delete environment[name];
 }
 
-export function getEnvironmentWithoutE2EBridgeVariables(): NodeJS.ProcessEnv {
+export function getEnvironmentForChildProcess(): NodeJS.ProcessEnv {
     const environment = Object.fromEntries(
         Object.entries(process.env).filter(([key]) => !key.startsWith('ASPIRE_EXTENSION_E2E_') && !filteredEnvironmentKeyCounts.has(key))
     );

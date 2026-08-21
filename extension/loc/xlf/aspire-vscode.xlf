@@ -557,7 +557,7 @@
       <source xml:lang="en">Official Aspire extension for Visual Studio Code</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.debuggerExtensionDisabled">
-      <source xml:lang="en">One or more extensions required for {0} debugging are disabled. Enable them, then restart the AppHost to enable debugging.</source>
+      <source xml:lang="en">One or more extensions required for {0} debugging did not become available. They may be disabled or require a window reload. Open the Extensions view to continue setup.</source>
     </trans-unit>
     <trans-unit id="command.viewAppHostLogFile">
       <source xml:lang="en">Open AppHost logs file</source>

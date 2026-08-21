@@ -42,6 +42,7 @@ export function isCsDevKitInstalled() {
 export const csharpExtensionId = 'ms-dotnettools.csharp';
 export const azureFunctionsExtensionId = 'ms-azuretools.vscode-azurefunctions';
 export const mauiExtensionId = 'ms-dotnettools.dotnet-maui';
+export const codeLldbExtensionId = 'vadimcn.vscode-lldb';
 
 export function isCsharpInstalled() {
     return isExtensionInstalled(csharpExtensionId);
@@ -62,15 +63,15 @@ export function isGoInstalled() {
 export function getRustExtensionId(
     platform: NodeJS.Platform = process.platform,
     extensionInstalled?: (extensionId: string) => boolean
-): 'ms-vscode.cpptools' | 'vadimcn.vscode-lldb' {
+): 'ms-vscode.cpptools' | typeof codeLldbExtensionId {
     if (platform === 'win32'
         && extensionInstalled
         && !extensionInstalled('ms-vscode.cpptools')
-        && extensionInstalled('vadimcn.vscode-lldb')) {
-        return 'vadimcn.vscode-lldb';
+        && extensionInstalled(codeLldbExtensionId)) {
+        return codeLldbExtensionId;
     }
 
-    return platform === 'win32' ? 'ms-vscode.cpptools' : 'vadimcn.vscode-lldb';
+    return platform === 'win32' ? 'ms-vscode.cpptools' : codeLldbExtensionId;
 }
 
 export function isRustInstalled(platform: NodeJS.Platform = process.platform) {

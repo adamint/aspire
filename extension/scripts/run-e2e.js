@@ -71,7 +71,7 @@ if (!verifyExtesterFeedOnly) {
 }
 const tempRoot = verifyExtesterFeedOnly ? '' : fs.realpathSync.native(requestedTempRoot);
 const shortRunRoot = verifyExtesterFeedOnly ? '' : fs.mkdtempSync(path.join(tempRoot, 'aev-'));
-const isolatedNuGetPackages = path.join(shortRunRoot, 'nuget-packages');
+const e2eNuGetPackages = path.join(downloadCacheRoot, 'nuget-packages', shardName);
 const isolatedAspireHome = path.join(shortRunRoot, 'aspire-home');
 const storageDir = path.join(shortRunRoot, 'storage');
 const extensionsDir = path.join(shortRunRoot, 'extensions');
@@ -147,6 +147,18 @@ function prepareRunDirectories() {
   removePath(recordingsDir, { recursive: true, force: true });
   for (const directory of [artifactsDir, resultsDir, diagnosticsStorageRoot, isolatedAspireHome, storageDir, extensionsDir]) {
     fs.mkdirSync(directory, { recursive: true });
+  }
+}
+
+function prepareNuGetPackageCache() {
+  fs.mkdirSync(e2eNuGetPackages, { recursive: true });
+  for (const entry of fs.readdirSync(e2eNuGetPackages, { withFileTypes: true })) {
+    // E2E builds reuse package versions, so only repository-built Aspire packages can be stale.
+    // Keep third-party packages warm across runs, and isolate each shard so concurrent runs do not
+    // remove packages another shard is restoring.
+    if (/^aspire(?:\.|$)/i.test(entry.name)) {
+      removePathWithoutFollowingLinks(path.join(e2eNuGetPackages, entry.name), { recursive: true, force: true });
+    }
   }
 }
 
@@ -589,6 +601,7 @@ async function main() {
 
     assertSpecMatches(testSpec);
     prepareRunDirectories();
+    prepareNuGetPackageCache();
     logE2eConfiguration();
 
     const bundledCliPath = resolveCliPath();
@@ -633,8 +646,8 @@ async function main() {
       // ignore an extension host left behind by an earlier run that is still polling them.
       ASPIRE_EXTENSION_E2E_RUN_ID: runId,
       ASPIRE_EXTENSION_E2E_ENABLE_BRIDGE: 'true',
-      NUGET_PACKAGES: isolatedNuGetPackages,
-      ASPIRE_EXTENSION_E2E_NUGET_PACKAGES: isolatedNuGetPackages,
+      NUGET_PACKAGES: e2eNuGetPackages,
+      ASPIRE_EXTENSION_E2E_NUGET_PACKAGES: e2eNuGetPackages,
       ASPIRE_EXTENSION_E2E_SKIP_CURRENT_CLI_REGRESSIONS: process.env.ASPIRE_EXTENSION_E2E_SKIP_CURRENT_CLI_REGRESSIONS === 'true' ? 'true' : 'false',
       ASPIRE_EXTENSION_E2E_PRIMARY_APPHOST: primaryAppHostProject,
       ASPIRE_EXTENSION_E2E_APPHOST_SDK_VERSION: appHostSdkVersion,
@@ -1686,7 +1699,7 @@ function getAspireCliEnvironment(extraEnv = {}) {
     ASPIRE_CLI_START_TIMEOUT: process.env.ASPIRE_EXTENSION_E2E_CLI_START_TIMEOUT || '300',
     ASPIRE_CLI_TELEMETRY_OPTOUT: 'true',
     ASPIRE_VERSION_CHECK_DISABLED: 'true',
-    NUGET_PACKAGES: isolatedNuGetPackages,
+    NUGET_PACKAGES: e2eNuGetPackages,
     DOTNET_CLI_UI_LANGUAGE: 'en',
     DOTNET_CLI_TELEMETRY_OPTOUT: '1',
     DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE: '1',

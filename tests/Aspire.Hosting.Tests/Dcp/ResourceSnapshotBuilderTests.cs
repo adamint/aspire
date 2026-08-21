@@ -111,6 +111,15 @@ public class ResourceSnapshotBuilderTests
         snapshot = snapshotBuilder.ToSnapshot(executable, snapshot);
 
         Assert.Empty(snapshot.Properties.Where(property => property.Name == propertyName));
+
+        resource.Annotations.Remove(resource.Annotations.OfType<ForceProcessExecutionAnnotation>().Single());
+        resource.Annotations.Add(new ContainerLifetimeAnnotation
+        {
+            Lifetime = ContainerLifetime.Persistent
+        });
+        snapshot = snapshotBuilder.ToSnapshot(executable, snapshot);
+
+        Assert.Empty(snapshot.Properties.Where(property => property.Name == propertyName));
     }
 
     [Fact]

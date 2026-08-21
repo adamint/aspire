@@ -28,7 +28,7 @@ import { createResolvedAspireCliPathProcessEnvironment } from '../../utils/cliPa
 import { resolveCliPath } from '../../utils/cliPath';
 import { getCliPathTargetForUri } from '../../utils/cliPathVariables';
 import { getHotReloadDiagnostics, logHotReloadDiagnostics, showHotReloadDisabledAdvisoryIfNeeded } from '../hotReload';
-import { deleteEnvironmentVariable, getEnvironmentWithoutE2EBridgeVariables, setEnvironmentVariable } from '../../utils/environment';
+import { deleteEnvironmentVariable, getEnvironmentForChildProcess, setEnvironmentVariable } from '../../utils/environment';
 
 interface IDotNetService {
     getAndActivateDevKit(): Promise<boolean>
@@ -511,7 +511,7 @@ function createProjectEnvironment(
         ));
     }
 
-    const environment = getEnvironmentWithoutE2EBridgeVariables();
+    const environment = getEnvironmentForChildProcess();
     const { profile: defaultProfile, profileName: defaultProfileName } = determineDefaultLaunchProfile(launchSettings);
     applyEnvironmentVariables(environment, runApiEnvironment, defaultProfile, defaultProfileName);
     for (const envVar of runSessionEnvironment) {

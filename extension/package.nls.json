@@ -300,7 +300,7 @@
   "aspire-vscode.strings.resourceCommandOutputOpenFailed": "The command completed, but its output could not be opened: {0}",
   "aspire-vscode.strings.debuggerSetupAction": "Set Up",
   "aspire-vscode.strings.debuggerSetupNotification": "Set up {0} debugging support to debug resources in this app.",
-  "aspire-vscode.strings.debuggerExtensionDisabled": "One or more extensions required for {0} debugging are disabled. Enable them, then restart the AppHost to enable debugging.",
+  "aspire-vscode.strings.debuggerExtensionDisabled": "One or more extensions required for {0} debugging did not become available. They may be disabled or require a window reload. Open the Extensions view to continue setup.",
   "aspire-vscode.strings.debuggerInstalledRestartAppHost": "The extensions required for {0} debugging are installed. Restart the AppHost to enable debugging.",
   "aspire-vscode.strings.openExtensionsLabel": "Open Extensions",
   "aspire-vscode.strings.codeLensSetUpDebugger": "⚠️ Set up {0} debugger",

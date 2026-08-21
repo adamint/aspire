@@ -425,7 +425,7 @@ suite('debugger install hints', () => {
         assert.ok(getExtension.calledWith('vscjava.vscode-java-debug'));
         assert.strictEqual(
             showWarningMessage.firstCall.args[0],
-            'One or more extensions required for Java debugging are disabled. Enable them, then restart the AppHost to enable debugging.');
+            'One or more extensions required for Java debugging did not become available. They may be disabled or require a window reload. Open the Extensions view to continue setup.');
         assert.deepStrictEqual(showWarningMessage.firstCall.args.slice(1), ['Open Extensions']);
         assert.ok(executeCommand.thirdCall.calledWithExactly(
             'workbench.extensions.search',
