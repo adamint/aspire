@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { CliPathResolver, cliPathResolver } from '../utils/cliPath';
@@ -17,6 +18,7 @@ const mcpServerLabel = 'Aspire';
 const mcpServerArgs = ['agent', 'mcp'];
 const appHostOption = '--apphost';
 const aspireCliExecutablePathSetting = 'aspire.aspireCliExecutablePath';
+const appHostCanonicalizationTimeoutMs = 5000;
 
 export interface AspireMcpServerDefinitionOptions {
     label?: string;
@@ -93,9 +95,39 @@ export interface AspireMcpServerDefinitionProviderDependencies {
     capabilityProbe: McpCapabilityProbe;
 }
 
+/**
+ * Resolves one AppHost to the physical file an MCP definition will remain pinned to.
+ *
+ * Workspace folders can live on network filesystems where a realpath request may never return.
+ * Registration is refresh-driven, so bounding that request lets a bad candidate be skipped rather
+ * than permanently blocking every healthy definition and all later refreshes.
+ */
+export async function canonicalizeMcpAppHostPath(
+    appHostPath: string,
+    timeoutMs = appHostCanonicalizationTimeoutMs): Promise<string> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+        return await Promise.race([
+            fs.promises.realpath(appHostPath),
+            new Promise<never>((_, reject) => {
+                timeout = setTimeout(
+                    () => reject(new Error(`AppHost canonicalization did not complete within ${timeoutMs}ms.`)),
+                    timeoutMs);
+            }),
+        ]);
+    }
+    finally {
+        if (timeout !== undefined) {
+            clearTimeout(timeout);
+        }
+    }
+}
+
 interface PinnedAppHost {
     cliPath: string;
+    selectorPath: string;
     appHostPath: string;
+    comparisonKey: string;
 }
 
 /**
@@ -105,7 +137,6 @@ interface PinnedAppHost {
  */
 interface OwnedPinnedAppHost extends PinnedAppHost {
     owner: vscode.WorkspaceFolder;
-    comparisonKey: string;
 }
 
 interface RegisteredDefinition {
@@ -136,6 +167,8 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
     private _definitions: vscode.McpStdioServerDefinition[] = [];
     private _definitionsByPin = new Map<string, RegisteredDefinition>();
     private _refreshGeneration = 0;
+    private _refreshPending = false;
+    private _refreshPromise: Promise<void> | undefined;
     private _disposed = false;
     private _configChangeDisposable: vscode.Disposable | undefined;
     private _workspaceFolderChangeDisposable: vscode.Disposable | undefined;
@@ -178,12 +211,37 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
         this._candidateChangeDisposable = this._appHostDiscovery.onDidChangeCandidates(() => void this.refresh());
     }
 
-    async refresh(): Promise<void> {
-        const refreshGeneration = ++this._refreshGeneration;
+    refresh(): Promise<void> {
+        this._refreshGeneration++;
         if (this._disposed) {
-            return;
+            return Promise.resolve();
         }
 
+        this._refreshPending = true;
+        this._refreshPromise ??= this._drainRefreshes();
+        return this._refreshPromise;
+    }
+
+    /**
+     * Runs at most one refresh graph at a time and collapses any event burst into one follow-up.
+     *
+     * Individual events still bump the generation immediately, so the in-flight graph cannot
+     * publish stale definitions. The follow-up then observes the latest workspace state once.
+     */
+    private async _drainRefreshes(): Promise<void> {
+        try {
+            while (this._refreshPending && !this._disposed) {
+                this._refreshPending = false;
+                const refreshGeneration = this._refreshGeneration;
+                await this._runRefresh(refreshGeneration);
+            }
+        }
+        finally {
+            this._refreshPromise = undefined;
+        }
+    }
+
+    private async _runRefresh(refreshGeneration: number): Promise<void> {
         try {
             await this._refresh(refreshGeneration);
         }
@@ -206,7 +264,8 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
         // Restricted Mode must never launch a repository-controlled CLI, so no folder is probed
         // until the whole workspace is trusted.
         const pinsByFolder = vscode.workspace.isTrusted
-            ? await Promise.all(workspaceFolders.map(folder => this._resolvePinnedAppHostsSafely(folder)))
+            ? await Promise.all(workspaceFolders.map(folder =>
+                this._resolvePinnedAppHostsSafely(folder, refreshGeneration)))
             : [];
 
         if (refreshGeneration !== this._refreshGeneration) {
@@ -215,18 +274,10 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
 
         const definitions: vscode.McpStdioServerDefinition[] = [];
         const definitionsByPin = new Map<string, RegisteredDefinition>();
-        const registeredLabels = new Set<string>();
-        for (const pin of selectWorkspacePinnedAppHosts(workspaceFolders, pinsByFolder)) {
-            const label = createPinnedServerLabel(pin);
-
-            // VS Code identifies an MCP server by its label. Two folders that share a name and
-            // hold the same relative AppHost path are the one case this label cannot tell apart,
-            // and registering both would give VS Code two servers with one identity. Keep the
-            // first in the deterministic order and report the one that is skipped.
-            if (registeredLabels.has(label)) {
-                extensionLogOutputChannel.warn(`Skipping Aspire MCP server registration for '${pin.appHostPath}': label '${label}' is already registered for another AppHost.`);
-                continue;
-            }
+        const pins = selectWorkspacePinnedAppHosts(workspaceFolders, pinsByFolder);
+        const labels = createPinnedServerLabels(pins, this._definitionsByPin);
+        for (const [index, pin] of pins.entries()) {
+            const label = labels[index];
 
             // The pin key is the AppHost identity, so reusing an existing definition can only ever
             // keep serving the same AppHost. Reuse it when nothing else about the launch changed
@@ -252,7 +303,6 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
                 }
             }
 
-            registeredLabels.add(label);
             definitionsByPin.set(pin.comparisonKey, { definition, cliPath: pin.cliPath });
             definitions.push(definition);
         }
@@ -283,6 +333,7 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
         // stops a later event from publishing through an already-disposed change emitter.
         this._disposed = true;
         this._refreshGeneration++;
+        this._refreshPending = false;
         this._configChangeDisposable?.dispose();
         this._workspaceFolderChangeDisposable?.dispose();
         this._workspaceTrustGrantDisposable?.dispose();
@@ -296,9 +347,11 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
      * every other folder's, so a failure there must reduce that folder to zero registrations
      * rather than abort the refresh and freeze the whole published set.
      */
-    private async _resolvePinnedAppHostsSafely(workspaceFolder: vscode.WorkspaceFolder): Promise<PinnedAppHost[]> {
+    private async _resolvePinnedAppHostsSafely(
+        workspaceFolder: vscode.WorkspaceFolder,
+        refreshGeneration: number): Promise<PinnedAppHost[]> {
         try {
-            return await this._resolvePinnedAppHosts(workspaceFolder);
+            return await this._resolvePinnedAppHosts(workspaceFolder, refreshGeneration);
         }
         catch (error) {
             extensionLogOutputChannel.warn(`Skipping Aspire MCP server registration for '${workspaceFolder.uri.fsPath}': ${error instanceof Error ? error.message : String(error)}`);
@@ -311,7 +364,9 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
      * scoped: the opt-out, the CLI, its capabilities, and discovery all belong to that folder, so
      * one folder can register servers while another registers none.
      */
-    private async _resolvePinnedAppHosts(workspaceFolder: vscode.WorkspaceFolder): Promise<PinnedAppHost[]> {
+    private async _resolvePinnedAppHosts(
+        workspaceFolder: vscode.WorkspaceFolder,
+        refreshGeneration: number): Promise<PinnedAppHost[]> {
         if (getRegisterMcpServerInWorkspaceOverride(workspaceFolder.uri) === false) {
             return [];
         }
@@ -323,6 +378,9 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
         }
         catch (error) {
             extensionLogOutputChannel.warn(`Skipping Aspire MCP server registration for '${workspaceFolder.uri.fsPath}': CLI resolution failed: ${error instanceof Error ? error.message : String(error)}`);
+            return [];
+        }
+        if (refreshGeneration !== this._refreshGeneration) {
             return [];
         }
 
@@ -346,6 +404,9 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
             extensionLogOutputChannel.warn(`Skipping Aspire MCP server registration for '${workspaceFolder.uri.fsPath}': CLI capability probe failed: ${error instanceof Error ? error.message : String(error)}`);
             return [];
         }
+        if (refreshGeneration !== this._refreshGeneration) {
+            return [];
+        }
 
         if (capabilityStatus !== 'supported') {
             extensionLogOutputChannel.info(`Skipping Aspire MCP server registration for '${workspaceFolder.uri.fsPath}': CLI capability '${agentMcpCapability}' is ${capabilityStatus}.`);
@@ -360,25 +421,47 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
             extensionLogOutputChannel.warn(`Skipping Aspire MCP server registration for '${workspaceFolder.uri.fsPath}': AppHost discovery failed: ${error instanceof Error ? error.message : String(error)}`);
             return [];
         }
+        if (refreshGeneration !== this._refreshGeneration) {
+            return [];
+        }
 
-        const appHostPathsByKey = new Map<string, string>();
+        const pinsByKey = new Map<string, PinnedAppHost>();
         for (const candidate of candidates) {
+            if (refreshGeneration !== this._refreshGeneration) {
+                return [];
+            }
             if (!isBuildableAppHostCandidate(candidate)) {
                 continue;
             }
 
-            // Pin an absolute path anchored to the owning folder: the MCP server outlives this
-            // refresh and must not depend on the working directory VS Code launches it from.
-            const appHostPath = path.resolve(workspaceFolder.uri.fsPath, candidate.path);
-            const key = getLexicalAppHostPathKey(appHostPath);
-            if (!appHostPathsByKey.has(key)) {
-                appHostPathsByKey.set(key, appHostPath);
+            const selectorPath = path.resolve(workspaceFolder.uri.fsPath, candidate.path);
+            let appHostPath: string;
+            try {
+                // The server can start after this refresh, so pin the physical file selected now
+                // rather than leaving a symlink free to retarget before VS Code launches it.
+                appHostPath = await canonicalizeMcpAppHostPath(selectorPath);
+            }
+            catch (error) {
+                extensionLogOutputChannel.warn(`Skipping Aspire MCP server registration for '${selectorPath}': AppHost canonicalization failed: ${error instanceof Error ? error.message : String(error)}`);
+                continue;
+            }
+            if (refreshGeneration !== this._refreshGeneration) {
+                return [];
+            }
+
+            const comparisonKey = getLexicalAppHostPathKey(appHostPath);
+            if (!pinsByKey.has(comparisonKey)) {
+                pinsByKey.set(comparisonKey, {
+                    cliPath: cliResult.cliPath,
+                    selectorPath,
+                    appHostPath,
+                    comparisonKey,
+                });
             }
         }
 
-        return [...appHostPathsByKey.entries()]
-            .sort(([leftKey], [rightKey]) => compareOrdinal(leftKey, rightKey))
-            .map(([, appHostPath]) => ({ cliPath: cliResult.cliPath, appHostPath }));
+        return [...pinsByKey.values()]
+            .sort((left, right) => compareOrdinal(left.comparisonKey, right.comparisonKey));
     }
 }
 
@@ -406,9 +489,8 @@ function selectWorkspacePinnedAppHosts(
     pinsByFolder.forEach((pins, index) => {
         const owner = workspaceFolders[index];
         for (const pin of pins) {
-            const comparisonKey = getLexicalAppHostPathKey(pin.appHostPath);
-            if (!ownedPinsByKey.has(comparisonKey)) {
-                ownedPinsByKey.set(comparisonKey, { ...pin, owner, comparisonKey });
+            if (!ownedPinsByKey.has(pin.comparisonKey)) {
+                ownedPinsByKey.set(pin.comparisonKey, { ...pin, owner });
             }
         }
     });
@@ -426,16 +508,65 @@ function selectWorkspacePinnedAppHosts(
  * would rename - and so restart - an existing server the moment an unrelated folder is added.
  * For the same reason the folder name is used verbatim rather than being disambiguated with an
  * ordinal: an ordinal depends on how many folders share that name, so opening a second `repo`
- * folder would rename the first one's servers. Two folders that share a name therefore produce
- * readable-but-similar labels, and the caller's duplicate-label guard handles the only case that
- * is genuinely ambiguous - the same relative AppHost path under both of them.
+ * folder would rename the first one's servers.
  */
 function createPinnedServerLabel(pin: OwnedPinnedAppHost): string {
-    const relativePath = path.relative(pin.owner.uri.fsPath, pin.appHostPath);
+    const relativePath = path.relative(pin.owner.uri.fsPath, pin.selectorPath);
     const appHostLabel = relativePath.length > 0 && !relativePath.startsWith('..') && !path.isAbsolute(relativePath)
         ? relativePath.split(path.sep).join('/')
-        : pin.appHostPath;
+        : pin.selectorPath;
     return `${mcpServerLabel} (${pin.owner.name}: ${appHostLabel})`;
+}
+
+/**
+ * Preserves every surviving pin's published label, then disambiguates only new collisions.
+ *
+ * VS Code uses the label as the server identity. Recomputing suffixes from the current peer set
+ * would rename and restart an existing server whenever a colliding folder appears or disappears.
+ * Existing assignments are reserved first; a new collision receives a stable folder-URI suffix.
+ */
+function createPinnedServerLabels(
+    pins: readonly OwnedPinnedAppHost[],
+    existingDefinitionsByPin: ReadonlyMap<string, RegisteredDefinition>): string[] {
+    const baseLabels = pins.map(createPinnedServerLabel);
+    const registeredLabels = new Set<string>();
+    const labels = pins.map(pin => {
+        const existingLabel = existingDefinitionsByPin.get(pin.comparisonKey)?.definition.label;
+        if (existingLabel !== undefined && !registeredLabels.has(existingLabel)) {
+            registeredLabels.add(existingLabel);
+            return existingLabel;
+        }
+
+        return undefined;
+    });
+
+    return pins.map((pin, index) => {
+        const existingLabel = labels[index];
+        if (existingLabel !== undefined) {
+            return existingLabel;
+        }
+
+        const baseLabel = baseLabels[index];
+        let label = registeredLabels.has(baseLabel)
+            ? `${baseLabel} [${createStableStringIdentifier(pin.owner.uri.toString())}]`
+            : baseLabel;
+        let collisionIndex = 2;
+        while (registeredLabels.has(label)) {
+            label = `${baseLabel} [${createStableStringIdentifier(pin.owner.uri.toString())}-${collisionIndex++}]`;
+        }
+        registeredLabels.add(label);
+
+        return label;
+    });
+}
+
+function createStableStringIdentifier(value: string): string {
+    let identifier = 0x811c9dc5;
+    for (let index = 0; index < value.length; index++) {
+        identifier = Math.imul(identifier ^ value.charCodeAt(index), 0x01000193);
+    }
+
+    return (identifier >>> 0).toString(36);
 }
 
 function areMcpDefinitionsEqual(

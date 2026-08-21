@@ -1,10 +1,12 @@
 import * as assert from 'assert';
+import * as fs from 'fs';
 import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import * as cliPath from '../utils/cliPath';
 import {
     AspireMcpServerDefinitionProvider,
+    canonicalizeMcpAppHostPath,
     createAspireMcpServerDefinition,
 } from '../mcp/AspireMcpServerDefinitionProvider';
 import { CliPathResolutionTarget } from '../utils/cliPathVariables';
@@ -98,6 +100,19 @@ suite('AspireMcpServerDefinitionProvider definition tests', () => {
         assert.deepStrictEqual(definition.env, { AspireCliPath: cliPath });
     });
 
+    test('bounds AppHost canonicalization', async () => {
+        const realpath = sinon.stub(fs.promises, 'realpath').returns(new Promise(() => { }));
+
+        try {
+            await assert.rejects(
+                canonicalizeMcpAppHostPath('/repo/AppHost.csproj', 1),
+                /AppHost canonicalization did not complete within 1ms/);
+        }
+        finally {
+            realpath.restore();
+        }
+    });
+
     // `aspire agent mcp` can build an AppHost, and that build inherits this environment. Forwarding
     // an unbundled framework-dependent CLI path makes ResolveAspireCliBundle stamp bundle assets
     // from a CLI that has no bundle layout, so the MCP server must apply the same forwardability
@@ -140,6 +155,7 @@ interface HarnessOptions {
     cliPathFor?: (folder: vscode.WorkspaceFolder) => string | undefined;
     capabilityFor?: (folder: vscode.WorkspaceFolder) => CapabilityStatus;
     candidatesFor?: (folder: vscode.WorkspaceFolder) => Promise<CandidateAppHostDisplayInfo[]>;
+    canonicalPathFor?: (appHostPath: string) => string;
     /** Makes CLI resolution reject for a folder, standing in for a spawn or filesystem failure. */
     resolveErrorFor?: (folder: vscode.WorkspaceFolder) => Error | undefined;
     /** Makes the capability probe reject for a folder, standing in for a CLI probe failure. */
@@ -211,6 +227,8 @@ class ProviderHarness {
         });
         this.discoverStub = sinon.stub().callsFake(async (folder: vscode.WorkspaceFolder) =>
             await (options.candidatesFor?.(folder) ?? Promise.resolve([])));
+        this._restores.push(stubRestore(sinon.stub(fs.promises, 'realpath').callsFake(async appHostPath =>
+            options.canonicalPathFor?.(appHostPath.toString()) ?? appHostPath.toString())));
 
         this.provider = new AspireMcpServerDefinitionProvider({
             appHostDiscovery: {
@@ -487,17 +505,56 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
         }
     });
 
-    // Two same-named folders holding the same relative AppHost path is the one case a readable
-    // label cannot tell apart. Registering both would hand VS Code two servers with one identity.
-    test('skips an AppHost whose label is already registered for another AppHost', async () => {
+    test('keeps an existing label stable when a same-named folder introduces a collision', async () => {
         const firstFolder = workspaceFolder('repo', '/checkout/one/repo', 0);
         const secondFolder = workspaceFolder('repo', '/checkout/two/repo', 1);
+        const folders = [firstFolder];
         const firstCandidate = appHostCandidate(firstFolder, 'AppHost.csproj');
         const secondCandidate = appHostCandidate(secondFolder, 'AppHost.csproj');
         const harness = new ProviderHarness({
-            folders: [firstFolder, secondFolder],
+            folders,
             cliPathFor: folder => path.join(folder.uri.fsPath, 'aspire'),
             candidatesFor: async folder => folder.index === 0 ? [firstCandidate] : [secondCandidate],
+        });
+
+        try {
+            await harness.provider.refresh();
+            const initialDefinition = harness.definitions()[0];
+            assert.strictEqual(initialDefinition.label, 'Aspire (repo: AppHost.csproj)');
+
+            folders.push(secondFolder);
+            await harness.provider.refresh();
+            const collidingDefinitions = harness.definitions();
+
+            assert.strictEqual(collidingDefinitions.length, 2);
+            assert.strictEqual(collidingDefinitions[0], initialDefinition);
+            assert.strictEqual(collidingDefinitions[0].label, 'Aspire (repo: AppHost.csproj)');
+            assert.match(collidingDefinitions[1].label, /^Aspire \(repo: AppHost\.csproj\) \[[a-z0-9]+\]$/);
+            assert.deepStrictEqual(collidingDefinitions.map(definition => definition.args), [
+                ['agent', 'mcp', '--apphost', path.resolve(firstCandidate.path)],
+                ['agent', 'mcp', '--apphost', path.resolve(secondCandidate.path)],
+            ]);
+
+            folders.pop();
+            await harness.provider.refresh();
+
+            assert.deepStrictEqual(harness.definitions(), [initialDefinition]);
+        }
+        finally {
+            harness.dispose();
+        }
+    });
+
+    test('deduplicates selector aliases by canonical AppHost identity', async () => {
+        const firstFolder = workspaceFolder('repo', '/checkout/repo', 0);
+        const secondFolder = workspaceFolder('linked', '/checkout/linked', 1);
+        const canonicalPath = path.resolve(firstFolder.uri.fsPath, 'AppHost.csproj');
+        const firstCandidate = appHostCandidate(firstFolder, 'AppHost.csproj');
+        const linkedCandidate = appHostCandidate(secondFolder, 'AppHost.csproj');
+        const harness = new ProviderHarness({
+            folders: [firstFolder, secondFolder],
+            candidatesFor: async folder => folder.index === 0 ? [firstCandidate] : [linkedCandidate],
+            canonicalPathFor: () => canonicalPath,
         });
 
         try {
@@ -506,12 +563,10 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
             assert.deepStrictEqual(harness.definitions().map(definition => ({
                 label: definition.label,
                 args: definition.args,
-            })), [
-                {
-                    label: 'Aspire (repo: AppHost.csproj)',
-                    args: ['agent', 'mcp', '--apphost', path.resolve(firstCandidate.path)],
-                },
-            ]);
+            })), [{
+                label: 'Aspire (repo: AppHost.csproj)',
+                args: ['agent', 'mcp', '--apphost', canonicalPath],
+            }]);
         }
         finally {
             harness.dispose();
@@ -1038,29 +1093,36 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
         }
     });
 
-    test('ignores an older refresh that completes after a newer result', async () => {
+    test('coalesces refresh bursts into one follow-up with the latest result', async () => {
         const folder = workspaceFolder('app', '/repo/app', 0);
         const candidate = appHostCandidate(folder, 'AppHost.csproj');
         let completeOlderDiscovery: ((candidates: CandidateAppHostDisplayInfo[]) => void) | undefined;
+        let markOlderDiscoveryStarted: (() => void) | undefined;
+        const olderDiscoveryStarted = new Promise<void>(resolve => markOlderDiscoveryStarted = resolve);
         let discoveryCall = 0;
         const harness = new ProviderHarness({
             folders: [folder],
             candidatesFor: () => {
                 discoveryCall++;
-                return discoveryCall === 1
-                    ? new Promise<CandidateAppHostDisplayInfo[]>(resolve => completeOlderDiscovery = resolve)
-                    : Promise.resolve([]);
+                if (discoveryCall === 1) {
+                    markOlderDiscoveryStarted!();
+                    return new Promise<CandidateAppHostDisplayInfo[]>(resolve => completeOlderDiscovery = resolve);
+                }
+
+                return Promise.resolve([]);
             },
         });
 
         try {
             const olderRefresh = harness.provider.refresh();
-            await harness.provider.refresh();
+            await olderDiscoveryStarted;
+            const newerRefreshes = Array.from({ length: 10 }, () => harness.provider.refresh());
 
             completeOlderDiscovery!([candidate]);
-            await olderRefresh;
+            await Promise.all([olderRefresh, ...newerRefreshes]);
 
-            assert.deepStrictEqual(harness.definitions(), [], 'an older refresh must not restore stale definitions');
+            assert.strictEqual(discoveryCall, 2, 'a burst must produce only one follow-up refresh');
+            assert.deepStrictEqual(harness.definitions(), [], 'the follow-up result must win');
         }
         finally {
             harness.dispose();

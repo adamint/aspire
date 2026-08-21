@@ -96,10 +96,16 @@ export class EditorStateSnapshotService {
 
     async createActiveSessionSnapshot(token: vscode.CancellationToken): Promise<ActiveEditorStateSnapshot> {
         const representativeTargets = await this.enumerateRepresentativeTargets(token);
-        const activeAppHosts = (await this.projectSummaries(representativeTargets, token))
-            .map((summary, index) => ({ target: representativeTargets[index], summary }))
-            .filter(entry => entry.summary.state !== 'notDebugging');
+        const sessionsByIdentity = this.groupEditorRunSessions(representativeTargets);
+        const activeAppHosts = representativeTargets.flatMap(target => {
+            const summary = this.createEditorStateSummary(
+                target,
+                sessionsByIdentity.get(target.identity) ?? []);
+            return summary === undefined ? [] : [{ target, summary }];
+        });
         const appHosts = activeAppHosts.slice(0, maxSummaries);
+        throwIfCanceled(token);
+        this._dependencies.targetResolver.assertTargetsCurrent(representativeTargets);
 
         // Only active AppHosts are summarized, but every enumerated target is carried out so the
         // caller's own freshness barrier covers the scope this snapshot was taken over rather than

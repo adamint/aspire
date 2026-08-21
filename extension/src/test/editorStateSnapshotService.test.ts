@@ -147,7 +147,7 @@ suite('Editor assistance AppHost services', () => {
             });
         });
 
-        test('reports an externally running AppHost in full, active, and exact summaries', async () => {
+        test('reports an externally running AppHost only in full and exact summaries', async () => {
             const idleAppHostPath = path.join(workspaceRoot, 'IdleAppHost', 'AppHost.csproj');
             fs.mkdirSync(path.dirname(idleAppHostPath), { recursive: true });
             fs.writeFileSync(idleAppHostPath, appHostProjectContents);
@@ -159,8 +159,11 @@ suite('Editor assistance AppHost services', () => {
             assertResolved(resolution);
 
             const snapshot = await snapshotService.createSnapshot(token);
+            assert.strictEqual(launchService.runningAppHostRequests, 1);
             const activeSnapshot = await snapshotService.createActiveSessionSnapshot(token);
+            assert.strictEqual(launchService.runningAppHostRequests, 1);
             const exactSummary = await snapshotService.getAppHostSummary(resolution.target, token);
+            assert.strictEqual(launchService.runningAppHostRequests, 2);
 
             const expectedExternalSummary = {
                 appHost: 'AppHost/AppHost.csproj',
@@ -179,13 +182,12 @@ suite('Editor assistance AppHost services', () => {
             ]);
             assert.deepStrictEqual(
                 activeSnapshot.appHosts.map(entry => entry.summary),
-                [expectedExternalSummary]);
+                []);
             assert.deepStrictEqual(
                 activeSnapshot.appHosts.map(entry => entry.target.identity),
-                [resolution.target.identity]);
+                []);
             assert.strictEqual(Object.prototype.hasOwnProperty.call(activeSnapshot, 'truncated'), false);
             assert.deepStrictEqual(exactSummary, expectedExternalSummary);
-            assert.strictEqual(launchService.runningAppHostRequests, 3);
             // Only the active AppHost is summarized, but the idle one is still carried out so the
             // caller's freshness barrier covers the scope this answer was formed over.
             assert.deepStrictEqual(
@@ -217,9 +219,10 @@ suite('Editor assistance AppHost services', () => {
             await assert.rejects(
                 () => snapshotService.createSnapshot(token),
                 isAmbiguousAppHostOwnership);
-            await assert.rejects(
-                () => snapshotService.createActiveSessionSnapshot(token),
-                isAmbiguousAppHostOwnership);
+            assert.deepStrictEqual(await snapshotService.createActiveSessionSnapshot(token), {
+                appHosts: [],
+                observedTargets: [resolution.target],
+            });
             await assert.rejects(
                 () => snapshotService.getAppHostSummary(resolution.target, token),
                 isAmbiguousAppHostOwnership);
@@ -549,7 +552,7 @@ suite('Editor assistance AppHost services', () => {
             ]);
         });
 
-        test('fails closed when a captured AppHost retargets while the running registry is read', async function () {
+        test('fails full and exact summaries closed when a captured AppHost retargets during the running registry read', async function () {
             // The running-AppHost read is the one asynchronous step between capturing the
             // targets and publishing their states, so an alias can be repointed across it. Every
             // captured target is revalidated before publication: an entry whose file changed can
@@ -593,16 +596,22 @@ suite('Editor assistance AppHost services', () => {
             const token = new vscode.CancellationTokenSource().token;
 
             await assert.rejects(() => snapshotService.createSnapshot(token), isStaleAppHostTarget);
+            assert.strictEqual(launchService.runningAppHostRequests, 1);
 
             restoreLink();
-            await assert.rejects(() => snapshotService.createActiveSessionSnapshot(token), isStaleAppHostTarget);
+            const activeSnapshot = await snapshotService.createActiveSessionSnapshot(token);
+            assert.deepStrictEqual(activeSnapshot.appHosts, []);
+            assert.deepStrictEqual(
+                activeSnapshot.observedTargets.map(target => target.displayPath),
+                ['ALinked/AppHost.csproj', 'Second/AppHost.csproj']);
+            assert.strictEqual(launchService.runningAppHostRequests, 1);
 
-            restoreLink();
             const resolution = await resolver.resolveTarget('ALinked/AppHost.csproj', token);
             assertResolved(resolution);
             await assert.rejects(
                 () => snapshotService.getAppHostSummary(resolution.target, token),
                 isStaleAppHostTarget);
+            assert.strictEqual(launchService.runningAppHostRequests, 2);
         });
 
         test('answers editor-known AppHost state without reading the running registry', async () => {
@@ -653,6 +662,37 @@ suite('Editor assistance AppHost services', () => {
             assert.strictEqual(launchService.runningAppHostRequests, 0);
         });
 
+        test('lists active editor sessions without reading external ownership for idle AppHosts', async () => {
+            const idleAppHostPath = path.join(workspaceRoot, 'Idle', 'AppHost.csproj');
+            fs.mkdirSync(path.dirname(idleAppHostPath), { recursive: true });
+            fs.writeFileSync(idleAppHostPath, appHostProjectContents);
+            addCandidate(discoveryService, workspaceRoot, idleAppHostPath);
+            launchService.editorSessions.push({
+                appHostPath: appHostProjectPath,
+                resolvedAppHostPath: appHostProjectPath,
+                operationKind: 'run',
+                startupCompleted: true,
+                noDebug: false,
+                isStopping: false,
+            });
+            launchService.beforeGetRunningAppHosts = () => {
+                throw new Error('aspire ps is unavailable');
+            };
+
+            const snapshot = await snapshotService.createActiveSessionSnapshot(new vscode.CancellationTokenSource().token);
+
+            assert.deepStrictEqual(snapshot.appHosts.map(entry => entry.summary), [{
+                appHost: 'AppHost/AppHost.csproj',
+                state: 'running',
+                mode: 'debug',
+                controller: 'editor',
+            }]);
+            assert.deepStrictEqual(
+                snapshot.observedTargets.map(target => target.displayPath),
+                ['AppHost/AppHost.csproj', 'Idle/AppHost.csproj']);
+            assert.strictEqual(launchService.runningAppHostRequests, 0);
+        });
+
         test('fails closed when external ownership is required and cannot be read', async () => {
             // Nothing in this window claims the AppHost, so only the running registry could say
             // whether something else does. A failed read is not "nothing is running it".
@@ -664,11 +704,14 @@ suite('Editor assistance AppHost services', () => {
             assertResolved(resolution);
 
             await assert.rejects(() => snapshotService.createSnapshot(token), /aspire ps is unavailable/);
-            await assert.rejects(() => snapshotService.createActiveSessionSnapshot(token), /aspire ps is unavailable/);
+            assert.deepStrictEqual(await snapshotService.createActiveSessionSnapshot(token), {
+                appHosts: [],
+                observedTargets: [resolution.target],
+            });
             await assert.rejects(
                 () => snapshotService.getAppHostSummary(resolution.target, token),
                 /aspire ps is unavailable/);
-            assert.strictEqual(launchService.runningAppHostRequests, 3);
+            assert.strictEqual(launchService.runningAppHostRequests, 2);
         });
 
         test('returns at most 20 AppHosts sorted by safe display path', async () => {

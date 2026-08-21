@@ -889,12 +889,12 @@ suite('Editor assistance AppHost services', () => {
             assert.deepStrictEqual(await service.getHotReloadStatus({ resourceName: 'api' }, token), {
                 success: false,
                 tool: aspireHotReloadStatusToolName,
-                outcome: 'ambiguousAppHost',
+                outcome: 'resourceNotFound',
             });
             assert.deepStrictEqual(await service.listDebugSessions({}, token), {
-                success: false,
+                success: true,
                 tool: aspireListDebugSessionsToolName,
-                outcome: 'ambiguousAppHost',
+                outcome: 'noSessions',
                 sessions: [],
             });
             // An undecidable relationship is decided before any resource is read, so nothing
@@ -3156,7 +3156,7 @@ suite('Editor assistance AppHost services', () => {
             }
         });
 
-        test('lists active external AppHosts and bounded editor child resource sessions', async () => {
+        test('lists only editor-owned active AppHosts without child resource details', async () => {
             discoveryService.candidatesByFolder.set(workspaceRoot, []);
             const paths = {
                 notDebugging: path.join(workspaceRoot, 'ZNotDebugging', 'AppHost.csproj'),
@@ -3174,6 +3174,9 @@ suite('Editor assistance AppHost services', () => {
 
             launchService.pendingOrActiveRunLaunchPaths.add(path.resolve(paths.starting));
             launchService.runningAppHosts.push({ appHostPath: paths.external });
+            launchService.beforeGetRunningAppHosts = () => {
+                throw new Error('aspire ps must not be read while listing editor sessions');
+            };
             launchService.editorSessions.push(
                 {
                     appHostPath: paths.running,
@@ -3269,59 +3272,32 @@ suite('Editor assistance AppHost services', () => {
                         state: 'starting',
                         mode: 'other',
                         controller: 'editor',
-                        resources: [],
                     },
                     {
                         appHost: 'BRunning/AppHost.csproj',
                         state: 'running',
                         mode: 'debug',
                         controller: 'editor',
-                        resources: [
-                            {
-                                resourceName: 'api',
-                                outcome: 'running',
-                                controller: 'editor',
-                                mode: 'debug',
-                                resource: createExpectedResource(path.basename(apiProjectPath), { healthStatus: 'Healthy' }),
-                            },
-                            {
-                                resourceName: 'worker',
-                                outcome: 'multipleSessions',
-                                controller: 'editor',
-                                resource: createExpectedResource(path.basename(workerExecutablePath), {
-                                    resourceType: 'Executable',
-                                    state: 'Starting',
-                                }),
-                            },
-                        ],
                     },
                     {
                         appHost: 'CStopping/AppHost.csproj',
                         state: 'stopping',
                         mode: 'run',
                         controller: 'editor',
-                        resources: [],
                     },
                     {
                         appHost: 'DMultiple/AppHost.csproj',
                         state: 'multipleSessions',
                         mode: 'other',
                         controller: 'editor',
-                        resources: [],
-                    },
-                    {
-                        appHost: 'EExternal/AppHost.csproj',
-                        state: 'running',
-                        mode: 'other',
-                        controller: 'external',
-                        resources: [],
                     },
                 ],
             });
             assert.deepStrictEqual(Object.keys(result), ['success', 'tool', 'outcome', 'sessions']);
             const serialized = JSON.stringify(result);
-            assert.strictEqual(serialized.includes(path.basename(apiProjectPath)), true);
-            assert.strictEqual(serialized.includes(path.basename(workerExecutablePath)), true);
+            assert.strictEqual(serialized.includes(path.basename(apiProjectPath)), false);
+            assert.strictEqual(serialized.includes(path.basename(workerExecutablePath)), false);
+            assert.strictEqual(serialized.includes('EExternal'), false);
             assert.strictEqual(serialized.includes(JSON.stringify(apiProjectPath)), false);
             assert.strictEqual(serialized.includes(JSON.stringify(workerExecutablePath)), false);
             assert.strictEqual(serialized.includes('ambiguous-api'), false);
@@ -3337,6 +3313,8 @@ suite('Editor assistance AppHost services', () => {
             assert.strictEqual(serialized.includes('sessionId'), false);
             assert.strictEqual(serialized.includes('secret-session'), false);
             assert.strictEqual(serialized.includes('pid'), false);
+            assert.deepStrictEqual(resourceRepository.authoritativeRequests, []);
+            assert.strictEqual(launchService.runningAppHostRequests, 0);
         });
 
         test('reports only the allowed source fallbacks on status and list results', async () => {
@@ -3379,7 +3357,6 @@ suite('Editor assistance AppHost services', () => {
                 readonly resource: ResourceJson;
                 readonly expectedSource: string | null;
                 readonly targetPath?: string;
-                readonly expectedInList?: boolean;
                 readonly omittedSourceParts?: readonly string[];
             }> = [
                 {
@@ -3631,7 +3608,6 @@ suite('Editor assistance AppHost services', () => {
                         source: '',
                     },
                     expectedSource: null,
-                    expectedInList: false,
                 },
             ];
             const token = new vscode.CancellationTokenSource().token;
@@ -3641,7 +3617,6 @@ suite('Editor assistance AppHost services', () => {
                 resource,
                 expectedSource,
                 targetPath = projectPath,
-                expectedInList = true,
                 omittedSourceParts = [],
             } of cases) {
                 resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [resource]);
@@ -3656,9 +3631,7 @@ suite('Editor assistance AppHost services', () => {
                 const status = await service.getDebugSessionStatus(
                     { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api' },
                     token);
-                const sessions = await service.listDebugSessions({}, token);
                 const statusResource = (status as { resource?: unknown }).resource;
-                const listResources = sessions.sessions.flatMap(session => session.resources);
                 const expectedResource = {
                     resourceType: 'Project',
                     state: 'Running',
@@ -3668,14 +3641,8 @@ suite('Editor assistance AppHost services', () => {
                 };
 
                 assert.deepStrictEqual(statusResource, expectedResource, label);
-                assert.deepStrictEqual(
-                    listResources.map(listResource => listResource.resource),
-                    // A resource with no usable target path cannot be correlated to a child
-                    // session, so it is absent from the list rather than reported without one.
-                    expectedInList ? [expectedResource] : [],
-                    label);
 
-                const serialized = JSON.stringify([status, sessions]);
+                const serialized = JSON.stringify(status);
                 for (const [property, value] of Object.entries(forbidden)) {
                     assert.strictEqual(serialized.includes(property), false, `${label}: ${property}`);
                     assert.strictEqual(serialized.includes(value), false, `${label}: ${value}`);
@@ -3689,52 +3656,30 @@ suite('Editor assistance AppHost services', () => {
             }
         });
 
-        test('bounds child resource summaries per AppHost with deterministic ordering', async () => {
+        test('does not read or project child resources in the session list', async () => {
             addEditorAppHostRunSession(appHostProjectPath);
-            // Names are registered in reverse so the assertion proves the list is ordered before
-            // it is cut, rather than keeping whichever 20 the correlation map happened to yield.
-            const addDebuggedResources = (count: number) => {
-                const resources: ResourceJson[] = [];
-                resourceSessions.splice(0, resourceSessions.length);
-                for (let index = count - 1; index >= 0; index--) {
-                    const name = `api${index.toString().padStart(2, '0')}`;
-                    const projectPath = path.join(workspaceRoot, name, `${name}.csproj`);
-                    resources.push(createResource(name, projectPath));
-                    resourceSessions.push({
-                        appHostPath: appHostProjectPath,
-                        targetPath: projectPath,
-                        state: 'running',
-                        mode: 'debug',
-                    });
-                }
-
-                resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), resources);
-            };
+            const projectPath = path.join(workspaceRoot, 'Api', 'Api.csproj');
+            resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [
+                createResource('api', projectPath),
+            ]);
+            resourceSessions.push({
+                appHostPath: appHostProjectPath,
+                targetPath: projectPath,
+                state: 'running',
+                mode: 'debug',
+            });
             const token = new vscode.CancellationTokenSource().token;
 
-            addDebuggedResources(21);
-            const overLimit = await service.listDebugSessions({}, token);
-            assert.deepStrictEqual(
-                overLimit.sessions.map(session => session.resources.map(resource => resource.resourceName)),
-                [Array.from({ length: 20 }, (_, index) => `api${index.toString().padStart(2, '0')}`)]);
-            assert.strictEqual(overLimit.sessions[0].resourcesTruncated, true);
-            assert.deepStrictEqual(
-                Object.keys(overLimit.sessions[0]),
-                ['appHost', 'state', 'mode', 'controller', 'resources', 'resourcesTruncated']);
+            const result = await service.listDebugSessions({}, token);
 
-            addDebuggedResources(20);
-            const atLimit = await service.listDebugSessions({}, token);
-            assert.strictEqual(atLimit.sessions[0].resources.length, 20);
-            assert.strictEqual(
-                Object.prototype.hasOwnProperty.call(atLimit.sessions[0], 'resourcesTruncated'),
-                false);
-
-            addDebuggedResources(19);
-            const underLimit = await service.listDebugSessions({}, token);
-            assert.strictEqual(underLimit.sessions[0].resources.length, 19);
-            assert.strictEqual(
-                Object.prototype.hasOwnProperty.call(underLimit.sessions[0], 'resourcesTruncated'),
-                false);
+            assert.deepStrictEqual(result.sessions, [{
+                appHost: 'AppHost/AppHost.csproj',
+                state: 'running',
+                mode: 'debug',
+                controller: 'editor',
+            }]);
+            assert.deepStrictEqual(resourceRepository.authoritativeRequests, []);
+            assert.strictEqual(JSON.stringify(result).includes('api'), false);
         });
 
         test('returns noSessions and bounds active session summaries with only a truncated flag', async () => {
@@ -3754,7 +3699,6 @@ suite('Editor assistance AppHost services', () => {
 
             assert.strictEqual(result.outcome, 'sessionsFound');
             assert.strictEqual(result.sessions.length, 20);
-            assert.strictEqual(result.sessions.every(session => session.resources.length === 0), true);
             assert.deepStrictEqual(
                 result.sessions.map(session => session.appHost),
                 Array.from({ length: 20 }, (_, index) =>
@@ -3847,17 +3791,6 @@ suite('Editor assistance AppHost services', () => {
                 success: false,
                 tool: aspireHotReloadStatusToolName,
                 outcome: 'appHostNotFound',
-            });
-
-            fs.rmSync(linkedAppHostPath);
-            fs.symlinkSync(firstTarget, linkedAppHostPath);
-            __resetAppHostIdentityRegistryForTests();
-            const sessions = await service.listDebugSessions({}, token);
-            assert.deepStrictEqual(sessions, {
-                success: false,
-                tool: aspireListDebugSessionsToolName,
-                outcome: 'error',
-                sessions: [],
             });
 
             fs.rmSync(linkedAppHostPath);
@@ -3992,7 +3925,7 @@ suite('Editor assistance AppHost services', () => {
                 });
         });
 
-        test('lists only the resources of the AppHost it resolved when a selector retargets during the read', async function () {
+        test('lists an AppHost without reading resource state through a retargetable selector', async function () {
             const aba = addRetargetableAppHost('AbaList');
             if (!aba) {
                 this.skip();
@@ -4022,18 +3955,10 @@ suite('Editor assistance AppHost services', () => {
                             state: 'running',
                             mode: 'debug',
                             controller: 'editor',
-                            resources: [
-                                {
-                                    resourceName: 'first-api',
-                                    outcome: 'running',
-                                    controller: 'editor',
-                                    mode: 'debug',
-                                    resource: createExpectedResource(path.basename(aba.projectPath)),
-                                },
-                            ],
                         },
                     ],
                 });
+            assert.deepStrictEqual(resourceRepository.authoritativeRequests, []);
         });
 
         test('explains only the failure of the AppHost it resolved when a selector retargets during the journal read', async function () {
@@ -4082,86 +4007,6 @@ suite('Editor assistance AppHost services', () => {
                     exitCodeBucket: 'none',
                     recommendedActions: ['fixBuildErrors'],
                 });
-        });
-
-        test('fails the aggregate closed when an earlier AppHost retargets while a later one is read', async function () {
-            // Aggregate answers cover several AppHosts read at different times, so an entry
-            // validated early can be repointed while a later one is still being read. An external
-            // entry is the sharpest case: it needs no read of its own, so nothing after the
-            // snapshot would look at it again before it is published.
-            const firstTarget = path.join(workspaceRoot, 'FirstTarget', 'AppHost.csproj');
-            const secondTarget = path.join(workspaceRoot, 'SecondTarget', 'AppHost.csproj');
-            const linkedAppHostPath = path.join(workspaceRoot, 'ALinked', 'AppHost.csproj');
-            for (const target of [firstTarget, secondTarget, linkedAppHostPath]) {
-                fs.mkdirSync(path.dirname(target), { recursive: true });
-            }
-
-            fs.writeFileSync(firstTarget, appHostProjectContents);
-            fs.writeFileSync(secondTarget, appHostProjectContents);
-            try {
-                fs.symlinkSync(firstTarget, linkedAppHostPath);
-            }
-            catch {
-                this.skip();
-                return;
-            }
-
-            discoveryService.candidatesByFolder.set(workspaceRoot, []);
-            addCandidate(discoveryService, workspaceRoot, linkedAppHostPath);
-            addCandidate(discoveryService, workspaceRoot, appHostProjectPath);
-            addEditorDebuggedApiResource();
-            // The linked AppHost is externally started, so the list reports it without reading
-            // anything from it. The read that does happen belongs to the other AppHost.
-            launchService.runningAppHosts.push({ appHostPath: firstTarget });
-            const retargetLink = () => {
-                fs.rmSync(linkedAppHostPath);
-                fs.symlinkSync(secondTarget, linkedAppHostPath);
-            };
-            resourceRepository.beforeAuthoritativeRead = retargetLink;
-            const token = new vscode.CancellationTokenSource().token;
-
-            assert.deepStrictEqual(await service.listDebugSessions({}, token), {
-                success: false,
-                tool: aspireListDebugSessionsToolName,
-                outcome: 'error',
-                sessions: [],
-            });
-        });
-
-        test('fails the session list closed when an idle AppHost retargets while an active one is read', async function () {
-            // An idle AppHost publishes no summary, but it is still part of the scope the list was
-            // enumerated over: it is what makes the published entries "every active session in this
-            // window" rather than "every active session among the AppHosts that happened to stay
-            // put". Dropping it before the freshness barrier would let it be repointed during
-            // another AppHost's read without anything noticing.
-            const idleAppHost = addIdleLinkedAppHost('IdleList');
-            if (!idleAppHost) {
-                this.skip();
-                return;
-            }
-
-            addEditorDebuggedApiResource();
-            let authoritativeReads = 0;
-            resourceRepository.beforeAuthoritativeRead = () => {
-                authoritativeReads++;
-                if (authoritativeReads > 1) {
-                    return;
-                }
-
-                idleAppHost.retarget();
-            };
-
-            const result = await service.listDebugSessions({}, new vscode.CancellationTokenSource().token);
-
-            // The idle AppHost is never read, so the interleaving only exists if the active
-            // AppHost's own read ran. Asserting it keeps this from passing for the wrong reason.
-            assert.strictEqual(authoritativeReads, 1);
-            assert.deepStrictEqual(result, {
-                success: false,
-                tool: aspireListDebugSessionsToolName,
-                outcome: 'error',
-                sessions: [],
-            });
         });
 
         test('fails a global Hot Reload lookup closed when an idle AppHost retargets while an active one is read', async function () {
@@ -4263,7 +4108,9 @@ suite('Editor assistance AppHost services', () => {
             };
 
             assert.deepStrictEqual(
-                await service.getHotReloadStatus({ resourceName: 'api' }, new vscode.CancellationTokenSource().token),
+                await service.getHotReloadStatus(
+                    { resourceName: 'api' },
+                    new vscode.CancellationTokenSource().token),
                 {
                     success: false,
                     tool: aspireHotReloadStatusToolName,
@@ -4386,12 +4233,14 @@ suite('Editor assistance AppHost services', () => {
                 token);
 
             assert.strictEqual(hotReload.outcome, 'applicable');
-            assert.deepStrictEqual(
-                sessions.sessions.map(session => session.resources.map(resource => resource.resourceName)),
-                [['api']]);
+            assert.deepStrictEqual(sessions.sessions, [{
+                appHost: 'AppHost/AppHost.csproj',
+                state: 'running',
+                mode: 'debug',
+                controller: 'editor',
+            }]);
             assert.strictEqual(status.outcome, 'running');
             assert.deepStrictEqual(resourceRepository.authoritativeRequests, [
-                path.resolve(appHostProjectPath),
                 path.resolve(appHostProjectPath),
                 path.resolve(appHostProjectPath),
             ]);
@@ -4591,31 +4440,23 @@ suite('Editor assistance AppHost services', () => {
             assert.strictEqual((status as { controller: string }).controller, 'editor');
         });
 
-        test('reports the external controller for a resource of an externally started AppHost', async () => {
+        test('fails closed for a resource of an externally started AppHost', async () => {
             launchService.runningAppHosts.push({ appHostPath: appHostProjectPath });
             resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [
                 createResource('api', path.join(workspaceRoot, 'Api', 'Api.csproj')),
             ]);
 
             assert.deepStrictEqual(
-                await service.getHotReloadStatus({ resourceName: 'api' }, new vscode.CancellationTokenSource().token),
+                await service.getHotReloadStatus(
+                    { resourceName: 'api', appHostPath: 'AppHost/AppHost.csproj' },
+                    new vscode.CancellationTokenSource().token),
                 {
-                    success: true,
+                    success: false,
                     tool: aspireHotReloadStatusToolName,
-                    outcome: 'notApplicable',
-                    appHost: 'AppHost/AppHost.csproj',
-                    resourceName: 'api',
-                    controller: 'external',
-                    hotReloadEnabled: true,
-                    evidence: [
-                        'devKitInstalled',
-                        'hotReloadSettingEnabled',
-                        'hotReloadOnSaveEnabled',
-                        'notEditorDebuggedResource',
-                        'dotnetProjectResource',
-                    ],
-                    fallback: ['restartResource', 'rebuildAndRestartAppHost'],
+                    outcome: 'noEditorControlledResource',
                 });
+            assert.deepStrictEqual(resourceRepository.authoritativeRequests, []);
+            assert.strictEqual(hotReloadDiagnosticsReads, 0);
         });
 
         test('never reports a debugged non-.NET resource as Hot Reload applicable', async () => {

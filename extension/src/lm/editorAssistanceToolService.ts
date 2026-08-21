@@ -35,8 +35,6 @@ import {
     type HotReloadStatusToolResult,
     type HotReloadStatusUnavailableResult,
     type ListDebugSessionsToolResult,
-    type ListDebugSessionAppHostSummary,
-    type ListDebugSessionResourceSummary,
     type OpenDashboardFailureResult,
     type OpenDashboardToolResult,
     type OpenOutputFailureResult,
@@ -44,7 +42,6 @@ import {
 } from './editorAssistanceToolContracts';
 import {
     AmbiguousAppHostOwnershipError,
-    type ActiveEditorAppHost,
     type EditorAppHostSummary,
 } from './editorStateSnapshotService';
 import {
@@ -53,15 +50,6 @@ import {
     type ResolvedAppHostTarget,
     type SafeAppHostTargetResolution,
 } from './safeAppHostTargetResolver';
-
-/**
- * Cap on the child resource sessions one AppHost reports in `aspire_list_debug_sessions`.
- *
- * It matches the bound the same tool already applies to AppHosts, so a single call stays
- * bounded in both dimensions instead of turning one AppHost with many debugged resources
- * into an unbounded result. See `maxSummaries` in `editorStateSnapshotService.ts`.
- */
-const maxResourceSummaries = 20;
 
 type ResolvedPreflight<T> =
     | { readonly resolved: true; readonly target: ResolvedAppHostTarget; readonly input: T }
@@ -211,16 +199,10 @@ export class EditorAssistanceToolService {
         try {
             const snapshot = await this._dependencies.snapshotService.createActiveSessionSnapshot(token);
             throwIfCanceled(token);
-            const editorResourceSessions = this._dependencies.getEditorResourceSessions();
-            const sessions = await Promise.all(snapshot.appHosts.map(entry =>
-                this.createListAppHostSummary(entry, editorResourceSessions, token)));
-            throwIfCanceled(token);
-            // Each AppHost is read at its own time, so one validated early can still be
-            // repointed while another is read. The whole set the snapshot enumerated is
-            // revalidated once here, after the last read and before publication, rather than
-            // trusting per-entry checks. Idle AppHosts are included even though they publish no
-            // summary: they are why this list is "every active session in this window", so one of
-            // them changing underneath the reads leaves that claim unestablished.
+            const sessions = snapshot.appHosts.map(entry => entry.summary);
+            // Idle AppHosts are included in the final freshness barrier even though they publish
+            // no summary: they are why this list is "every active session in this window", so one
+            // of them changing underneath the snapshot leaves that claim unestablished.
             this.throwIfTargetsStale(...snapshot.observedTargets);
             return {
                 success: true,
@@ -472,6 +454,10 @@ export class EditorAssistanceToolService {
                 return createHotReloadFailure('resourceAmbiguous');
             }
 
+            if (candidate.controller === 'external') {
+                return createHotReloadFailure('noEditorControlledResource');
+            }
+
             return createHotReloadReport(candidate, this._dependencies.readHotReloadDiagnostics());
         }
         catch (error) {
@@ -576,6 +562,12 @@ export class EditorAssistanceToolService {
             }
 
             const summary = await this._dependencies.snapshotService.getAppHostSummary(resolution.target, token);
+            if (summary.controller === 'external') {
+                // Hot Reload diagnostics belong to this editor's debugger. Once exact resolution
+                // establishes external ownership, reading that AppHost's resources cannot turn it
+                // into an editor-controlled target and would only expose unrelated failure modes.
+                return { resolved: false, outcome: 'noEditorControlledResource' };
+            }
             if (summary.state === 'notDebugging') {
                 // A stopped AppHost publishes no resources, so there is nothing to read and no
                 // Hot Reload question to answer about it. Reading anyway would turn state this
@@ -611,64 +603,6 @@ export class EditorAssistanceToolService {
             // Idle AppHosts answer nothing, but they were part of the enumeration that made this
             // lookup global, so they stay in scope for the freshness barrier.
             observedTargets: snapshot.observedTargets,
-        };
-    }
-
-    private async createListAppHostSummary(
-        entry: ActiveEditorAppHost,
-        editorResourceSessions: readonly EditorResourceSessionSnapshot[],
-        token: vscode.CancellationToken): Promise<ListDebugSessionAppHostSummary> {
-        const result: ListDebugSessionAppHostSummary = {
-            ...entry.summary,
-            resources: [],
-        };
-        // The target the snapshot summarized is reused rather than re-resolved, so a registry
-        // change between the snapshot and this read cannot silently turn an AppHost's child
-        // sessions into an empty list. It is checked again here because `aspire describe`
-        // evaluates the AppHost it is pointed at, and the read below is addressed to the
-        // physical AppHost the entry was bound to so a retarget cannot redirect it.
-        const target = entry.target;
-        this.throwIfTargetsStale(target);
-        if (entry.summary.controller === 'external') {
-            return result;
-        }
-
-        if (this.getEditorResourceSessionsForAppHost(target, editorResourceSessions).length === 0) {
-            return result;
-        }
-
-        const resources = await this._dependencies.resourceRepository.fetchAppHostResourcesOnce(
-            createAppHostOperationTarget(target.canonicalPath, target.absolutePath),
-            token);
-        throwIfCanceled(token);
-
-        const sessionsByResource = new Map<ResourceJson, EditorResourceSessionSnapshot[]>();
-        for (const match of this.getResourceSessionMatches(target, resources, editorResourceSessions)) {
-            if (match.matchingResources.length !== 1) {
-                continue;
-            }
-
-            const resource = match.matchingResources[0];
-            const sessions = sessionsByResource.get(resource);
-            if (sessions) {
-                sessions.push(match.session);
-            }
-            else {
-                sessionsByResource.set(resource, [match.session]);
-            }
-        }
-
-        const resourceSummaries = Array.from(
-            sessionsByResource,
-            ([resource, sessions]) => createListResourceSummary(resource, sessions))
-            .sort((left, right) => compareResourceNames(left.resourceName, right.resourceName));
-
-        return {
-            ...result,
-            // Ordering is applied before the cut so the same AppHost always reports the same
-            // resources, rather than whichever ones the correlation map happened to yield first.
-            resources: resourceSummaries.slice(0, maxResourceSummaries),
-            ...(resourceSummaries.length > maxResourceSummaries ? { resourcesTruncated: true as const } : {}),
         };
     }
 
@@ -1064,34 +998,6 @@ function createBoundedResource(resource: ResourceJson): EditorAssistanceResource
         exitCode: resource.exitCode,
         source: getModelSafeResourceSource(resource),
     };
-}
-
-function createListResourceSummary(
-    resource: ResourceJson,
-    sessions: readonly EditorResourceSessionSnapshot[]): ListDebugSessionResourceSummary {
-    const outcome = sessions.length > 1 ? 'multipleSessions' : sessions[0].state;
-    const result: ListDebugSessionResourceSummary = {
-        resourceName: resource.name,
-        outcome,
-        controller: 'editor',
-        resource: createBoundedResource(resource),
-    };
-    if (sessions.length === 1 && isModeMeaningful(outcome)) {
-        return { ...result, mode: sessions[0].mode };
-    }
-
-    return result;
-}
-
-function compareResourceNames(left: string, right: string): number {
-    if (left < right) {
-        return -1;
-    }
-    if (left > right) {
-        return 1;
-    }
-
-    return 0;
 }
 
 function getRecommendedActions(category: ExplainLaunchFailureFoundResult['category']): readonly EditorAssistanceRecommendedAction[] {

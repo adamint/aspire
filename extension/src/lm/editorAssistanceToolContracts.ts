@@ -199,9 +199,9 @@ export interface HotReloadStatusToolInput {
     /** When omitted, the tool answers only if one editor-controlled resource is unambiguous. */
     readonly resourceName?: string;
     /**
-     * When omitted, every active AppHost this window knows about is considered. Supplying the
-     * same workspace-relative selector the other tools take narrows the lookup to one AppHost,
-     * which is how a resource name shared by several AppHosts is disambiguated.
+     * When omitted, every active AppHost controlled by this editor is considered. Supplying
+     * the same workspace-relative selector the other tools take narrows the lookup to one
+     * AppHost, which is how a resource name shared by several AppHosts is disambiguated.
      */
     readonly appHostPath?: string;
 }
@@ -328,29 +328,11 @@ export type OpenOutputToolResult =
     | OpenOutputSuccessResult
     | OpenOutputFailureResult;
 
-export interface ListDebugSessionResourceSummary {
-    readonly resourceName: string;
-    readonly outcome: 'starting' | 'running' | 'stopping' | 'multipleSessions';
-    readonly controller: 'editor';
-    readonly mode?: EditorAssistanceMode;
-    readonly resource: EditorAssistanceResource;
-}
-
 export interface ListDebugSessionAppHostSummary {
     readonly appHost: string;
     readonly state: 'running' | 'starting' | 'stopping' | 'notDebugging' | 'multipleSessions';
     readonly mode: EditorAssistanceMode;
     readonly controller: EditorAssistanceController;
-    readonly resources: readonly ListDebugSessionResourceSummary[];
-    /**
-     * Present only when this AppHost has more correlated child resource sessions than the
-     * bounded list carries.
-     *
-     * The flag exists so a caller can tell a complete list from a cut one. Without it, an
-     * AppHost running more resources than the cap would look like it runs exactly the cap,
-     * and any "these are all of them" conclusion would be wrong.
-     */
-    readonly resourcesTruncated?: true;
 }
 
 export interface ListDebugSessionsToolResult {

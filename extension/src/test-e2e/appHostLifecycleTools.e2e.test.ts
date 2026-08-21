@@ -507,14 +507,7 @@ suite('Aspire AppHost lifecycle E2E', function () {
         assert.strictEqual(sessions.outcome, 'sessionsFound');
         assert.ok(sessions.sessions.length > 0 && sessions.sessions.length <= 20);
         for (const session of sessions.sessions) {
-            assert.deepStrictEqual(Object.keys(session).sort(), ['appHost', 'controller', 'mode', 'resources', 'state']);
-            // The fixture installs no C# debugger, so the AppHost has no editor-owned child
-            // resource session to correlate and the bounded resource list stays empty. With
-            // nothing cut, the bounded indicator is absent rather than reported as false.
-            assert.deepStrictEqual(session.resources, []);
-            assert.strictEqual(
-                Object.prototype.hasOwnProperty.call(session, 'resourcesTruncated'),
-                false);
+            assert.deepStrictEqual(Object.keys(session).sort(), ['appHost', 'controller', 'mode', 'state']);
         }
         assertSafeEditorAssistanceResult(sessions);
 
