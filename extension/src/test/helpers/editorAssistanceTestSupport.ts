@@ -48,14 +48,15 @@ class FakeDiscoveryService implements AppHostLifecycleDiscoveryService {
             throw this.discoverError;
         }
 
-        const folderError = this.discoverErrorsByFolder.get(workspaceFolder.uri.fsPath);
+        const folderPath = fs.realpathSync.native(workspaceFolder.uri.fsPath);
+        const folderError = this.discoverErrorsByFolder.get(folderPath);
         if (folderError) {
             throw folderError;
         }
 
         // Read before the hook runs so a hook that replaces the registry entry cannot retroactively
         // change what this call already enumerated.
-        const candidates = this.candidatesByFolder.get(workspaceFolder.uri.fsPath) ?? [];
+        const candidates = this.candidatesByFolder.get(folderPath) ?? [];
         this.afterDiscover?.(workspaceFolder);
         return candidates;
     }
@@ -138,7 +139,7 @@ function createFixtureDirectory(prefix: string): string {
     const fixtureRoot = path.resolve(__dirname, '..', '..', '..', '.test-workspace', 'editor-assistance');
     const directory = path.join(fixtureRoot, `${prefix}-${crypto.randomBytes(6).toString('hex')}`);
     fs.mkdirSync(directory, { recursive: true });
-    return directory;
+    return fs.realpathSync.native(directory);
 }
 
 function createWorkspaceFolder(root: string, name: string, index: number): vscode.WorkspaceFolder {

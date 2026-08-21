@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import nodeChildProcess = require('child_process');
 import { EventEmitter } from 'events';
+import * as path from 'path';
 import { PassThrough } from 'stream';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
@@ -82,10 +83,14 @@ suite('AppHostStopper', () => {
         const childState = createTestChildProcess();
         const child = childState as unknown as nodeChildProcess.ChildProcessWithoutNullStreams;
         const spawnStub = sinon.stub(nodeChildProcess, 'spawn').returns(child);
-        const folder = { name: 'a', index: 0, uri: vscode.Uri.file('/repo') } as vscode.WorkspaceFolder;
+        const workspaceRoot = path.resolve('/repo');
+        const selectorPath = path.join(workspaceRoot, 'AppHost', 'AppHost.csproj');
+        const physicalAppHostPath = path.resolve('/physical/AppHost/AppHost.csproj');
+        const cliPath = path.join(workspaceRoot, 'bin', 'aspire');
+        const folder = { name: 'a', index: 0, uri: vscode.Uri.file(workspaceRoot) } as vscode.WorkspaceFolder;
         const getWorkspaceFolderStub = sinon.stub(vscode.workspace, 'getWorkspaceFolder')
-            .callsFake(uri => uri.fsPath.startsWith('/repo/') ? folder : undefined);
-        const getAspireCliExecutablePathStub = sinon.stub().resolves('/repo/bin/aspire');
+            .callsFake(uri => uri.fsPath.startsWith(`${folder.uri.fsPath}${path.sep}`) ? folder : undefined);
+        const getAspireCliExecutablePathStub = sinon.stub().resolves(cliPath);
         const terminalProvider = {
             getAspireCliExecutablePath: getAspireCliExecutablePathStub,
             createEnvironment: () => ({}),
@@ -95,13 +100,13 @@ suite('AppHostStopper', () => {
         try {
             const stopping = stopExternalAppHost(
                 terminalProvider,
-                createAppHostOperationTarget('/physical/AppHost/AppHost.csproj', '/repo/AppHost/AppHost.csproj'),
+                createAppHostOperationTarget(physicalAppHostPath, selectorPath),
                 new vscode.CancellationTokenSource().token);
             await new Promise(resolve => setImmediate(resolve));
 
             assert.deepStrictEqual(spawnStub.firstCall.args.slice(0, 2), [
-                '/repo/bin/aspire',
-                ['stop', '--apphost', '/physical/AppHost/AppHost.csproj'],
+                cliPath,
+                ['stop', '--apphost', physicalAppHostPath],
             ]);
             assert.ok(getAspireCliExecutablePathStub.calledOnceWith(workspaceFolderCliPathTarget(folder)));
 

@@ -300,12 +300,12 @@ class FakeDiscoveryService implements AppHostLifecycleDiscoveryService {
             throw this.discoverError;
         }
 
-        const folderError = this.discoverErrorsByFolder.get(workspaceFolder.uri.fsPath);
+        const folderPath = fs.realpathSync.native(workspaceFolder.uri.fsPath);
+        const folderError = this.discoverErrorsByFolder.get(folderPath);
         if (folderError) {
             throw folderError;
         }
 
-        const folderPath = workspaceFolder.uri.fsPath;
         return this.registeredPaths
             .filter(candidatePath => {
                 const relative = path.relative(folderPath, candidatePath);
@@ -361,7 +361,7 @@ function createFixtureDirectory(prefix: string): string {
     // Stop the ancestor walk at this fixture so a checkout that is itself a linked
     // worktree does not make every LM-tool test infer isolated mode.
     fs.mkdirSync(path.join(directory, '.git'));
-    return directory;
+    return fs.realpathSync.native(directory);
 }
 
 function readToolResultPayload(result: vscode.LanguageModelToolResult): AppHostLifecycleToolResult {

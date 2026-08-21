@@ -290,13 +290,13 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
                 {
                     label: 'Aspire (app: other/AppHost.csproj)',
                     command: path.join(folder.uri.fsPath, 'aspire'),
-                    args: ['agent', 'mcp', '--apphost', second.path],
+                    args: ['agent', 'mcp', '--apphost', path.resolve(second.path)],
                     cwd: folder.uri.fsPath,
                 },
                 {
                     label: 'Aspire (app: src/AppHost/AppHost.csproj)',
                     command: path.join(folder.uri.fsPath, 'aspire'),
-                    args: ['agent', 'mcp', '--apphost', first.path],
+                    args: ['agent', 'mcp', '--apphost', path.resolve(first.path)],
                     cwd: folder.uri.fsPath,
                 },
             ]);
@@ -321,7 +321,7 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
             await harness.provider.refresh();
 
             assert.deepStrictEqual(harness.definitions().map(definition => definition.args), [
-                ['agent', 'mcp', '--apphost', buildable.path],
+                ['agent', 'mcp', '--apphost', path.resolve(buildable.path)],
             ]);
         }
         finally {
@@ -352,13 +352,13 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
                 {
                     label: 'Aspire (a: AppHost.csproj)',
                     command: path.join(folderA.uri.fsPath, 'aspire'),
-                    args: ['agent', 'mcp', '--apphost', candidateA.path],
+                    args: ['agent', 'mcp', '--apphost', path.resolve(candidateA.path)],
                     cwd: folderA.uri.fsPath,
                 },
                 {
                     label: 'Aspire (b: AppHost.csproj)',
                     command: path.join(folderB.uri.fsPath, 'aspire'),
-                    args: ['agent', 'mcp', '--apphost', candidateB.path],
+                    args: ['agent', 'mcp', '--apphost', path.resolve(candidateB.path)],
                     cwd: folderB.uri.fsPath,
                 },
             ]);
@@ -424,7 +424,7 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
             })), [
                 {
                     label: 'Aspire (repo: app/AppHost.csproj)',
-                    args: ['agent', 'mcp', '--apphost', appHostPath],
+                    args: ['agent', 'mcp', '--apphost', path.resolve(appHostPath)],
                     cwd: outerFolder.uri.fsPath,
                 },
             ]);
@@ -450,7 +450,7 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
             await harness.provider.refresh();
 
             assert.deepStrictEqual(harness.definitions().map(definition => definition.args), [
-                ['agent', 'mcp', '--apphost', path.join(folder.uri.fsPath, 'AppHost', 'AppHost.csproj')],
+                ['agent', 'mcp', '--apphost', path.resolve(folder.uri.fsPath, 'AppHost', 'AppHost.csproj')],
             ]);
         }
         finally {
@@ -478,7 +478,7 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
             })), [
                 {
                     label: 'Aspire (app: AppHost/AppHost.csproj)',
-                    args: ['agent', 'mcp', '--apphost', path.join(folder.uri.fsPath, 'AppHost', 'AppHost.csproj')],
+                    args: ['agent', 'mcp', '--apphost', path.resolve(folder.uri.fsPath, 'AppHost', 'AppHost.csproj')],
                 },
             ]);
         }
@@ -509,7 +509,7 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
             })), [
                 {
                     label: 'Aspire (repo: AppHost.csproj)',
-                    args: ['agent', 'mcp', '--apphost', firstCandidate.path],
+                    args: ['agent', 'mcp', '--apphost', path.resolve(firstCandidate.path)],
                 },
             ]);
         }
@@ -676,7 +676,7 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
             await harness.provider.refresh();
 
             assert.deepStrictEqual(harness.definitions().map(definition => definition.args), [
-                ['agent', 'mcp', '--apphost', candidateB.path],
+                ['agent', 'mcp', '--apphost', path.resolve(candidateB.path)],
             ]);
         }
         finally {
@@ -727,7 +727,7 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
             await harness.provider.refresh();
 
             assert.deepStrictEqual(harness.definitions().map(definition => definition.args), [
-                ['agent', 'mcp', '--apphost', launchable.path],
+                ['agent', 'mcp', '--apphost', path.resolve(launchable.path)],
             ]);
         }
         finally {
@@ -794,7 +794,7 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
             await harness.provider.refresh();
 
             assert.deepStrictEqual(harness.definitions().map(definition => definition.args), [
-                ['agent', 'mcp', '--apphost', candidate.path],
+                ['agent', 'mcp', '--apphost', path.resolve(candidate.path)],
             ]);
         }
         finally {
@@ -815,7 +815,7 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
             await harness.provider.refresh();
 
             assert.deepStrictEqual(harness.definitions().map(definition => definition.args), [
-                ['agent', 'mcp', '--apphost', candidate.path],
+                ['agent', 'mcp', '--apphost', path.resolve(candidate.path)],
             ]);
         }
         finally {
@@ -863,7 +863,7 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
                 label: definition.label,
                 args: definition.args,
             })), [
-                { label: 'Aspire (b: AppHost.csproj)', args: ['agent', 'mcp', '--apphost', candidateB.path] },
+                { label: 'Aspire (b: AppHost.csproj)', args: ['agent', 'mcp', '--apphost', path.resolve(candidateB.path)] },
             ]);
         }
         finally {
@@ -912,8 +912,8 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
 
             assert.strictEqual(updatedDefinitions[0], keptDefinition, 'a surviving AppHost must keep its pinned definition');
             assert.deepStrictEqual(updatedDefinitions.map(definition => definition.args), [
-                ['agent', 'mcp', '--apphost', kept.path],
-                ['agent', 'mcp', '--apphost', added.path],
+                ['agent', 'mcp', '--apphost', path.resolve(kept.path)],
+                ['agent', 'mcp', '--apphost', path.resolve(added.path)],
             ]);
         }
         finally {

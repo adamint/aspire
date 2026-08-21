@@ -238,7 +238,7 @@ suite('Editor assistance AppHost services', () => {
         const fixtureDirectory = createFixtureDirectory('support-root');
 
         try {
-            const expectedRoot = path.resolve(__dirname, '..', '..', '.test-workspace', 'editor-assistance');
+            const expectedRoot = fs.realpathSync.native(path.resolve(__dirname, '..', '..', '.test-workspace', 'editor-assistance'));
             assert.strictEqual(path.dirname(fixtureDirectory), expectedRoot);
         }
         finally {

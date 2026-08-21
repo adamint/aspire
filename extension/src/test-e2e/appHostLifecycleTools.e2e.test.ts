@@ -839,7 +839,10 @@ suite('Aspire AppHost lifecycle E2E', function () {
 
                 descendantPid = await waitForProcessIdFile(wrapper.pidPath, 10000);
                 await assert.rejects(invocation, /timed out after 1000ms/);
-                assert.strictEqual(isProcessRunning(descendantPid), false, `Expected descendant process ${descendantPid} to be gone before runAspireCli rejected.`);
+                assert.strictEqual(
+                    await getProcessEntry(descendantPid),
+                    undefined,
+                    `Expected descendant process ${descendantPid} to be gone before runAspireCli rejected.`);
             }
             finally {
                 await runE2eTeardown([
@@ -1868,6 +1871,9 @@ function writeTimeoutCliWrapper(): { cliPath: string; pidPath: string; directory
         "if (mode === 'fail') {",
         '  process.exit(23);',
         '}',
+        "if (mode !== 'timeout-tree') {",
+        '  process.exit(0);',
+        '}',
         'fs.writeFileSync(pidPath, String(process.pid));',
         'setInterval(() => undefined, 1000);',
         '',
@@ -1900,6 +1906,9 @@ function writeTimeoutCliWrapper(): { cliPath: string; pidPath: string; directory
         'printf "%s\\n" "$*" >&2',
         'if [ "$mode" = "fail" ]; then',
         '  exit 23',
+        'fi',
+        'if [ "$mode" != "timeout-tree" ]; then',
+        '  exit 0',
         'fi',
         '/bin/sleep 600 &',
         'child_pid=$!',

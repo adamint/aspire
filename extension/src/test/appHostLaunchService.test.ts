@@ -75,7 +75,7 @@ function createAppHostDirectory(...entries: readonly string[]): string {
         fs.writeFileSync(path.join(directory, entry), '');
     }
 
-    return directory;
+    return fs.realpathSync.native(directory);
 }
 
 class FakeCapabilityProvider implements AppHostLaunchCapabilityProvider {
@@ -376,7 +376,7 @@ suite('AppHostLaunchService', () => {
         const config = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
         assert.strictEqual(config.type, 'aspire');
         assert.strictEqual(config.request, 'launch');
-        assert.strictEqual(config.program, '/repo/AppHost.csproj');
+        assert.strictEqual(config.program, path.resolve('/repo/AppHost.csproj'));
         assert.strictEqual(config.command, 'run');
         assert.strictEqual(config.noDebug, false);
         assert.strictEqual(config.step, undefined);
@@ -426,13 +426,14 @@ suite('AppHostLaunchService', () => {
             return;
         }
 
+        const linkedAppHostUri = vscode.Uri.file(alias.linkedAppHostPath);
         const folder = {
             name: 'workspace',
             index: 0,
-            uri: vscode.Uri.file(path.dirname(alias.linkedAppHostPath)),
+            uri: vscode.Uri.file(path.dirname(linkedAppHostUri.fsPath)),
         } as vscode.WorkspaceFolder;
         const getWorkspaceFolderStub = sinon.stub(vscode.workspace, 'getWorkspaceFolder')
-            .callsFake(uri => uri.fsPath === alias.linkedAppHostPath ? folder : undefined);
+            .callsFake(uri => uri.fsPath === linkedAppHostUri.fsPath ? folder : undefined);
         const checkCliStub = sinon.stub(workspaceModule, 'checkCliAvailableOrRedirect')
             .resolves({ cliPath: '/path/bin/aspire', available: true });
         try {
@@ -3036,7 +3037,7 @@ suite('AppHostLaunchService', () => {
             await lowerCaseLaunchTask;
 
             assert.deepStrictEqual(terminationEvents, [{
-                appHostPath: upperCasePath,
+                appHostPath: path.resolve(upperCasePath),
                 command: 'run',
                 shouldRequestStopRefresh: true,
                 shouldMarkAppHostStopping: false,
@@ -3091,13 +3092,13 @@ suite('AppHostLaunchService', () => {
 
             assert.deepStrictEqual(terminationEvents, [
                 {
-                    appHostPath: upperCasePath,
+                    appHostPath: path.resolve(upperCasePath),
                     command: 'run',
                     shouldRequestStopRefresh: false,
                     shouldMarkAppHostStopping: false,
                 },
                 {
-                    appHostPath: lowerCasePath,
+                    appHostPath: path.resolve(lowerCasePath),
                     command: 'run',
                     shouldRequestStopRefresh: true,
                     shouldMarkAppHostStopping: true,
