@@ -91,6 +91,48 @@ suite('Dotnet Debugger Extension Tests', () => {
         process.env[name] = value;
     }
 
+    for (const [projectFile, language] of [
+        ['/workspace/AppHost.fsproj', 'F#'],
+        ['/workspace/AppHost.vbproj', 'Visual Basic'],
+    ]) {
+        test(`${language} AppHost tracker routes output through the AppHost coordinator`, async () => {
+            const parentDebugSession = {
+                id: 'aspire-session',
+                type: 'aspire',
+                name: 'Aspire',
+                workspaceFolder: undefined,
+                configuration: {
+                    type: 'aspire',
+                    request: 'launch',
+                    name: 'Aspire',
+                    program: projectFile,
+                },
+                customRequest: sinon.stub(),
+                getDebugProtocolBreakpoint: sinon.stub(),
+            } as unknown as vscode.DebugSession;
+            const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+            const outputCoordinator = (aspireDebugSession as unknown as {
+                _appHostLogOutput: {
+                    handleDebugAdapterOutput(output: string, category: string | undefined): unknown;
+                };
+            })._appHostLogOutput;
+            const handleOutputSpy = sinon.spy(outputCoordinator, 'handleDebugAdapterOutput');
+            const trackerStub = sinon.stub(aspireDebugSession, 'createDebugAdapterTrackerCore');
+            sinon.stub(projectDebuggerExtension, 'createDebugSessionConfigurationCallback').resolves();
+            sinon.stub(aspireDebugSession, 'startAndGetDebugSession').resolves({
+                id: 'apphost-session',
+            } as unknown as Awaited<ReturnType<AspireDebugSession['startAndGetDebugSession']>>);
+
+            await aspireDebugSession.startAppHost(projectFile, ['run', '--project', projectFile], [], true, { forceBuild: false });
+
+            const onOutput = trackerStub.firstCall.args[1]?.onOutput;
+            assert.ok(onOutput);
+            onOutput('AppHost output\n', 'stdout');
+
+            assert.strictEqual(handleOutputSpy.calledOnceWithExactly('AppHost output\n', 'stdout'), true);
+        });
+    }
+
     test('failed AppHost start writes error to debug console', async () => {
         const parentDebugSession = {
             id: 'aspire-session',

@@ -1223,7 +1223,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
   }
 
   private static readonly _nodeAppHostExtensions = ['.js', '.ts', '.mjs', '.mts', '.cjs', '.cts'];
-  private static readonly _csharpAppHostExtensions = ['.cs', '.csproj'];
+  private static readonly _dotnetAppHostExtensions = ['.cs', '.csproj', '.fsproj', '.vbproj'];
   private static readonly _rustAppHostExtensions = ['.rs'];
   private static readonly _javaAppHostExtensions = ['.java'];
 
@@ -1235,7 +1235,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
       this._appHostLogOutput.reset();
       const fileExtension = path.extname(projectFile).toLowerCase();
       const isNodeAppHost = AspireDebugSession._nodeAppHostExtensions.includes(fileExtension);
-      const isCSharpAppHost = AspireDebugSession._csharpAppHostExtensions.includes(fileExtension);
+      const isDotNetAppHost = AspireDebugSession._dotnetAppHostExtensions.includes(fileExtension);
       const isRustAppHost = AspireDebugSession._rustAppHostExtensions.includes(fileExtension);
       const isJavaAppHost = AspireDebugSession._javaAppHostExtensions.includes(fileExtension);
 
@@ -1276,7 +1276,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
       // we suppress VS Code's automatic child restart and restart the
       // entire Aspire debug session instead.
       //
-      // The output filter is intentionally a positive opt-in for C# AppHosts only.
+      // The output filter is intentionally a positive opt-in for .NET AppHosts only.
       // The .NET debugger (`coreclr`) emits a lot of `console`-category chatter
       // (module loads, exception-thrown notifications, the debugger banner, etc.)
       // into the parent debug console, and `Microsoft.Extensions.Logging` lines need
@@ -1293,7 +1293,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
             this.configuration[appHostRestartSourceSessionIdConfigKey] = this._session.id;
             return true; // suppress VS Code's child restart
           },
-          onOutput: isCSharpAppHost
+          onOutput: isDotNetAppHost
             ? (output, category) => this.sendAppHostMessage(output, category)
             : (output, category) => this.sendMessage(output, false, category === 'stderr' ? 'stderr' : 'stdout')
         },
