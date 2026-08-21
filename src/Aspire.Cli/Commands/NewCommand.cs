@@ -770,6 +770,7 @@ internal class NewCommandPrompter(IInteractionService interactionService) : INew
             validator: resolvedValidator,
             binding: PromptBinding.Create(parseResult, NewCommand.s_outputOption, path),
             directory: true,
+            retryOnValidationFailure: true,
             cancellationToken: cancellationToken
             );
 

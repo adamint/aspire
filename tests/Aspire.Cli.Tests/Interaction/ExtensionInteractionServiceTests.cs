@@ -138,7 +138,8 @@ public class ExtensionInteractionServiceTests(ITestOutputHelper outputHelper)
             validator: path => string.Equals(path, validPath, StringComparison.Ordinal)
                 ? ValidationResult.Success()
                 : ValidationResult.Error(validationMessage),
-            directory: true);
+            directory: true,
+            retryOnValidationFailure: true);
         await interactionService.FlushAsync();
 
         Assert.Equal(validPath, result);
@@ -177,11 +178,32 @@ public class ExtensionInteractionServiceTests(ITestOutputHelper outputHelper)
             interactionService.PromptForFilePathAsync(
                 "Select a directory",
                 validator: _ => ValidationResult.Error(validationMessage),
-                directory: true));
+                directory: true,
+                retryOnValidationFailure: true));
         await interactionService.FlushAsync();
 
         Assert.Equal(2, promptCount);
         Assert.Equal([validationMessage], displayedErrors);
+    }
+
+    [Fact]
+    public async Task PromptForFilePathAsync_InvalidSelectionWithoutRetryThrows()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var backchannel = new TestExtensionBackchannel
+        {
+            HasCapabilityAsyncCallback = (capability, _) => Task.FromResult(capability == KnownCapabilities.FilePickers),
+            PromptForFilePathAsyncCallback = (_, _, _) => Task.FromResult<string?>("invalid")
+        };
+
+        using var interactionService = CreateExtensionInteractionService(workspace, backchannel);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            interactionService.PromptForFilePathAsync(
+                "Select a directory",
+                validator: _ => ValidationResult.Error("Invalid path.")));
+
+        Assert.Equal("Invalid path.", exception.Message);
     }
 
     [Fact]

@@ -4,6 +4,7 @@
 using System.Diagnostics;
 using System.Threading.Channels;
 using Aspire.Cli.Backchannel;
+using Aspire.Cli.Resources;
 using Aspire.Cli.Utils;
 using Microsoft.Extensions.Logging;
 using Spectre.Console;
@@ -191,7 +192,7 @@ internal class ExtensionInteractionService : IExtensionInteractionService, IDisp
         }
     }
 
-    public async Task<string> PromptForFilePathAsync(string promptText, Func<string, ValidationResult>? validator = null, bool directory = false, bool required = false, PromptBinding<string?>? binding = null, CancellationToken cancellationToken = default)
+    public async Task<string> PromptForFilePathAsync(string promptText, Func<string, ValidationResult>? validator = null, bool directory = false, bool required = false, PromptBinding<string?>? binding = null, bool retryOnValidationFailure = false, CancellationToken cancellationToken = default)
     {
         var (wasProvided, value, _) = PromptBinding.Resolve(binding);
         if (wasProvided && value is not null)
@@ -243,7 +244,13 @@ internal class ExtensionInteractionService : IExtensionInteractionService, IDisp
 
                     // VS Code file pickers can't show inline validation, so keep the wizard alive
                     // by displaying the error before reopening the picker.
-                    DisplayError(validationResult.Message ?? "Invalid selection.");
+                    var errorMessage = validationResult.Message ?? InteractionServiceStrings.InvalidSelection;
+                    DisplayError(errorMessage);
+
+                    if (!retryOnValidationFailure)
+                    {
+                        throw new InvalidOperationException(errorMessage);
+                    }
                 }
             }
 
@@ -251,7 +258,7 @@ internal class ExtensionInteractionService : IExtensionInteractionService, IDisp
             return await PromptForStringAsync(promptText, validator, isSecret: false, required, binding, cancellationToken).ConfigureAwait(false);
         }
 
-        return await _consoleInteractionService.PromptForFilePathAsync(promptText, validator, directory, required, binding, cancellationToken).ConfigureAwait(false);
+        return await _consoleInteractionService.PromptForFilePathAsync(promptText, validator, directory, required, binding, retryOnValidationFailure, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<bool> PromptConfirmAsync(string promptText, PromptBinding<bool>? binding = null, CancellationToken cancellationToken = default)
