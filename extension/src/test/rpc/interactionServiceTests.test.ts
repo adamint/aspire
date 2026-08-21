@@ -252,6 +252,10 @@ suite('InteractionService endpoints', () => {
 					replaceExternalLaunchReservation: () => 'reservation-1',
 					markLaunchAttemptFailureRecorded: () => { },
 					releaseExternalLaunchReservation: () => { },
+					tryReserveExternalOperation: () => 'operation-1',
+					validateOrReacquireExternalOperationReservation: (_appHostPath, reservationId) => reservationId,
+					replaceExternalOperationReservation: () => 'operation-1',
+					releaseExternalOperationReservation: () => { },
 					prepareLaunchArguments: async (_appHostPath, _command, args) => ({ args }),
 				},
 				createTestMemento());

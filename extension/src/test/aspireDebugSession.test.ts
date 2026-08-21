@@ -15,7 +15,9 @@ import * as debuggerExtensionsModule from '../debugger/debuggerExtensions';
 import { AspireDebugSession, buildAspireCommandArgs, getLoggableDebugConfiguration, markDebugConfigurationEnvironmentSensitive } from '../debugger/AspireDebugSession';
 import { AspireDebugConfigurationProvider } from '../debugger/AspireDebugConfigurationProvider';
 import { extensionLogOutputChannel } from '../utils/logging';
-import { appHostLaunchReservationIdConfigKey, appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
+import { appHostLaunchReservationIdConfigKey, appHostLaunchTokenConfigKey, appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
+import { isAspireDebugConfigurationExtensionOwned } from '../debugger/AspireDebugConfigurationProviderInternal';
+import { windowCliPathTarget, workspaceFolderCliPathTarget } from '../utils/cliPathVariables';
 import { AspireExtendedDebugConfiguration, AspireResourceExtendedDebugConfiguration, JavaLaunchConfiguration, RustLaunchConfiguration } from '../dcp/types';
 import {
     __resetLaunchFailureJournalForTests,
@@ -27,8 +29,6 @@ import { aspireDashboard, debugSessionStopTimedOut } from '../loc/strings';
 import { registerRunCleanup } from '../debugger/runCleanupRegistry';
 import { __resetAppHostIdentityRegistryForTests } from '../utils/appHostIdentity';
 import { AppHostBuildFailureError } from '../debugger/appHostBuildFailureError';
-import { isAspireDebugConfigurationExtensionOwned } from '../debugger/AspireDebugConfigurationProviderInternal';
-import { windowCliPathTarget, workspaceFolderCliPathTarget } from '../utils/cliPathVariables';
 import { AppHostDiscoveryService } from '../utils/appHostDiscovery';
 
 interface RecordedEvent {
@@ -764,6 +764,80 @@ suite('AspireDebugSession tests', () => {
         sinon.assert.notCalled(spawnStub);
         assert.strictEqual((aspireDebugSession as any)._cliProcess, undefined);
         sinon.assert.calledWithMatch(infoStub, 'Skipping Aspire CLI launch for disposed or shutting-down debug session');
+    });
+
+    suite('launch command arguments', () => {
+        test('omits the debug session flag for a no-debug do launch', async () => {
+            const args = await captureLaunchCommandArgs('do', true);
+
+            assert.deepStrictEqual(args, [
+                'do',
+                'build',
+                '--nologo',
+                '--apphost',
+                '/workspace/apphost.cs',
+            ]);
+        });
+
+        test('includes the debug session flag for a debug do launch', async () => {
+            const args = await captureLaunchCommandArgs('do', false);
+
+            assert.deepStrictEqual(args, [
+                'do',
+                'build',
+                '--start-debug-session',
+                '--nologo',
+                '--apphost',
+                '/workspace/apphost.cs',
+            ]);
+        });
+
+        test('preserves no-debug run launch arguments', async () => {
+            const args = await captureLaunchCommandArgs('run', true);
+
+            assert.deepStrictEqual(args, [
+                'run',
+                '--nologo',
+                '--apphost',
+                '/workspace/apphost.cs',
+            ]);
+        });
+
+        test('preserves debug run launch arguments', async () => {
+            const args = await captureLaunchCommandArgs('run', false);
+
+            assert.deepStrictEqual(args, [
+                'run',
+                '--start-debug-session',
+                '--nologo',
+                '--apphost',
+                '/workspace/apphost.cs',
+            ]);
+        });
+
+        test('ignores noDebug for deploy launch arguments', async () => {
+            const args = await captureLaunchCommandArgs('deploy', true);
+
+            assert.deepStrictEqual(args, [
+                'deploy',
+                '--start-debug-session',
+                '--nologo',
+                '--apphost',
+                '/workspace/apphost.cs',
+            ]);
+        });
+
+        test('ignores noDebug for publish launch arguments', async () => {
+            const args = await captureLaunchCommandArgs('publish', true);
+
+            assert.deepStrictEqual(args, [
+                'publish',
+                '--start-debug-session',
+                '--nologo',
+                '--apphost',
+                '/workspace/apphost.cs',
+            ]);
+        });
     });
 
     test('suppresses the Aspire CLI first-run banner for extension-managed launches', async () => {
@@ -5183,6 +5257,18 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             markLaunchAttemptFailureRecorded: () => {
                 throw new Error('The successful restart should not record a launch failure.');
             },
+            tryReserveExternalOperation: () => {
+                throw new Error('The run restart should not reserve an external operation.');
+            },
+            validateOrReacquireExternalOperationReservation: () => {
+                throw new Error('The run restart should not validate an external operation.');
+            },
+            replaceExternalOperationReservation: () => {
+                throw new Error('The run restart should not replace an external operation.');
+            },
+            releaseExternalOperationReservation: () => {
+                throw new Error('The run restart should not release an external operation.');
+            },
             prepareLaunchArguments: async (_appHostPath: string, _command: string, args: string[] | undefined, _token: vscode.CancellationToken, cliPath?: string) => {
                 preparedCliPaths.push(cliPath);
                 return { args };
@@ -5224,6 +5310,114 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         assert.strictEqual(spawnCliStub.firstCall.args[1], pathResolvedCli);
         assert.strictEqual(getAspireCliExecutablePath.called, false);
+    });
+
+    test('a service-owned non-Run restart reclaims its pending operation through the provider', async () => {
+        let restartHandler: ((debugSessionId: string) => boolean) | undefined;
+        let terminateSessionCallback: ((session: vscode.DebugSession) => unknown) | undefined;
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire deploy',
+                program: '/workspace/apphost.cs',
+                command: 'deploy',
+                [appHostLaunchTokenConfigKey]: 42,
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const appHostDebugSession = {
+            id: 'apphost-session',
+            type: 'coreclr',
+            name: 'AppHost',
+            configuration: {
+                runId: 'apphost-run',
+            },
+        };
+        const appHostResourceSession = {
+            id: appHostDebugSession.id,
+            session: appHostDebugSession as unknown as vscode.DebugSession,
+            stopSession: sinon.stub().resolves(),
+        };
+        sinon.stub(debuggerExtensionsModule, 'createDebugSessionConfiguration').resolves({
+            runId: 'apphost-run',
+            debugSessionId: 'debug-1',
+            type: 'coreclr',
+            name: 'AppHost',
+            request: 'launch',
+        });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(callback => {
+            terminateSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.workspace, 'getWorkspaceFolder').returns(undefined);
+        const startDebuggingStub = sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+        const aspireDebugSession = new AspireDebugSession(
+            parentDebugSession as unknown as vscode.DebugSession,
+            {} as any,
+            {} as any,
+            { isDebugConfigEnvironmentLoggingEnabled: () => false } as any,
+            () => { });
+        sinon.stub(aspireDebugSession, 'createDebugAdapterTrackerCore').callsFake((_debugAdapter, onRestart) => {
+            restartHandler = onRestart;
+        });
+        sinon.stub(aspireDebugSession, 'startAndGetDebugSession').resolves(appHostResourceSession);
+        sinon.stub(aspireDebugSession, 'stopDebugging').resolves();
+
+        await aspireDebugSession.startAppHost('/workspace/AppHost.csproj', ['run'], [], true, { forceBuild: false });
+        assert.strictEqual(restartHandler?.(aspireDebugSession.debugSessionId), true);
+        await terminateSessionCallback?.(appHostDebugSession as unknown as vscode.DebugSession);
+
+        const restartedConfig = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
+        assert.strictEqual(isAspireDebugConfigurationExtensionOwned(restartedConfig), true);
+
+        const provider = new AspireDebugConfigurationProvider({
+            resolveDebugTarget: async (filePath: string) => filePath,
+            tryFindWorkspaceDefaultCandidate: async () => undefined,
+        } as unknown as AppHostDiscoveryService, {
+            tryReserveExternalLaunch: () => {
+                throw new Error('The non-Run restart should not reserve an external launch.');
+            },
+            validateOrReacquireExternalLaunchReservation: () => {
+                throw new Error('The non-Run restart should not validate an external launch.');
+            },
+            replaceExternalLaunchReservation: () => {
+                throw new Error('The non-Run restart should not replace an external launch.');
+            },
+            releaseExternalLaunchReservation: () => {
+                throw new Error('The non-Run restart should not release an external launch.');
+            },
+            markLaunchAttemptFailureRecorded: () => {
+                throw new Error('The successful restart should not record a launch failure.');
+            },
+            tryReserveExternalOperation: () => {
+                throw new Error('The matching launch token already owns this operation.');
+            },
+            validateOrReacquireExternalOperationReservation: () => {
+                throw new Error('The matching launch token already owns this operation.');
+            },
+            replaceExternalOperationReservation: () => {
+                throw new Error('The matching launch token already owns this operation.');
+            },
+            releaseExternalOperationReservation: () => {
+                throw new Error('The matching launch token already owns this operation.');
+            },
+            prepareLaunchArguments: async (_appHostPath: string, _command: string, args: string[] | undefined) => ({ args }),
+        }, {
+            get: () => undefined,
+            update: async () => { },
+            keys: () => [],
+        });
+
+        const resolvedConfig = await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined, restartedConfig);
+
+        assert.strictEqual(resolvedConfig, restartedConfig);
+        assert.strictEqual(resolvedConfig?.[appHostLaunchTokenConfigKey], 42);
     });
 
     test('an AppHost restart is aborted and forces CLI cleanup when resource shutdown fails', async () => {
@@ -6687,6 +6881,43 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             exitCodeBucket: record.exitCodeBucket,
         };
     }
+
+    async function captureLaunchCommandArgs(
+        command: 'run' | 'do' | 'deploy' | 'publish',
+        noDebug: boolean,
+    ): Promise<string[]> {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command,
+                step: command === 'do' ? 'build' : undefined,
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = {
+            isCliDebugLoggingEnabled: () => false,
+        };
+        const aspireDebugSession = new AspireDebugSession(
+            parentDebugSession as unknown as vscode.DebugSession,
+            {} as any,
+            {} as any,
+            terminalProvider as any,
+            () => { });
+        const spawnStub = sinon.stub(aspireDebugSession, 'spawnAspireCommand').resolves();
+
+        aspireDebugSession.handleMessage({ command: 'launch', seq: 1, arguments: { noDebug } });
+        await waitFor(() => spawnStub.calledOnce);
+        return spawnStub.firstCall.args[0];
+    return spawnStub.firstCall.args[0];
+}
 
     function createSessionForSpawn(
         getAspireCliExecutablePath: () => Promise<string> = async () => '/usr/local/bin/aspire',
