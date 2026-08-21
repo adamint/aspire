@@ -41,16 +41,20 @@ internal sealed class WaitForResourcesTool(
     ILogger<WaitForResourcesTool> logger) : CliMcpTool
 {
     private const string NoEligibleResourcesError = "No eligible resources were found in the selected AppHost.";
+    internal const int MaximumResourceNameCount = 100;
+    internal const int MaximumResourceNameLength = 256;
 
     private static readonly JsonElement s_inputSchema = JsonDocument.Parse(
-        """
+        $$"""
         {
           "type": "object",
           "properties": {
             "resourceNames": {
               "type": "array",
+              "maxItems": {{MaximumResourceNameCount}},
               "items": {
-                "type": "string"
+                "type": "string",
+                "maxLength": {{MaximumResourceNameLength}}
               }
             },
             "targetState": {
@@ -200,7 +204,7 @@ internal sealed class WaitForResourcesTool(
     {
         return new WaitForResourceResultJson(
             result.ResourceName,
-            result.State,
+            MapResourceState(result.State),
             result.Health,
             GetOutcomeValue(result.Outcome),
             GetError(result));
@@ -227,10 +231,23 @@ internal sealed class WaitForResourcesTool(
                 throw new McpProtocolException("Argument 'resourceNames' must be an array of strings.", McpErrorCode.InvalidParams);
             }
 
+            if (resourceNamesElement.GetArrayLength() > MaximumResourceNameCount)
+            {
+                throw new McpProtocolException(
+                    $"Argument 'resourceNames' must contain no more than {MaximumResourceNameCount} items.",
+                    McpErrorCode.InvalidParams);
+            }
+
             resourceNames = resourceNamesElement
                 .EnumerateArray()
                 .Select(static item => item.GetString()!)
                 .ToArray();
+            if (resourceNames.Any(static name => name.EnumerateRunes().Count() > MaximumResourceNameLength))
+            {
+                throw new McpProtocolException(
+                    $"Each 'resourceNames' item must contain no more than {MaximumResourceNameLength} characters.",
+                    McpErrorCode.InvalidParams);
+            }
         }
 
         var targetState = ResourceWaitTarget.Healthy;
@@ -267,6 +284,27 @@ internal sealed class WaitForResourcesTool(
         }
 
         return new WaitForResourcesArguments(resourceNames, targetState, timeoutSeconds);
+    }
+
+    private static string? MapResourceState(string? state)
+    {
+        return state switch
+        {
+            null => null,
+            "Active" or
+            "Building" or
+            "Exited" or
+            "FailedToStart" or
+            "Finished" or
+            "NotStarted" or
+            "Running" or
+            "RuntimeUnhealthy" or
+            "Starting" or
+            "Stopping" or
+            "ValueMissing" or
+            "Waiting" => state,
+            _ => "unknown"
+        };
     }
 
     private static string GetOverallOutcome(IReadOnlyList<WaitForResourceResultJson> resources)

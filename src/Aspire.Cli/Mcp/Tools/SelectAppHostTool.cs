@@ -16,6 +16,12 @@ internal sealed class SelectAppHostTool(IAuxiliaryBackchannelMonitor auxiliaryBa
 
     public override string Description => "Selects which AppHost to use when multiple AppHosts are running. The path can be a fully qualified path or a workspace root relative path.";
 
+    public override ToolAnnotations Annotations => new()
+    {
+        ReadOnlyHint = false,
+        DestructiveHint = false
+    };
+
     public override JsonElement GetInputSchema()
     {
         return JsonDocument.Parse("""

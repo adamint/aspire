@@ -19,9 +19,10 @@ internal sealed class McpResourceToolRefreshService : IMcpResourceToolRefreshSer
     private readonly ILogger _logger;
     private readonly object _lock = new();
     private McpServer? _server;
-    private Dictionary<string, ResourceToolEntry> _resourceToolMap = new(StringComparer.Ordinal);
+    private ResourceToolMapSnapshot _snapshot = new(
+        null,
+        new Dictionary<string, ResourceToolEntry>(StringComparer.Ordinal));
     private bool _invalidated = true;
-    private string? _lastRefreshedConnectionSocketPath;
 
     public McpResourceToolRefreshService(
         IAuxiliaryBackchannelMonitor auxiliaryBackchannelMonitor,
@@ -34,23 +35,23 @@ internal sealed class McpResourceToolRefreshService : IMcpResourceToolRefreshSer
     /// <inheritdoc/>
     public bool TryGetResourceToolMap(
         IAppHostAuxiliaryBackchannel? connection,
-        out IReadOnlyDictionary<string, ResourceToolEntry> resourceToolMap)
+        out ResourceToolMapSnapshot snapshot)
     {
         lock (_lock)
         {
             if (_invalidated || !IsSameConnection(connection))
             {
-                resourceToolMap = null!;
+                snapshot = null!;
                 return false;
             }
 
-            resourceToolMap = _resourceToolMap;
+            snapshot = _snapshot;
             return true;
         }
     }
 
     private bool IsSameConnection(IAppHostAuxiliaryBackchannel? connection)
-        => string.Equals(_lastRefreshedConnectionSocketPath, connection?.SocketPath, StringComparison.Ordinal);
+        => ReferenceEquals(_snapshot.Connection, connection);
 
     /// <inheritdoc/>
     public void InvalidateToolMap()
@@ -77,7 +78,7 @@ internal sealed class McpResourceToolRefreshService : IMcpResourceToolRefreshSer
     }
 
     /// <inheritdoc/>
-    public async Task<(IReadOnlyDictionary<string, ResourceToolEntry> ToolMap, bool Changed)> RefreshResourceToolMapAsync(CancellationToken cancellationToken)
+    public async Task<(ResourceToolMapSnapshot Snapshot, bool Changed)> RefreshResourceToolMapAsync(CancellationToken cancellationToken)
     {
         _logger.LogDebug("Refreshing resource tool map.");
 
@@ -129,11 +130,11 @@ internal sealed class McpResourceToolRefreshService : IMcpResourceToolRefreshSer
 
         lock (_lock)
         {
-            var changed = _resourceToolMap.Count != refreshedMap.Count;
+            var changed = _snapshot.ToolMap.Count != refreshedMap.Count;
             if (!changed)
             {
                 // Check for deleted tools (in old but not in new).
-                foreach (var key in _resourceToolMap.Keys)
+                foreach (var key in _snapshot.ToolMap.Keys)
                 {
                     if (!refreshedMap.ContainsKey(key))
                     {
@@ -147,7 +148,7 @@ internal sealed class McpResourceToolRefreshService : IMcpResourceToolRefreshSer
                 {
                     foreach (var key in refreshedMap.Keys)
                     {
-                        if (!_resourceToolMap.ContainsKey(key))
+                        if (!_snapshot.ToolMap.ContainsKey(key))
                         {
                             changed = true;
                             break;
@@ -156,10 +157,9 @@ internal sealed class McpResourceToolRefreshService : IMcpResourceToolRefreshSer
                 }
             }
 
-            _resourceToolMap = refreshedMap;
-            _lastRefreshedConnectionSocketPath = connection?.SocketPath;
+            _snapshot = new ResourceToolMapSnapshot(connection, refreshedMap);
             _invalidated = false;
-            return (_resourceToolMap, changed);
+            return (_snapshot, changed);
         }
     }
 

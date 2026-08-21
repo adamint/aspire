@@ -200,7 +200,9 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
 
         var resourceNames = properties.GetProperty("resourceNames");
         Assert.Equal("array", resourceNames.GetProperty("type").GetString());
+        Assert.Equal(100, resourceNames.GetProperty("maxItems").GetInt32());
         Assert.Equal("string", resourceNames.GetProperty("items").GetProperty("type").GetString());
+        Assert.Equal(256, resourceNames.GetProperty("items").GetProperty("maxLength").GetInt32());
 
         var targetState = properties.GetProperty("targetState");
         Assert.Equal("string", targetState.GetProperty("type").GetString());
@@ -427,6 +429,65 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
         // Verify the handler was called with the correct resource and tool names
         Assert.Equal("my-resource", callResourceName);
         Assert.Equal("do_something", callToolName);
+    }
+
+    [Fact]
+    public async Task McpServer_CallTool_ResourceMcpTool_UsesConnectionThatProducedToolMap()
+    {
+        await using var ctx = await CreateMcpClientAsync();
+        var appHostAPath = Path.Combine(ctx.Workspace.WorkspaceRoot.FullName, "AppHostA", "AppHostA.csproj");
+        var appHostBPath = Path.Combine(ctx.Workspace.WorkspaceRoot.FullName, "AppHostB", "AppHostB.csproj");
+        var appHostAToolCalls = 0;
+        var appHostBToolCalls = 0;
+        var appHostA = CreateResourceToolConnection(
+            ctx.Workspace,
+            hash: "apphost-a",
+            socketPath: "socket.a",
+            displayName: "resource-a",
+            toolName: "tool_a",
+            appHostPath: appHostAPath);
+        var appHostB = CreateResourceToolConnection(
+            ctx.Workspace,
+            hash: "apphost-b",
+            socketPath: "socket.b",
+            displayName: "resource-b",
+            toolName: "tool_b",
+            appHostPath: appHostBPath);
+        appHostA.CallResourceMcpToolHandler = (_, _, _, _) =>
+        {
+            Interlocked.Increment(ref appHostAToolCalls);
+            return Task.FromResult(new CallToolResult
+            {
+                Content = [new TextContentBlock { Text = "apphost-a" }]
+            });
+        };
+        appHostB.CallResourceMcpToolHandler = (_, _, _, _) =>
+        {
+            Interlocked.Increment(ref appHostBToolCalls);
+            return Task.FromResult(new CallToolResult
+            {
+                Content = [new TextContentBlock { Text = "apphost-b" }]
+            });
+        };
+        appHostA.GetResourceSnapshotsHandler = _ =>
+        {
+            // Selection can change while the map is being built. Dispatch must remain bound to
+            // the connection whose resource snapshot advertised the selected tool.
+            ctx.BackchannelMonitor!.SelectedAppHostPath = appHostBPath;
+            return Task.FromResult(appHostA.ResourceSnapshots);
+        };
+        ctx.BackchannelMonitor!.AddConnection(appHostA.Hash, appHostA.SocketPath, appHostA);
+        ctx.BackchannelMonitor.AddConnection(appHostB.Hash, appHostB.SocketPath, appHostB);
+        ctx.BackchannelMonitor.SelectedAppHostPath = appHostAPath;
+
+        var result = await ctx.Client.CallToolAsync(
+            "resource_a_tool_a",
+            cancellationToken: ctx.Cts.Token).DefaultTimeout();
+
+        Assert.Equal("apphost-a", GetResultText(result));
+        Assert.Equal(1, appHostAToolCalls);
+        Assert.Equal(0, appHostBToolCalls);
+        Assert.Equal(appHostBPath, ctx.BackchannelMonitor.SelectedAppHostPath);
     }
 
     [Fact]
@@ -1685,7 +1746,7 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
         {
             AssertToolAnnotations(
                 tool,
-                readOnly: tool.Name != KnownMcpTools.ExecuteResourceCommand,
+                readOnly: tool.Name is not (KnownMcpTools.ExecuteResourceCommand or KnownMcpTools.SelectAppHost),
                 destructive: tool.Name == KnownMcpTools.ExecuteResourceCommand);
         }
     }

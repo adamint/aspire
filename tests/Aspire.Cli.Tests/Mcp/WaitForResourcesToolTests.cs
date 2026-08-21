@@ -39,6 +39,44 @@ public class WaitForResourcesToolTests
         Assert.Equal(McpErrorCode.InvalidParams, exception.ErrorCode);
     }
 
+    [Fact]
+    public async Task WaitForResourcesTool_RejectsTooManyResourceNames()
+    {
+        var tool = CreateTool(new TestAuxiliaryBackchannelMonitor());
+        var resourceNames = Enumerable.Range(0, 101).Select(static index => $"resource-{index}").ToArray();
+        var arguments = ParseArguments(JsonSerializer.Serialize(new { resourceNames }));
+
+        var exception = await Assert.ThrowsAsync<McpProtocolException>(
+            () => tool.CallToolAsync(CallToolContextTestHelper.Create(arguments), CancellationToken.None).AsTask());
+
+        Assert.Equal(McpErrorCode.InvalidParams, exception.ErrorCode);
+    }
+
+    [Fact]
+    public async Task WaitForResourcesTool_RejectsResourceNameThatIsTooLong()
+    {
+        var tool = CreateTool(new TestAuxiliaryBackchannelMonitor());
+        var arguments = ParseArguments(JsonSerializer.Serialize(new { resourceNames = new[] { new string('a', 257) } }));
+
+        var exception = await Assert.ThrowsAsync<McpProtocolException>(
+            () => tool.CallToolAsync(CallToolContextTestHelper.Create(arguments), CancellationToken.None).AsTask());
+
+        Assert.Equal(McpErrorCode.InvalidParams, exception.ErrorCode);
+    }
+
+    [Fact]
+    public async Task WaitForResourcesTool_AcceptsResourceNameWithinUnicodeCharacterLimit()
+    {
+        var tool = CreateTool(new TestAuxiliaryBackchannelMonitor());
+        var resourceName = string.Concat(Enumerable.Repeat("\U0001F680", 256));
+        var arguments = ParseArguments(JsonSerializer.Serialize(new { resourceNames = new[] { resourceName } }));
+
+        var exception = await Assert.ThrowsAsync<McpProtocolException>(
+            () => tool.CallToolAsync(CallToolContextTestHelper.Create(arguments), CancellationToken.None).AsTask());
+
+        Assert.Equal(McpErrorCode.InternalError, exception.ErrorCode);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("""{"resourceNames":[]}""")]
@@ -345,6 +383,11 @@ public class WaitForResourcesToolTests
                 Success = true,
                 State = "FailedToStart",
                 ErrorMessage = "secret=false-success-credential"
+            },
+            ["custom-state"] = new()
+            {
+                Success = false,
+                State = "secret-custom-state"
             }
         };
         var connection = CreateConnection(
@@ -392,7 +435,13 @@ public class WaitForResourcesToolTests
                 "false-down",
                 "FailedToStart",
                 "failure",
-                "Resource entered a terminal failed state."));
+                "Resource entered a terminal failed state."),
+            resource => AssertResourceOutcome(
+                resource,
+                "custom-state",
+                "unknown",
+                "failure",
+                "Resource wait failed."));
     }
 
     [Fact]

@@ -266,7 +266,7 @@ internal sealed class AgentMcpCommand : BaseCommand
             else
             {
                 // Refresh resource tools if needed (e.g., AppHost selection changed or invalidated)
-                var (hasCurrentResourceToolMap, resourceToolMap) = await TryGetResourceToolMapAsync(cancellationToken).ConfigureAwait(false);
+                var (hasCurrentResourceToolMap, snapshot) = await TryGetResourceToolMapAsync(cancellationToken).ConfigureAwait(false);
                 if (!hasCurrentResourceToolMap)
                 {
                     // Don't send tools/list_changed here — the client already called tools/list
@@ -274,10 +274,10 @@ internal sealed class AgentMcpCommand : BaseCommand
                     // list handler would cause the client to call tools/list again, creating an
                     // infinite loop when tool availability is unstable (e.g., container MCP tools
                     // oscillating between available/unavailable).
-                    (resourceToolMap, _) = await _resourceToolRefreshService.RefreshResourceToolMapAsync(cancellationToken);
+                    (snapshot, _) = await _resourceToolRefreshService.RefreshResourceToolMapAsync(cancellationToken);
                 }
 
-                tools.AddRange(resourceToolMap.Select(x => new Tool
+                tools.AddRange(snapshot.ToolMap.Select(x => new Tool
                 {
                     Name = x.Key,
                     Description = x.Value.Tool.Description,
@@ -341,11 +341,11 @@ internal sealed class AgentMcpCommand : BaseCommand
         var toolsRefreshed = false;
 
         // Refresh resource tools if needed (e.g., AppHost selection changed or invalidated)
-        var (hasCurrentResourceToolMap, resourceToolMap) = await TryGetResourceToolMapAsync(cancellationToken).ConfigureAwait(false);
+        var (hasCurrentResourceToolMap, snapshot) = await TryGetResourceToolMapAsync(cancellationToken).ConfigureAwait(false);
         if (!hasCurrentResourceToolMap)
         {
             bool changed;
-            (resourceToolMap, changed) = await _resourceToolRefreshService.RefreshResourceToolMapAsync(cancellationToken);
+            (snapshot, changed) = await _resourceToolRefreshService.RefreshResourceToolMapAsync(cancellationToken);
             if (changed)
             {
                 await _resourceToolRefreshService.SendToolsListChangedNotificationAsync(cancellationToken).ConfigureAwait(false);
@@ -354,10 +354,9 @@ internal sealed class AgentMcpCommand : BaseCommand
         }
 
         // Resource MCP tools are invoked via the AppHost backchannel (AppHost proxies to the resource MCP endpoint).
-        if (resourceToolMap.TryGetValue(toolName, out var resourceAndTool))
+        if (snapshot.ToolMap.TryGetValue(toolName, out var resourceAndTool))
         {
-            var connection = await GetSelectedConnectionAsync(cancellationToken).ConfigureAwait(false);
-            if (connection == null)
+            if (snapshot.Connection is null)
             {
                 throw new McpProtocolException(
                     "No Aspire AppHost is currently running. To use resource MCP tools, start an Aspire application (e.g. 'aspire run') and then retry.",
@@ -373,7 +372,7 @@ internal sealed class AgentMcpCommand : BaseCommand
                 _logger.LogDebug("Invoking tool {Name} with arguments {Arguments}", toolName, JsonSerializer.Serialize(args, BackchannelJsonSerializerContext.Default.DictionaryStringJsonElement));
             }
 
-            var result = await connection.CallResourceMcpToolAsync(resourceAndTool.ResourceName, resourceAndTool.Tool.Name, args, cancellationToken).ConfigureAwait(false);
+            var result = await snapshot.Connection.CallResourceMcpToolAsync(resourceAndTool.ResourceName, resourceAndTool.Tool.Name, args, cancellationToken).ConfigureAwait(false);
 
             if (result is null)
             {
@@ -403,13 +402,13 @@ internal sealed class AgentMcpCommand : BaseCommand
         return AppHostConnectionHelper.GetSelectedConnectionAsync(_auxiliaryBackchannelMonitor, _logger, cancellationToken);
     }
 
-    private async Task<(bool Success, IReadOnlyDictionary<string, ResourceToolEntry> ToolMap)> TryGetResourceToolMapAsync(
+    private async Task<(bool Success, ResourceToolMapSnapshot Snapshot)> TryGetResourceToolMapAsync(
         CancellationToken cancellationToken)
     {
         var connection = await GetSelectedConnectionAsync(cancellationToken).ConfigureAwait(false);
 
-        return _resourceToolRefreshService.TryGetResourceToolMap(connection, out var resourceToolMap)
-            ? (true, resourceToolMap)
+        return _resourceToolRefreshService.TryGetResourceToolMap(connection, out var snapshot)
+            ? (true, snapshot)
             : (false, null!);
     }
 
