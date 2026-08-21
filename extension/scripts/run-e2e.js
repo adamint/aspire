@@ -837,9 +837,19 @@ function resolveAzureFunctionsVsixPaths() {
     return [];
   }
 
-  // The Functions extension activates the Azure Resource Groups extension directly.
-  // Install both VSIXes explicitly because the E2E VS Code instance runs offline.
+  // Aspire advertises its azure-functions launch capability only when both the C# and
+  // Azure Functions extensions are installed. Install C# with its required .NET runtime
+  // dependency, plus the Azure Resource Groups extension that Functions activates directly.
+  // All dependencies must be explicit because the E2E VS Code instance runs offline.
   return [
+    {
+      displayName: '.NET Install Tool',
+      path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_DOTNET_RUNTIME_VSIX'),
+    },
+    {
+      displayName: 'C#',
+      path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_CSHARP_VSIX'),
+    },
     {
       displayName: 'Azure Resource Groups',
       path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_AZURE_RESOURCE_GROUPS_VSIX'),
@@ -1181,8 +1191,13 @@ function resolveRequiredVsixPath(environmentVariable) {  const configuredPath = 
 }
 
 function validateAzureFunctionsCoreTools() {
-  const executable = process.platform === 'win32' ? 'func.cmd' : 'func';
-  const result = spawnSync(executable, ['--version'], {
+  // Node cannot launch .cmd files directly on Windows, so invoke the trusted, constant
+  // Core Tools command through ComSpec instead.
+  // https://nodejs.org/api/child_process.html#spawning-bat-and-cmd-files-on-windows
+  const displayName = isWindows ? 'func.cmd' : 'func';
+  const executable = isWindows ? (process.env.ComSpec || 'cmd.exe') : displayName;
+  const args = isWindows ? ['/d', '/s', '/c', 'func.cmd --version'] : ['--version'];
+  const result = spawnSync(executable, args, {
     cwd: extensionRoot,
     env: getAspireCliEnvironment(),
     shell: false,
@@ -1191,7 +1206,7 @@ function validateAzureFunctionsCoreTools() {
   });
 
   if (result.error) {
-    throw new Error(`Unable to execute Azure Functions Core Tools (${executable}): ${result.error.message}`);
+    throw new Error(`Unable to execute Azure Functions Core Tools (${displayName}): ${result.error.message}`);
   }
 
   if (result.status !== 0) {
@@ -1349,7 +1364,7 @@ function writeAppHostProject(projectName, resolvedAppHostSdkVersion, includeAzur
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
@@ -1362,10 +1377,14 @@ ${azureFunctionsPackageReference}  </ItemGroup>
 `);
 
   const azureFunctionsResource = includeAzureFunctions
-    ? `\nbuilder.AddAzureFunctionsProject("e2e-functions", "../AspireE2E.Functions/AspireE2E.Functions.csproj");\n`
+    ? `builder.AddAzureFunctionsProject("e2e-functions", "../AspireE2E.Functions/AspireE2E.Functions.csproj");\n\n`
     : '';
   fs.writeFileSync(path.join(projectDirectory, 'AppHost.cs'), `${csharpFileHeader}#pragma warning disable ASPIREINTERACTION001
+#pragma warning disable ASPIREPIPELINES001
 #pragma warning disable ASPIRETERMINAL001
+
+using Aspire.Hosting.Pipelines;
+
 // The E2E fixture intentionally covers interaction command arguments and terminal metadata while those APIs are still experimental.
 var builder = DistributedApplication.CreateBuilder(args);
 
@@ -1441,7 +1460,36 @@ builder.AddResource(new NoCommandsResource("e2e-no-commands"));
 builder.AddProject<Projects.AspireE2E_Worker>("e2e-terminal")
     .WithHttpEndpoint(name: "http")
     .WithTerminal();
-${azureFunctionsResource}
+
+${azureFunctionsResource}builder.Pipeline.AddStep("e2e-run-action-step", async context =>
+{
+    var task = await context.ReportingStep
+        .CreateTaskAsync("Running E2E run action pipeline step", context.CancellationToken)
+        .ConfigureAwait(false);
+
+    await using (task.ConfigureAwait(false))
+    {
+        await task.CompleteAsync(
+            "E2E run action pipeline step completed",
+            CompletionState.Completed,
+            context.CancellationToken).ConfigureAwait(false);
+    }
+});
+
+builder.Pipeline.AddStep("e2e-debug-action-step", async context =>
+{
+    var task = await context.ReportingStep
+        .CreateTaskAsync("Running E2E debug action pipeline step", context.CancellationToken)
+        .ConfigureAwait(false);
+
+    await using (task.ConfigureAwait(false))
+    {
+        await task.CompleteAsync(
+            "E2E debug action pipeline step completed",
+            CompletionState.Completed,
+            context.CancellationToken).ConfigureAwait(false);
+    }
+});
 
 builder.Build().Run();
 
@@ -1453,12 +1501,12 @@ function writeAzureFunctionsProject(projectName) {
   const projectDirectory = path.join(workspaceRoot, projectName);
   const propertiesDirectory = path.join(projectDirectory, 'Properties');
   const certificatePath = path.join(projectDirectory, 'https-e2e.pfx');
-  const certificatePassword = 'AspireE2E';
+  const certificatePassword = String.raw`Aspire E2E p@ss'\word`;
   fs.mkdirSync(propertiesDirectory, { recursive: true });
   fs.writeFileSync(path.join(projectDirectory, `${projectName}.csproj`), `<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <AzureFunctionsVersion>v4</AzureFunctionsVersion>
     <OutputType>Exe</OutputType>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -1512,7 +1560,7 @@ public sealed class HttpsFunction
     profiles: {
       [projectName]: {
         commandName: 'Project',
-        commandLineArgs: `--useHttps --cert ${certificatePath} --password ${certificatePassword}`,
+        commandLineArgs: `--useHttps --cert "${certificatePath}" --password "${certificatePassword}"`,
         launchBrowser: false,
       },
     },
@@ -1529,7 +1577,7 @@ function writeWorkerProject(projectName) {
   fs.writeFileSync(path.join(projectDirectory, `${projectName}.csproj`), `<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
