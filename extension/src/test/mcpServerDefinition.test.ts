@@ -452,6 +452,26 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
         }
     });
 
+    test('keeps a child path beginning with two dots workspace-relative in its label', async () => {
+        const folder = workspaceFolder('repo', '/repo', 0);
+        const appHostPath = path.join(folder.uri.fsPath, '..app', 'AppHost.csproj');
+        const harness = new ProviderHarness({
+            folders: [folder],
+            candidatesFor: async () => [{ path: appHostPath, language: 'csharp', status: 'buildable' }],
+        });
+
+        try {
+            await harness.provider.refresh();
+
+            assert.strictEqual(
+                harness.definitions()[0].label,
+                'Aspire (repo: ..app/AppHost.csproj)');
+        }
+        finally {
+            harness.dispose();
+        }
+    });
+
     // Windows paths are case-insensitive, so two candidates differing only in case name one file.
     test('deduplicates case-variant AppHost paths on Windows', async () => {
         const platformStub = sinon.stub(process, 'platform').value('win32');

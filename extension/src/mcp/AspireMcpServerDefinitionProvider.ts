@@ -512,7 +512,10 @@ function selectWorkspacePinnedAppHosts(
  */
 function createPinnedServerLabel(pin: OwnedPinnedAppHost): string {
     const relativePath = path.relative(pin.owner.uri.fsPath, pin.selectorPath);
-    const appHostLabel = relativePath.length > 0 && !relativePath.startsWith('..') && !path.isAbsolute(relativePath)
+    const appHostLabel = relativePath.length > 0 &&
+        relativePath !== '..' &&
+        !relativePath.startsWith(`..${path.sep}`) &&
+        !path.isAbsolute(relativePath)
         ? relativePath.split(path.sep).join('/')
         : pin.selectorPath;
     return `${mcpServerLabel} (${pin.owner.name}: ${appHostLabel})`;
