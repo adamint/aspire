@@ -1264,6 +1264,33 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         sinon.assert.calledOnce(startDebugging);
     });
 
+    test('a pending dashboard debug launch disposes its start listener after shutdown', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        const disposeStartListener = sinon.stub();
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').returns({ dispose: disposeStartListener });
+        sinon.stub(vscode.debug, 'startDebugging').returns(new Promise<boolean>(() => { }));
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+
+        await aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
+        const stopPromise = aspireDebugSession.stopDebugging();
+        await clock.tickAsync(2000);
+        await stopPromise;
+        sinon.assert.notCalled(disposeStartListener);
+
+        await clock.tickAsync(29999);
+        sinon.assert.notCalled(disposeStartListener);
+
+        await clock.tickAsync(1);
+        sinon.assert.calledOnce(disposeStartListener);
+    });
+
     test('a rejected dashboard debug launch disposes its start listener and logs the failure', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
