@@ -158,6 +158,10 @@ export class DashboardLauncher implements vscode.Disposable {
       // Start as a child debug session so it is stopped alongside this session in `dispose`.
       didStart = await start;
     }
+    catch (error) {
+      disposable.dispose();
+      throw error;
+    }
     finally {
       this._pendingDashboardDebugSessionStarts.delete(completion);
     }

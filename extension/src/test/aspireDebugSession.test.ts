@@ -1264,6 +1264,28 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         sinon.assert.calledOnce(startDebugging);
     });
 
+    test('a rejected dashboard debug launch disposes its start listener and logs the failure', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        const disposeStartListener = sinon.stub();
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').returns({ dispose: disposeStartListener });
+        sinon.stub(vscode.debug, 'startDebugging').rejects(new Error('Browser launch failed'));
+        const warn = sinon.stub(extensionLogOutputChannel, 'warn');
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+
+        await aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
+        await new Promise(resolve => setImmediate(resolve));
+
+        sinon.assert.calledOnce(disposeStartListener);
+        sinon.assert.calledOnceWithExactly(
+            warn,
+            'Failed to launch dashboard debug session (pwa-msedge): Browser launch failed');
+    });
+
     test('stopDebugging ignores a dashboard debug session that already terminated', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
