@@ -647,8 +647,21 @@ suite('E2E launch profile', () => {
     test('isolates E2E NuGet packages under the temporary run root', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const nuGetPathDeclaration = "const isolatedNuGetPackages = path.join(shortRunRoot, 'nuget-packages');";
+        const nuGetPathIndex = runner.indexOf(nuGetPathDeclaration);
+        const restoreWorkspaceIndex = runner.indexOf('restoreWorkspaceFixture();');
+        const cliEnvironmentStart = runner.indexOf('function getAspireCliEnvironment');
+        const cliEnvironmentEnd = runner.indexOf('\nfunction ', cliEnvironmentStart + 1);
+        const cliEnvironment = runner.slice(cliEnvironmentStart, cliEnvironmentEnd);
+        const extestEnvironmentStart = runner.indexOf('const extestEnv = getAspireCliEnvironment({');
+        const extestEnvironmentEnd = runner.indexOf('\n    });', extestEnvironmentStart);
+        const extestEnvironment = runner.slice(extestEnvironmentStart, extestEnvironmentEnd);
 
-        assert.ok(runner.includes("ASPIRE_EXTENSION_E2E_NUGET_PACKAGES: path.join(shortRunRoot, 'nuget-packages')"));
+        assert.ok(nuGetPathIndex >= 0);
+        assert.ok(nuGetPathIndex < restoreWorkspaceIndex);
+        assert.ok(cliEnvironment.includes('NUGET_PACKAGES: isolatedNuGetPackages,'));
+        assert.ok(extestEnvironment.includes('NUGET_PACKAGES: isolatedNuGetPackages,'));
+        assert.ok(extestEnvironment.includes('ASPIRE_EXTENSION_E2E_NUGET_PACKAGES: isolatedNuGetPackages,'));
     });
 
     test('makes local NuGet sources available to external AppHosts', () => {

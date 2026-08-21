@@ -71,6 +71,7 @@ if (!verifyExtesterFeedOnly) {
 }
 const tempRoot = verifyExtesterFeedOnly ? '' : fs.realpathSync.native(requestedTempRoot);
 const shortRunRoot = verifyExtesterFeedOnly ? '' : fs.mkdtempSync(path.join(tempRoot, 'aev-'));
+const isolatedNuGetPackages = path.join(shortRunRoot, 'nuget-packages');
 const isolatedAspireHome = path.join(shortRunRoot, 'aspire-home');
 const storageDir = path.join(shortRunRoot, 'storage');
 const extensionsDir = path.join(shortRunRoot, 'extensions');
@@ -632,7 +633,8 @@ async function main() {
       // ignore an extension host left behind by an earlier run that is still polling them.
       ASPIRE_EXTENSION_E2E_RUN_ID: runId,
       ASPIRE_EXTENSION_E2E_ENABLE_BRIDGE: 'true',
-      ASPIRE_EXTENSION_E2E_NUGET_PACKAGES: path.join(shortRunRoot, 'nuget-packages'),
+      NUGET_PACKAGES: isolatedNuGetPackages,
+      ASPIRE_EXTENSION_E2E_NUGET_PACKAGES: isolatedNuGetPackages,
       ASPIRE_EXTENSION_E2E_SKIP_CURRENT_CLI_REGRESSIONS: process.env.ASPIRE_EXTENSION_E2E_SKIP_CURRENT_CLI_REGRESSIONS === 'true' ? 'true' : 'false',
       ASPIRE_EXTENSION_E2E_PRIMARY_APPHOST: primaryAppHostProject,
       ASPIRE_EXTENSION_E2E_APPHOST_SDK_VERSION: appHostSdkVersion,
@@ -1683,6 +1685,7 @@ function getAspireCliEnvironment(extraEnv = {}) {
     ASPIRE_CLI_START_TIMEOUT: process.env.ASPIRE_EXTENSION_E2E_CLI_START_TIMEOUT || '300',
     ASPIRE_CLI_TELEMETRY_OPTOUT: 'true',
     ASPIRE_VERSION_CHECK_DISABLED: 'true',
+    NUGET_PACKAGES: isolatedNuGetPackages,
     DOTNET_CLI_UI_LANGUAGE: 'en',
     DOTNET_CLI_TELEMETRY_OPTOUT: '1',
     DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE: '1',
