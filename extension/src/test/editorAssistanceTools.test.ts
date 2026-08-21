@@ -3335,11 +3335,13 @@ suite('Editor assistance AppHost services', () => {
             const nestedSlashPrefixedSource = '/subscriptions/subscription-id/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/account/blobServices/default/containers/container';
             const deceptiveSlashPrefixedSource = '/subscriptions/private/Api.csproj';
             const privateWebSource = 'https://private.example/Api.csproj?token=web-secret';
+            const privateDataSource = 'data:text/plain,private-source-secret';
             const fileUriProjectPathWithSecrets = 'file:///workspace/Api/Api.csproj?token=source-secret#fragment-secret';
             const encodedPosixFileUriWithSecret = 'file:///workspace%2FApi%2FApi.csproj?token=encoded-secret';
             const encodedWindowsFileUriWithSecret = 'file:///C:%5Cworkspace%5CApi%5CApi.csproj#encoded-fragment';
             const malformedEncodedFileUriWithSecret = 'file:///workspace/%E0%A4%A?token=decode-secret';
             const oneLetterSchemeUrlWithSecret = 'x://private.example/Api.csproj?token=one-letter-secret';
+            const driveShapedUriWithSecret = 'x:/Api.csproj?token=drive-shaped-secret';
             const rootFileUriWithSecret = 'file:///?token=source-secret';
             const authorityOnlyFileUriWithSecret = 'file://private-host?token=authority-secret';
             const authorityFileUriProjectPathWithSecret = 'file://private-host/share/Api.csproj?token=host-secret';
@@ -3406,6 +3408,18 @@ suite('Editor assistance AppHost services', () => {
                     },
                     expectedSource: 'registry.example/api:1',
                     omittedSourceParts: ['private.example', 'web-secret'],
+                },
+                {
+                    label: 'non-hierarchical URI source falls through to the container image',
+                    resource: {
+                        ...createResource('api', projectPath, {
+                            'container.image': 'registry.example/api:1',
+                            ...forbidden,
+                        }),
+                        source: privateDataSource,
+                    },
+                    expectedSource: 'registry.example/api:1',
+                    omittedSourceParts: ['private-source-secret'],
                 },
                 {
                     label: 'canonical POSIX absolute source uses its filename',
@@ -3493,6 +3507,18 @@ suite('Editor assistance AppHost services', () => {
                     },
                     expectedSource: 'registry.example/api:1',
                     omittedSourceParts: ['private.example', 'one-letter-secret'],
+                },
+                {
+                    label: 'drive-shaped URI source falls through to the container image',
+                    resource: {
+                        ...createResource('api', projectPath, {
+                            'container.image': 'registry.example/api:1',
+                            ...forbidden,
+                        }),
+                        source: driveShapedUriWithSecret,
+                    },
+                    expectedSource: 'registry.example/api:1',
+                    omittedSourceParts: ['drive-shaped-secret'],
                 },
                 {
                     label: 'root file URI falls through to the container image',
@@ -3654,6 +3680,24 @@ suite('Editor assistance AppHost services', () => {
                     assert.strictEqual(serialized.includes(omittedSourcePart), false, `${label}: ${omittedSourcePart}`);
                 }
             }
+        });
+
+        test('maps unrecognized resource states to unknown', async () => {
+            addEditorAppHostRunSession(appHostProjectPath);
+            const privateState = 'Running with private-state-secret';
+            resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [{
+                ...createResource('api', path.join(workspaceRoot, 'Api', 'Api.csproj')),
+                state: privateState,
+            }]);
+
+            const result = await service.getDebugSessionStatus(
+                { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api' },
+                new vscode.CancellationTokenSource().token);
+
+            assert.deepStrictEqual((result as { resource?: unknown }).resource, createExpectedResource('Api.csproj', {
+                state: 'unknown',
+            }));
+            assert.strictEqual(JSON.stringify(result).includes(privateState), false);
         });
 
         test('does not read or project child resources in the session list', async () => {

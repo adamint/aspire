@@ -124,7 +124,13 @@ export interface AppHostLifecycleLaunchService extends AppHostEditorStateLaunchS
      * if it were the selector is the failure that hides itself: the freshness check then compares
      * the physical path with itself and can never fail.
      */
-    launchFromLifecycleOwner(launchTarget: AppHostLaunchTarget, command: 'run', noDebug: boolean, isolated: boolean | undefined, token: vscode.CancellationToken): Promise<AppHostLaunchIsolation | undefined>;
+    launchFromLifecycleOwner(
+        launchTarget: AppHostLaunchTarget,
+        command: 'run',
+        noDebug: boolean,
+        isolated: boolean | undefined,
+        token: vscode.CancellationToken,
+        inferredIsolationOverride?: boolean): Promise<AppHostLaunchIsolation | undefined>;
     stopAppHost(appHostPath: string, token: vscode.CancellationToken): Promise<AppHostStopResult>;
     stopAppHostFromLifecycleOwner(stopTarget: AppHostLaunchTarget, token: vscode.CancellationToken): Promise<AppHostStopResult>;
 }

@@ -165,11 +165,27 @@ export type EditorAssistanceController = 'editor' | 'external';
 
 export interface EditorAssistanceResource {
     readonly resourceType: string;
-    readonly state: string | null;
+    readonly state: EditorAssistanceResourceState;
     readonly healthStatus: string | null;
     readonly exitCode: number | null;
     readonly source: string | null;
 }
+
+export type EditorAssistanceResourceState =
+    | 'Running'
+    | 'Active'
+    | 'Starting'
+    | 'Building'
+    | 'Stopping'
+    | 'Stopped'
+    | 'Waiting'
+    | 'NotStarted'
+    | 'Finished'
+    | 'Exited'
+    | 'FailedToStart'
+    | 'RuntimeUnhealthy'
+    | 'ValueMissing'
+    | 'unknown';
 
 export type EditorAssistanceRecommendedAction =
     | 'checkAspireOutput'

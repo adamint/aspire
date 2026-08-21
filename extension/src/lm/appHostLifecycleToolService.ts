@@ -21,7 +21,7 @@ import {
     type AppHostStartToolInput,
     type AppHostStopToolInput,
 } from './appHostLifecycleToolContracts';
-import { type ResolvedAppHostTarget, SafeAppHostTargetResolver, toAppHostLaunchTarget } from './safeAppHostTargetResolver';
+import { type AppHostTargetIdentity, type ResolvedAppHostTarget, SafeAppHostTargetResolver, toAppHostLaunchTarget } from './safeAppHostTargetResolver';
 
 type AppHostTargetResolution =
     | { resolved: true; target: ResolvedAppHostTarget }
@@ -30,6 +30,17 @@ type AppHostTargetResolution =
 type PreflightResult =
     | { rejected: true; result: AppHostLifecycleToolResult }
     | { rejected: false; target: ResolvedAppHostTarget };
+
+interface PreparedLifecycleAction {
+    readonly tool: typeof aspireAppHostStartToolName | typeof aspireAppHostStopToolName;
+    readonly inputKey: string;
+    readonly identity: AppHostTargetIdentity;
+    readonly isolated?: boolean;
+    readonly expiresAt: number;
+}
+
+const preparedActionLimit = 64;
+const preparedActionLifetimeMs = 5 * 60 * 1000;
 
 /**
  * Backs the `aspire_apphost_start` / `aspire_apphost_stop` language model tools.
@@ -54,6 +65,7 @@ type PreflightResult =
 export class AppHostLifecycleToolService implements vscode.Disposable {
     private readonly _dependencies: AppHostLifecycleToolDependencies;
     private readonly _targetResolver: SafeAppHostTargetResolver;
+    private readonly _preparedActions: PreparedLifecycleAction[] = [];
     private _disposed = false;
 
     constructor(
@@ -65,6 +77,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
 
     dispose(): void {
         this._disposed = true;
+        this._preparedActions.length = 0;
     }
 
     /**
@@ -77,6 +90,12 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
      * inside the trusted prompt that gates "Always allow".
      */
     async describeTarget(rawAppHost: unknown, token: vscode.CancellationToken): Promise<string> {
+        return await this.prepareStopTarget(
+            typeof rawAppHost === 'string' ? { appHostPath: rawAppHost } : undefined,
+            token);
+    }
+
+    async prepareStopTarget(input: AppHostStopToolInput | undefined, token: vscode.CancellationToken): Promise<string> {
         // VS Code can keep the implementation reachable in Restricted Mode and call
         // `prepareInvocation` before `invoke` gets a chance to reject the tool call. Do
         // not run AppHost discovery there: it shells out to `aspire ls`, which crosses
@@ -85,8 +104,22 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             return appHostLifecycleUnresolvedPath;
         }
 
-        const resolution = await this._targetResolver.resolveTarget(rawAppHost, token);
-        return resolution.resolved ? resolution.target.displayPath : appHostLifecycleUnresolvedPath;
+        if (!isValidStopInput(input)) {
+            return appHostLifecycleUnresolvedPath;
+        }
+
+        const resolution = await this._targetResolver.resolveTarget(input.appHostPath, token);
+        if (!resolution.resolved) {
+            return appHostLifecycleUnresolvedPath;
+        }
+
+        this.rememberPreparedAction({
+            tool: aspireAppHostStopToolName,
+            inputKey: getStopInputKey(input),
+            identity: resolution.target.identity,
+            expiresAt: Date.now() + preparedActionLifetimeMs,
+        });
+        return resolution.target.displayPath;
     }
 
     async describeStartTarget(input: AppHostStartToolInput | undefined, token: vscode.CancellationToken): Promise<{ displayPath: string; isolated: boolean }> {
@@ -94,7 +127,11 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             return { displayPath: appHostLifecycleUnresolvedPath, isolated: false };
         }
 
-        const resolution = await this.resolveTarget(input?.appHostPath, token);
+        if (!isValidStartInput(input)) {
+            return { displayPath: appHostLifecycleUnresolvedPath, isolated: false };
+        }
+
+        const resolution = await this.resolveTarget(input.appHostPath, token);
         if (!resolution.resolved) {
             return { displayPath: appHostLifecycleUnresolvedPath, isolated: false };
         }
@@ -112,10 +149,37 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         // an explicit choice; anything else is rejected by `isValidStartInput` at invoke time.
         const explicitIsolation = typeof input?.isolated === 'boolean' ? input.isolated : undefined;
         const isolated = explicitIsolation ?? isLinkedGitWorktree(resolution.target.canonicalPath);
+        this.rememberPreparedAction({
+            tool: aspireAppHostStartToolName,
+            inputKey: getStartInputKey(input),
+            identity: resolution.target.identity,
+            isolated,
+            expiresAt: Date.now() + preparedActionLifetimeMs,
+        });
         return { displayPath: resolution.target.displayPath, isolated };
     }
 
+    async startConfirmed(input: AppHostStartToolInput, token: vscode.CancellationToken): Promise<AppHostLifecycleToolResult> {
+        if (!isValidStartInput(input) || this._disposed || token.isCancellationRequested || !vscode.workspace.isTrusted) {
+            return await this.start(input, token);
+        }
+
+        const preparedAction = this.consumePreparedAction(aspireAppHostStartToolName, getStartInputKey(input));
+        if (preparedAction === undefined) {
+            return this.createUnconfirmedInvocationResult(aspireAppHostStartToolName, input.mode);
+        }
+
+        return await this.startCore(input, token, preparedAction);
+    }
+
     async start(input: AppHostStartToolInput, token: vscode.CancellationToken): Promise<AppHostLifecycleToolResult> {
+        return await this.startCore(input, token);
+    }
+
+    private async startCore(
+        input: AppHostStartToolInput,
+        token: vscode.CancellationToken,
+        preparedAction?: PreparedLifecycleAction): Promise<AppHostLifecycleToolResult> {
         if (!isValidStartInput(input)) {
             return createResult(aspireAppHostStartToolName, 'invalidInput', '', 'none', undefined, undefined);
         }
@@ -124,6 +188,11 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         const preflight = await this.preflight(aspireAppHostStartToolName, input?.appHostPath, token, requestedMode);
         if (preflight.rejected) {
             return preflight.result;
+        }
+        if (preparedAction !== undefined &&
+            (preparedAction.identity !== preflight.target.identity ||
+                preparedAction.isolated !== (input.isolated ?? isLinkedGitWorktree(preflight.target.canonicalPath)))) {
+            return this.createUnconfirmedInvocationResult(aspireAppHostStartToolName, requestedMode);
         }
 
         // Every decision below is addressed to `canonicalPath`, the physical AppHost the selector
@@ -203,6 +272,15 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                     return createResult(aspireAppHostStartToolName, 'alreadyRunning', current.relativePath, 'external', requestedMode, undefined);
                 }
 
+                // An omitted isolation value follows linked-worktree state. That filesystem state
+                // can change while the external-owner probes or lifecycle lock are awaited, so
+                // compare it again at the final launch boundary rather than relying only on the
+                // preflight comparison made before those awaits.
+                if (preparedAction !== undefined &&
+                    preparedAction.isolated !== (input.isolated ?? isLinkedGitWorktree(current.canonicalPath))) {
+                    return this.createUnconfirmedInvocationResult(aspireAppHostStartToolName, requestedMode);
+                }
+
                 // Claim the launching slot in one synchronous step. The lifecycle lock only
                 // serializes callers that take it, and `launch.json`/F5 reaches
                 // `startDebugging` without it, so this claim - not the checks above - is
@@ -225,7 +303,10 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                         'run',
                         requestedMode === 'run',
                         input.isolated,
-                        lockToken);
+                        lockToken,
+                        preparedAction !== undefined && input.isolated === undefined
+                            ? preparedAction.isolated
+                            : undefined);
                     return createResult(aspireAppHostStartToolName, 'started', current.relativePath, 'editor', requestedMode, requestedMode, undefined, launchedIsolation?.effective);
                 }
                 catch (error) {
@@ -242,7 +323,27 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         }
     }
 
+    async stopConfirmed(input: AppHostStopToolInput, token: vscode.CancellationToken): Promise<AppHostLifecycleToolResult> {
+        if (!isValidStopInput(input) || this._disposed || token.isCancellationRequested || !vscode.workspace.isTrusted) {
+            return await this.stop(input, token);
+        }
+
+        const preparedAction = this.consumePreparedAction(aspireAppHostStopToolName, getStopInputKey(input));
+        if (preparedAction === undefined) {
+            return this.createUnconfirmedInvocationResult(aspireAppHostStopToolName, undefined);
+        }
+
+        return await this.stopCore(input, token, preparedAction);
+    }
+
     async stop(input: AppHostStopToolInput, token: vscode.CancellationToken): Promise<AppHostLifecycleToolResult> {
+        return await this.stopCore(input, token);
+    }
+
+    private async stopCore(
+        input: AppHostStopToolInput,
+        token: vscode.CancellationToken,
+        preparedAction?: PreparedLifecycleAction): Promise<AppHostLifecycleToolResult> {
         if (!isValidStopInput(input)) {
             return createResult(aspireAppHostStopToolName, 'invalidInput', '', 'none', undefined, undefined);
         }
@@ -250,6 +351,9 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         const preflight = await this.preflight(aspireAppHostStopToolName, input?.appHostPath, token, undefined);
         if (preflight.rejected) {
             return preflight.result;
+        }
+        if (preparedAction !== undefined && preparedAction.identity !== preflight.target.identity) {
+            return this.createUnconfirmedInvocationResult(aspireAppHostStopToolName, undefined);
         }
 
         try {
@@ -292,6 +396,50 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             result.controller,
             undefined,
             effectiveMode);
+    }
+
+    private rememberPreparedAction(action: PreparedLifecycleAction): void {
+        this.prunePreparedActions();
+        if (this._preparedActions.length >= preparedActionLimit) {
+            this._preparedActions.splice(0, this._preparedActions.length - preparedActionLimit + 1);
+        }
+
+        this._preparedActions.push(action);
+    }
+
+    private consumePreparedAction(
+        tool: PreparedLifecycleAction['tool'],
+        inputKey: string): PreparedLifecycleAction | undefined {
+        this.prunePreparedActions();
+        let consumed: PreparedLifecycleAction | undefined;
+        for (let index = this._preparedActions.length - 1; index >= 0; index--) {
+            const action = this._preparedActions[index];
+            if (action.tool === tool && action.inputKey === inputKey) {
+                this._preparedActions.splice(index, 1);
+                consumed ??= action;
+            }
+        }
+
+        // The VS Code API does not provide a preparation token to correlate with invocation.
+        // Consume every duplicate for this complete input so abandoned identical preparations
+        // cannot be replayed after one confirmed action executes.
+        return consumed;
+    }
+
+    private prunePreparedActions(): void {
+        const now = Date.now();
+        for (let index = this._preparedActions.length - 1; index >= 0; index--) {
+            if (this._preparedActions[index].expiresAt <= now) {
+                this._preparedActions.splice(index, 1);
+            }
+        }
+    }
+
+    private createUnconfirmedInvocationResult(
+        tool: PreparedLifecycleAction['tool'],
+        requestedMode: AppHostLifecycleMode | undefined): AppHostLifecycleToolResult {
+        extensionLogOutputChannel.warn(`Aspire language model tool ${tool} refused an invocation that did not match a current prepared action.`);
+        return createResult(tool, 'failed', '', 'none', requestedMode, undefined);
     }
 
     /**
@@ -410,4 +558,12 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
 
 function getSessionMode(session: AppHostLifecycleEditorSession): AppHostLifecycleMode {
     return session.configuration?.noDebug === true ? 'run' : 'debug';
+}
+
+function getStartInputKey(input: AppHostStartToolInput): string {
+    return JSON.stringify([input.appHostPath, input.mode, input.isolated ?? null]);
+}
+
+function getStopInputKey(input: AppHostStopToolInput): string {
+    return JSON.stringify([input.appHostPath]);
 }

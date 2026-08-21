@@ -13,6 +13,7 @@ import type { ConfigInfoOptions } from '../utils/configInfoProvider';
 import type { CandidateAppHostDisplayInfo } from '../utils/appHostCandidateTypes';
 import { getLexicalAppHostPathKey } from '../utils/paths/comparison';
 import { isBuildableAppHostCandidate } from '../utils/appHostCandidateSelection';
+import { isCapturedAppHostPathWithinDirectory } from '../utils/appHostIdentity';
 
 const mcpServerLabel = 'Aspire';
 const mcpServerArgs = ['agent', 'mcp'];
@@ -125,8 +126,8 @@ export async function canonicalizeMcpAppHostPath(
 
 interface PinnedAppHost {
     cliPath: string;
-    selectorPath: string;
     appHostPath: string;
+    labelPath: string;
     comparisonKey: string;
 }
 
@@ -425,6 +426,19 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
             return [];
         }
 
+        const lexicalWorkspaceRoot = path.resolve(workspaceFolder.uri.fsPath);
+        let canonicalWorkspaceRoot: string;
+        try {
+            canonicalWorkspaceRoot = await canonicalizeMcpAppHostPath(lexicalWorkspaceRoot);
+        }
+        catch (error) {
+            extensionLogOutputChannel.warn(`Skipping Aspire MCP server registration for '${workspaceFolder.uri.fsPath}': workspace root canonicalization failed: ${error instanceof Error ? error.message : String(error)}`);
+            return [];
+        }
+        if (refreshGeneration !== this._refreshGeneration) {
+            return [];
+        }
+
         const pinsByKey = new Map<string, PinnedAppHost>();
         for (const candidate of candidates) {
             if (refreshGeneration !== this._refreshGeneration) {
@@ -448,13 +462,24 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
             if (refreshGeneration !== this._refreshGeneration) {
                 return [];
             }
+            if (!isCapturedAppHostPathWithinDirectory(appHostPath, canonicalWorkspaceRoot)) {
+                extensionLogOutputChannel.warn(`Skipping Aspire MCP server registration for '${selectorPath}': canonical AppHost is outside its workspace folder.`);
+                continue;
+            }
+
+            const labelPath = getContainedRelativePath(lexicalWorkspaceRoot, selectorPath)
+                ?? getContainedRelativePath(canonicalWorkspaceRoot, appHostPath);
+            if (labelPath === undefined || labelPath.length === 0) {
+                extensionLogOutputChannel.warn(`Skipping Aspire MCP server registration for '${selectorPath}': AppHost label is outside its workspace folder.`);
+                continue;
+            }
 
             const comparisonKey = getLexicalAppHostPathKey(appHostPath);
             if (!pinsByKey.has(comparisonKey)) {
                 pinsByKey.set(comparisonKey, {
                     cliPath: cliResult.cliPath,
-                    selectorPath,
                     appHostPath,
+                    labelPath,
                     comparisonKey,
                 });
             }
@@ -471,6 +496,15 @@ function compareOrdinal(left: string, right: string): number {
     }
 
     return left < right ? -1 : 1;
+}
+
+function getContainedRelativePath(rootPath: string, candidatePath: string): string | undefined {
+    const relativePath = path.relative(rootPath, candidatePath);
+    return relativePath !== '..'
+        && !relativePath.startsWith(`..${path.sep}`)
+        && !path.isAbsolute(relativePath)
+        ? relativePath
+        : undefined;
 }
 
 /**
@@ -511,13 +545,7 @@ function selectWorkspacePinnedAppHosts(
  * folder would rename the first one's servers.
  */
 function createPinnedServerLabel(pin: OwnedPinnedAppHost): string {
-    const relativePath = path.relative(pin.owner.uri.fsPath, pin.selectorPath);
-    const appHostLabel = relativePath.length > 0 &&
-        relativePath !== '..' &&
-        !relativePath.startsWith(`..${path.sep}`) &&
-        !path.isAbsolute(relativePath)
-        ? relativePath.split(path.sep).join('/')
-        : pin.selectorPath;
+    const appHostLabel = pin.labelPath.split(path.sep).join('/');
     return `${mcpServerLabel} (${pin.owner.name}: ${appHostLabel})`;
 }
 

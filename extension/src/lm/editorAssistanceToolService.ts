@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 
 import { resolveResourceNameMatches, type ResourceJson } from '../data/appHostCliContracts';
 import { type HotReloadDiagnostics } from '../debugger/hotReload';
+import { ResourceState } from '../editor/resourceConstants';
 import { appHostLifecycleUnresolvedPath } from '../loc/strings';
 import { type EditorResourceSessionSnapshot } from '../services/appHostLaunchContracts';
 import { createAppHostOperationTarget } from '../utils/appHostOperationTarget';
@@ -27,6 +28,7 @@ import {
     type EditorAssistanceMode,
     type EditorAssistanceRecommendedAction,
     type EditorAssistanceResource,
+    type EditorAssistanceResourceState,
     type EditorAssistanceToolDependencies,
     type ExplainLaunchFailureFailureResult,
     type ExplainLaunchFailureFoundResult,
@@ -918,8 +920,8 @@ function isModeMeaningful(outcome: DebugSessionStatusResult['outcome']): boolean
 }
 
 // Model-facing results need a smaller privacy boundary than the tree view: preserve opaque
-// identifiers, reduce filesystem and file URI sources to terminal names, and reject other URLs so
-// paths, authorities, queries, and fragments cannot reach the model.
+// identifiers, reduce filesystem and file URI sources to terminal names, and reject other URI
+// schemes so paths, authorities, queries, fragments, and opaque payloads cannot reach the model.
 function getModelSafeResourceSource(resource: ResourceJson): string | null {
     if (typeof resource.source === 'string' && resource.source.trim().length > 0) {
         const trimmedSource = resource.source.trim();
@@ -928,17 +930,15 @@ function getModelSafeResourceSource(resource: ResourceJson): string | null {
             if (sourceFileName !== undefined) {
                 return sourceFileName;
             }
-        } else if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmedSource)) {
-            if (trimmedSource.startsWith('/') ||
-                trimmedSource.startsWith('\\') ||
-                /^[a-z]:[\\/]/i.test(trimmedSource)) {
-                const sourceFileName = getPortableFileName(trimmedSource);
-                if (sourceFileName !== undefined) {
-                    return sourceFileName;
-                }
-            } else {
-                return resource.source;
+        } else if (trimmedSource.startsWith('/') ||
+            trimmedSource.startsWith('\\') ||
+            (/^[a-z]:[\\/](?![\\/])/i.test(trimmedSource) && !/[?#]/.test(trimmedSource))) {
+            const sourceFileName = getPortableFileName(trimmedSource);
+            if (sourceFileName !== undefined) {
+                return sourceFileName;
             }
+        } else if (!/^[a-z][a-z0-9+.-]*:/i.test(trimmedSource)) {
+            return resource.source;
         }
     }
 
@@ -993,11 +993,32 @@ function getPortableFileName(value: string): string | undefined {
 function createBoundedResource(resource: ResourceJson): EditorAssistanceResource {
     return {
         resourceType: resource.resourceType,
-        state: resource.state,
+        state: getModelSafeResourceState(resource.state),
         healthStatus: resource.healthStatus,
         exitCode: resource.exitCode,
         source: getModelSafeResourceSource(resource),
     };
+}
+
+function getModelSafeResourceState(state: string | null): EditorAssistanceResourceState {
+    switch (state) {
+        case ResourceState.Running:
+        case ResourceState.Active:
+        case ResourceState.Starting:
+        case ResourceState.Building:
+        case ResourceState.Stopping:
+        case ResourceState.Stopped:
+        case ResourceState.Waiting:
+        case ResourceState.NotStarted:
+        case ResourceState.Finished:
+        case ResourceState.Exited:
+        case ResourceState.FailedToStart:
+        case ResourceState.RuntimeUnhealthy:
+        case ResourceState.ValueMissing:
+            return state;
+        default:
+            return 'unknown';
+    }
 }
 
 function getRecommendedActions(category: ExplainLaunchFailureFoundResult['category']): readonly EditorAssistanceRecommendedAction[] {

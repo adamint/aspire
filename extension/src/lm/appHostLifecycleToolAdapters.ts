@@ -46,7 +46,7 @@ export class AppHostStartLanguageModelTool implements vscode.LanguageModelTool<A
     }
 
     async invoke(options: vscode.LanguageModelToolInvocationOptions<AppHostStartToolInput>, token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        return createToolResult(await this._service.start(options.input, token));
+        return createToolResult(await this._service.startConfirmed(options.input, token));
     }
 }
 
@@ -55,7 +55,7 @@ export class AppHostStopLanguageModelTool implements vscode.LanguageModelTool<Ap
     }
 
     async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<AppHostStopToolInput>, token: vscode.CancellationToken): Promise<vscode.PreparedToolInvocation> {
-        const displayPath = escapeMarkdown(await this._service.describeTarget(options.input?.appHostPath, token));
+        const displayPath = escapeMarkdown(await this._service.prepareStopTarget(options.input, token));
         return {
             invocationMessage: appHostLifecycleStopInvocationMessage(displayPath),
             confirmationMessages: {
@@ -66,7 +66,7 @@ export class AppHostStopLanguageModelTool implements vscode.LanguageModelTool<Ap
     }
 
     async invoke(options: vscode.LanguageModelToolInvocationOptions<AppHostStopToolInput>, token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        return createToolResult(await this._service.stop(options.input, token));
+        return createToolResult(await this._service.stopConfirmed(options.input, token));
     }
 }
 

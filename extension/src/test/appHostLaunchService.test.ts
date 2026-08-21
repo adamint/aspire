@@ -943,6 +943,45 @@ suite('AppHostLaunchService', () => {
         }]);
     });
 
+    test('lifecycle-owned launch uses a confirmed inferred isolation snapshot', async () => {
+        capabilityProvider.capabilityStatus = 'supported';
+        const directory = createAppHostDirectory('AppHost.csproj');
+        fs.rmSync(path.join(directory, '.git'), { recursive: true, force: true });
+        writeLinkedWorktreeMetadata(directory, path.join(directory, 'common', '.git'));
+        const appHostPath = path.join(directory, 'AppHost.csproj');
+        assert.strictEqual(service.tryReserveLaunch(appHostPath), true);
+
+        const isolation = await service.launchFromLifecycleOwner(
+            bindAppHostLaunchTarget(appHostPath),
+            'run',
+            true,
+            undefined,
+            new vscode.CancellationTokenSource().token,
+            false);
+
+        const config = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
+        assert.strictEqual(config.args, undefined);
+        assert.deepStrictEqual(isolation, { effective: false, option: undefined });
+    });
+
+    test('confirmed inferred isolation still downgrades for an older CLI', async () => {
+        capabilityProvider.capabilityStatus = 'unsupported';
+        const appHostPath = '/repo/AppHost.csproj';
+        assert.strictEqual(service.tryReserveLaunch(appHostPath), true);
+
+        const isolation = await service.launchFromLifecycleOwner(
+            bindAppHostLaunchTarget(appHostPath),
+            'run',
+            true,
+            undefined,
+            new vscode.CancellationTokenSource().token,
+            true);
+
+        const config = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
+        assert.strictEqual(config.args, undefined);
+        assert.deepStrictEqual(isolation, { effective: false, option: undefined });
+    });
+
     test('lifecycle-owned launch honors explicit isolation false for an older CLI', async () => {
         capabilityProvider.capabilityStatus = 'unsupported';
         const directory = createAppHostDirectory('AppHost.csproj');

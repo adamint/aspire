@@ -593,6 +593,77 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
         }
     });
 
+    test('rejects AppHost candidates whose canonical path escapes the workspace root', async () => {
+        const folder = workspaceFolder('repo', '/checkout/repo', 0);
+        const linkedCandidate = appHostCandidate(folder, 'linked/AppHost.csproj');
+        const safeCandidate = appHostCandidate(folder, 'safe/AppHost.csproj');
+        const canonicalWorkspaceRoot = path.resolve('/canonical/repo');
+        const canonicalSafePath = path.join(canonicalWorkspaceRoot, 'safe/AppHost.csproj');
+        const canonicalExternalPath = path.resolve('/canonical/external/AppHost.csproj');
+        const harness = new ProviderHarness({
+            folders: [folder],
+            candidatesFor: async () => [linkedCandidate, safeCandidate],
+            canonicalPathFor: appHostPath => {
+                if (appHostPath === path.resolve(folder.uri.fsPath)) {
+                    return canonicalWorkspaceRoot;
+                }
+
+                return appHostPath === path.resolve(linkedCandidate.path)
+                    ? canonicalExternalPath
+                    : canonicalSafePath;
+            },
+        });
+
+        try {
+            await harness.provider.refresh();
+
+            assert.deepStrictEqual(harness.definitions().map(definition => ({
+                label: definition.label,
+                args: definition.args,
+            })), [{
+                label: 'Aspire (repo: safe/AppHost.csproj)',
+                args: ['agent', 'mcp', '--apphost', canonicalSafePath],
+            }]);
+        }
+        finally {
+            harness.dispose();
+        }
+    });
+
+    test('accepts a physical AppHost candidate under an aliased workspace root', async () => {
+        const folder = workspaceFolder('repo', '/checkout/repo-alias', 0);
+        const canonicalWorkspaceRoot = path.resolve('/canonical/repo');
+        const canonicalAppHostPath = path.join(canonicalWorkspaceRoot, 'AppHost.csproj');
+        const candidate: CandidateAppHostDisplayInfo = {
+            path: canonicalAppHostPath,
+            language: 'csharp',
+            status: 'buildable',
+        };
+        const harness = new ProviderHarness({
+            folders: [folder],
+            candidatesFor: async () => [candidate],
+            canonicalPathFor: appHostPath =>
+                appHostPath === path.resolve(folder.uri.fsPath)
+                    ? canonicalWorkspaceRoot
+                    : canonicalAppHostPath,
+        });
+
+        try {
+            await harness.provider.refresh();
+
+            assert.deepStrictEqual(harness.definitions().map(definition => ({
+                label: definition.label,
+                args: definition.args,
+            })), [{
+                label: 'Aspire (repo: AppHost.csproj)',
+                args: ['agent', 'mcp', '--apphost', canonicalAppHostPath],
+            }]);
+        }
+        finally {
+            harness.dispose();
+        }
+    });
+
     test('does not publish a refresh that was in flight when the provider was disposed', async () => {
         const folder = workspaceFolder('app', '/repo/app', 0);
         const candidate = appHostCandidate(folder, 'AppHost.csproj');
