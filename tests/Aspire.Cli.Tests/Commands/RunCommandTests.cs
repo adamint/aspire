@@ -3644,6 +3644,55 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task CaptureAppHostLogsAsync_SuppressesRepeatedPositiveSequencesOnly()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var logFilePath = Path.Combine(workspace.WorkspaceRoot.FullName, "test.log");
+        var extensionBackchannel = new TestExtensionBackchannel
+        {
+            HasCapabilityAsyncCallback = (_, _) => Task.FromResult(true)
+        };
+        using var services = new ServiceCollection()
+            .AddSingleton<IExtensionBackchannel>(extensionBackchannel)
+            .BuildServiceProvider();
+        var forwarded = new List<ExtensionAppHostLogEntry>();
+        var legacyMessages = new List<string>();
+        var interactionService = new TestExtensionInteractionService(services)
+        {
+            WriteAppHostLogEntryCallback = forwarded.Add,
+            WriteDebugSessionMessageCallback = (message, _, _) => legacyMessages.Add(message)
+        };
+        var backchannel = new TestAppHostBackchannel
+        {
+            GetAppHostLogEntriesAsyncCallback = YieldEntries
+        };
+
+        using (var fileLoggerProvider = new FileLoggerProvider(logFilePath, new TestStartupErrorWriter()))
+        {
+            await RunCommand.CaptureAppHostLogsAsync(fileLoggerProvider, backchannel, interactionService, CancellationToken.None);
+        }
+
+        Assert.Equal(["Numbered entry"], forwarded.Select(entry => entry.Message));
+        Assert.Equal(["Legacy entry", "Legacy entry"], legacyMessages);
+        var lines = (await File.ReadAllLinesAsync(logFilePath))
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .ToArray();
+        Assert.Collection(lines,
+            line => Assert.Equal("[2026-03-16 12:00:00.000] [WARN] [AppHost/Category] Numbered entry", line),
+            line => Assert.Equal("[2026-03-16 12:00:00.000] [INFO] [AppHost/Category] Legacy entry", line),
+            line => Assert.Equal("[2026-03-16 12:00:00.000] [INFO] [AppHost/Category] Legacy entry", line));
+
+        static async IAsyncEnumerable<BackchannelLogEntry> YieldEntries([EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            yield return CreateEntry(42, LogLevel.Warning, "Numbered entry");
+            yield return CreateEntry(42, LogLevel.Warning, "Numbered replay");
+            yield return CreateEntry(0, LogLevel.Information, "Legacy entry");
+            yield return CreateEntry(0, LogLevel.Information, "Legacy entry");
+            await Task.CompletedTask;
+        }
+    }
+
+    [Fact]
     public async Task CaptureAppHostLogsAsync_UsesLegacyOutputForUnnumberedEntries()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
@@ -3675,6 +3724,61 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
         {
             yield return CreateEntry(0, LogLevel.Information, "Legacy message");
             await Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task CaptureAppHostLogsAsync_ForwardsBufferedEntryWhenCapabilityProbeCompletes()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var capabilityProbe = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var nextEntryRequested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var extensionBackchannel = new TestExtensionBackchannel
+        {
+            HasCapabilityAsyncCallback = (_, _) => capabilityProbe.Task
+        };
+        using var services = new ServiceCollection()
+            .AddSingleton<IExtensionBackchannel>(extensionBackchannel)
+            .BuildServiceProvider();
+        var forwarded = new TaskCompletionSource<ExtensionAppHostLogEntry>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var interactionService = new TestExtensionInteractionService(services)
+        {
+            WriteAppHostLogEntryCallback = entry => forwarded.TrySetResult(entry)
+        };
+        var backchannel = new TestAppHostBackchannel
+        {
+            GetAppHostLogEntriesAsyncCallback = YieldOneEntryThenWait
+        };
+        using var captureCancellationSource = new CancellationTokenSource();
+        using var fileLoggerProvider = new FileLoggerProvider(
+            Path.Combine(workspace.WorkspaceRoot.FullName, "test.log"),
+            new TestStartupErrorWriter());
+        var captureTask = RunCommand.CaptureAppHostLogsAsync(
+            fileLoggerProvider,
+            backchannel,
+            interactionService,
+            captureCancellationSource.Token);
+
+        try
+        {
+            await nextEntryRequested.Task.DefaultTimeout();
+            capabilityProbe.SetResult(true);
+
+            var entry = await forwarded.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal("Buffered entry", entry.Message);
+        }
+        finally
+        {
+            await captureCancellationSource.CancelAsync();
+            await captureTask;
+        }
+
+        async IAsyncEnumerable<BackchannelLogEntry> YieldOneEntryThenWait([EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            yield return CreateEntry(1, LogLevel.Information, "Buffered entry");
+            nextEntryRequested.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
         }
     }
 
@@ -3802,6 +3906,55 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
         {
             yield return CreateEntry(1, LogLevel.Information, "Fallback entry");
             await Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task CaptureAppHostLogsAsync_ExpectedDisconnectDrainsBufferedEntries()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var capabilityProbe = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var waitingToDisconnect = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Synchronous continuations ensure SetException does not return until the in-flight
+        // MoveNextAsync has observed the disconnect. The capability probe completes afterward.
+        var disconnect = new TaskCompletionSource();
+        var extensionBackchannel = new TestExtensionBackchannel
+        {
+            HasCapabilityAsyncCallback = (_, _) => capabilityProbe.Task
+        };
+        using var services = new ServiceCollection()
+            .AddSingleton<IExtensionBackchannel>(extensionBackchannel)
+            .BuildServiceProvider();
+        var forwarded = new List<ExtensionAppHostLogEntry>();
+        var interactionService = new TestExtensionInteractionService(services)
+        {
+            WriteAppHostLogEntryCallback = forwarded.Add
+        };
+        var backchannel = new TestAppHostBackchannel
+        {
+            GetAppHostLogEntriesAsyncCallback = YieldOneEntryThenDisconnect
+        };
+        using var fileLoggerProvider = new FileLoggerProvider(
+            Path.Combine(workspace.WorkspaceRoot.FullName, "test.log"),
+            new TestStartupErrorWriter());
+        var captureTask = RunCommand.CaptureAppHostLogsAsync(
+            fileLoggerProvider,
+            backchannel,
+            interactionService,
+            CancellationToken.None);
+
+        await waitingToDisconnect.Task.DefaultTimeout();
+        disconnect.SetException(new ConnectionLostException());
+        capabilityProbe.SetResult(true);
+        await captureTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("Buffered entry", Assert.Single(forwarded).Message);
+
+        async IAsyncEnumerable<BackchannelLogEntry> YieldOneEntryThenDisconnect([EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            yield return CreateEntry(1, LogLevel.Warning, "Buffered entry");
+            waitingToDisconnect.SetResult();
+            await disconnect.Task;
         }
     }
 
