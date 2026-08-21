@@ -128,7 +128,7 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
 
     public Task<IEnumerable<NuGetPackage>> GetTemplatePackagesAsync(DirectoryInfo workingDirectory, CancellationToken cancellationToken)
     {
-        return GetTemplatePackagesAsync(workingDirectory, Mappings, cancellationToken);
+        return GetTemplatePackagesAsync(workingDirectory, Mappings, filterLocalPackagesToPinnedVersion: true, cancellationToken);
     }
 
     /// <summary>
@@ -136,7 +136,7 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
     /// </summary>
     public Task<IEnumerable<NuGetPackage>> GetTemplatePackagesAsync(DirectoryInfo workingDirectory, PackageMapping[]? mappings, CancellationToken cancellationToken)
     {
-        return GetTemplatePackagesAsync(workingDirectory, mappings, filterLocalPackagesToPinnedVersion: true, cancellationToken);
+        return GetTemplatePackagesAsync(workingDirectory, mappings, filterLocalPackagesToPinnedVersion: false, cancellationToken);
     }
 
     /// <summary>

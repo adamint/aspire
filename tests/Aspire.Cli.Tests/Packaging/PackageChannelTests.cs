@@ -133,6 +133,38 @@ public class PackageChannelTests(ITestOutputHelper outputHelper)
         Assert.Equal(channelSource, channel.SourceDetails);
     }
 
+    [Fact]
+    public async Task GetTemplatePackagesAsync_PinnedChannelWithLocalMappingsOverride_DoesNotFilterToPinnedVersion()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var packagesDirectory = workspace.CreateDirectory("packages");
+        var nestedDirectory = Directory.CreateDirectory(Path.Combine(
+            packagesDirectory.FullName,
+            "aspire.projecttemplates",
+            "13.6.0"));
+
+        File.WriteAllText(
+            Path.Combine(nestedDirectory.FullName, "Aspire.ProjectTemplates.13.6.0.nupkg"),
+            string.Empty);
+
+        var packageSource = packagesDirectory.FullName.Replace('\\', '/');
+        var channel = PackageChannel.CreateExplicitChannel(
+            "local",
+            PackageChannelQuality.Both,
+            [new PackageMapping("Aspire*", packageSource)],
+            new FakeNuGetPackageCache(),
+            new TestFeatures(),
+            NullLogger.Instance,
+            pinnedVersion: "13.7.0");
+
+        var package = Assert.Single(await channel.GetTemplatePackagesAsync(
+            workspace.WorkspaceRoot,
+            PackageSourceOverrideMappings.CreateForTemplateOperations(packageSource),
+            CancellationToken.None).DefaultTimeout());
+
+        Assert.Equal("13.6.0", package.Version);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
