@@ -343,7 +343,35 @@ suite('debugger install hints', () => {
         }
     });
 
-    test('does not show a setup notification while an overlapping install remains active', async () => {
+    test('coalesces concurrent installs for the same debugger', async () => {
+        let installed = false;
+        sinon.stub(vscode.extensions, 'getExtension').callsFake(extensionId =>
+            installed ? { id: extensionId } as vscode.Extension<unknown> : undefined);
+        const showInformationMessage = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+        let installResolve!: () => void;
+        const installCommand = new Promise<void>(resolve => installResolve = resolve);
+        const executeCommand = sinon.stub(vscode.commands, 'executeCommand').returns(installCommand);
+        const service = new DebuggerInstallHintService(createMemento());
+        const hint = {
+            debuggerName: 'Python',
+            debuggerType: 'python',
+            extensionIds: ['ms-python.debugpy'],
+        };
+
+        const firstInstallation = service.installDebuggerExtension(hint);
+        const secondInstallation = service.installDebuggerExtension(hint);
+        await Promise.resolve();
+        installed = true;
+        installResolve();
+        await Promise.all([firstInstallation, secondInstallation]);
+
+        assert.ok(executeCommand.calledOnceWithExactly(
+            'workbench.extensions.installExtension',
+            'ms-python.debugpy'));
+        assert.strictEqual(showInformationMessage.callCount, 1);
+    });
+
+    test('allows retry after a failed install and suppresses setup notifications during the retry', async () => {
         sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
         const showWarningMessage = sinon.stub(vscode.window, 'showWarningMessage').resolves(undefined);
         sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined);
@@ -360,9 +388,9 @@ suite('debugger install hints', () => {
         };
 
         const firstInstallation = service.installDebuggerExtension(hint);
-        const secondInstallation = service.installDebuggerExtension(hint);
         await firstInstallation;
 
+        const secondInstallation = service.installDebuggerExtension(hint);
         await service.notifyMissingDebuggers([createResource('bun')]);
 
         assert.strictEqual(showWarningMessage.callCount, 0);

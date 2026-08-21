@@ -112,7 +112,7 @@ export function getDebuggerInstallHintForResource(
 
 export class DebuggerInstallHintService {
     private static readonly _extensionRegistrationTimeoutMs = 5_000;
-    private readonly _installsInProgress = new Map<string, number>();
+    private readonly _installsInProgress = new Map<string, Promise<void | DebuggerInstallFailure>>();
     private readonly _notificationsShown = new Set<string>();
 
     constructor(private readonly _globalState: vscode.Memento) {
@@ -168,10 +168,24 @@ export class DebuggerInstallHintService {
         await Promise.all(notifications);
     }
 
-    async installDebuggerExtension(hint: DebuggerInstallHint): Promise<void | DebuggerInstallFailure> {
-        this._installsInProgress.set(
-            hint.debuggerType,
-            (this._installsInProgress.get(hint.debuggerType) ?? 0) + 1);
+    installDebuggerExtension(hint: DebuggerInstallHint): Promise<void | DebuggerInstallFailure> {
+        const existingInstallation = this._installsInProgress.get(hint.debuggerType);
+        if (existingInstallation) {
+            return existingInstallation;
+        }
+
+        // Start the install after it is tracked because command execution can synchronously trigger
+        // an extension change event that re-evaluates setup notifications.
+        const installation = Promise.resolve().then(() => this._installDebuggerExtension(hint));
+        this._installsInProgress.set(hint.debuggerType, installation);
+        void installation.then(
+            () => this._clearInstallation(hint.debuggerType, installation),
+            () => this._clearInstallation(hint.debuggerType, installation));
+
+        return installation;
+    }
+
+    private async _installDebuggerExtension(hint: DebuggerInstallHint): Promise<void | DebuggerInstallFailure> {
         try {
             const missingExtensionIds = hint.extensionIds.filter(
                 extensionId => !vscode.extensions.getExtension(extensionId));
@@ -212,13 +226,15 @@ export class DebuggerInstallHintService {
                 success: false,
                 errorKind: error instanceof Error ? error.name : 'Error',
             };
-        } finally {
-            const remainingInstalls = this._installsInProgress.get(hint.debuggerType)! - 1;
-            if (remainingInstalls === 0) {
-                this._installsInProgress.delete(hint.debuggerType);
-            } else {
-                this._installsInProgress.set(hint.debuggerType, remainingInstalls);
-            }
+        }
+    }
+
+    private _clearInstallation(
+        debuggerType: string,
+        installation: Promise<void | DebuggerInstallFailure>,
+    ): void {
+        if (this._installsInProgress.get(debuggerType) === installation) {
+            this._installsInProgress.delete(debuggerType);
         }
     }
 
