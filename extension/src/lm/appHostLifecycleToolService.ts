@@ -66,6 +66,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
     private readonly _dependencies: AppHostLifecycleToolDependencies;
     private readonly _targetResolver: SafeAppHostTargetResolver;
     private readonly _preparedActions: PreparedLifecycleAction[] = [];
+    private readonly _activePreparedActionCounts = new Map<string, number>();
     private _disposed = false;
 
     constructor(
@@ -78,6 +79,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
     dispose(): void {
         this._disposed = true;
         this._preparedActions.length = 0;
+        this._activePreparedActionCounts.clear();
     }
 
     /**
@@ -169,7 +171,10 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             return this.createUnconfirmedInvocationResult(aspireAppHostStartToolName, input.mode);
         }
 
-        return await this.startCore(input, token, preparedAction);
+        return await this.runPreparedAction(
+            aspireAppHostStartToolName,
+            getStartInputKey(input),
+            () => this.startCore(input, token, preparedAction));
     }
 
     async start(input: AppHostStartToolInput, token: vscode.CancellationToken): Promise<AppHostLifecycleToolResult> {
@@ -333,7 +338,10 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             return this.createUnconfirmedInvocationResult(aspireAppHostStopToolName, undefined);
         }
 
-        return await this.stopCore(input, token, preparedAction);
+        return await this.runPreparedAction(
+            aspireAppHostStopToolName,
+            getStopInputKey(input),
+            () => this.stopCore(input, token, preparedAction));
     }
 
     async stop(input: AppHostStopToolInput, token: vscode.CancellationToken): Promise<AppHostLifecycleToolResult> {
@@ -411,19 +419,49 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         tool: PreparedLifecycleAction['tool'],
         inputKey: string): PreparedLifecycleAction | undefined {
         this.prunePreparedActions();
-        let consumed: PreparedLifecycleAction | undefined;
         for (let index = this._preparedActions.length - 1; index >= 0; index--) {
             const action = this._preparedActions[index];
             if (action.tool === tool && action.inputKey === inputKey) {
                 this._preparedActions.splice(index, 1);
-                consumed ??= action;
+                return action;
             }
         }
 
+        return undefined;
+    }
+
+    private async runPreparedAction<T>(
+        tool: PreparedLifecycleAction['tool'],
+        inputKey: string,
+        action: () => Promise<T>): Promise<T> {
+        const key = `${tool}\0${inputKey}`;
+        this._activePreparedActionCounts.set(key, (this._activePreparedActionCounts.get(key) ?? 0) + 1);
+        try {
+            return await action();
+        }
+        finally {
+            const activeCount = this._activePreparedActionCounts.get(key) ?? 0;
+            if (activeCount > 1) {
+                this._activePreparedActionCounts.set(key, activeCount - 1);
+            }
+            else {
+                this._activePreparedActionCounts.delete(key);
+                this.removePreparedActions(tool, inputKey);
+            }
+        }
+    }
+
+    private removePreparedActions(tool: PreparedLifecycleAction['tool'], inputKey: string): void {
         // The VS Code API does not provide a preparation token to correlate with invocation.
-        // Consume every duplicate for this complete input so abandoned identical preparations
-        // cannot be replayed after one confirmed action executes.
-        return consumed;
+        // Concurrent identical confirmations may each consume one record while the first action is
+        // still active. Once the last one settles, remove every abandoned duplicate so a later
+        // unconfirmed invocation cannot replay an earlier preparation.
+        for (let index = this._preparedActions.length - 1; index >= 0; index--) {
+            const action = this._preparedActions[index];
+            if (action.tool === tool && action.inputKey === inputKey) {
+                this._preparedActions.splice(index, 1);
+            }
+        }
     }
 
     private prunePreparedActions(): void {

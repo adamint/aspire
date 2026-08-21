@@ -2038,6 +2038,32 @@ suite('AppHost lifecycle language model tools', () => {
             assert.strictEqual(launchService.launchCalls.length, 1);
         });
 
+        test('allows independently confirmed identical actions to deduplicate concurrently', async () => {
+            const tool = new AppHostStartLanguageModelTool(service);
+            const token = new vscode.CancellationTokenSource().token;
+            const input = { appHostPath: 'AppHost/AppHost.csproj', mode: 'run' } as const;
+
+            await Promise.all([
+                tool.prepareInvocation({ input }, token),
+                tool.prepareInvocation({ input }, token),
+            ]);
+            const [first, second] = await Promise.all([
+                tool.invoke({ input, toolInvocationToken: undefined }, token),
+                tool.invoke({ input, toolInvocationToken: undefined }, token),
+            ]);
+            const outcomes = [first, second]
+                .map(readToolResultPayload)
+                .map(result => result.outcome)
+                .sort();
+            const replay = readToolResultPayload(await tool.invoke(
+                { input, toolInvocationToken: undefined },
+                token));
+
+            assert.deepStrictEqual(outcomes, ['alreadyStarting', 'started']);
+            assert.strictEqual(replay.outcome, 'failed');
+            assert.strictEqual(launchService.launchCalls.length, 1);
+        });
+
         test('rejects an expired prepared action', async () => {
             const now = sinon.stub(Date, 'now').returns(1_000);
             const tool = new AppHostStartLanguageModelTool(service);
