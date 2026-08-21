@@ -710,6 +710,48 @@ public class TemplateNuGetConfigServiceTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task ResolveTemplatePackageAsync_InitLocalChannelDoesNotFilterToPinnedVersion()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var packagesDirectory = workspace.CreateDirectory("packages");
+        var nestedDirectory = Directory.CreateDirectory(Path.Combine(
+            packagesDirectory.FullName,
+            "aspire.projecttemplates",
+            "13.6.0"));
+        File.WriteAllText(
+            Path.Combine(nestedDirectory.FullName, "Aspire.ProjectTemplates.13.6.0.nupkg"),
+            string.Empty);
+
+        var executionContext = TestExecutionContextHelper.CreateExecutionContext(
+            workspace.WorkspaceRoot,
+            identityChannel: PackageChannelNames.Local,
+            identityVersion: "13.7.0");
+        var localChannel = PackageChannel.CreateExplicitChannel(
+            PackageChannelNames.Local,
+            PackageChannelQuality.Both,
+            [new PackageMapping("Aspire*", packagesDirectory.FullName.Replace('\\', '/'))],
+            new FakeNuGetPackageCache(),
+            features: new TestFeatures(),
+            NullLogger.Instance,
+            pinnedVersion: "13.7.0");
+        var packagingService = new TestPackagingService
+        {
+            GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>([localChannel])
+        };
+        var service = CreateService(packagingService: packagingService, executionContext: executionContext);
+
+        var selection = await service.ResolveTemplatePackageAsync(
+            new TemplatePackageQuery(
+                RequestedChannel: PackageChannelNames.Local,
+                VersionOverride: null,
+                SourceOverride: null,
+                IncludePrHives: false),
+            CancellationToken.None);
+
+        Assert.Equal("13.6.0", selection.Package.Version);
+    }
+
+    [Fact]
     public async Task ResolveTemplatePackageAsync_ExplicitVersionFindsExactLocalPackageBelowNewerPinnedVersion()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);

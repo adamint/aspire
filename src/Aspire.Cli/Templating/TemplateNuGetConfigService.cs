@@ -305,8 +305,10 @@ internal sealed class TemplateNuGetConfigService(
                 var templatePackages = await channel.GetTemplatePackagesAsync(
                     executionContext.WorkingDirectory,
                     templateSearchMappings,
-                    filterLocalPackagesToPinnedVersion:
-                        !isUnqualifiedLocalResolution && string.IsNullOrWhiteSpace(query.VersionOverride),
+                    // This service applies exact-version, channel, and highest-version selection
+                    // after collecting candidates. Filtering here would make init fail when a
+                    // local channel's pin comes from a different package than ProjectTemplates.
+                    filterLocalPackagesToPinnedVersion: false,
                     ct);
                 lock (resultsLock)
                 {
