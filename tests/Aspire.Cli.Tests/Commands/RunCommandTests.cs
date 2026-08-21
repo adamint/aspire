@@ -3693,6 +3693,50 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task CaptureAppHostLogsAsync_EvictsTheOldestRememberedSequence()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var logFilePath = Path.Combine(workspace.WorkspaceRoot.FullName, "test.log");
+        var extensionBackchannel = new TestExtensionBackchannel
+        {
+            HasCapabilityAsyncCallback = (_, _) => Task.FromResult(true)
+        };
+        using var services = new ServiceCollection()
+            .AddSingleton<IExtensionBackchannel>(extensionBackchannel)
+            .BuildServiceProvider();
+        var forwardedSequences = new List<long>();
+        var interactionService = new TestExtensionInteractionService(services)
+        {
+            WriteAppHostLogEntryCallback = entry => forwardedSequences.Add(entry.SequenceNumber)
+        };
+        var backchannel = new TestAppHostBackchannel
+        {
+            GetAppHostLogEntriesAsyncCallback = YieldEntries
+        };
+
+        using (var fileLoggerProvider = new FileLoggerProvider(logFilePath, new TestStartupErrorWriter()))
+        {
+            await RunCommand.CaptureAppHostLogsAsync(fileLoggerProvider, backchannel, interactionService, CancellationToken.None);
+        }
+
+        Assert.Equal(1026, forwardedSequences.Count);
+        Assert.Equal(1, forwardedSequences[0]);
+        Assert.Equal(1, forwardedSequences[^1]);
+        Assert.Equal(1026, (await File.ReadAllLinesAsync(logFilePath)).Count(line => !string.IsNullOrWhiteSpace(line)));
+
+        static async IAsyncEnumerable<BackchannelLogEntry> YieldEntries([EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            for (var sequenceNumber = 1L; sequenceNumber <= 1025; sequenceNumber++)
+            {
+                yield return CreateEntry(sequenceNumber, LogLevel.Information, $"Entry {sequenceNumber}");
+            }
+
+            yield return CreateEntry(1, LogLevel.Information, "Evicted entry");
+            await Task.CompletedTask;
+        }
+    }
+
+    [Fact]
     public async Task CaptureAppHostLogsAsync_UsesLegacyOutputForUnnumberedEntries()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);

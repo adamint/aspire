@@ -1123,96 +1123,97 @@ internal sealed class RunCommand : BaseCommand
 
             try
             {
-                await using var enumerator = logEntries.GetAsyncEnumerator(cancellationToken);
+                using var enumerationCancellationSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                await using var enumerator = logEntries.GetAsyncEnumerator(enumerationCancellationSource.Token);
                 Task<bool>? moveNextTask = null;
 
-                while (true)
+                try
                 {
-                    moveNextTask ??= enumerator.MoveNextAsync().AsTask();
-
-                    // Once an entry is buffered, keep one MoveNextAsync in flight and observe the
-                    // capability probe alongside it. This preserves file capture throughput while
-                    // allowing an idle stream to flush as soon as the extension answers.
-                    if (extensionSupportsStructuredLogs is null && pendingExtensionEntries.Count > 0)
+                    while (true)
                     {
-                        var completedTask = await Task.WhenAny(moveNextTask, structuredLogSupportProbe).ConfigureAwait(false);
-                        if (completedTask == structuredLogSupportProbe)
+                        moveNextTask ??= enumerator.MoveNextAsync().AsTask();
+
+                        // Once an entry is buffered, keep one MoveNextAsync in flight and observe the
+                        // capability probe alongside it. This preserves file capture throughput while
+                        // allowing an idle stream to flush as soon as the extension answers.
+                        if (extensionSupportsStructuredLogs is null && pendingExtensionEntries.Count > 0)
                         {
-                            try
+                            var probeCompletedFirst = structuredLogSupportProbe.IsCompleted ||
+                                await Task.WhenAny(moveNextTask, structuredLogSupportProbe).ConfigureAwait(false) == structuredLogSupportProbe;
+                            if (probeCompletedFirst)
                             {
                                 extensionSupportsStructuredLogs = await structuredLogSupportProbe.ConfigureAwait(false);
+                                ForwardPendingAppHostLogEntriesToExtension(
+                                    extensionInteractionService!,
+                                    extensionSupportsStructuredLogs.Value,
+                                    pendingExtensionEntries);
+                                continue;
                             }
-                            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                        }
+
+                        var hasEntry = await moveNextTask.ConfigureAwait(false);
+                        moveNextTask = null;
+                        if (!hasEntry)
+                        {
+                            break;
+                        }
+
+                        var entry = enumerator.Current;
+
+                        // A reconnect replays the AppHost's 1,000-entry buffer. Remember exact
+                        // sequences instead of a high-water mark so delayed delivery remains valid.
+                        // Sequence zero comes from older AppHosts and has no stable identity.
+                        if (entry.SequenceNumber > 0)
+                        {
+                            if (!recentSequenceNumbers.Add(entry.SequenceNumber))
                             {
-                                // The capability task can observe cancellation before the stream does.
-                                // Settle the retained move before disposing the enumerator so DisposeAsync
-                                // never runs concurrently with MoveNextAsync.
-                                try
-                                {
-                                    await moveNextTask.ConfigureAwait(false);
-                                }
-                                catch (Exception) when (cancellationToken.IsCancellationRequested)
-                                {
-                                }
-
-                                moveNextTask = null;
-                                throw;
+                                continue;
                             }
 
-                            ForwardPendingAppHostLogEntriesToExtension(
-                                extensionInteractionService!,
-                                extensionSupportsStructuredLogs.Value,
-                                pendingExtensionEntries);
-                            continue;
+                            sequenceNumberOrder.Enqueue(entry.SequenceNumber);
+                            if (sequenceNumberOrder.Count > MaxRememberedAppHostLogSequenceNumbers)
+                            {
+                                recentSequenceNumbers.Remove(sequenceNumberOrder.Dequeue());
+                            }
                         }
-                    }
 
-                    var hasEntry = await moveNextTask.ConfigureAwait(false);
-                    moveNextTask = null;
-                    if (!hasEntry)
-                    {
-                        break;
-                    }
+                        var shortCategory = FileLoggerProvider.GetShortCategoryName(entry.CategoryName);
+                        var message = string.IsNullOrEmpty(entry.Exception)
+                            ? entry.Message
+                            : $"{entry.Message}{Environment.NewLine}{entry.Exception}";
+                        fileLoggerProvider.WriteLog(entry.Timestamp, entry.LogLevel, $"AppHost/{shortCategory}", message);
 
-                    var entry = enumerator.Current;
-
-                    // A reconnect replays the AppHost's 1,000-entry buffer. Remember exact
-                    // sequences instead of a high-water mark so delayed delivery remains valid.
-                    // Sequence zero comes from older AppHosts and has no stable identity.
-                    if (entry.SequenceNumber > 0)
-                    {
-                        if (!recentSequenceNumbers.Add(entry.SequenceNumber))
+                        // Preserve the previous RPC volume. Trace and Debug still arrive through the
+                        // AppHost console provider and are styled by the extension.
+                        if (extensionInteractionService is null || entry.LogLevel is LogLevel.Trace or LogLevel.Debug)
                         {
                             continue;
                         }
 
-                        sequenceNumberOrder.Enqueue(entry.SequenceNumber);
-                        if (sequenceNumberOrder.Count > MaxRememberedAppHostLogSequenceNumbers)
+                        if (extensionSupportsStructuredLogs is null)
                         {
-                            recentSequenceNumbers.Remove(sequenceNumberOrder.Dequeue());
+                            pendingExtensionEntries.Add(entry);
+                            continue;
+                        }
+
+                        ForwardAppHostLogEntryToExtension(extensionInteractionService, extensionSupportsStructuredLogs.Value, entry);
+                    }
+                }
+                finally
+                {
+                    if (moveNextTask is not null)
+                    {
+                        // Forwarding can fail while the stream read is still pending. Cancel and
+                        // settle that read before DisposeAsync touches the enumerator.
+                        await enumerationCancellationSource.CancelAsync().ConfigureAwait(false);
+                        try
+                        {
+                            await moveNextTask.ConfigureAwait(false);
+                        }
+                        catch (Exception) when (enumerationCancellationSource.IsCancellationRequested)
+                        {
                         }
                     }
-
-                    var shortCategory = FileLoggerProvider.GetShortCategoryName(entry.CategoryName);
-                    var message = string.IsNullOrEmpty(entry.Exception)
-                        ? entry.Message
-                        : $"{entry.Message}{Environment.NewLine}{entry.Exception}";
-                    fileLoggerProvider.WriteLog(entry.Timestamp, entry.LogLevel, $"AppHost/{shortCategory}", message);
-
-                    // Preserve the previous RPC volume. Trace and Debug still arrive through the
-                    // AppHost console provider and are styled by the extension.
-                    if (extensionInteractionService is null || entry.LogLevel is LogLevel.Trace or LogLevel.Debug)
-                    {
-                        continue;
-                    }
-
-                    if (extensionSupportsStructuredLogs is null)
-                    {
-                        pendingExtensionEntries.Add(entry);
-                        continue;
-                    }
-
-                    ForwardAppHostLogEntryToExtension(extensionInteractionService, extensionSupportsStructuredLogs.Value, entry);
                 }
             }
             catch (Exception ex) when (AppHostFollowDisconnectHelpers.IsExpectedDisconnect(ex))
