@@ -1248,6 +1248,22 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(stopDebugging.thirdCall.args[0], dashboardDebugSession);
     });
 
+    test('openDashboard does not wait for a dashboard debug session to start', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').returns({ dispose: sinon.stub() });
+        const startDebugging = sinon.stub(vscode.debug, 'startDebugging').returns(new Promise<boolean>(() => { }));
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+
+        await aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
+
+        sinon.assert.calledOnce(startDebugging);
+    });
+
     test('stopDebugging ignores a dashboard debug session that already terminated', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
@@ -1310,9 +1326,10 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         });
         sinon.stub(vscode.debug, 'onDidTerminateDebugSession').returns({ dispose: sinon.stub() });
         let resolveStartDebugging: ((didStart: boolean) => void) | undefined;
-        sinon.stub(vscode.debug, 'startDebugging').returns(new Promise<boolean>(resolve => {
+        const startDebuggingPromise = new Promise<boolean>(resolve => {
             resolveStartDebugging = resolve;
-        }));
+        });
+        sinon.stub(vscode.debug, 'startDebugging').returns(startDebuggingPromise);
         let dashboardStopAttempts = 0;
         const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').callsFake(async session => {
             if (session === dashboardDebugSession && dashboardStopAttempts++ === 0) {
@@ -1321,12 +1338,11 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         });
         const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
 
-        const openPromise = aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
-        await Promise.resolve();
+        await aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
         const firstStop = aspireDebugSession.stopDebugging();
         startSessionCallback?.(dashboardDebugSession);
         resolveStartDebugging?.(true);
-        await openPromise;
+        await startDebuggingPromise;
 
         await firstStop;
 
@@ -1358,14 +1374,14 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         });
         sinon.stub(vscode.debug, 'onDidTerminateDebugSession').returns({ dispose: sinon.stub() });
         let resolveStartDebugging: ((didStart: boolean) => void) | undefined;
-        sinon.stub(vscode.debug, 'startDebugging').returns(new Promise<boolean>(resolve => {
+        const startDebuggingPromise = new Promise<boolean>(resolve => {
             resolveStartDebugging = resolve;
-        }));
+        });
+        sinon.stub(vscode.debug, 'startDebugging').returns(startDebuggingPromise);
         const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').resolves();
         const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
 
-        const openPromise = aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
-        await Promise.resolve();
+        await aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
         const stopPromise = aspireDebugSession.stopDebugging();
         startSessionCallback?.(dashboardDebugSession);
         await clock.tickAsync(2000);
@@ -1375,7 +1391,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(stopDebugging.secondCall.args[0], parentDebugSession);
 
         resolveStartDebugging?.(true);
-        await openPromise;
+        await startDebuggingPromise;
     });
 
     test('a dashboard that starts after shutdown retries a failed background stop', async () => {
@@ -1400,9 +1416,10 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         });
         sinon.stub(vscode.debug, 'onDidTerminateDebugSession').returns({ dispose: sinon.stub() });
         let resolveStartDebugging: ((didStart: boolean) => void) | undefined;
-        sinon.stub(vscode.debug, 'startDebugging').returns(new Promise<boolean>(resolve => {
+        const startDebuggingPromise = new Promise<boolean>(resolve => {
             resolveStartDebugging = resolve;
-        }));
+        });
+        sinon.stub(vscode.debug, 'startDebugging').returns(startDebuggingPromise);
         let dashboardStopAttempts = 0;
         const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').callsFake(async session => {
             if (session === dashboardDebugSession && dashboardStopAttempts++ === 0) {
@@ -1411,8 +1428,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         });
         const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
 
-        const openPromise = aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
-        await Promise.resolve();
+        await aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
         const stopPromise = aspireDebugSession.stopDebugging();
         await clock.tickAsync(2000);
         await stopPromise;
@@ -1426,7 +1442,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(stopDebugging.thirdCall.args[0], dashboardDebugSession);
 
         resolveStartDebugging?.(true);
-        await openPromise;
+        await startDebuggingPromise;
     });
 
     test('stopDebugging treats dashboard termination during a pending stop as success', async () => {
@@ -1569,18 +1585,18 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             return { dispose: sinon.stub() };
         });
         let resolveStartDebugging: ((didStart: boolean) => void) | undefined;
-        sinon.stub(vscode.debug, 'startDebugging').returns(new Promise<boolean>(resolve => {
+        const startDebuggingPromise = new Promise<boolean>(resolve => {
             resolveStartDebugging = resolve;
-        }));
+        });
+        sinon.stub(vscode.debug, 'startDebugging').returns(startDebuggingPromise);
         const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').resolves();
         const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
 
-        const openPromise = aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
-        await Promise.resolve();
+        await aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
         aspireDebugSession.dispose();
         startSessionCallback?.(dashboardDebugSession);
         resolveStartDebugging?.(true);
-        await openPromise;
+        await startDebuggingPromise;
         await aspireDebugSession.stopDebugging();
 
         assert.strictEqual(stopDebugging.calledWith(dashboardDebugSession), true);
@@ -1596,18 +1612,18 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         } as unknown as vscode.DebugSession;
         sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(() => ({ dispose: sinon.stub() }));
         let resolveStartDebugging: ((didStart: boolean) => void) | undefined;
-        sinon.stub(vscode.debug, 'startDebugging').returns(new Promise<boolean>(resolve => {
+        const startDebuggingPromise = new Promise<boolean>(resolve => {
             resolveStartDebugging = resolve;
-        }));
+        });
+        sinon.stub(vscode.debug, 'startDebugging').returns(startDebuggingPromise);
         sinon.stub(vscode.debug, 'stopDebugging').resolves();
         const openExternal = sinon.stub(vscode.env, 'openExternal').resolves(true);
         const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
 
-        const openPromise = aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
-        await Promise.resolve();
+        await aspireDebugSession.openDashboard('https://localhost:1234', 'debugEdge');
         aspireDebugSession.dispose();
         resolveStartDebugging?.(false);
-        await openPromise;
+        await startDebuggingPromise;
 
         assert.strictEqual(openExternal.called, false);
     });

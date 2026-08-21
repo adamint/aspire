@@ -75,15 +75,15 @@ export class DashboardLauncher implements vscode.Disposable {
 
     switch (browserType) {
       case 'debugChrome':
-        await this.launchDebugBrowser(url, 'pwa-chrome');
+        this.launchDebugBrowserInBackground(url, 'pwa-chrome');
         break;
 
       case 'debugEdge':
-        await this.launchDebugBrowser(url, 'pwa-msedge');
+        this.launchDebugBrowserInBackground(url, 'pwa-msedge');
         break;
 
       case 'debugFirefox':
-        await this.launchDebugBrowser(url, 'firefox');
+        this.launchDebugBrowserInBackground(url, 'firefox');
         break;
 
       case 'integratedBrowser':
@@ -96,6 +96,15 @@ export class DashboardLauncher implements vscode.Disposable {
         await vscode.env.openExternal(vscode.Uri.parse(url));
         break;
     }
+  }
+
+  private launchDebugBrowserInBackground(
+    url: string,
+    debugType: 'pwa-chrome' | 'pwa-msedge' | 'firefox'): void {
+    void this.launchDebugBrowser(url, debugType).catch(error => {
+      extensionLogOutputChannel.warn(
+        `Failed to launch dashboard debug session (${debugType}): ${describeStopFailure(error)}`);
+    });
   }
 
   /**
