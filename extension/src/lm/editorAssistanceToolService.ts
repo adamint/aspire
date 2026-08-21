@@ -7,7 +7,6 @@ import { type EditorResourceSessionSnapshot } from '../services/appHostLaunchCon
 import { createAppHostOperationTarget } from '../utils/appHostOperationTarget';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { isSamePath } from '../utils/paths/comparison';
-import { getResourceSource } from '../utils/resourceDisplay';
 import { isCommandCancellation } from '../utils/telemetry';
 import {
     aspireDebugSessionStatusToolName,
@@ -984,13 +983,86 @@ function isModeMeaningful(outcome: DebugSessionStatusResult['outcome']): boolean
     return outcome === 'running' || outcome === 'starting' || outcome === 'stopping';
 }
 
+// Model-facing results need a smaller privacy boundary than the tree view: preserve opaque
+// identifiers, reduce filesystem and file URI sources to terminal names, and reject other URLs so
+// paths, authorities, queries, and fragments cannot reach the model.
+function getModelSafeResourceSource(resource: ResourceJson): string | null {
+    if (typeof resource.source === 'string' && resource.source.trim().length > 0) {
+        const trimmedSource = resource.source.trim();
+        if (/^file:/i.test(trimmedSource)) {
+            const sourceFileName = getFileUriFileName(trimmedSource);
+            if (sourceFileName !== undefined) {
+                return sourceFileName;
+            }
+        } else if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmedSource)) {
+            if (trimmedSource.startsWith('/') ||
+                trimmedSource.startsWith('\\') ||
+                /^[a-z]:[\\/]/i.test(trimmedSource)) {
+                const sourceFileName = getPortableFileName(trimmedSource);
+                if (sourceFileName !== undefined) {
+                    return sourceFileName;
+                }
+            } else {
+                return resource.source;
+            }
+        }
+    }
+
+    const containerImage = resource.properties?.['container.image'];
+    if (typeof containerImage === 'string' && containerImage.trim().length > 0) {
+        return containerImage;
+    }
+
+    const executablePath = resource.properties?.['executable.path'];
+    if (typeof executablePath === 'string' && executablePath.trim().length > 0) {
+        const executableFileName = getPortableFileName(executablePath);
+        if (executableFileName !== undefined) {
+            return executableFileName;
+        }
+    }
+
+    const projectPath = resource.properties?.['project.path'];
+    if (typeof projectPath === 'string' && projectPath.trim().length > 0) {
+        const projectFileName = getPortableFileName(projectPath);
+        if (projectFileName !== undefined) {
+            return projectFileName;
+        }
+    }
+
+    return null;
+}
+
+function getFileUriFileName(value: string): string | undefined {
+    try {
+        // File URIs can include an authority, query, and fragment:
+        //   file://private-host/share/Api.csproj?token=secret#fragment
+        // Only the pathname is model-safe; authority-only and root URIs must use a fallback.
+        const parsed = new URL(value);
+        if (parsed.protocol !== 'file:') {
+            return undefined;
+        }
+
+        // URL pathnames remain percent-encoded, including separators such as `%2F` and `%5C`.
+        // Malformed encoding throws here and must use a safer resource fallback.
+        return getPortableFileName(decodeURIComponent(parsed.pathname));
+    } catch {
+        return undefined;
+    }
+}
+
+function getPortableFileName(value: string): string | undefined {
+    const separatorIndex = Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\'));
+    const fileName = value.slice(separatorIndex + 1);
+    return fileName.trim().length > 0 ? fileName : undefined;
+}
+
 function createBoundedResource(resource: ResourceJson): EditorAssistanceResource {
     return {
         resourceType: resource.resourceType,
         state: resource.state,
         healthStatus: resource.healthStatus,
         exitCode: resource.exitCode,
-        source: getResourceSource(resource) ?? null,
+        source: getModelSafeResourceSource(resource),
     };
 }
 

@@ -1056,7 +1056,7 @@ suite('Editor assistance AppHost services', () => {
                 controller: 'editor',
                 appHost: 'AppHost/AppHost.csproj',
                 resourceName: 'api',
-                resource: createExpectedResource(requestedProjectPath),
+                resource: createExpectedResource(path.basename(requestedProjectPath)),
             });
 
             resourceSessions.push({
@@ -1077,7 +1077,7 @@ suite('Editor assistance AppHost services', () => {
                 mode: 'debug',
                 appHost: 'AppHost/AppHost.csproj',
                 resourceName: 'api',
-                resource: createExpectedResource(requestedProjectPath),
+                resource: createExpectedResource(path.basename(requestedProjectPath)),
             });
             assert.deepStrictEqual(resourceRepository.authoritativeRequests, [appHostProjectPath, appHostProjectPath]);
         });
@@ -1134,7 +1134,7 @@ suite('Editor assistance AppHost services', () => {
                     mode: 'debug',
                     appHost: 'AppHost/Program.cs',
                     resourceName: 'api',
-                    resource: createExpectedResource(programResourcePath),
+                    resource: createExpectedResource(path.basename(programResourcePath)),
                 });
             assert.deepStrictEqual(
                 await service.getDebugSessionStatus(
@@ -1149,7 +1149,7 @@ suite('Editor assistance AppHost services', () => {
                     mode: 'run',
                     appHost: 'SourceAlias/SourceAlias.csproj',
                     resourceName: 'worker',
-                    resource: createExpectedResource(sourceAliasResourcePath),
+                    resource: createExpectedResource(path.basename(sourceAliasResourcePath)),
                 });
         });
 
@@ -1194,7 +1194,7 @@ suite('Editor assistance AppHost services', () => {
                 controller: 'editor',
                 appHost: 'workspace/AppHost/Program.cs',
                 resourceName: 'api',
-                resource: createExpectedResource(resourcePath),
+                resource: createExpectedResource(path.basename(resourcePath)),
             });
 
             resourceSessions.push({
@@ -1216,7 +1216,7 @@ suite('Editor assistance AppHost services', () => {
                 mode: 'debug',
                 appHost: 'workspace/AppHost/Program.cs',
                 resourceName: 'api',
-                resource: createExpectedResource(resourcePath),
+                resource: createExpectedResource(path.basename(resourcePath)),
             });
         });
 
@@ -1257,7 +1257,7 @@ suite('Editor assistance AppHost services', () => {
                         mode: 'debug',
                         appHost: 'AppHost/AppHost.csproj',
                         resourceName,
-                        resource: createExpectedResource(resourceExecutablePath),
+                        resource: createExpectedResource(path.basename(resourceExecutablePath)),
                     });
             }
         });
@@ -1436,7 +1436,7 @@ suite('Editor assistance AppHost services', () => {
                     mode: 'debug',
                     appHost: 'AppHost/AppHost.csproj',
                     resourceName: 'tests',
-                    resource: createExpectedResource(executablePath),
+                    resource: createExpectedResource(path.basename(executablePath)),
                 });
 
             resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [
@@ -1503,8 +1503,9 @@ suite('Editor assistance AppHost services', () => {
                     resourceName: 'API',
                 });
 
+            const exactApiProjectPath = path.join(workspaceRoot, 'ExactApi', 'Api.csproj');
             resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [
-                createResource('api', path.join(workspaceRoot, 'ExactApi', 'Api.csproj')),
+                createResource('api', exactApiProjectPath),
                 {
                     ...createResource('api-replica', path.join(workspaceRoot, 'ReplicaApi', 'Api.csproj')),
                     displayName: 'api',
@@ -1522,7 +1523,7 @@ suite('Editor assistance AppHost services', () => {
                     controller: 'external',
                     appHost: 'AppHost/AppHost.csproj',
                     resourceName: 'API',
-                    resource: createExpectedResource(path.join(workspaceRoot, 'ExactApi', 'Api.csproj')),
+                    resource: createExpectedResource(path.basename(exactApiProjectPath)),
                 });
 
             resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [
@@ -1547,8 +1548,9 @@ suite('Editor assistance AppHost services', () => {
         test('matches logical resource display names and rejects duplicate replicas', async () => {
             const token = new vscode.CancellationTokenSource().token;
             addEditorAppHostRunSession(appHostProjectPath);
+            const apiProjectPath = path.join(workspaceRoot, 'Api', 'Api.csproj');
             resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [{
-                ...createResource('api-abc123', path.join(workspaceRoot, 'Api', 'Api.csproj')),
+                ...createResource('api-abc123', apiProjectPath),
                 displayName: 'api',
             }]);
 
@@ -1564,7 +1566,7 @@ suite('Editor assistance AppHost services', () => {
                     controller: 'editor',
                     appHost: 'AppHost/AppHost.csproj',
                     resourceName: 'api',
-                    resource: createExpectedResource(path.join(workspaceRoot, 'Api', 'Api.csproj')),
+                    resource: createExpectedResource(path.basename(apiProjectPath)),
                 });
 
             resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [
@@ -1650,7 +1652,7 @@ suite('Editor assistance AppHost services', () => {
                 mode: 'other',
                 appHost: 'AppHost/AppHost.csproj',
                 resourceName: 'api',
-                resource: createExpectedResource(projectPath),
+                resource: createExpectedResource(path.basename(projectPath)),
             });
 
             resourceSessions[0] = {
@@ -1671,7 +1673,7 @@ suite('Editor assistance AppHost services', () => {
                 mode: 'debug',
                 appHost: 'AppHost/AppHost.csproj',
                 resourceName: 'api',
-                resource: createExpectedResource(projectPath),
+                resource: createExpectedResource(path.basename(projectPath)),
             });
 
             resourceSessions.push({ ...resourceSessions[0], state: 'running' });
@@ -1686,11 +1688,12 @@ suite('Editor assistance AppHost services', () => {
                 controller: 'editor',
                 appHost: 'AppHost/AppHost.csproj',
                 resourceName: 'api',
-                resource: createExpectedResource(projectPath),
+                resource: createExpectedResource(path.basename(projectPath)),
             });
 
             const serialized = JSON.stringify([starting, stopping, multiple]);
-            assert.strictEqual(serialized.includes(JSON.stringify(projectPath)), true);
+            assert.strictEqual(serialized.includes(path.basename(projectPath)), true);
+            assert.strictEqual(serialized.includes(JSON.stringify(projectPath)), false);
             assert.strictEqual(serialized.includes('targetPath'), false);
             assert.strictEqual(serialized.includes('resourceExecutablePaths'), false);
             assert.strictEqual(serialized.includes('project.path'), false);
@@ -3279,13 +3282,13 @@ suite('Editor assistance AppHost services', () => {
                                 outcome: 'running',
                                 controller: 'editor',
                                 mode: 'debug',
-                                resource: createExpectedResource(apiProjectPath, { healthStatus: 'Healthy' }),
+                                resource: createExpectedResource(path.basename(apiProjectPath), { healthStatus: 'Healthy' }),
                             },
                             {
                                 resourceName: 'worker',
                                 outcome: 'multipleSessions',
                                 controller: 'editor',
-                                resource: createExpectedResource(workerExecutablePath, {
+                                resource: createExpectedResource(path.basename(workerExecutablePath), {
                                     resourceType: 'Executable',
                                     state: 'Starting',
                                 }),
@@ -3317,8 +3320,10 @@ suite('Editor assistance AppHost services', () => {
             });
             assert.deepStrictEqual(Object.keys(result), ['success', 'tool', 'outcome', 'sessions']);
             const serialized = JSON.stringify(result);
-            assert.strictEqual(serialized.includes(JSON.stringify(apiProjectPath)), true);
-            assert.strictEqual(serialized.includes(JSON.stringify(workerExecutablePath)), true);
+            assert.strictEqual(serialized.includes(path.basename(apiProjectPath)), true);
+            assert.strictEqual(serialized.includes(path.basename(workerExecutablePath)), true);
+            assert.strictEqual(serialized.includes(JSON.stringify(apiProjectPath)), false);
+            assert.strictEqual(serialized.includes(JSON.stringify(workerExecutablePath)), false);
             assert.strictEqual(serialized.includes('ambiguous-api'), false);
             assert.strictEqual(serialized.includes('ambiguous-worker'), false);
             assert.strictEqual(serialized.includes('properties'), false);
@@ -3335,14 +3340,33 @@ suite('Editor assistance AppHost services', () => {
         });
 
         test('reports only the allowed source fallbacks on status and list results', async () => {
-            // `source` is deliberately model-visible, and it is deliberately limited to the
-            // canonical value plus three launch identifiers, in that order. Container images and
-            // project/executable paths are relevant to the question the tools answer; anything
-            // else about a resource - other properties, URLs, environment, secrets - is not, so
-            // this pins both the order and the boundary.
+            // `source` is deliberately model-visible only when it is opaque or reducible to a
+            // filename. Container images and project/executable filenames are relevant to the
+            // question the tools answer; URLs, paths, other properties, environment, and secrets
+            // are not, so this pins both the order and the boundary.
             addEditorAppHostRunSession(appHostProjectPath);
             const projectPath = path.join(workspaceRoot, 'Api', 'Api.csproj');
             const executablePath = path.join(workspaceRoot, 'Worker', 'worker');
+            const windowsExecutablePath = 'C:\\workspace\\Worker\\worker.exe';
+            const windowsExecutableDirectoryPath = 'C:\\workspace\\Worker\\';
+            const posixProjectPath = '/workspace/Api/Api.csproj';
+            const windowsProjectPath = 'C:\\workspace\\Api\\Api.csproj';
+            const uncProjectPath = '\\\\server\\share\\Api.csproj';
+            const fileUriProjectPath = 'file:///workspace/Api/Api.csproj';
+            const simpleSlashPrefixedSource = '/subscriptions/subscription-id';
+            const nestedSlashPrefixedSource = '/subscriptions/subscription-id/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/account/blobServices/default/containers/container';
+            const deceptiveSlashPrefixedSource = '/subscriptions/private/Api.csproj';
+            const privateWebSource = 'https://private.example/Api.csproj?token=web-secret';
+            const fileUriProjectPathWithSecrets = 'file:///workspace/Api/Api.csproj?token=source-secret#fragment-secret';
+            const encodedPosixFileUriWithSecret = 'file:///workspace%2FApi%2FApi.csproj?token=encoded-secret';
+            const encodedWindowsFileUriWithSecret = 'file:///C:%5Cworkspace%5CApi%5CApi.csproj#encoded-fragment';
+            const malformedEncodedFileUriWithSecret = 'file:///workspace/%E0%A4%A?token=decode-secret';
+            const oneLetterSchemeUrlWithSecret = 'x://private.example/Api.csproj?token=one-letter-secret';
+            const rootFileUriWithSecret = 'file:///?token=source-secret';
+            const authorityOnlyFileUriWithSecret = 'file://private-host?token=authority-secret';
+            const authorityFileUriProjectPathWithSecret = 'file://private-host/share/Api.csproj?token=host-secret';
+            const invalidFileUriWithSecret = 'file://[private-host?token=invalid-secret';
+            const projectDirectoryPath = '/workspace/Api/';
             const forbidden = {
                 connectionString: 'secret-connection',
                 apiKey: 'secret-api-key',
@@ -3354,6 +3378,9 @@ suite('Editor assistance AppHost services', () => {
                 readonly label: string;
                 readonly resource: ResourceJson;
                 readonly expectedSource: string | null;
+                readonly targetPath?: string;
+                readonly expectedInList?: boolean;
+                readonly omittedSourceParts?: readonly string[];
             }> = [
                 {
                     label: 'canonical source wins over every fallback',
@@ -3366,6 +3393,174 @@ suite('Editor assistance AppHost services', () => {
                         source: 'Api.csproj',
                     },
                     expectedSource: 'Api.csproj',
+                },
+                {
+                    label: 'simple slash-prefixed source uses its terminal name',
+                    resource: {
+                        ...createResource('api', projectPath, forbidden),
+                        source: simpleSlashPrefixedSource,
+                    },
+                    expectedSource: 'subscription-id',
+                },
+                {
+                    label: 'nested slash-prefixed source uses its terminal name',
+                    resource: {
+                        ...createResource('api', projectPath, forbidden),
+                        source: nestedSlashPrefixedSource,
+                    },
+                    expectedSource: 'container',
+                },
+                {
+                    label: 'deceptive slash-prefixed source uses its terminal name',
+                    resource: {
+                        ...createResource('api', projectPath, forbidden),
+                        source: deceptiveSlashPrefixedSource,
+                    },
+                    expectedSource: 'Api.csproj',
+                },
+                {
+                    label: 'web URL source falls through to the container image',
+                    resource: {
+                        ...createResource('api', projectPath, {
+                            'container.image': 'registry.example/api:1',
+                            ...forbidden,
+                        }),
+                        source: privateWebSource,
+                    },
+                    expectedSource: 'registry.example/api:1',
+                    omittedSourceParts: ['private.example', 'web-secret'],
+                },
+                {
+                    label: 'canonical POSIX absolute source uses its filename',
+                    resource: {
+                        ...createResource('api', posixProjectPath, forbidden),
+                        source: posixProjectPath,
+                    },
+                    expectedSource: 'Api.csproj',
+                    targetPath: posixProjectPath,
+                },
+                {
+                    label: 'canonical Windows absolute source uses its filename',
+                    resource: {
+                        ...createResource('api', windowsProjectPath, forbidden),
+                        source: windowsProjectPath,
+                    },
+                    expectedSource: 'Api.csproj',
+                    targetPath: windowsProjectPath,
+                },
+                {
+                    label: 'canonical UNC source uses its filename',
+                    resource: {
+                        ...createResource('api', uncProjectPath, forbidden),
+                        source: uncProjectPath,
+                    },
+                    expectedSource: 'Api.csproj',
+                    targetPath: uncProjectPath,
+                },
+                {
+                    label: 'canonical file URI uses its filename',
+                    resource: {
+                        ...createResource('api', fileUriProjectPath, forbidden),
+                        source: fileUriProjectPath,
+                    },
+                    expectedSource: 'Api.csproj',
+                    targetPath: fileUriProjectPath,
+                },
+                {
+                    label: 'canonical file URI omits query and fragment data',
+                    resource: {
+                        ...createResource('api', projectPath, forbidden),
+                        source: fileUriProjectPathWithSecrets,
+                    },
+                    expectedSource: 'Api.csproj',
+                    omittedSourceParts: ['source-secret', 'fragment-secret'],
+                },
+                {
+                    label: 'file URI decodes POSIX separators before selecting its filename',
+                    resource: {
+                        ...createResource('api', projectPath, forbidden),
+                        source: encodedPosixFileUriWithSecret,
+                    },
+                    expectedSource: 'Api.csproj',
+                    omittedSourceParts: ['workspace%2F', 'encoded-secret'],
+                },
+                {
+                    label: 'file URI decodes Windows separators before selecting its filename',
+                    resource: {
+                        ...createResource('api', projectPath, forbidden),
+                        source: encodedWindowsFileUriWithSecret,
+                    },
+                    expectedSource: 'Api.csproj',
+                    omittedSourceParts: ['C:%5Cworkspace', 'encoded-fragment'],
+                },
+                {
+                    label: 'malformed encoded file URI falls through to the container image',
+                    resource: {
+                        ...createResource('api', projectPath, {
+                            'container.image': 'registry.example/api:1',
+                            ...forbidden,
+                        }),
+                        source: malformedEncodedFileUriWithSecret,
+                    },
+                    expectedSource: 'registry.example/api:1',
+                    omittedSourceParts: ['%E0%A4%A', 'decode-secret'],
+                },
+                {
+                    label: 'one-letter URL scheme falls through to the container image',
+                    resource: {
+                        ...createResource('api', projectPath, {
+                            'container.image': 'registry.example/api:1',
+                            ...forbidden,
+                        }),
+                        source: oneLetterSchemeUrlWithSecret,
+                    },
+                    expectedSource: 'registry.example/api:1',
+                    omittedSourceParts: ['private.example', 'one-letter-secret'],
+                },
+                {
+                    label: 'root file URI falls through to the container image',
+                    resource: {
+                        ...createResource('api', projectPath, {
+                            'container.image': 'registry.example/api:1',
+                            ...forbidden,
+                        }),
+                        source: rootFileUriWithSecret,
+                    },
+                    expectedSource: 'registry.example/api:1',
+                    omittedSourceParts: ['source-secret'],
+                },
+                {
+                    label: 'authority-only file URI falls through to the container image',
+                    resource: {
+                        ...createResource('api', projectPath, {
+                            'container.image': 'registry.example/api:1',
+                            ...forbidden,
+                        }),
+                        source: authorityOnlyFileUriWithSecret,
+                    },
+                    expectedSource: 'registry.example/api:1',
+                    omittedSourceParts: ['private-host', 'authority-secret'],
+                },
+                {
+                    label: 'file URI uses only its pathname filename',
+                    resource: {
+                        ...createResource('api', projectPath, forbidden),
+                        source: authorityFileUriProjectPathWithSecret,
+                    },
+                    expectedSource: 'Api.csproj',
+                    omittedSourceParts: ['private-host', 'host-secret'],
+                },
+                {
+                    label: 'invalid file URI falls through to the container image',
+                    resource: {
+                        ...createResource('api', projectPath, {
+                            'container.image': 'registry.example/api:1',
+                            ...forbidden,
+                        }),
+                        source: invalidFileUriWithSecret,
+                    },
+                    expectedSource: 'registry.example/api:1',
+                    omittedSourceParts: ['private-host', 'invalid-secret'],
                 },
                 {
                     label: 'container.image is preferred once source is absent',
@@ -3382,12 +3577,12 @@ suite('Editor assistance AppHost services', () => {
                         'executable.path': executablePath,
                         ...forbidden,
                     }),
-                    expectedSource: executablePath,
+                    expectedSource: path.basename(executablePath),
                 },
                 {
                     label: 'project.path is the last allowed fallback',
                     resource: createResource('api', projectPath, forbidden),
-                    expectedSource: projectPath,
+                    expectedSource: path.basename(projectPath),
                 },
                 {
                     label: 'blank values fall through to the next allowed candidate',
@@ -3399,7 +3594,35 @@ suite('Editor assistance AppHost services', () => {
                         }),
                         source: '  ',
                     },
-                    expectedSource: projectPath,
+                    expectedSource: path.basename(projectPath),
+                },
+                {
+                    label: 'executable.path ending in a separator falls through to project.path',
+                    resource: createResource('api', projectPath, {
+                        'executable.path': windowsExecutableDirectoryPath,
+                        ...forbidden,
+                    }),
+                    expectedSource: 'Api.csproj',
+                },
+                {
+                    label: 'Windows-style executable.path uses its filename on every host',
+                    resource: createResource('api', projectPath, {
+                        'executable.path': windowsExecutablePath,
+                        ...forbidden,
+                    }),
+                    expectedSource: 'worker.exe',
+                },
+                {
+                    label: 'POSIX-style project.path uses its filename on every host',
+                    resource: createResource('api', posixProjectPath, forbidden),
+                    expectedSource: 'Api.csproj',
+                    targetPath: posixProjectPath,
+                },
+                {
+                    label: 'project.path ending in a separator reports no source',
+                    resource: createResource('api', projectDirectoryPath, forbidden),
+                    expectedSource: null,
+                    targetPath: projectDirectoryPath,
                 },
                 {
                     label: 'no allowed candidate reports no source at all',
@@ -3408,15 +3631,23 @@ suite('Editor assistance AppHost services', () => {
                         source: '',
                     },
                     expectedSource: null,
+                    expectedInList: false,
                 },
             ];
             const token = new vscode.CancellationTokenSource().token;
 
-            for (const { label, resource, expectedSource } of cases) {
+            for (const {
+                label,
+                resource,
+                expectedSource,
+                targetPath = projectPath,
+                expectedInList = true,
+                omittedSourceParts = [],
+            } of cases) {
                 resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [resource]);
                 resourceSessions.splice(0, resourceSessions.length, {
                     appHostPath: appHostProjectPath,
-                    targetPath: projectPath,
+                    targetPath,
                     resourceExecutablePaths: [executablePath],
                     state: 'running',
                     mode: 'debug',
@@ -3441,7 +3672,7 @@ suite('Editor assistance AppHost services', () => {
                     listResources.map(listResource => listResource.resource),
                     // A resource with no usable target path cannot be correlated to a child
                     // session, so it is absent from the list rather than reported without one.
-                    expectedSource === null ? [] : [expectedResource],
+                    expectedInList ? [expectedResource] : [],
                     label);
 
                 const serialized = JSON.stringify([status, sessions]);
@@ -3451,6 +3682,9 @@ suite('Editor assistance AppHost services', () => {
                 }
                 for (const property of ['properties', 'urls', 'commands', 'dashboardUrl', 'stateStyle', 'healthReports']) {
                     assert.strictEqual(serialized.includes(property), false, `${label}: ${property}`);
+                }
+                for (const omittedSourcePart of omittedSourceParts) {
+                    assert.strictEqual(serialized.includes(omittedSourcePart), false, `${label}: ${omittedSourcePart}`);
                 }
             }
         });
@@ -3703,7 +3937,7 @@ suite('Editor assistance AppHost services', () => {
                     controller: 'editor',
                     appHost: aba.selector,
                     resourceName: 'first-api',
-                    resource: createExpectedResource(aba.projectPath),
+                    resource: createExpectedResource(path.basename(aba.projectPath)),
                 });
         });
 
@@ -3794,7 +4028,7 @@ suite('Editor assistance AppHost services', () => {
                                     outcome: 'running',
                                     controller: 'editor',
                                     mode: 'debug',
-                                    resource: createExpectedResource(aba.projectPath),
+                                    resource: createExpectedResource(path.basename(aba.projectPath)),
                                 },
                             ],
                         },
