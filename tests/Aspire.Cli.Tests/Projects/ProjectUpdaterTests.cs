@@ -1761,7 +1761,7 @@ public class ProjectUpdaterTests(ITestOutputHelper outputHelper)
             NewSdkVersion: "13.5.0");
 
         Assert.Equal(
-            "[bold yellow]aspire.config.json#channel[/] [grey](none)[/] to [bold green]stable[/], [bold yellow]aspire.config.json#sdk.version[/] [grey]unknown[/] to [bold green]13.5.0[/]",
+            "[bold yellow]aspire.config.json#channel[/] [grey](none)[/] to [bold green]stable[/], [bold yellow]aspire.config.json#sdk.version[/] [grey](unknown)[/] to [bold green]13.5.0[/]",
             step.GetFormattedDisplayText());
     }
 

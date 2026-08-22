@@ -297,6 +297,31 @@ public class PackageChannelTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task GetTemplatePackagesAsync_ImplicitChannelWithLocalMappingsOverride_EnumeratesOverrideDirectory()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var packagesDirectory = workspace.CreateDirectory("packages");
+        var nestedDirectory = Directory.CreateDirectory(Path.Combine(packagesDirectory.FullName, "aspire.projecttemplates", "13.5.0-preview.2"));
+        File.WriteAllText(Path.Combine(nestedDirectory.FullName, "Aspire.ProjectTemplates.13.5.0-preview.2.nupkg"), string.Empty);
+
+        var cache = new FakeNuGetPackageCache
+        {
+            GetTemplatePackagesAsyncCallback = (_, _, _, _) => throw new InvalidOperationException("Local package sources should be enumerated directly.")
+        };
+        var channel = PackageChannel.CreateImplicitChannel(cache, new TestFeatures(), NullLogger.Instance);
+        var source = packagesDirectory.FullName.Replace('\\', '/');
+
+        var package = Assert.Single(await channel.GetTemplatePackagesAsync(
+            workspace.WorkspaceRoot,
+            PackageSourceOverrideMappings.CreateForTemplateOperations(source),
+            CancellationToken.None).DefaultTimeout());
+
+        Assert.Equal("Aspire.ProjectTemplates", package.Id);
+        Assert.Equal("13.5.0-preview.2", package.Version);
+        Assert.Equal(source, package.Source);
+    }
+
+    [Fact]
     public async Task GetIntegrationPackagesAsync_WithPinnedLocalSource_ReturnsOnlyPinnedLocalIntegrationPackages()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
@@ -396,6 +421,35 @@ public class PackageChannelTests(ITestOutputHelper outputHelper)
             .ToArray();
 
         Assert.Equal(["Aspire.Hosting.Redis"], packageIds);
+    }
+
+    [Fact]
+    public async Task GetPolyglotCompatiblePackageIdsAsync_LocalFolderSource_UsesConfiguredSdkVersion()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var packagesDirectory = workspace.CreateDirectory("packages");
+        CreatePackageWithTags(packagesDirectory, "Aspire.Hosting.Redis", "13.6.0-dev", "aspire integration hosting cache");
+        CreatePackageWithTags(packagesDirectory, "Aspire.Hosting.Redis", "99.0.0", "aspire integration hosting cache polyglot");
+
+        var config = AspireConfigFile.LoadOrCreate(workspace.WorkspaceRoot.FullName);
+        config.Channel = PackageChannelNames.Local;
+        config.SdkVersion = "13.6.0-dev";
+        config.Save(workspace.WorkspaceRoot.FullName);
+
+        var packageSource = packagesDirectory.FullName.Replace('\\', '/');
+        var channel = PackageChannel.CreateExplicitChannel(
+            PackageChannelNames.Local,
+            PackageChannelQuality.Both,
+            [new PackageMapping("Aspire*", packageSource)],
+            new FakeNuGetPackageCache(),
+            new TestFeatures(),
+            NullLogger.Instance,
+            pinnedVersion: "99.0.0",
+            currentCliVersion: "13.6.0-dev");
+
+        var packageIds = await channel.GetPolyglotCompatiblePackageIdsAsync(workspace.WorkspaceRoot, CancellationToken.None).DefaultTimeout();
+
+        Assert.Empty(packageIds);
     }
 
     [Fact]

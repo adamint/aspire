@@ -1538,7 +1538,7 @@ internal record ProjectConfigUpdateStep(
         if (!string.Equals(CurrentSdkVersion, NewSdkVersion, StringComparison.OrdinalIgnoreCase))
         {
             var currentSdkVersion = string.IsNullOrEmpty(CurrentSdkVersion)
-                ? "[grey]unknown[/]"
+                ? $"[grey]{UpdateCommandStrings.SdkVersionUnknownPlaceholder.EscapeMarkup()}[/]"
                 : $"[bold green]{CurrentSdkVersion.EscapeMarkup()}[/]";
             changes.Add($"[bold yellow]aspire.config.json#sdk.version[/] {currentSdkVersion} to [bold green]{NewSdkVersion.EscapeMarkup()}[/]");
         }

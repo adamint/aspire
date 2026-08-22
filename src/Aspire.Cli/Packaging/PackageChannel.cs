@@ -257,9 +257,9 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
 
     private (string Source, DirectoryInfo PackageSource)? GetLocalAspirePackageSource() => GetLocalAspirePackageSource(Mappings);
 
-    private (string Source, DirectoryInfo PackageSource)? GetLocalAspirePackageSource(PackageMapping[]? mappings)
+    private static (string Source, DirectoryInfo PackageSource)? GetLocalAspirePackageSource(PackageMapping[]? mappings)
     {
-        if (Type is not PackageChannelType.Explicit || mappings is null)
+        if (mappings is null)
         {
             return null;
         }
@@ -378,7 +378,10 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
     {
         if (GetLocalAspirePackageSource() is { } localPackageSource)
         {
-            return GetPolyglotCompatiblePackageIdsFromLocalPackageSource(localPackageSource.PackageSource, cancellationToken);
+            return GetPolyglotCompatiblePackageIdsFromLocalPackageSource(
+                localPackageSource.PackageSource,
+                GetLocalPackageVersion(workingDirectory),
+                cancellationToken);
         }
 
         using var tempNuGetConfig = Type is PackageChannelType.Explicit ? await TemporaryNuGetConfig.CreateAsync(Mappings!) : null;
@@ -403,13 +406,19 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
             .ToHashSet(StringComparers.NuGetPackageId);
     }
 
-    private IReadOnlySet<string> GetPolyglotCompatiblePackageIdsFromLocalPackageSource(DirectoryInfo packageSource, CancellationToken cancellationToken)
+    private IReadOnlySet<string> GetPolyglotCompatiblePackageIdsFromLocalPackageSource(
+        DirectoryInfo packageSource,
+        string? packageVersion,
+        CancellationToken cancellationToken)
     {
         var ids = new HashSet<string>(StringComparers.NuGetPackageId);
 
         foreach (var file in EnumerateLocalPackageFiles(packageSource, cancellationToken))
         {
-            if (GetPackageFileMetadata(file.FullName) is not { } metadata || !PackageIdFilters.IsIntegrationPackageId(metadata.PackageId))
+            if (GetPackageFileMetadata(file.FullName) is not { } metadata ||
+                !PackageIdFilters.IsIntegrationPackageId(metadata.PackageId) ||
+                packageVersion is not null &&
+                !string.Equals(metadata.Version.ToString(), packageVersion, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }

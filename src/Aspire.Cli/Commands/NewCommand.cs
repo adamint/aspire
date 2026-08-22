@@ -380,6 +380,7 @@ internal sealed class NewCommand : BaseCommand
                 // command stays useful while surfacing a deterministic version.
                 PackageChannel? identityChannelMatch = null;
                 if (string.IsNullOrWhiteSpace(configuredChannelName) &&
+                    string.IsNullOrWhiteSpace(source) &&
                     !string.IsNullOrWhiteSpace(ExecutionContext.IdentityChannel))
                 {
                     identityChannelMatch = channels.FirstOrDefault(c =>
@@ -428,8 +429,9 @@ internal sealed class NewCommand : BaseCommand
                     return new ResolveTemplateVersionResult { ErrorMessage = errorMessage };
                 }
 
-                // Apply the source override after selection so it cannot change implicit/explicit channel selection.
-                // Pass the adjusted mappings directly so the original channel remains authoritative for persistence.
+                // An explicit source without an explicit channel resolves through the implicit channel above,
+                // so the identity channel cannot constrain package discovery or be persisted into the project.
+                // When both options are explicit, the channel still owns version policy and persistence.
                 var templateDiscoveryMappings = string.IsNullOrWhiteSpace(source)
                     ? selectedChannel.Mappings
                     : PackageSourceOverrideMappings.CreateForTemplateOperations(source);
@@ -553,20 +555,18 @@ internal sealed class NewCommand : BaseCommand
             resolvedChannelName = resolveResult.ChannelName;
         }
 
-        // An unqualified local DotNet template lets TemplateNuGetConfigService resolve the
-        // identity-named local directory itself. Forwarding "local" here would make it
-        // indistinguishable from an explicit `--channel local`, bypassing strict exact-version
-        // validation. Explicit `--version` also needs to defer channel selection so the downstream
-        // resolver can search eligible feed-backed channels instead of staying pinned to local.
-        // Other identities and explicit source overrides retain the existing identity fallback.
-        var deferUnqualifiedLocalDotNetResolution =
-            template.Runtime is TemplateRuntime.DotNet &&
+        // An explicit source owns package resolution and must not inherit the CLI identity channel.
+        // An unqualified local DotNet template similarly lets TemplateNuGetConfigService resolve the
+        // identity-named local directory itself. Forwarding "local" would make it indistinguishable
+        // from an explicit `--channel local`, bypassing strict exact-version validation.
+        var deferIdentityChannelResolution =
             string.IsNullOrWhiteSpace(requestedChannelName) &&
-            string.IsNullOrWhiteSpace(source) &&
-            string.Equals(ExecutionContext.IdentityChannel, PackageChannelNames.Local, StringComparisons.ChannelName);
+            (!string.IsNullOrWhiteSpace(source) ||
+                template.Runtime is TemplateRuntime.DotNet &&
+                string.Equals(ExecutionContext.IdentityChannel, PackageChannelNames.Local, StringComparisons.ChannelName));
 
         resolvedChannelName = requestedChannelName ?? resolvedChannelName;
-        if (resolvedChannelName is null && !deferUnqualifiedLocalDotNetResolution)
+        if (resolvedChannelName is null && !deferIdentityChannelResolution)
         {
             resolvedChannelName = await ResolveIdentityChannelNameAsync(cancellationToken);
         }

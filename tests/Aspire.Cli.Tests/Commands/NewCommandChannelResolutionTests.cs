@@ -240,6 +240,22 @@ public class NewCommandChannelResolutionTests(ITestOutputHelper outputHelper)
         Assert.Equal(PackageChannelNames.Local, captured.Channel);
     }
 
+    [Fact]
+    public async Task NewCommand_CliRuntimeTemplate_LocalIdentityWithSourceOverride_UsesSourceVersion()
+    {
+        var captured = await CaptureTemplateInputsAsync(
+            identityChannel: PackageChannelNames.Local,
+            channelOptionArg: null,
+            identityChannelVersion: "13.7.0-dev",
+            identitySdkVersion: "13.6.0-dev",
+            sourceOptionArg: "https://example.invalid/override/v3/index.json",
+            sourceOverrideVersion: "13.6.0-dev");
+
+        Assert.True(captured.WasApplied);
+        Assert.Equal("13.6.0-dev", captured.Version);
+        Assert.Null(captured.Channel);
+    }
+
     /// <summary>
     /// Issue #17121 regression guard: a staging-identity CLI should have a registered
     /// staging channel from <c>PackagingService.GetChannelsAsync</c>, so <c>aspire new</c>
@@ -413,6 +429,19 @@ public class NewCommandChannelResolutionTests(ITestOutputHelper outputHelper)
         Assert.Null(captured.Channel);
     }
 
+    [Fact]
+    public async Task NewCommand_DotNetRuntimeTemplate_LocalIdentityWithSourceOverride_DefersChannelResolution()
+    {
+        var captured = await CaptureTemplateInputsAsync(
+            identityChannel: PackageChannelNames.Local,
+            channelOptionArg: null,
+            identityChannelVersion: "13.7.0-dev",
+            runtime: TemplateRuntime.DotNet,
+            sourceOptionArg: "https://example.invalid/override/v3/index.json");
+
+        Assert.Null(captured.Channel);
+    }
+
     /// <summary>
     /// Defensive: when the identity channel is something that isn't a registered channel
     /// (typo, future addition, locally-built CLI without the local hive installed, etc.),
@@ -505,7 +534,9 @@ public class NewCommandChannelResolutionTests(ITestOutputHelper outputHelper)
         string? versionOptionArg = null,
         int expectedExitCode = CliExitCodes.Success,
         string? identitySdkVersion = null,
-        bool useLocalIdentityPackageDirectory = false)
+        bool useLocalIdentityPackageDirectory = false,
+        string? sourceOptionArg = null,
+        string? sourceOverrideVersion = null)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
 
@@ -547,7 +578,7 @@ public class NewCommandChannelResolutionTests(ITestOutputHelper outputHelper)
 
             options.TemplateProviderFactory = _ => new SingleTemplateProvider(fakeTemplate);
 
-            options.PackagingServiceFactory = _ => BuildPackagingService(workspace, identityChannel, identityChannelVersion, identityChannelVersions, useLocalIdentityPackageDirectory);
+            options.PackagingServiceFactory = _ => BuildPackagingService(workspace, identityChannel, identityChannelVersion, identityChannelVersions, useLocalIdentityPackageDirectory, sourceOverrideVersion);
 
             options.InteractionServiceFactory = _ => interactionService;
         });
@@ -557,7 +588,8 @@ public class NewCommandChannelResolutionTests(ITestOutputHelper outputHelper)
 
         var channelArg = string.IsNullOrEmpty(channelOptionArg) ? "" : $" --channel {channelOptionArg}";
         var versionArg = string.IsNullOrEmpty(versionOptionArg) ? "" : $" --version {versionOptionArg}";
-        var parseResult = newCommand.Parse($"new fake-template --name TestApp --output ./captured{channelArg}{versionArg}");
+        var sourceArg = string.IsNullOrEmpty(sourceOptionArg) ? "" : $" --source {sourceOptionArg}";
+        var parseResult = newCommand.Parse($"new fake-template --name TestApp --output ./captured{channelArg}{versionArg}{sourceArg}");
         var exitCode = await parseResult.InvokeAsync().DefaultTimeout();
 
         Assert.Equal(expectedExitCode, exitCode);
@@ -576,7 +608,8 @@ public class NewCommandChannelResolutionTests(ITestOutputHelper outputHelper)
         string identityChannel,
         string? identityChannelVersion,
         IEnumerable<string>? identityChannelVersions,
-        bool useLocalIdentityPackageDirectory)
+        bool useLocalIdentityPackageDirectory,
+        string? sourceOverrideVersion)
     {
         var identityVersions = identityChannelVersions?.ToArray()
             ?? (identityChannelVersion is null ? [] : [identityChannelVersion]);
@@ -585,9 +618,16 @@ public class NewCommandChannelResolutionTests(ITestOutputHelper outputHelper)
         // outcome is distinguishable from an identity-channel pickup.
         var implicitCache = new FakeNuGetPackageCache
         {
-            GetTemplatePackagesAsyncCallback = (_, _, _, _) =>
+            GetTemplatePackagesAsyncCallback = (_, _, configFile, _) =>
                 Task.FromResult<IEnumerable<NuGetPackage>>(
-                    [new NuGetPackage { Id = "Aspire.ProjectTemplates", Source = "nuget", Version = "13.3.0" }])
+                    [new NuGetPackage
+                    {
+                        Id = "Aspire.ProjectTemplates",
+                        Source = "nuget",
+                        Version = configFile is not null && sourceOverrideVersion is not null
+                            ? sourceOverrideVersion
+                            : "13.3.0"
+                    }])
         };
         var implicitChannel = PackageChannel.CreateImplicitChannel(implicitCache, new TestFeatures(), NullLogger.Instance);
 
