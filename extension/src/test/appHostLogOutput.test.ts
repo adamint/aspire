@@ -67,6 +67,24 @@ suite('AppHost log output coordinator', () => {
         assert.strictEqual(debugLoggerFirst.handleBackchannelEntry(entry), undefined);
     });
 
+    test('preserves structured trailing whitespace while correlating normalized adapter output', () => {
+        const entry = createEntry({ message: 'value \t\n\n' });
+        const raw = 'info: Example.Category[7]\n      value \t\n      \n      \n';
+        const expected = {
+            output: 'Example.Category: Information: value \t\n\n\n',
+            category: 'stdout'
+        };
+
+        const structuredFirst = new AppHostLogOutputCoordinator();
+        assert.deepStrictEqual(structuredFirst.handleBackchannelEntry(entry), expected);
+        assert.deepStrictEqual(renderConsole(structuredFirst, raw, 'stdout'), []);
+
+        const consoleFirst = new AppHostLogOutputCoordinator();
+        assert.deepStrictEqual(consoleFirst.handleDebugAdapterOutput(raw, 'stdout'), []);
+        assert.deepStrictEqual(consoleFirst.handleBackchannelEntry(entry), expected);
+        assert.deepStrictEqual(consoleFirst.flush(), []);
+    });
+
     test('escapes category control characters consistently across log sources', () => {
         const coordinator = new AppHostLogOutputCoordinator();
         const category = 'Unsafe\x1b[31m\tCategory\u0085';
@@ -1056,6 +1074,31 @@ suite('AppHost log output coordinator', () => {
             []);
         assert.strictEqual(
             coordinator.handleBackchannelEntry(createEntry({ message: 'Logged.' })),
+            undefined);
+    });
+
+    test('matches maximum-size alternative boundary sets', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const debugTail = Array.from({ length: 128 }, (_, index) => `debug-${index}\n`).join('');
+        const consoleScopes = Array.from({ length: 128 }, (_, index) => `      => scope-${index}\n`).join('');
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                `Example.Category: Information: shared\n${debugTail}`,
+                'console'),
+            [{
+                output: `Example.Category: Information: shared\n${debugTail}`,
+                category: 'stdout'
+            }]);
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                `info: Example.Category[7]\n${consoleScopes}      shared\n`,
+                'stdout'),
+            []);
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message: 'shared' })),
             undefined);
     });
 

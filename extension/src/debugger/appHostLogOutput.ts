@@ -31,6 +31,7 @@ interface LogRecord {
     logLevel: AppHostLogLevel;
     eventId?: number;
     body: string;
+    displayBody?: string;
     singleLine?: boolean;
 }
 
@@ -597,11 +598,13 @@ export class AppHostLogOutputCoordinator {
 }
 
 function createBackchannelRecord(entry: AppHostLogEntry): LogRecord {
+    const displayBody = normalizeLineEndings(joinRecordBody(entry.message, entry.exception));
     return {
         categoryName: escapeCategoryControlCharacters(entry.categoryName),
         logLevel: entry.logLevel,
         eventId: entry.eventId,
-        body: normalizeRecordText(joinRecordBody(entry.message, entry.exception))
+        body: normalizeRecordText(displayBody),
+        displayBody
     };
 }
 
@@ -821,24 +824,45 @@ function matchRecordIdentities(left: LogRecordIdentity, right: LogRecordIdentity
         };
     }
 
-    for (const leftRange of getAlternativeBodyRanges(left)) {
-        for (const rightRange of getAlternativeBodyRanges(right)) {
-            if (!recordBodyRangesMatch(
+    const leftRanges = getAlternativeBodyRanges(left);
+    if (leftRanges.length === 0) {
+        return undefined;
+    }
+
+    const rightRanges = getAlternativeBodyRanges(right);
+    if (rightRanges.length === 0) {
+        return undefined;
+    }
+
+    const rightRangesByLength = new Map<number, BodyRange[]>();
+
+    for (const rightRange of rightRanges) {
+        const length = rightRange.end - rightRange.start;
+        const ranges = rightRangesByLength.get(length);
+        if (ranges) {
+            ranges.push(rightRange);
+        } else {
+            rightRangesByLength.set(length, [rightRange]);
+        }
+    }
+
+    for (const leftRange of leftRanges) {
+        const matchingRightRanges = rightRangesByLength.get(leftRange.end - leftRange.start);
+        for (const rightRange of matchingRightRanges ?? []) {
+            if (recordBodyRangesMatch(
                 left.record,
                 leftRange.start,
                 leftRange.end,
                 right.record,
                 rightRange.start,
                 rightRange.end)) {
-                continue;
+                return {
+                    record: createCanonicalRecord(
+                        createBodyRangeRecord(left.record, leftRange),
+                        createBodyRangeRecord(right.record, rightRange)),
+                    isExactBody: false
+                };
             }
-
-            return {
-                record: createCanonicalRecord(
-                    createBodyRangeRecord(left.record, leftRange),
-                    createBodyRangeRecord(right.record, rightRange)),
-                isExactBody: false
-            };
         }
     }
 
@@ -945,6 +969,7 @@ function createCanonicalRecord(
         logLevel: bodyRecord.logLevel,
         eventId: left.eventId ?? right.eventId,
         body: bodyRecord.body,
+        displayBody: left.displayBody ?? right.displayBody,
         singleLine: left.singleLine && right.singleLine ? true : undefined
     };
 }
@@ -957,7 +982,7 @@ function formatLogRecord(record: LogRecord): AppHostParentOutput {
     const prefix = record.categoryName
         ? `${record.categoryName}: ${record.logLevel}`
         : record.logLevel;
-    const raw = `${prefix}: ${record.body}`;
+    const raw = `${prefix}: ${record.displayBody ?? record.body}`;
     return formatRecord(raw, record.logLevel, record.logLevel === 'Error' || record.logLevel === 'Critical' ? 'stderr' : 'stdout');
 }
 
@@ -975,7 +1000,11 @@ function formatRecord(raw: string, logLevel: AppHostLogLevel, category: 'stdout'
 }
 
 function normalizeRecordText(value: string): string {
-    return value.replace(/\r\n|\r/g, '\n').replace(/[ \t\n]+$/, '');
+    return normalizeLineEndings(value).replace(/[ \t\n]+$/, '');
+}
+
+function normalizeLineEndings(value: string): string {
+    return value.replace(/\r\n|\r/g, '\n');
 }
 
 function joinRecordBody(message: string, exception?: string | null): string {
