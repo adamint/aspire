@@ -419,11 +419,11 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
   private async stopAllSessions(): Promise<unknown[]> {
     // One deadline for the whole shutdown rather than one per stop, so the worst case does not grow
     // with the number of resources. See _stopSessionsTimeoutMs for why this has to be bounded.
-    const shutdownDeadline = Date.now() + AspireDebugSession._stopSessionsTimeoutMs;
+    const deadline = Date.now() + AspireDebugSession._stopSessionsTimeoutMs;
     // Resource and dashboard stops run against an earlier deadline so that whatever they consume,
     // the AppHost and parent stops below still have _appHostStopReserveMs to work with. See
     // _appHostStopReserveMs for why a single shared deadline leaves the AppHost running.
-    const resourceDeadline = shutdownDeadline - AspireDebugSession._appHostStopReserveMs;
+    const resourceDeadline = deadline - AspireDebugSession._appHostStopReserveMs;
 
     // A dashboard or resource launched under a debugger can keep the AppHost shutdown in flight
     // until its debug session exits. Stop those sessions before the AppHost to avoid waiting on a
@@ -456,12 +456,11 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
     let pendingStartBudgetExhausted = await this.drainPendingDebugSessionStarts(resourceDeadline, stopFailures);
     await this.drainLateResourceStops(resourceDeadline, stopFailures);
 
-    // A debugger can synchronously block the Extension Host while locating its runtime. Timers resume
-    // late after that stall, so the absolute shutdown deadline may already be past even though none of
-    // the reserved AppHost/parent work could run. Preserve that reserve after the event loop resumes;
-    // normal asynchronous timeouts still use the original shared ten-second deadline.
-    const appHostDeadline = Math.max(
-      shutdownDeadline,
+    // A blocked extension host can resume after the absolute shutdown deadline has passed. Timers
+    // could not enforce that deadline while JavaScript was blocked, so preserve the documented final
+    // phase reserve from the point at which AppHost teardown can actually begin.
+    const finalStopDeadline = Math.max(
+      deadline,
       Date.now() + AspireDebugSession._appHostStopReserveMs);
 
     // Global/E2E stop requests target the synthetic Aspire session. Stop the real AppHost session
@@ -473,7 +472,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
         await this.stopWithinBudget(
           () => appHostDebugSession.stopSession(),
           appHostDebugSession.session.name,
-          appHostDeadline,
+          finalStopDeadline,
           () => appHostDebugSession.resetStopSessionAttempt?.());
         this._appHostStopped = true;
         this._resourceDebugSessions = this._resourceDebugSessions.filter(session => session.id !== appHostDebugSession.id);
@@ -496,13 +495,13 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
     }
 
     if (!pendingStartBudgetExhausted) {
-      pendingStartBudgetExhausted = await this.drainPendingDebugSessionStarts(appHostDeadline, stopFailures);
+      pendingStartBudgetExhausted = await this.drainPendingDebugSessionStarts(finalStopDeadline, stopFailures);
     }
-    await this.drainLateResourceStops(appHostDeadline, stopFailures);
+    await this.drainLateResourceStops(finalStopDeadline, stopFailures);
 
     if (!this._parentStopped) {
       try {
-        await this.stopWithinBudget(() => this.stopParentDebugSession(), this._session.name, appHostDeadline);
+        await this.stopWithinBudget(() => this.stopParentDebugSession(), this._session.name, finalStopDeadline);
       }
       catch (err) {
         stopFailures.push(err);
@@ -510,9 +509,9 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
     }
 
     if (!pendingStartBudgetExhausted) {
-      await this.drainPendingDebugSessionStarts(appHostDeadline, stopFailures);
+      await this.drainPendingDebugSessionStarts(finalStopDeadline, stopFailures);
     }
-    await this.drainLateResourceStops(appHostDeadline, stopFailures);
+    await this.drainLateResourceStops(finalStopDeadline, stopFailures);
 
     return stopFailures;
   }

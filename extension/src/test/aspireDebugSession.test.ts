@@ -1365,7 +1365,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         sinon.assert.calledOnce(disposeStartListener);
     });
 
-    test('a blocked dashboard adapter does not consume the reserved AppHost stop budget', async () => {
+    test('a delayed dashboard stop preserves the reserved AppHost stop budget', async () => {
         const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
         const parentDebugSession = {
             id: 'aspire-session',
@@ -1379,35 +1379,56 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             name: 'AppHost',
             configuration: {},
         } as unknown as vscode.DebugSession;
-        sinon.stub(vscode.debug, 'onDidStartDebugSession').returns({ dispose: sinon.stub() });
-        sinon.stub(vscode.debug, 'startDebugging').returns(new Promise<boolean>(() => { }));
-        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').callsFake(async session => {
-            if (session === appHostDebugSession) {
-                await new Promise<void>(resolve => setTimeout(resolve, 50));
-            }
-        });
         const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+        const delayedShutdownWork: sinon.SinonStub[] = [];
+        const addDelayedShutdownWork = (phase: string, pendingStartDelayMs: number, lateResourceStopDelayMs: number) => {
+            const pendingStart = aspireDebugSession.beginPendingDebugSessionStart(`${phase} pending start`);
+            setTimeout(() => pendingStart.dispose(), pendingStartDelayMs);
+
+            const stopLateResource = sinon.stub().callsFake(
+                () => new Promise<void>(resolve => setTimeout(resolve, lateResourceStopDelayMs)));
+            delayedShutdownWork.push(stopLateResource);
+            const tracked = aspireDebugSession.trackAlreadyStartedResourceSession(
+                { type: 'node', request: 'launch', name: phase, runId: phase, debugSessionId: null } as any,
+                {
+                    id: `${phase}-resource`,
+                    processId: 1234,
+                    session: { id: `${phase}-resource`, name: `${phase} resource` } as unknown as vscode.DebugSession,
+                    stopSession: stopLateResource,
+                    termination: new Promise<number>(() => { }),
+                });
+            assert.strictEqual(tracked, undefined);
+        };
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').callsFake(session => {
+            assert.strictEqual(session, parentDebugSession);
+            addDelayedShutdownWork('parent', 5, 7);
+            return new Promise<void>(resolve => setTimeout(resolve, 3));
+        });
+        const stopAppHost = sinon.stub().callsFake(() => {
+            addDelayedShutdownWork('AppHost', 3, 5);
+            return new Promise<void>(resolve => setTimeout(resolve, 1));
+        });
         (aspireDebugSession as any)._appHostDebugSession = {
             id: appHostDebugSession.id,
             session: appHostDebugSession,
-            stopSession: () => vscode.debug.stopDebugging(appHostDebugSession),
+            stopSession: stopAppHost,
         };
+        sinon.stub(
+            (aspireDebugSession as any)._dashboardLauncher,
+            'stopDashboardWithinBudget').callsFake(async () => {
+                clock.setSystemTime(clock.now + 10000);
+            });
 
-        await aspireDebugSession.openDashboard('https://localhost:1234', 'debugChrome');
         const stopPromise = aspireDebugSession.stopDebugging();
-
-        // js-debug can synchronously search for a browser executable and block the Extension Host.
-        // Timers cannot run during that search, so the two-second dashboard timer may resume after
-        // the original ten-second shutdown deadline has already passed.
-        clock.setSystemTime(20_000);
-        await clock.tickAsync(2_000);
-        await clock.tickAsync(50);
+        await Promise.resolve();
+        for (let elapsedMs = 0; elapsedMs < 12; elapsedMs++) {
+            await clock.tickAsync(1);
+        }
         await stopPromise;
 
-        sinon.assert.calledWith(stopDebugging, appHostDebugSession);
-        sinon.assert.calledWith(stopDebugging, parentDebugSession);
-        assert.strictEqual((aspireDebugSession as any)._appHostStopped, true);
-        assert.strictEqual((aspireDebugSession as any)._parentStopped, true);
+        sinon.assert.calledOnce(stopAppHost);
+        sinon.assert.calledOnceWithExactly(stopDebugging, parentDebugSession);
+        delayedShutdownWork.forEach(stopLateResource => sinon.assert.calledOnce(stopLateResource));
     });
 
     test('a rejected dashboard debug launch disposes its start listener and logs the failure', async () => {
