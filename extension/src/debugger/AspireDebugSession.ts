@@ -420,11 +420,11 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
   private async stopAllSessions(): Promise<unknown[]> {
     // One deadline for the whole shutdown rather than one per stop, so the worst case does not grow
     // with the number of resources. See _stopSessionsTimeoutMs for why this has to be bounded.
-    const deadline = Date.now() + AspireDebugSession._stopSessionsTimeoutMs;
+    const shutdownDeadline = Date.now() + AspireDebugSession._stopSessionsTimeoutMs;
     // Resource and dashboard stops run against an earlier deadline so that whatever they consume,
     // the AppHost and parent stops below still have _appHostStopReserveMs to work with. See
     // _appHostStopReserveMs for why a single shared deadline leaves the AppHost running.
-    const resourceDeadline = deadline - AspireDebugSession._appHostStopReserveMs;
+    const resourceDeadline = shutdownDeadline - AspireDebugSession._appHostStopReserveMs;
 
     // A dashboard or resource launched under a debugger can keep the AppHost shutdown in flight
     // until its debug session exits. Stop those sessions before the AppHost to avoid waiting on a
@@ -457,6 +457,14 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
     let pendingStartBudgetExhausted = await this.drainPendingDebugSessionStarts(resourceDeadline, stopFailures);
     await this.drainLateResourceStops(resourceDeadline, stopFailures);
 
+    // A debugger can synchronously block the Extension Host while locating its runtime. Timers resume
+    // late after that stall, so the absolute shutdown deadline may already be past even though none of
+    // the reserved AppHost/parent work could run. Preserve that reserve after the event loop resumes;
+    // normal asynchronous timeouts still use the original shared ten-second deadline.
+    const appHostDeadline = Math.max(
+      shutdownDeadline,
+      Date.now() + AspireDebugSession._appHostStopReserveMs);
+
     // Global/E2E stop requests target the synthetic Aspire session. Stop the real AppHost session
     // explicitly before the parent so we do not rely on VS Code cascading termination before the
     // AppHost registry refresh runs.
@@ -466,7 +474,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
         await this.stopWithinBudget(
           () => appHostDebugSession.stopSession(),
           appHostDebugSession.session.name,
-          deadline,
+          appHostDeadline,
           () => appHostDebugSession.resetStopSessionAttempt?.());
         this._appHostStopped = true;
         this._resourceDebugSessions = this._resourceDebugSessions.filter(session => session.id !== appHostDebugSession.id);
@@ -489,13 +497,13 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
     }
 
     if (!pendingStartBudgetExhausted) {
-      pendingStartBudgetExhausted = await this.drainPendingDebugSessionStarts(deadline, stopFailures);
+      pendingStartBudgetExhausted = await this.drainPendingDebugSessionStarts(appHostDeadline, stopFailures);
     }
-    await this.drainLateResourceStops(deadline, stopFailures);
+    await this.drainLateResourceStops(appHostDeadline, stopFailures);
 
     if (!this._parentStopped) {
       try {
-        await this.stopWithinBudget(() => this.stopParentDebugSession(), this._session.name, deadline);
+        await this.stopWithinBudget(() => this.stopParentDebugSession(), this._session.name, appHostDeadline);
       }
       catch (err) {
         stopFailures.push(err);
@@ -503,9 +511,9 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
     }
 
     if (!pendingStartBudgetExhausted) {
-      await this.drainPendingDebugSessionStarts(deadline, stopFailures);
+      await this.drainPendingDebugSessionStarts(appHostDeadline, stopFailures);
     }
-    await this.drainLateResourceStops(deadline, stopFailures);
+    await this.drainLateResourceStops(appHostDeadline, stopFailures);
 
     return stopFailures;
   }

@@ -1365,6 +1365,51 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         sinon.assert.calledOnce(disposeStartListener);
     });
 
+    test('a blocked dashboard adapter does not consume the reserved AppHost stop budget', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        const appHostDebugSession = {
+            id: 'apphost-session',
+            type: 'coreclr',
+            name: 'AppHost',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').returns({ dispose: sinon.stub() });
+        sinon.stub(vscode.debug, 'startDebugging').returns(new Promise<boolean>(() => { }));
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').callsFake(async session => {
+            if (session === appHostDebugSession) {
+                await new Promise<void>(resolve => setTimeout(resolve, 50));
+            }
+        });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+        (aspireDebugSession as any)._appHostDebugSession = {
+            id: appHostDebugSession.id,
+            session: appHostDebugSession,
+            stopSession: () => vscode.debug.stopDebugging(appHostDebugSession),
+        };
+
+        await aspireDebugSession.openDashboard('https://localhost:1234', 'debugChrome');
+        const stopPromise = aspireDebugSession.stopDebugging();
+
+        // js-debug can synchronously search for a browser executable and block the Extension Host.
+        // Timers cannot run during that search, so the two-second dashboard timer may resume after
+        // the original ten-second shutdown deadline has already passed.
+        clock.setSystemTime(20_000);
+        await clock.tickAsync(2_000);
+        await clock.tickAsync(50);
+        await stopPromise;
+
+        sinon.assert.calledWith(stopDebugging, appHostDebugSession);
+        sinon.assert.calledWith(stopDebugging, parentDebugSession);
+        assert.strictEqual((aspireDebugSession as any)._appHostStopped, true);
+        assert.strictEqual((aspireDebugSession as any)._parentStopped, true);
+    });
+
     test('a rejected dashboard debug launch disposes its start listener and logs the failure', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
