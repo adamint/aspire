@@ -256,6 +256,19 @@ public class NewCommandChannelResolutionTests(ITestOutputHelper outputHelper)
         Assert.Null(captured.Channel);
     }
 
+    [Fact]
+    public async Task NewCommand_CliRuntimeTemplate_LocalIdentityWithVersionOverride_DefersChannelResolution()
+    {
+        var captured = await CaptureTemplateInputsAsync(
+            identityChannel: PackageChannelNames.Local,
+            channelOptionArg: null,
+            identityChannelVersion: "13.6.0-dev",
+            versionOptionArg: "13.5.0");
+
+        Assert.Equal("13.5.0", captured.Version);
+        Assert.Null(captured.Channel);
+    }
+
     /// <summary>
     /// Issue #17121 regression guard: a staging-identity CLI should have a registered
     /// staging channel from <c>PackagingService.GetChannelsAsync</c>, so <c>aspire new</c>

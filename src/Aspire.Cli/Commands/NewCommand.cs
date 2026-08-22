@@ -531,6 +531,7 @@ internal sealed class NewCommand : BaseCommand
         }
 
         var version = parseResult.GetValue(s_versionOption);
+        var hasExplicitVersion = !string.IsNullOrWhiteSpace(version);
         var requestedChannelName = parseResult.GetValue(_channelOption);
         // Precedence for the channel written into TemplateInputs.Channel:
         //   1. Explicit --channel argument (user override always wins).
@@ -556,14 +557,18 @@ internal sealed class NewCommand : BaseCommand
         }
 
         // An explicit source owns package resolution and must not inherit the CLI identity channel.
-        // An unqualified local DotNet template similarly lets TemplateNuGetConfigService resolve the
-        // identity-named local directory itself. Forwarding "local" would make it indistinguishable
-        // from an explicit `--channel local`, bypassing strict exact-version validation.
+        // Unqualified local DotNet templates and explicit versions similarly defer local channel
+        // selection. Forwarding "local" would persist mappings to a directory that may not contain
+        // the requested version; callers that need those mappings can pass `--channel local`.
+        var hasLocalIdentity = string.Equals(
+            ExecutionContext.IdentityChannel,
+            PackageChannelNames.Local,
+            StringComparisons.ChannelName);
         var deferIdentityChannelResolution =
             string.IsNullOrWhiteSpace(requestedChannelName) &&
             (!string.IsNullOrWhiteSpace(source) ||
-                template.Runtime is TemplateRuntime.DotNet &&
-                string.Equals(ExecutionContext.IdentityChannel, PackageChannelNames.Local, StringComparisons.ChannelName));
+                hasLocalIdentity &&
+                (template.Runtime is TemplateRuntime.DotNet || hasExplicitVersion));
 
         resolvedChannelName = requestedChannelName ?? resolvedChannelName;
         if (resolvedChannelName is null && !deferIdentityChannelResolution)
