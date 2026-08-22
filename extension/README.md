@@ -1,18 +1,12 @@
-<p align="center">
-  <img src="./aspire-logo-128.png" width="96" alt="Aspire logo">
-</p>
+# Your whole distributed app, one F5 away.
 
-<h1 align="center">Your whole distributed app, one F5 away.</h1>
+![Aspire logo](https://raw.githubusercontent.com/microsoft/aspire/main/extension/aspire-logo-128.png)
 
-<p align="center">
-  The official Aspire extension for Visual Studio Code brings your AppHost, resources, debuggers, and dashboard into one development loop.
-</p>
+The official Aspire extension for Visual Studio Code brings your AppHost, resources, debuggers, and dashboard into one development loop.
 
-<p align="center">
-  <a href="https://aspire.dev/get-started/aspire-vscode-extension/">Get started</a> ·
-  <a href="https://aspire.dev/docs/">Documentation</a> ·
-  <a href="https://aspire.dev/integrations/gallery/">Integrations</a>
-</p>
+[Get started](https://aspire.dev/get-started/aspire-vscode-extension/) ·
+[Documentation](https://aspire.dev/docs/) ·
+[Integrations](https://aspire.dev/integrations/gallery/)
 
 ## Start here
 
