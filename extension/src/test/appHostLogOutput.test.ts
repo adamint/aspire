@@ -258,6 +258,93 @@ suite('AppHost log output coordinator', () => {
         assert.deepStrictEqual(coordinator.flush(), []);
     });
 
+    test('matches ANSI-colored SimpleConsoleFormatter output', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const entry = createEntry({ logLevel: 'Warning', message: 'Port is busy.' });
+        const raw = '\x1b[40m\x1b[33mwarn\x1b[39m\x1b[49m: Example.Category[7] Port is busy.\n';
+
+        assert.deepStrictEqual(coordinator.handleBackchannelEntry(entry), {
+            output: '\x1b[33mExample.Category: Warning: Port is busy.\x1b[0m\n',
+            category: 'stdout'
+        });
+        assert.deepStrictEqual(renderConsole(coordinator, raw, 'stdout'), []);
+    });
+
+    test('matches ANSI-colored multiline SimpleConsoleFormatter output', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const entry = createEntry({ logLevel: 'Warning', message: 'Port is busy.' });
+        const raw = '\x1b[40m\x1b[33mwarn\x1b[39m\x1b[49m: Example.Category[7]\n'
+            + '      Port is busy.\n';
+
+        assert.ok(coordinator.handleBackchannelEntry(entry));
+        assert.deepStrictEqual(renderConsole(coordinator, raw, 'stdout'), []);
+    });
+
+    test('matches single-line SimpleConsoleFormatter output with scopes', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const entry = createEntry({ logLevel: 'Warning', message: 'Scoped warning.' });
+        const raw = 'warn: Example.Category[7] => RequestPath:/health Scoped warning.\n';
+
+        assert.ok(coordinator.handleBackchannelEntry(entry));
+        assert.deepStrictEqual(renderConsole(coordinator, raw, 'stdout'), []);
+
+        const emptyMessageCoordinator = new AppHostLogOutputCoordinator();
+        assert.ok(emptyMessageCoordinator.handleBackchannelEntry(createEntry({ logLevel: 'Warning', message: '' })));
+        assert.deepStrictEqual(
+            renderConsole(
+                emptyMessageCoordinator,
+                'warn: Example.Category[7] => RequestPath:/health\n',
+                'stdout'),
+            []);
+    });
+
+    test('keeps an exact single-line message that begins with the scope marker', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const entry = createEntry({ message: '=> started' });
+
+        assert.ok(coordinator.handleBackchannelEntry(entry));
+        assert.deepStrictEqual(
+            renderConsole(coordinator, 'info: Example.Category[7] => started\n', 'stdout'),
+            []);
+    });
+
+    test('does not correlate a scope-like message with its plain suffix', () => {
+        const plainEntry = createEntry({ message: 'started' });
+        const scopeLikeRaw = 'info: Example.Category[7] => started\n';
+        const scopeLikeOutput = {
+            output: 'Example.Category: Information: => started\n',
+            category: 'stdout'
+        };
+        const plainOutput = {
+            output: 'Example.Category: Information: started\n',
+            category: 'stdout'
+        };
+
+        const structuredFirst = new AppHostLogOutputCoordinator();
+        assert.deepStrictEqual(structuredFirst.handleBackchannelEntry(plainEntry), plainOutput);
+        assert.deepStrictEqual(renderConsole(structuredFirst, scopeLikeRaw, 'stdout'), [scopeLikeOutput]);
+
+        const consoleFirst = new AppHostLogOutputCoordinator();
+        assert.deepStrictEqual(renderConsole(consoleFirst, scopeLikeRaw, 'stdout'), [scopeLikeOutput]);
+        assert.deepStrictEqual(consoleFirst.handleBackchannelEntry(plainEntry), plainOutput);
+    });
+
+    test('matches an empty single-line scope and message regardless of source order', () => {
+        const entry = createEntry({ logLevel: 'Warning', message: '' });
+        const raw = 'warn: Example.Category[7] => \n';
+
+        const structuredFirst = new AppHostLogOutputCoordinator();
+        assert.ok(structuredFirst.handleBackchannelEntry(entry));
+        assert.deepStrictEqual(renderConsole(structuredFirst, raw, 'stdout'), []);
+
+        const consoleFirst = new AppHostLogOutputCoordinator();
+        assert.deepStrictEqual(renderConsole(consoleFirst, raw, 'stdout'), [{
+            output: '\x1b[33mExample.Category: Warning: =>\x1b[0m\n',
+            category: 'stdout'
+        }]);
+        assert.strictEqual(consoleFirst.handleBackchannelEntry(entry), undefined);
+    });
+
     test('matches a single-line message containing an event-id-shaped value', () => {
         const coordinator = new AppHostLogOutputCoordinator();
         const entry = createEntry({ message: 'Processing order [42] now' });
@@ -1022,6 +1109,19 @@ suite('AppHost log output coordinator', () => {
         assert.strictEqual(
             pending.leadingScopeBodyOffsets.at(-1),
             pending.body.length);
+    });
+
+    test('bounds retained single-line scope-boundary candidates', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const body = `=> ${Array.from({ length: 500 }, (_, index) => `scope-${index}`).join(' ')}`;
+        const raw = `info: Example.Category[7] ${body}\n`;
+
+        assert.deepStrictEqual(coordinator.handleDebugAdapterOutput(raw, 'stdout'), []);
+
+        const pending = (coordinator as any)._pendingRecords.get('stdout');
+        assert.strictEqual(pending.leadingScopeBodyOffsets.length, 128);
+        assert.strictEqual(pending.leadingScopeBodyOffsets[0], '=> scope-0 '.length);
+        assert.strictEqual(pending.leadingScopeBodyOffsets.at(-1), body.length);
     });
 
     test('bounds the pending DebugLogger raw buffer', () => {

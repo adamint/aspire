@@ -237,7 +237,8 @@ export class AppHostLogOutputCoordinator {
                     singleLine: true
                 },
                 body: singleLineRecord.body,
-                leadingScopeBodyOffsets: [],
+                leadingScopeBodyOffsets:
+                    AppHostLogOutputCoordinator.getSingleLineScopeBodyOffsets(singleLineRecord.body),
                 raw: line,
                 category,
                 allowsContinuation: false,
@@ -516,6 +517,33 @@ export class AppHostLogOutputCoordinator {
         return filter;
     }
 
+    private static getSingleLineScopeBodyOffsets(body: string): number[] {
+        if (body === '=>') {
+            return [body.length];
+        }
+
+        if (!body.startsWith('=> ')) {
+            return [];
+        }
+
+        // SingleLine+IncludeScopes emits `=> scope message` with only a space between
+        // the final scope and message, so retain each possible boundary until another
+        // source confirms the exact body.
+        const offsets: number[] = [];
+        for (let offset = '=> '.length + 1; offset <= body.length; offset++) {
+            if (offset < body.length && body[offset - 1] !== ' ') {
+                continue;
+            }
+
+            if (offsets.length === AppHostLogOutputCoordinator._maxLeadingScopeBodyOffsets) {
+                offsets.splice(1, 1);
+            }
+            offsets.push(offset);
+        }
+
+        return offsets;
+    }
+
     private resetFallbackFilter(category: string): void {
         this._fallbackFilters.get(category)?.reset();
     }
@@ -594,10 +622,13 @@ function createPendingRecordIdentity(pending: PendingConsoleRecord): LogRecordId
 
 const consoleLoggerTimestampPrefix =
     String.raw`(?:(?:\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:\s?(?:Z|[+-]\d{2}:?\d{2}))?|\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)\s+)?`;
+const consoleLoggerAnsiSgrSequence = String.raw`\x1b\[[0-9;]*m`;
+const consoleLoggerLevelPattern =
+    String.raw`(?:${consoleLoggerAnsiSgrSequence})*(trce|dbug|info|warn|fail|crit)(?:${consoleLoggerAnsiSgrSequence})*`;
 const multilineConsoleLoggerHeaderRegex = new RegExp(
-    String.raw`^${consoleLoggerTimestampPrefix}(trce|dbug|info|warn|fail|crit): (.*)\[(-?\d+)\](?:\r\n|\r|\n)$`);
+    String.raw`^${consoleLoggerTimestampPrefix}${consoleLoggerLevelPattern}: (.*)\[(-?\d+)\](?:\r\n|\r|\n)$`);
 const singleLineConsoleLoggerRecordRegex = new RegExp(
-    String.raw`^${consoleLoggerTimestampPrefix}(trce|dbug|info|warn|fail|crit): (.*?)\[(-?\d+)\] (.*?)(?:\r\n|\r|\n)?$`);
+    String.raw`^${consoleLoggerTimestampPrefix}${consoleLoggerLevelPattern}: (.*?)\[(-?\d+)\] (.*?)(?:\r\n|\r|\n)?$`);
 const debugLoggerCategoryPattern = String.raw`[A-Za-z_]\w*(?:\.\w+)+`;
 const debugLoggerRecordRegex = new RegExp(
     String.raw`^(${debugLoggerCategoryPattern})(?:\[(-?\d+)\])?: (Trace|Debug|Information|Warning|Error|Critical): ([\s\S]*)$`);
