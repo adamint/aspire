@@ -382,6 +382,136 @@ suite('AppHost log output coordinator', () => {
             []);
     });
 
+    test('deduplicates a message that begins with the scope marker after a real scope regardless of source order', () => {
+        const raw = 'info: Example.Category[7]\n'
+            + '      => RequestPath:/health\n'
+            + '      => ConnectionId:0HN123\n'
+            + '      => started\n';
+
+        const backchannelFirst = new AppHostLogOutputCoordinator();
+        assert.deepStrictEqual(backchannelFirst.handleBackchannelEntry(createEntry({ message: '=> started' })), {
+            output: 'Example.Category: Information: => started\n',
+            category: 'stdout'
+        });
+        assert.deepStrictEqual(
+            renderConsole(backchannelFirst, raw, 'stdout'),
+            []);
+        assert.deepStrictEqual(
+            renderConsole(backchannelFirst, 'Example.Category: Information: => started\n', 'console'),
+            []);
+
+        assert.deepStrictEqual(backchannelFirst.handleBackchannelEntry(createEntry({
+            sequenceNumber: 2,
+            message: '=> started'
+        })), {
+            output: 'Example.Category: Information: => started\n',
+            category: 'stdout'
+        });
+        assert.deepStrictEqual(
+            renderConsole(backchannelFirst, raw, 'stdout'),
+            []);
+        assert.deepStrictEqual(
+            renderConsole(backchannelFirst, 'Example.Category: Information: => started\n', 'console'),
+            []);
+
+        const consoleFirst = new AppHostLogOutputCoordinator();
+        assert.deepStrictEqual(renderConsole(consoleFirst, raw, 'stdout'), [{
+            output: 'Example.Category: Information: => RequestPath:/health\n=> ConnectionId:0HN123\n=> started\n',
+            category: 'stdout'
+        }]);
+        assert.strictEqual(
+            consoleFirst.handleBackchannelEntry(createEntry({ message: '=> started' })),
+            undefined);
+        assert.deepStrictEqual(
+            renderConsole(consoleFirst, 'Example.Category: Information: => started\n', 'console'),
+            []);
+
+        const debugLoggerFirst = new AppHostLogOutputCoordinator();
+        assert.deepStrictEqual(
+            renderConsole(debugLoggerFirst, 'Example.Category: Information: => started\n', 'console'),
+            [{
+                output: 'Example.Category: Information: => started\n',
+                category: 'stdout'
+            }]);
+        assert.deepStrictEqual(renderConsole(debugLoggerFirst, raw, 'stdout'), []);
+        assert.strictEqual(
+            debugLoggerFirst.handleBackchannelEntry(createEntry({ message: '=> started' })),
+            undefined);
+    });
+
+    test('discards ambiguous scope aliases after another source confirms the message identity', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const raw = 'info: Example.Category[7]\n'
+            + '      => RequestPath:/health\n'
+            + '      => ConnectionId:0HN123\n'
+            + '      => started\n';
+
+        assert.deepStrictEqual(renderConsole(coordinator, raw, 'stdout'), [{
+            output: 'Example.Category: Information: => RequestPath:/health\n=> ConnectionId:0HN123\n=> started\n',
+            category: 'stdout'
+        }]);
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message: '=> started' })),
+            undefined);
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Information: => ConnectionId:0HN123\n=> started\n',
+                'console'),
+            [{
+                output: 'Example.Category: Information: => ConnectionId:0HN123\n=> started\n',
+                category: 'stdout'
+            }]);
+        assert.deepStrictEqual(
+            renderConsole(coordinator, 'Example.Category: Information: => started\n', 'console'),
+            []);
+    });
+
+    test('prefers an exact identity over an older scope alias when DebugLogger omits the event ID', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const raw = 'info: Example.Category[7]\n'
+            + '      => RequestPath:/health\n'
+            + '      => ConnectionId:0HN123\n'
+            + '      => started\n';
+
+        assert.deepStrictEqual(renderConsole(coordinator, raw, 'stdout'), [{
+            output: 'Example.Category: Information: => RequestPath:/health\n=> ConnectionId:0HN123\n=> started\n',
+            category: 'stdout'
+        }]);
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ eventId: 8, message: '=> started' })),
+            {
+                output: 'Example.Category: Information: => started\n',
+                category: 'stdout'
+            });
+        assert.deepStrictEqual(
+            renderConsole(coordinator, 'Example.Category: Information: => started\n', 'console'),
+            []);
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Information: => ConnectionId:0HN123\n=> started\n',
+                'console'),
+            []);
+    });
+
+    test('does not treat a scope marker after the first message line as a new scope boundary', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const message = 'started\n=> still part of the message';
+        const raw = 'info: Example.Category[7]\n'
+            + '      => RequestPath:/health\n'
+            + '      started\n'
+            + '      => still part of the message\n';
+
+        assert.deepStrictEqual(renderConsole(coordinator, raw, 'stdout'), [{
+            output: 'Example.Category: Information: => RequestPath:/health\nstarted\n=> still part of the message\n',
+            category: 'stdout'
+        }]);
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message })),
+            undefined);
+    });
+
     test('deduplicates an empty log message', () => {
         const coordinator = new AppHostLogOutputCoordinator();
         const raw = 'info: Example.Category[7]\n';

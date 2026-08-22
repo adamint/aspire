@@ -31,17 +31,25 @@ interface LogRecord {
     singleLine?: boolean;
 }
 
+interface LogRecordIdentity {
+    record: LogRecord;
+    leadingScopeBodyOffsets?: readonly number[];
+}
+
+interface LogRecordIdentityMatch {
+    record: LogRecord;
+    isExactBody: boolean;
+}
+
 interface CorrelatedRecord {
-    // IncludeScopes gives one ConsoleLogger record both scope-inclusive and scope-free
-    // identities. They share sources so either identity advances the same logical record.
-    records: LogRecord[];
+    identity: LogRecordIdentity;
     sources: Set<LogSource>;
 }
 
 interface PendingConsoleRecord {
     record: Omit<LogRecord, 'body'>;
     body: string;
-    bodyWithoutLeadingScopes: string;
+    leadingScopeBodyOffsets: number[];
     raw: string;
     category: string;
     allowsContinuation: boolean;
@@ -94,7 +102,7 @@ export class AppHostLogOutputCoordinator {
 
         const record = createBackchannelRecord(entry);
 
-        return this.correlate(record, 'backchannel');
+        return this.correlate({ record }, 'backchannel');
     }
 
     handleDebugAdapterOutput(output: string, category: string | undefined): AppHostParentOutput[] {
@@ -173,8 +181,12 @@ export class AppHostLogOutputCoordinator {
                 // Keep them until correlation can distinguish scope metadata from a real message
                 // such as `logger.LogInformation("=> started")`.
                 pending.body += bodyLine;
-                if (pending.hasNonScopeBodyLine || !bodyLine.startsWith('=> ')) {
-                    pending.bodyWithoutLeadingScopes += bodyLine;
+                if (!pending.hasNonScopeBodyLine && bodyLine.startsWith('=> ')) {
+                    // Each leading marker can be either scope metadata or the first message line.
+                    // Store compact offsets instead of each suffix so deeply nested scopes retain
+                    // linear state while `=> scope` followed by `=> message` remains distinguishable.
+                    pending.leadingScopeBodyOffsets.push(pending.body.length);
+                } else {
                     pending.hasNonScopeBodyLine = true;
                 }
                 pending.hasBodyLine = true;
@@ -189,7 +201,7 @@ export class AppHostLogOutputCoordinator {
             this._pendingRecords.set(category, {
                 record: multilineHeader,
                 body: '',
-                bodyWithoutLeadingScopes: '',
+                leadingScopeBodyOffsets: [],
                 raw: line,
                 category,
                 allowsContinuation: true,
@@ -209,7 +221,7 @@ export class AppHostLogOutputCoordinator {
                     singleLine: true
                 },
                 body: singleLineRecord.body,
-                bodyWithoutLeadingScopes: singleLineRecord.body,
+                leadingScopeBodyOffsets: [],
                 raw: line,
                 category,
                 allowsContinuation: false,
@@ -231,11 +243,7 @@ export class AppHostLogOutputCoordinator {
         this.clearIdleFlushTimer(category);
         this._pendingRecords.delete(category);
 
-        const candidates = createPendingRecords(pending);
-        const record = candidates.find(candidate => this.hasCorrelatedTwin(candidate, 'consoleLogger'))
-            ?? candidates[0];
-
-        const output = this.correlate(record, 'consoleLogger', candidates);
+        const output = this.correlate(createPendingRecordIdentity(pending), 'consoleLogger');
         if (output) {
             outputs.push(output);
         }
@@ -314,45 +322,55 @@ export class AppHostLogOutputCoordinator {
             return;
         }
 
-        const output = this.correlate(record, 'debugLogger');
+        const output = this.correlate({ record }, 'debugLogger');
         if (output) {
             outputs.push(output);
         }
     }
 
     private correlate(
-        record: LogRecord,
-        source: LogSource,
-        aliases: readonly LogRecord[] = [record]): AppHostParentOutput | undefined {
-        const records = this.correlatedRecordsFor(record);
-        const index = records.findIndex(candidate =>
-            !candidate.sources.has(source)
-            && candidate.records.some(candidateRecord => recordsMatch(candidateRecord, record)));
-        if (index < 0) {
-            records.push({ records: [...aliases], sources: new Set([source]) });
-            const limit = isLowLevel(record)
+        identity: LogRecordIdentity,
+        source: LogSource): AppHostParentOutput | undefined {
+        const records = this.correlatedRecordsFor(identity.record);
+        let selectedMatch: { index: number; match: LogRecordIdentityMatch } | undefined;
+        for (let index = 0; index < records.length; index++) {
+            const candidate = records[index];
+            if (candidate.sources.has(source)) {
+                continue;
+            }
+
+            const match = matchRecordIdentities(candidate.identity, identity);
+            if (match && (!selectedMatch || match.isExactBody && !selectedMatch.match.isExactBody)) {
+                selectedMatch = { index, match };
+                if (match.isExactBody) {
+                    break;
+                }
+            }
+        }
+
+        if (!selectedMatch) {
+            records.push({ identity, sources: new Set([source]) });
+            const limit = isLowLevel(identity.record)
                 ? AppHostLogOutputCoordinator._maxLowLevelCorrelatedRecords
                 : AppHostLogOutputCoordinator._maxCorrelatedRecords;
             if (records.length > limit) {
                 records.shift();
             }
 
-            return formatLogRecord(record);
+            return formatLogRecord(identity.record);
         }
 
-        const existing = records[index];
+        const existing = records[selectedMatch.index];
         existing.sources.add(source);
-        for (const alias of aliases) {
-            if (!existing.records.some(existingRecord => recordsMatch(existingRecord, alias))) {
-                existing.records.push(alias);
-            }
-        }
+        // Once another source identifies the actual message body, discard the other possible
+        // scope boundaries so a later record cannot be suppressed through a rejected alias.
+        existing.identity = { record: selectedMatch.match.record };
 
-        const expectedSources = isLowLevel(record)
+        const expectedSources = isLowLevel(selectedMatch.match.record)
             ? AppHostLogOutputCoordinator._lowLevelSources
             : AppHostLogOutputCoordinator._allSources;
         if (expectedSources.every(expectedSource => existing.sources.has(expectedSource))) {
-            records.splice(index, 1);
+            records.splice(selectedMatch.index, 1);
         }
 
         return undefined;
@@ -361,7 +379,7 @@ export class AppHostLogOutputCoordinator {
     private hasCorrelatedTwin(record: LogRecord, source: LogSource): boolean {
         return this.correlatedRecordsFor(record).some(candidate =>
             !candidate.sources.has(source)
-            && candidate.records.some(candidateRecord => recordsMatch(candidateRecord, record)));
+            && matchRecordIdentities(candidate.identity, { record }) !== undefined);
     }
 
     private correlatedRecordsFor(record: LogRecord): CorrelatedRecord[] {
@@ -524,16 +542,19 @@ function createBackchannelRecord(entry: AppHostLogEntry): LogRecord {
     };
 }
 
-function createPendingRecords(pending: PendingConsoleRecord): LogRecord[] {
-    const fullBodyRecord = {
+function createPendingRecordIdentity(pending: PendingConsoleRecord): LogRecordIdentity {
+    const record = {
         ...pending.record,
         body: normalizeRecordText(pending.body)
     };
-    const bodyWithoutLeadingScopes = normalizeRecordText(pending.bodyWithoutLeadingScopes);
+    const leadingScopeBodyOffsets = [...new Set(
+        pending.leadingScopeBodyOffsets
+            .map(offset => Math.min(offset, record.body.length))
+            .filter(offset => offset > 0))];
 
-    return bodyWithoutLeadingScopes === fullBodyRecord.body
-        ? [fullBodyRecord]
-        : [fullBodyRecord, { ...pending.record, body: bodyWithoutLeadingScopes }];
+    return leadingScopeBodyOffsets.length > 0
+        ? { record, leadingScopeBodyOffsets }
+        : { record };
 }
 
 const consoleLoggerTimestampPrefix =
@@ -680,21 +701,83 @@ function findLastCompletedLineBreak(text: string): number {
     return Math.max(searchable.lastIndexOf('\n'), searchable.lastIndexOf('\r'));
 }
 
-function recordsMatch(left: LogRecord, right: LogRecord): boolean {
+function matchRecordIdentities(left: LogRecordIdentity, right: LogRecordIdentity): LogRecordIdentityMatch | undefined {
+    if (!recordHeadersMatch(left.record, right.record)) {
+        return undefined;
+    }
+
+    if (recordBodiesMatchAt(left.record, 0, right.record)) {
+        return {
+            record: createCanonicalRecord(left.record, right.record),
+            isExactBody: true
+        };
+    }
+
+    if (identityMatchesExactRecord(left, right.record)) {
+        return {
+            record: createCanonicalRecord(left.record, right.record, right.record),
+            isExactBody: false
+        };
+    }
+
+    if (identityMatchesExactRecord(right, left.record)) {
+        return {
+            record: createCanonicalRecord(left.record, right.record, left.record),
+            isExactBody: false
+        };
+    }
+
+    return undefined;
+}
+
+function identityMatchesExactRecord(identity: LogRecordIdentity, exactRecord: LogRecord): boolean {
+    const offset = identity.record.body.length - exactRecord.body.length;
+    return offset > 0
+        && identity.leadingScopeBodyOffsets?.includes(offset) === true
+        && recordBodiesMatchAt(identity.record, offset, exactRecord);
+}
+
+function recordHeadersMatch(left: LogRecord, right: LogRecord): boolean {
     return left.categoryName === right.categoryName
         && left.logLevel === right.logLevel
-        && (left.eventId === undefined || right.eventId === undefined || left.eventId === right.eventId)
-        && (left.body === right.body
-            || !!(left.singleLine || right.singleLine)
-                && toSingleLineRecordText(left.body) === toSingleLineRecordText(right.body));
+        && (left.eventId === undefined || right.eventId === undefined || left.eventId === right.eventId);
+}
+
+function recordBodiesMatchAt(left: LogRecord, leftOffset: number, right: LogRecord): boolean {
+    if (left.body.length - leftOffset !== right.body.length) {
+        return false;
+    }
+
+    if (!left.singleLine && !right.singleLine) {
+        return left.body.startsWith(right.body, leftOffset);
+    }
+
+    for (let index = 0; index < right.body.length; index++) {
+        const leftCharacter = left.body[leftOffset + index] === '\n' ? ' ' : left.body[leftOffset + index];
+        const rightCharacter = right.body[index] === '\n' ? ' ' : right.body[index];
+        if (leftCharacter !== rightCharacter) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+function createCanonicalRecord(
+    left: LogRecord,
+    right: LogRecord,
+    bodyRecord = left.singleLine && !right.singleLine ? right : left): LogRecord {
+    return {
+        categoryName: bodyRecord.categoryName,
+        logLevel: bodyRecord.logLevel,
+        eventId: left.eventId ?? right.eventId,
+        body: bodyRecord.body,
+        singleLine: left.singleLine && right.singleLine ? true : undefined
+    };
 }
 
 function isLowLevel(record: LogRecord): boolean {
     return record.logLevel === 'Trace' || record.logLevel === 'Debug';
-}
-
-function toSingleLineRecordText(value: string): string {
-    return value.replace(/\r\n|\r|\n/g, ' ');
 }
 
 function formatLogRecord(record: LogRecord): AppHostParentOutput {
