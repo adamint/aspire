@@ -1,4 +1,12 @@
 import { applyTextStyle } from '../utils/strings';
+import {
+    AppHostParentOutputFilter,
+    isSevereRuntimeOutputLine,
+    type AppHostParentOutput
+} from './session/appHostParentOutputFilter';
+
+export { AppHostParentOutputFilter };
+export type { AppHostParentOutput };
 
 const enum AnsiColors {
     Dim = '\x1b[2m',
@@ -16,11 +24,6 @@ export interface AppHostLogEntry {
     exception?: string | null;
 }
 
-export interface AppHostParentOutput {
-    output: string;
-    category: 'stdout' | 'stderr';
-}
-
 type LogSource = 'backchannel' | 'consoleLogger' | 'debugLogger';
 
 interface LogRecord {
@@ -34,6 +37,7 @@ interface LogRecord {
 interface LogRecordIdentity {
     record: LogRecord;
     leadingScopeBodyOffsets?: readonly number[];
+    trailingBodyEndOffsets?: readonly number[];
 }
 
 interface LogRecordIdentityMatch {
@@ -60,11 +64,18 @@ interface PendingConsoleRecord {
 interface PendingDebugRecord {
     raw: string;
     category: string;
+    hasException: boolean;
+    ambiguousLineBoundaries: {
+        rawOffset: number;
+    }[];
 }
 
 export class AppHostLogOutputCoordinator {
     private static readonly _maxCorrelatedRecords = 1024;
     private static readonly _maxLowLevelCorrelatedRecords = 128;
+    private static readonly _maxAmbiguousDebugLineBoundaries = 128;
+    private static readonly _maxLeadingScopeBodyOffsets = 128;
+    private static readonly _maxPendingDebugRecordCharacters = 64 * 1024;
     private static readonly _allSources: readonly LogSource[] = ['backchannel', 'consoleLogger', 'debugLogger'];
     private static readonly _lowLevelSources: readonly LogSource[] = ['consoleLogger', 'debugLogger'];
     private static readonly _maxRememberedBackchannelSequences = 1024;
@@ -185,6 +196,9 @@ export class AppHostLogOutputCoordinator {
                     // Each leading marker can be either scope metadata or the first message line.
                     // Store compact offsets instead of each suffix so deeply nested scopes retain
                     // linear state while `=> scope` followed by `=> message` remains distinguishable.
+                    if (pending.leadingScopeBodyOffsets.length === AppHostLogOutputCoordinator._maxLeadingScopeBodyOffsets) {
+                        pending.leadingScopeBodyOffsets.splice(1, 1);
+                    }
                     pending.leadingScopeBodyOffsets.push(pending.body.length);
                 } else {
                     pending.hasNonScopeBodyLine = true;
@@ -198,6 +212,7 @@ export class AppHostLogOutputCoordinator {
 
         const multilineHeader = parseMultilineConsoleLoggerHeader(line);
         if (multilineHeader && category !== 'console') {
+            this.resetFallbackFilter(category);
             this._pendingRecords.set(category, {
                 record: multilineHeader,
                 body: '',
@@ -213,6 +228,7 @@ export class AppHostLogOutputCoordinator {
 
         const singleLineRecord = parseSingleLineConsoleLoggerRecord(line);
         if (singleLineRecord && category !== 'console') {
+            this.resetFallbackFilter(category);
             this._pendingRecords.set(category, {
                 record: {
                     categoryName: singleLineRecord.categoryName,
@@ -255,33 +271,70 @@ export class AppHostLogOutputCoordinator {
         outputs: AppHostParentOutput[]): boolean {
         const pending = this._pendingDebugRecords.get(category);
         if (pending) {
+            if (pending.raw.length + line.length > AppHostLogOutputCoordinator._maxPendingDebugRecordCharacters) {
+                // Keep the bounded record visible, then let later continuation lines follow the
+                // normal console fallback policy rather than growing extension-host state forever.
+                this.flushPendingDebugRecord(category, outputs);
+                if (isDebugLoggerHeader(line)
+                    && line.length <= AppHostLogOutputCoordinator._maxPendingDebugRecordCharacters) {
+                    this._pendingDebugRecords.set(category, createPendingDebugRecord(line, category));
+                    this.resetFallbackFilter(category);
+                    return true;
+                }
+                return false;
+            }
+
             if (isDebugLoggerHeader(line)) {
                 if (this.mergedDebugRecordHasTwin(pending, line)) {
-                    pending.raw += line;
+                    appendPendingDebugLine(pending, line);
                     return true;
                 }
 
                 this.flushPendingDebugRecord(category, outputs);
-                this._pendingDebugRecords.set(category, { raw: line, category });
+                this._pendingDebugRecords.set(category, createPendingDebugRecord(line, category));
+                this.resetFallbackFilter(category);
                 return true;
             }
 
-            if (startsUnrelatedDebuggerOutput(line)
-                || (!isDebugLoggerContinuation(line)
-                    && !this.canAppendAmbiguousDebugLine(pending, line))) {
-                this.flushPendingDebugRecord(category, outputs);
+            const isExceptionContinuation = isDebugLoggerExceptionContinuation(pending, line);
+            if (startsUnrelatedDebuggerOutput(line) && !isExceptionContinuation) {
+                // A severe-looking line can still be part of a multiline message. A provider
+                // copy proves that case; otherwise remember the provisional full identity so a
+                // delayed provider does not render the same logical record again after the split.
+                if (this.mergedDebugRecordHasTwin(pending, line)) {
+                    appendPendingDebugLine(pending, line);
+                    return true;
+                }
+                const pendingRecord = parseDebugLoggerRecord(pending.raw);
+                if (pendingRecord && !this.hasCorrelatedTwin(pendingRecord, 'debugLogger')) {
+                    this.correlate({ record: pendingRecord }, 'debugLogger', false);
+                }
+                const provisionalRecord = parseDebugLoggerRecord(`${pending.raw}${line}`);
+                if (provisionalRecord) {
+                    this.correlate({ record: provisionalRecord }, 'debugLogger', false);
+                }
+                this.flushPendingDebugRecord(
+                    category,
+                    outputs,
+                    true);
                 return false;
             }
 
-            pending.raw += line;
+            if (!isDebugLoggerContinuation(pending, line)) {
+                this.recordAmbiguousDebugLineBoundary(pending);
+            }
+
+            appendPendingDebugLine(pending, line);
             return true;
         }
 
-        if (!isDebugLoggerHeader(line)) {
+        if (!isDebugLoggerHeader(line)
+            || line.length > AppHostLogOutputCoordinator._maxPendingDebugRecordCharacters) {
             return false;
         }
 
-        this._pendingDebugRecords.set(category, { raw: line, category });
+        this._pendingDebugRecords.set(category, createPendingDebugRecord(line, category));
+        this.resetFallbackFilter(category);
         return true;
     }
 
@@ -290,24 +343,22 @@ export class AppHostLogOutputCoordinator {
         return !!merged && this.hasCorrelatedTwin(merged, 'debugLogger');
     }
 
-    private canAppendAmbiguousDebugLine(pending: PendingDebugRecord, line: string): boolean {
-        // Before another source establishes the identity, preserve ambiguous unindented
-        // lines so a DAP-first multiline record can correlate later. Once the pending
-        // record has a twin, only append a line when the merged identity also has one.
-        const merged = parseDebugLoggerRecord(`${pending.raw}${line}`);
-        if (!merged) {
-            return false;
+    private recordAmbiguousDebugLineBoundary(pending: PendingDebugRecord): void {
+        if (pending.ambiguousLineBoundaries.length === AppHostLogOutputCoordinator._maxAmbiguousDebugLineBoundaries) {
+            // Keep the first possible boundary and the most recent ones. The first covers the
+            // common one-line-message case; the rolling tail keeps long multiline messages
+            // useful without allowing arbitrary console output to create unbounded scan work.
+            pending.ambiguousLineBoundaries.splice(1, 1);
         }
-
-        if (this.hasCorrelatedTwin(merged, 'debugLogger')) {
-            return true;
-        }
-
-        const current = parseDebugLoggerRecord(pending.raw);
-        return !!current && !this.hasCorrelatedTwin(current, 'debugLogger');
+        pending.ambiguousLineBoundaries.push({
+            rawOffset: pending.raw.length
+        });
     }
 
-    private flushPendingDebugRecord(category: string, outputs: AppHostParentOutput[]): void {
+    private flushPendingDebugRecord(
+        category: string,
+        outputs: AppHostParentOutput[],
+        hardBoundary = false): void {
         const pending = this._pendingDebugRecords.get(category);
         if (!pending) {
             return;
@@ -322,15 +373,74 @@ export class AppHostLogOutputCoordinator {
             return;
         }
 
-        const output = this.correlate({ record }, 'debugLogger');
+        if (hardBoundary && this.hasCorrelatedTwin(record, 'debugLogger')) {
+            const output = this.correlate({ record }, 'debugLogger');
+            if (output) {
+                outputs.push(output);
+            }
+            return;
+        }
+
+        const matchingBoundary = !this.hasCorrelatedTwin(record, 'debugLogger')
+            ? this.findConfirmedDebugLineBoundary(pending, record)
+            : undefined;
+        const selectedBoundary = hardBoundary
+            ? matchingBoundary ?? pending.ambiguousLineBoundaries[0]
+            : matchingBoundary;
+        if (selectedBoundary) {
+            const candidate = parseDebugLoggerRecord(pending.raw.slice(0, selectedBoundary.rawOffset));
+            if (!candidate) {
+                this.emitFallback(pending.raw, pending.category, outputs);
+                return;
+            }
+            const output = this.correlate({ record: candidate }, 'debugLogger');
+            if (output) {
+                outputs.push(output);
+            }
+            const tail = pending.raw.slice(selectedBoundary.rawOffset);
+            if (hardBoundary && !matchingBoundary) {
+                // The boundary is conservative rather than provider-confirmed. Keep the
+                // ambiguous middle visible before suppressing any delayed full provider copy.
+                outputs.push({ output: tail, category: 'stdout' });
+            } else {
+                this.emitFallback(tail, pending.category, outputs);
+            }
+            return;
+        }
+
+        const trailingBodyEndOffsets = [...new Set(
+            pending.ambiguousLineBoundaries
+                .map(boundary => parseDebugLoggerRecord(pending.raw.slice(0, boundary.rawOffset))?.body.length)
+                .filter((offset): offset is number => offset !== undefined && offset >= 0 && offset < record.body.length))];
+        const identity = trailingBodyEndOffsets.length > 0
+            ? { record, trailingBodyEndOffsets }
+            : { record };
+        const output = this.correlate(identity, 'debugLogger');
         if (output) {
             outputs.push(output);
         }
     }
 
+    private findConfirmedDebugLineBoundary(
+        pending: PendingDebugRecord,
+        record: LogRecord): PendingDebugRecord['ambiguousLineBoundaries'][number] | undefined {
+        // DebugLogger does not identify multiline message boundaries. Prefer the longest
+        // candidate another provider has confirmed so only the remaining raw tail falls back.
+        for (let index = pending.ambiguousLineBoundaries.length - 1; index >= 0; index--) {
+            const boundary = pending.ambiguousLineBoundaries[index];
+            const candidate = parseDebugLoggerRecord(pending.raw.slice(0, boundary.rawOffset));
+            if (candidate && this.hasCorrelatedTwin(candidate, 'debugLogger')) {
+                return boundary;
+            }
+        }
+
+        return undefined;
+    }
+
     private correlate(
         identity: LogRecordIdentity,
-        source: LogSource): AppHostParentOutput | undefined {
+        source: LogSource,
+        renderUnmatched = true): AppHostParentOutput | undefined {
         const records = this.correlatedRecordsFor(identity.record);
         let selectedMatch: { index: number; match: LogRecordIdentityMatch } | undefined;
         for (let index = 0; index < records.length; index++) {
@@ -357,7 +467,7 @@ export class AppHostLogOutputCoordinator {
                 records.shift();
             }
 
-            return formatLogRecord(identity.record);
+            return renderUnmatched ? formatLogRecord(identity.record) : undefined;
         }
 
         const existing = records[selectedMatch.index];
@@ -404,6 +514,10 @@ export class AppHostLogOutputCoordinator {
         }
 
         return filter;
+    }
+
+    private resetFallbackFilter(category: string): void {
+        this._fallbackFilters.get(category)?.reset();
     }
 
     private scheduleIdleFlush(category: string): void {
@@ -454,85 +568,6 @@ export class AppHostLogOutputCoordinator {
     }
 }
 
-export class AppHostParentOutputFilter {
-    private _continuingDroppedLog = false;
-    private _continuingErrorBlock = false;
-    private _lastCategory: string | undefined;
-
-    filter(output: string, category: string | undefined): AppHostParentOutput | undefined {
-        const normalizedCategory = category ?? 'console';
-        if (normalizedCategory === 'debug') {
-            this.reset();
-            this._lastCategory = normalizedCategory;
-            return undefined;
-        }
-
-        if (normalizedCategory !== this._lastCategory) {
-            this.reset();
-        }
-        this._lastCategory = normalizedCategory;
-
-        const segments = output.match(/[^\r\n]*(?:\r\n|\r|\n|$)/g)?.filter(segment => segment) ?? [];
-        let filteredOutput = '';
-        let hasErrorOutput = normalizedCategory === 'stderr';
-
-        for (const segment of segments) {
-            const outputCategory = this.getLineCategory(segment, normalizedCategory);
-            if (outputCategory) {
-                filteredOutput += segment;
-                hasErrorOutput ||= outputCategory === 'stderr';
-            }
-        }
-
-        return filteredOutput
-            ? { output: filteredOutput, category: hasErrorOutput ? 'stderr' : 'stdout' }
-            : undefined;
-    }
-
-    private getLineCategory(segment: string, category: string): 'stdout' | 'stderr' | undefined {
-        const line = segment.replace(/(?:\r\n|\r|\n)$/, '');
-        const trimmedLine = line.trim();
-
-        if (!trimmedLine) {
-            return !this._continuingDroppedLog && (category !== 'console' || this._continuingErrorBlock)
-                ? this.getCurrentCategory(category)
-                : undefined;
-        }
-
-        if (this._continuingDroppedLog && isIndentedContinuation(line)) {
-            return undefined;
-        }
-
-        if (this._continuingErrorBlock && isIndentedContinuation(line)) {
-            return 'stderr';
-        }
-
-        const logSeverity = getConsoleLogSeverity(trimmedLine);
-        if (logSeverity) {
-            this._continuingDroppedLog = logSeverity === 'low';
-            this._continuingErrorBlock = logSeverity === 'severe';
-            return logSeverity === 'low' ? undefined : this.getCurrentCategory(category);
-        }
-
-        const severe = isSevereRuntimeOutputLine(trimmedLine);
-        this._continuingDroppedLog = false;
-        this._continuingErrorBlock = severe;
-
-        return category === 'console' && !severe
-            ? undefined
-            : this.getCurrentCategory(category);
-    }
-
-    private getCurrentCategory(category: string): 'stdout' | 'stderr' {
-        return category === 'stderr' || this._continuingErrorBlock ? 'stderr' : 'stdout';
-    }
-
-    private reset(): void {
-        this._continuingDroppedLog = false;
-        this._continuingErrorBlock = false;
-    }
-}
-
 function createBackchannelRecord(entry: AppHostLogEntry): LogRecord {
     return {
         categoryName: escapeCategoryControlCharacters(entry.categoryName),
@@ -568,6 +603,22 @@ const debugLoggerRecordRegex = new RegExp(
     String.raw`^(${debugLoggerCategoryPattern})(?:\[(-?\d+)\])?: (Trace|Debug|Information|Warning|Error|Critical): ([\s\S]*)$`);
 const debugLoggerHeaderRegex = new RegExp(
     String.raw`^${debugLoggerCategoryPattern}(?:\[-?\d+\])?: (Trace|Debug|Information|Warning|Error|Critical): .*(?:\r\n|\r|\n)?$`);
+
+function createPendingDebugRecord(line: string, category: string): PendingDebugRecord {
+    return {
+        raw: line,
+        category,
+        hasException: false,
+        ambiguousLineBoundaries: []
+    };
+}
+
+function appendPendingDebugLine(pending: PendingDebugRecord, line: string): void {
+    if (isDebugLoggerExceptionStart(line.trim()) && endsWithBlankLine(pending.raw)) {
+        pending.hasException = true;
+    }
+    pending.raw += line;
+}
 
 function parseMultilineConsoleLoggerHeader(line: string): Omit<LogRecord, 'body'> | undefined {
     // SimpleConsoleFormatter's default multiline record begins as:
@@ -630,18 +681,23 @@ function isDebugLoggerHeader(line: string): boolean {
     return debugLoggerHeaderRegex.test(line);
 }
 
-function isDebugLoggerContinuation(line: string): boolean {
+function isDebugLoggerContinuation(pending: PendingDebugRecord, line: string): boolean {
     const content = line.replace(/(?:\r\n|\r|\n)$/, '');
     const trimmedLine = content.trim();
 
     // DebugLogger continuation lines are ambiguous with arbitrary Debug.WriteLine output.
-    // Continue only shapes that are part of an exception or visibly indented so an unrelated
-    // console line cannot change the pending record's correlation identity.
+    // Exceptions are preceded by a blank separator; without it, an exception-shaped line is
+    // unrelated runtime output and must retain its stderr classification.
     return !content
-        || /^\s/.test(content)
-        || isDebugLoggerExceptionStart(trimmedLine)
-        || /^---> /.test(trimmedLine)
-        || /^--- End of /.test(trimmedLine);
+        || isDebugLoggerExceptionContinuation(pending, line)
+        || /^\s/.test(content) && !isSevereRuntimeOutputLine(trimmedLine);
+}
+
+function isDebugLoggerExceptionContinuation(pending: PendingDebugRecord, line: string): boolean {
+    const trimmedLine = line.trim();
+    return isDebugLoggerExceptionStart(trimmedLine) && endsWithBlankLine(pending.raw)
+        || (/^---> /.test(trimmedLine) || /^--- End of /.test(trimmedLine))
+            && pending.hasException;
 }
 
 function startsUnrelatedDebuggerOutput(line: string): boolean {
@@ -649,10 +705,15 @@ function startsUnrelatedDebuggerOutput(line: string): boolean {
     // debugger-owned shapes. Absorbing these lines would alter correlation identity and
     // could hide a fatal runtime line behind the preceding log record.
     const trimmedLine = line.trim();
-    return /^Unhandled exception\./.test(trimmedLine)
+    return isSevereRuntimeOutputLine(trimmedLine)
+        || /^Unhandled exception\./.test(trimmedLine)
         || /^(?:'[^']*' \([^)]*\): |\S+ \(\d+\): )?Loaded '[^']*'\./.test(trimmedLine)
         || /^Exception thrown: '/.test(trimmedLine)
         || /^-{5,}$/.test(trimmedLine);
+}
+
+function endsWithBlankLine(value: string): boolean {
+    return /(?:\r\n|\r|\n){2}$/.test(value.slice(-4));
 }
 
 function splitMessageAndException(value: string): { message: string; exception?: string } {
@@ -670,7 +731,7 @@ function splitMessageAndException(value: string): { message: string; exception?:
 }
 
 function isDebugLoggerExceptionStart(line: string): boolean {
-    return /^(?:[A-Za-z_][\w`]*(?:\.[A-Za-z_][\w`]*)*(?:Exception|Error)(?: \([^)]*\))?:|Unhandled exception\.)/.test(line);
+    return /^(?:(?:[A-Za-z_][\w`]*\.)*[\w`]*(?:Exception|Error)(?: \([^)]*\))?:|Unhandled exception\.)/.test(line);
 }
 
 function isConsoleLoggerContinuation(line: string): boolean {
@@ -713,28 +774,89 @@ function matchRecordIdentities(left: LogRecordIdentity, right: LogRecordIdentity
         };
     }
 
-    if (identityMatchesExactRecord(left, right.record)) {
+    const leftCandidate = findIdentityCandidateMatchingExactRecord(left, right.record);
+    if (leftCandidate) {
         return {
-            record: createCanonicalRecord(left.record, right.record, right.record),
+            record: createCanonicalRecord(leftCandidate, right.record),
             isExactBody: false
         };
     }
 
-    if (identityMatchesExactRecord(right, left.record)) {
+    const rightCandidate = findIdentityCandidateMatchingExactRecord(right, left.record);
+    if (rightCandidate) {
         return {
-            record: createCanonicalRecord(left.record, right.record, left.record),
+            record: createCanonicalRecord(left.record, rightCandidate),
             isExactBody: false
         };
+    }
+
+    for (const leftRange of getAlternativeBodyRanges(left)) {
+        for (const rightRange of getAlternativeBodyRanges(right)) {
+            if (!recordBodyRangesMatch(
+                left.record,
+                leftRange.start,
+                leftRange.end,
+                right.record,
+                rightRange.start,
+                rightRange.end)) {
+                continue;
+            }
+
+            return {
+                record: createCanonicalRecord(
+                    createBodyRangeRecord(left.record, leftRange),
+                    createBodyRangeRecord(right.record, rightRange)),
+                isExactBody: false
+            };
+        }
     }
 
     return undefined;
 }
 
-function identityMatchesExactRecord(identity: LogRecordIdentity, exactRecord: LogRecord): boolean {
-    const offset = identity.record.body.length - exactRecord.body.length;
-    return offset > 0
-        && identity.leadingScopeBodyOffsets?.includes(offset) === true
-        && recordBodiesMatchAt(identity.record, offset, exactRecord);
+interface BodyRange {
+    start: number;
+    end: number;
+}
+
+function findIdentityCandidateMatchingExactRecord(
+    identity: LogRecordIdentity,
+    exactRecord: LogRecord): LogRecord | undefined {
+    for (const range of getAlternativeBodyRanges(identity)) {
+        if (recordBodyRangesMatch(
+            identity.record,
+            range.start,
+            range.end,
+            exactRecord,
+            0,
+            exactRecord.body.length)) {
+            return createBodyRangeRecord(identity.record, range);
+        }
+    }
+
+    return undefined;
+}
+
+function getAlternativeBodyRanges(identity: LogRecordIdentity): BodyRange[] {
+    const ranges = [
+        ...(identity.leadingScopeBodyOffsets ?? []).map(start => ({
+            start,
+            end: identity.record.body.length
+        })),
+        ...(identity.trailingBodyEndOffsets ?? []).map(end => ({ start: 0, end }))
+    ];
+    return ranges.filter(range =>
+        range.start >= 0
+        && range.end <= identity.record.body.length
+        && range.start <= range.end
+        && (range.start > 0 || range.end < identity.record.body.length));
+}
+
+function createBodyRangeRecord(record: LogRecord, range: BodyRange): LogRecord {
+    return {
+        ...record,
+        body: record.body.slice(range.start, range.end)
+    };
 }
 
 function recordHeadersMatch(left: LogRecord, right: LogRecord): boolean {
@@ -748,13 +870,33 @@ function recordBodiesMatchAt(left: LogRecord, leftOffset: number, right: LogReco
         return false;
     }
 
-    if (!left.singleLine && !right.singleLine) {
-        return left.body.startsWith(right.body, leftOffset);
+    return recordBodyRangesMatch(
+        left,
+        leftOffset,
+        left.body.length,
+        right,
+        0,
+        right.body.length);
+}
+
+function recordBodyRangesMatch(
+    left: LogRecord,
+    leftStart: number,
+    leftEnd: number,
+    right: LogRecord,
+    rightStart: number,
+    rightEnd: number): boolean {
+    if (leftEnd - leftStart !== rightEnd - rightStart) {
+        return false;
     }
 
-    for (let index = 0; index < right.body.length; index++) {
-        const leftCharacter = left.body[leftOffset + index] === '\n' ? ' ' : left.body[leftOffset + index];
-        const rightCharacter = right.body[index] === '\n' ? ' ' : right.body[index];
+    if (!left.singleLine && !right.singleLine) {
+        return left.body.startsWith(right.body.slice(rightStart, rightEnd), leftStart);
+    }
+
+    for (let index = 0; index < rightEnd - rightStart; index++) {
+        const leftCharacter = left.body[leftStart + index] === '\n' ? ' ' : left.body[leftStart + index];
+        const rightCharacter = right.body[rightStart + index] === '\n' ? ' ' : right.body[rightStart + index];
         if (leftCharacter !== rightCharacter) {
             return false;
         }
@@ -826,38 +968,4 @@ function getFullLoggerLevel(shortLevel: string): AppHostLogLevel {
         case 'crit': return 'Critical';
         default: throw new Error(`Unknown logger level: ${shortLevel}`);
     }
-}
-
-function getConsoleLogSeverity(line: string): 'low' | 'normal' | 'severe' | undefined {
-    const level = /^(trce|dbug|info|warn|fail|crit):\s/.exec(line)?.[1];
-    if (level) {
-        return level === 'trce' || level === 'dbug'
-            ? 'low'
-            : level === 'fail' || level === 'crit'
-                ? 'severe'
-                : 'normal';
-    }
-
-    // Preserve the pre-correlation filter for adapters that render records as:
-    //   Example.Category[7]: Warning: Request took too long.
-    // These records cannot be correlated with the default console grammar, but their
-    // low-level suppression and severe-stream classification must remain unchanged.
-    const fullLevel = /^[A-Za-z_]\w*(?:\.\w+)+(?:\[[^\]]+\])?:\s*(Trace|Debug|Information|Warning|Error|Critical):\s/.exec(line)?.[1];
-    return fullLevel === 'Trace' || fullLevel === 'Debug'
-        ? 'low'
-        : fullLevel === 'Error' || fullLevel === 'Critical'
-            ? 'severe'
-            : fullLevel
-                ? 'normal'
-                : undefined;
-}
-
-function isIndentedContinuation(line: string): boolean {
-    return /^\s+\S/.test(line);
-}
-
-function isSevereRuntimeOutputLine(line: string): boolean {
-    return /(?:^|\s)(?:[A-Za-z_][\w`]*\.)+(?:[A-Za-z_][\w`]*Exception|Exception):/.test(line)
-        || /^(?:Uncaught\s+)?(?:[A-Za-z_$][\w$]*Error|Error)(?:\s+\[[^\]]+\])?:/.test(line)
-        || /^(?:fatal|critical|panic|aborted|segmentation\s+fault|unhandled\s+exception)\b/i.test(line);
 }

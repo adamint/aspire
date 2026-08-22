@@ -33,7 +33,6 @@ import { getAppHostTargetVersion } from "../utils/appHostTargetVersion";
 import type { AspireDebugConsoleOutputEvent } from "../types/extensionApi";
 import { appHostLaunchTokenConfigKey, appHostRestartSourceSessionIdConfigKey, appHostSelectionOriginConfigKey, appHostTelemetryTargetPathConfigKey } from "./AspireDebugConfigurationMetadata";
 import { markAspireDebugConfigurationAsExtensionOwned, markAspireDebugConfigurationWithResolvedCliPath, markAspireDebugConfigurationWithResolvedCliPathScope } from "./AspireDebugConfigurationProviderInternal";
-import { AppHostParentOutputFilter } from "./session/appHostParentOutputFilter";
 import { getCliPathTargetForUri, getCliPathTargetKey, windowCliPathTarget } from "../utils/cliPathVariables";
 import { DashboardLauncher, type DashboardBrowserType, type DashboardLauncherHost } from "./session/dashboardLauncher";
 import { describeStopFailure, startStop, stopSessionInBackground } from "./session/stopHelpers";

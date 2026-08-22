@@ -579,6 +579,462 @@ suite('AppHost log output coordinator', () => {
             []);
     });
 
+    test('resolves a DebugLogger-first record before filtering an unrelated following line', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(
+                'Example.Category: Information: Logged.\nprocessing\n',
+                'console'),
+            []);
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message: 'Logged.' })),
+            {
+                output: 'Example.Category: Information: Logged.\n',
+                category: 'stdout'
+            });
+        assert.deepStrictEqual(coordinator.flush(), []);
+    });
+
+    test('resolves an exception record before filtering an unrelated following line', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const exception = 'System.InvalidOperationException: boom';
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(
+                `Example.Category: Error: failed\n\n${exception}\nprocessing\n`,
+                'console'),
+            []);
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({
+                logLevel: 'Error',
+                message: 'failed',
+                exception
+            })),
+            {
+                output: `Example.Category: Error: failed\n${exception}\n`,
+                category: 'stderr'
+            });
+        assert.deepStrictEqual(coordinator.flush(), []);
+    });
+
+    test('retains exception line boundaries after an unconfirmed flush', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const exception = 'System.InvalidOperationException: boom';
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                `Example.Category: Error: failed\n\n${exception}\nprocessing\n`,
+                'console'),
+            [{
+                output: `Example.Category: Error: failed\n${exception}\nprocessing\n`,
+                category: 'stderr'
+            }]);
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({
+                logLevel: 'Error',
+                message: 'failed',
+                exception
+            })),
+            undefined);
+    });
+
+    test('preserves severe fallback output after resolving a DebugLogger line boundary', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message: 'first\nsecond' })),
+            {
+                output: 'Example.Category: Information: first\nsecond\n',
+                category: 'stdout'
+            });
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(
+                'Example.Category: Information: first\nsecond\npanic: runtime failed\n',
+                'console'),
+            [
+                {
+                    output: 'panic: runtime failed\n',
+                    category: 'stderr'
+                }
+            ]);
+        assert.deepStrictEqual(coordinator.flush(), []);
+    });
+
+    test('retains possible DebugLogger boundaries after an unconfirmed flush', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Information: Logged.\nprocessing\n',
+                'console'),
+            [{
+                output: 'Example.Category: Information: Logged.\nprocessing\n',
+                category: 'stdout'
+            }]);
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message: 'Logged.' })),
+            undefined);
+    });
+
+    test('treats severe runtime output as a hard DebugLogger boundary', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Information: Logged.\npanic: runtime failed\n',
+                'console'),
+            [
+                {
+                    output: 'Example.Category: Information: Logged.\n',
+                    category: 'stdout'
+                },
+                {
+                    output: 'panic: runtime failed\n',
+                    category: 'stderr'
+                }
+            ]);
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message: 'Logged.' })),
+            undefined);
+    });
+
+    test('preserves ambiguous DebugLogger lines before a severe boundary', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Information: Logged.\nprocessing\npanic: runtime failed\n',
+                'console'),
+            [
+                {
+                    output: 'Example.Category: Information: Logged.\n',
+                    category: 'stdout'
+                },
+                {
+                    output: 'processing\n',
+                    category: 'stdout'
+                },
+                {
+                    output: 'panic: runtime failed\n',
+                    category: 'stderr'
+                }
+            ]);
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message: 'Logged.' })),
+            undefined);
+    });
+
+    test('remembers the pending multiline identity before a severe fallback split', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Information: one\ntwo\npanic: runtime failed\n',
+                'console'),
+            [
+                {
+                    output: 'Example.Category: Information: one\n',
+                    category: 'stdout'
+                },
+                {
+                    output: 'two\n',
+                    category: 'stdout'
+                },
+                {
+                    output: 'panic: runtime failed\n',
+                    category: 'stderr'
+                }
+            ]);
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message: 'one\ntwo' })),
+            undefined);
+    });
+
+    test('keeps a severe-shaped line when another provider confirms the merged message', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const message = 'first\ncritical path selected';
+
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message })),
+            {
+                output: 'Example.Category: Information: first\ncritical path selected\n',
+                category: 'stdout'
+            });
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Information: first\ncritical path selected\n',
+                'console'),
+            []);
+    });
+
+    test('remembers a provisional severe-shaped multiline identity for a delayed provider', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const message = 'first\ncritical path selected';
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                `Example.Category: Information: ${message}\n`,
+                'console'),
+            [
+                {
+                    output: 'Example.Category: Information: first\n',
+                    category: 'stdout'
+                },
+                {
+                    output: 'critical path selected\n',
+                    category: 'stderr'
+                }
+            ]);
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message })),
+            undefined);
+    });
+
+    test('uses a fully confirmed pending record before a later severe boundary', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(
+                'Example.Category: Information: first\nsecond\n',
+                'console'),
+            []);
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message: 'first\nsecond' })),
+            {
+                output: 'Example.Category: Information: first\nsecond\n',
+                category: 'stdout'
+            });
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('panic: runtime failed\n', 'console'),
+            [{
+                output: 'panic: runtime failed\n',
+                category: 'stderr'
+            }]);
+        assert.deepStrictEqual(coordinator.flush(), []);
+    });
+
+    test('does not let indentation hide a severe DebugLogger boundary', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Information: Logged.\n    panic: runtime failed\n',
+                'console'),
+            [
+                {
+                    output: 'Example.Category: Information: Logged.\n',
+                    category: 'stdout'
+                },
+                {
+                    output: '    panic: runtime failed\n',
+                    category: 'stderr'
+                }
+            ]);
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message: 'Logged.' })),
+            undefined);
+    });
+
+    test('does not let dropped fallback state hide indented severe output', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('dbug: Debugger.Category[0]\n', 'console'),
+            []);
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Information: Logged.\n',
+                'console'),
+            [{
+                output: 'Example.Category: Information: Logged.\n',
+                category: 'stdout'
+            }]);
+        assert.deepStrictEqual(
+            renderConsole(coordinator, '    panic: runtime failed\n', 'console'),
+            [{
+                output: '    panic: runtime failed\n',
+                category: 'stderr'
+            }]);
+    });
+
+    test('keeps exception text inside a dropped debug record suppressed', () => {
+        const filter = new AppHostParentOutputFilter();
+
+        assert.strictEqual(
+            filter.filter(
+                'dbug: Polly.Retry[0]\n'
+                    + '      Retry due to System.Net.Http.HttpRequestException: timeout\n'
+                    + '      Next delay 00:00:01\n',
+                'console'),
+            undefined);
+    });
+
+    test('requires the DebugLogger exception separator before absorbing an exception-shaped line', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Information: Logged.\nSystem.InvalidOperationException: separate\n',
+                'console'),
+            [
+                {
+                    output: 'Example.Category: Information: Logged.\n',
+                    category: 'stdout'
+                },
+                {
+                    output: 'System.InvalidOperationException: separate\n',
+                    category: 'stderr'
+                }
+            ]);
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message: 'Logged.' })),
+            undefined);
+    });
+
+    test('recognizes a base System.Exception inside a DebugLogger exception block', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const exception = 'System.Exception: boom\n   at Example.Run()';
+
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({
+                logLevel: 'Error',
+                message: 'failed',
+                exception
+            })),
+            {
+                output: `Example.Category: Error: failed\n${exception}\n`,
+                category: 'stderr'
+            });
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                `Example.Category: Error: failed\n\n${exception}\n`,
+                'console'),
+            []);
+    });
+
+    test('preserves multiline identity after matching a single-line ConsoleLogger alias', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Information: first\nsecond\nprocessing\n',
+                'console'),
+            [{
+                output: 'Example.Category: Information: first\nsecond\nprocessing\n',
+                category: 'stdout'
+            }]);
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'info: Example.Category[7] first second\n',
+                'stdout'),
+            []);
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message: 'first\nsecond' })),
+            undefined);
+    });
+
+    test('matches a DebugLogger trailing alias with a ConsoleLogger leading-scope alias', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Information: Logged.\nprocessing\n',
+                'console'),
+            [{
+                output: 'Example.Category: Information: Logged.\nprocessing\n',
+                category: 'stdout'
+            }]);
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'info: Example.Category[7]\n'
+                    + '      => RequestPath:/health\n'
+                    + '      Logged.\n',
+                'stdout'),
+            []);
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message: 'Logged.' })),
+            undefined);
+    });
+
+    test('filters a DebugLogger tail after a ConsoleLogger single-line prefix match', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'info: Example.Category[7] Logged.\n',
+                'stdout'),
+            [{
+                output: 'Example.Category: Information: Logged.\n',
+                category: 'stdout'
+            }]);
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Information: Logged.\nprocessing\n',
+                'console'),
+            []);
+    });
+
+    test('bounds retained DebugLogger line-boundary candidates', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const raw = 'Example.Category: Information: first\n'
+            + Array.from({ length: 500 }, (_, index) => `line ${index}\n`).join('');
+
+        assert.deepStrictEqual(coordinator.handleDebugAdapterOutput(raw, 'console'), []);
+
+        const pending = (coordinator as any)._pendingDebugRecords.get('console');
+        assert.strictEqual(pending.ambiguousLineBoundaries.length, 128);
+        assert.strictEqual(
+            pending.ambiguousLineBoundaries[0].rawOffset,
+            'Example.Category: Information: first\n'.length);
+        assert.strictEqual(
+            pending.ambiguousLineBoundaries.at(-1).rawOffset,
+            raw.length - 'line 499\n'.length);
+    });
+
+    test('bounds retained ConsoleLogger scope-boundary candidates', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const raw = 'info: Example.Category[7]\n'
+            + Array.from({ length: 500 }, (_, index) => `      => scope-${index}\n`).join('');
+
+        assert.deepStrictEqual(coordinator.handleDebugAdapterOutput(raw, 'stdout'), []);
+
+        const pending = (coordinator as any)._pendingRecords.get('stdout');
+        assert.strictEqual(pending.leadingScopeBodyOffsets.length, 128);
+        assert.strictEqual(pending.leadingScopeBodyOffsets[0], '=> scope-0\n'.length);
+        assert.strictEqual(
+            pending.leadingScopeBodyOffsets.at(-1),
+            pending.body.length);
+    });
+
+    test('bounds the pending DebugLogger raw buffer', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const line = `${'x'.repeat(1024)}\n`;
+        const outputs = coordinator.handleDebugAdapterOutput(
+            `Example.Category: Information: first\n${line.repeat(65)}`,
+            'console');
+
+        assert.ok(outputs.length > 0);
+        assert.strictEqual((coordinator as any)._pendingDebugRecords.has('console'), false);
+    });
+
     test('keeps an exception-shaped one-line DebugLogger message intact', () => {
         const coordinator = new AppHostLogOutputCoordinator();
         const expected = {
@@ -627,6 +1083,39 @@ suite('AppHost log output coordinator', () => {
                 output: 'Unhandled exception. System.InvalidOperationException: boom\n\n   at Example.Run()\n',
                 category: 'stderr'
             });
+    });
+
+    test('keeps Python traceback blocks on stderr', () => {
+        const filter = new AppHostParentOutputFilter();
+        const traceback = 'Traceback (most recent call last):\n'
+            + '  File "app.py", line 1, in <module>\n'
+            + 'ValueError: invalid value\n';
+
+        assert.deepStrictEqual(
+            filter.filter(traceback, 'console'),
+            {
+                output: traceback,
+                category: 'stderr'
+            });
+    });
+
+    test('correlates a scoped ConsoleLogger empty message', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'info: Example.Category[7]\n'
+                    + '      => RequestPath:/health\n'
+                    + '      \n',
+                'stdout'),
+            [{
+                output: 'Example.Category: Information: => RequestPath:/health\n',
+                category: 'stdout'
+            }]);
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message: '' })),
+            undefined);
     });
 
     test('suppresses replayed sequences and accepts the same sequence after reset', () => {
