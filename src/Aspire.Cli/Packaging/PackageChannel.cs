@@ -208,7 +208,11 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
     {
         if (GetLocalAspirePackageSource() is { } localPackageSource)
         {
-            return GetIntegrationPackagesFromLocalPackageSource(localPackageSource.Source, localPackageSource.PackageSource, cancellationToken);
+            return GetIntegrationPackagesFromLocalPackageSource(
+                localPackageSource.Source,
+                localPackageSource.PackageSource,
+                GetLocalPackageVersion(workingDirectory),
+                cancellationToken);
         }
 
         var tasks = new List<Task<IEnumerable<NuGetPackage>>>();
@@ -294,7 +298,31 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
             .ToArray();
     }
 
-    private IEnumerable<NuGetPackage> GetIntegrationPackagesFromLocalPackageSource(string source, DirectoryInfo packageSource, CancellationToken cancellationToken)
+    private string? GetLocalPackageVersion(DirectoryInfo workingDirectory)
+    {
+        // `aspire new` records an exact local selection as:
+        //   { "channel": "local", "sdk": { "version": "13.6.0-dev" } }
+        // A local hive can also contain stale higher-version packages, so use the project-scoped
+        // version when the persisted channel matches this channel. Projects created before that
+        // version was persisted continue to use the channel's discovered pin.
+        var configPath = ConfigurationHelper.FindNearestConfigFilePath(workingDirectory);
+        if (configPath is null ||
+            !ConfigurationHelper.TryLoadSettingsFile(configPath, out var configuration) ||
+            !string.Equals(configuration["channel"], Name, StringComparisons.ChannelName))
+        {
+            return PinnedVersion;
+        }
+
+        var configuredVersion = configuration["sdk:version"];
+        if (string.IsNullOrWhiteSpace(configuredVersion))
+        {
+            configuredVersion = configuration["sdkVersion"];
+        }
+
+        return string.IsNullOrWhiteSpace(configuredVersion) ? PinnedVersion : configuredVersion;
+    }
+
+    private IEnumerable<NuGetPackage> GetIntegrationPackagesFromLocalPackageSource(string source, DirectoryInfo packageSource, string? packageVersion, CancellationToken cancellationToken)
     {
         // Mirror NuGetPackageCache.GetIntegrationPackagesAsync: a user who flipped
         // ShowDeprecatedPackages to see deprecated packages on stable/staging/daily
@@ -309,17 +337,17 @@ internal class PackageChannel(string name, PackageChannelQuality quality, Packag
             .Where(metadata => showDeprecatedPackages || !DeprecatedPackages.IsDeprecated(metadata.PackageId))
             .Where(IsAllowedByQuality);
 
-        if (PinnedVersion is not null)
+        if (packageVersion is not null)
         {
             packageMetadata = packageMetadata
-                .Where(metadata => string.Equals(metadata.Version.ToString(), PinnedVersion, StringComparison.OrdinalIgnoreCase));
+                .Where(metadata => string.Equals(metadata.Version.ToString(), packageVersion, StringComparison.OrdinalIgnoreCase));
         }
 
         return packageMetadata
             .GroupBy(metadata => metadata.PackageId, StringComparers.NuGetPackageId)
             .Select(group => group.OrderByDescending(metadata => metadata.Version, SemVersion.PrecedenceComparer).First())
             .OrderBy(metadata => metadata.PackageId, StringComparers.NuGetPackageId)
-            .Select(metadata => new NuGetPackage { Id = metadata.PackageId, Version = PinnedVersion ?? metadata.Version.ToString(), Source = source })
+            .Select(metadata => new NuGetPackage { Id = metadata.PackageId, Version = packageVersion ?? metadata.Version.ToString(), Source = source })
             .ToArray();
 
         bool IsAllowedByQuality(PackageFileMetadata metadata) => new { metadata.Version, Quality } switch

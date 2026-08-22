@@ -100,7 +100,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task NewCommand_CSharpEmptyTemplateUnderStagingIdentity_WritesStagingNuGetConfig()
+    public async Task NewCommand_CSharpEmptyTemplateUnderStagingIdentity_WritesStagingConfiguration()
     {
         const string stagingFeed = "https://example.com/staging/v3/index.json";
 
@@ -155,7 +155,8 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
 
         var config = AspireConfigFile.Load(outputDirectory);
         Assert.NotNull(config);
-        Assert.Null(config.Channel);
+        Assert.Equal(PackageChannelNames.Staging, config.Channel);
+        Assert.Equal(VersionHelper.GetDefaultSdkVersion(), config.SdkVersion);
     }
 
     [Fact]
@@ -543,13 +544,17 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         using var provider = services.BuildServiceProvider();
 
         var command = provider.GetRequiredService<NewCommand>();
-        var result = command.Parse("new aspire-starter --channel pr-12345 --use-redis-cache --test-framework None");
+        var result = command.Parse("new aspire-starter --channel pr-12345 --name TestApp --output ./output --use-redis-cache --test-framework None");
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
         Assert.Equal(0, exitCode);
         Assert.Equal(cliVersion, selectedVersion);
         Assert.False(promptedForVersion);
+        var config = AspireConfigFile.Load(Path.Combine(workspace.WorkspaceRoot.FullName, "output"));
+        Assert.NotNull(config);
+        Assert.Equal("pr-12345", config.Channel);
+        Assert.Equal(cliVersion, config.SdkVersion);
     }
 
     [Fact]

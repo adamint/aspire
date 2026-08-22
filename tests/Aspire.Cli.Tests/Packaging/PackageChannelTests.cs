@@ -685,6 +685,68 @@ public class PackageChannelTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task GetIntegrationPackagesAsync_LocalFolderSource_UsesConfiguredSdkVersionInsteadOfStaleChannelPin()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var packagesDirectory = workspace.CreateDirectory("packages");
+        CreatePackageWithTags(packagesDirectory, "Aspire.Hosting.Redis", "13.6.0-dev", string.Empty);
+        CreatePackageWithTags(packagesDirectory, "Aspire.Hosting.Redis", "99.0.0", string.Empty);
+
+        var config = AspireConfigFile.LoadOrCreate(workspace.WorkspaceRoot.FullName);
+        config.Channel = PackageChannelNames.Local;
+        config.SdkVersion = "13.6.0-dev";
+        config.Save(workspace.WorkspaceRoot.FullName);
+
+        var packageSource = packagesDirectory.FullName.Replace('\\', '/');
+        var channel = PackageChannel.CreateExplicitChannel(
+            PackageChannelNames.Local,
+            PackageChannelQuality.Both,
+            [new PackageMapping("Aspire*", packageSource)],
+            new FakeNuGetPackageCache(),
+            new TestFeatures(),
+            NullLogger.Instance,
+            pinnedVersion: "99.0.0",
+            currentCliVersion: "13.6.0-dev");
+
+        var packages = (await channel.GetIntegrationPackagesAsync(workspace.WorkspaceRoot, CancellationToken.None).DefaultTimeout()).ToArray();
+
+        var package = Assert.Single(packages);
+        Assert.Equal("Aspire.Hosting.Redis", package.Id);
+        Assert.Equal("13.6.0-dev", package.Version);
+    }
+
+    [Fact]
+    public async Task GetIntegrationPackagesAsync_LocalFolderSource_BlankConfiguredSdkVersionUsesChannelPin()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var packagesDirectory = workspace.CreateDirectory("packages");
+        CreatePackageWithTags(packagesDirectory, "Aspire.Hosting.Redis", "13.6.0-dev", string.Empty);
+        CreatePackageWithTags(packagesDirectory, "Aspire.Hosting.Redis", "99.0.0", string.Empty);
+
+        var config = AspireConfigFile.LoadOrCreate(workspace.WorkspaceRoot.FullName);
+        config.Channel = PackageChannelNames.Local;
+        config.SdkVersion = " ";
+        config.Save(workspace.WorkspaceRoot.FullName);
+
+        var packageSource = packagesDirectory.FullName.Replace('\\', '/');
+        var channel = PackageChannel.CreateExplicitChannel(
+            PackageChannelNames.Local,
+            PackageChannelQuality.Both,
+            [new PackageMapping("Aspire*", packageSource)],
+            new FakeNuGetPackageCache(),
+            new TestFeatures(),
+            NullLogger.Instance,
+            pinnedVersion: "99.0.0",
+            currentCliVersion: "13.6.0-dev");
+
+        var packages = (await channel.GetIntegrationPackagesAsync(workspace.WorkspaceRoot, CancellationToken.None).DefaultTimeout()).ToArray();
+
+        var package = Assert.Single(packages);
+        Assert.Equal("Aspire.Hosting.Redis", package.Id);
+        Assert.Equal("99.0.0", package.Version);
+    }
+
+    [Fact]
     public void ShouldCreateNuGetConfig_StableChannel_ReturnsFalse()
     {
         // A real stable channel still carries mappings (everything -> nuget.org), so the
