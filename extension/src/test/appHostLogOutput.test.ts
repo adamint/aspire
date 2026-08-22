@@ -1162,6 +1162,29 @@ suite('AppHost log output coordinator', () => {
         }
     });
 
+    test('idle flush releases an empty adapter-only record', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const emitted: AppHostParentOutput[] = [];
+        const coordinator = new AppHostLogOutputCoordinator(output => emitted.push(output));
+
+        try {
+            assert.deepStrictEqual(
+                coordinator.handleDebugAdapterOutput('dbug: Example.Category[7]\n', 'stdout'),
+                []);
+
+            await clock.tickAsync(250);
+
+            assert.deepStrictEqual(emitted, [{
+                output: '\x1b[2mExample.Category: Debug: \x1b[0m\n',
+                category: 'stdout'
+            }]);
+        }
+        finally {
+            coordinator.reset();
+            clock.restore();
+        }
+    });
+
     test('continuous partial chunks do not postpone the original idle flush deadline', async () => {
         const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
         const emitted: AppHostParentOutput[] = [];

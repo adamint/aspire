@@ -523,7 +523,7 @@ export class AppHostLogOutputCoordinator {
     private scheduleIdleFlush(category: string): void {
         const pending = this._pendingRecords.get(category);
         const hasPendingDebugRecord = this._pendingDebugRecords.has(category);
-        if (!this._onIdleFlush || (!pending?.hasBodyLine && !hasPendingDebugRecord && !this._partialLines.has(category))) {
+        if (!this._onIdleFlush || (!pending && !hasPendingDebugRecord && !this._partialLines.has(category))) {
             this.clearIdleFlushTimer(category);
             return;
         }
