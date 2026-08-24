@@ -2481,12 +2481,12 @@ public class AtsTypeScriptCodeGeneratorTests
             declaration => declaration.Content.StartsWith(
                 "export interface PromiseContextPromise ",
                 StringComparison.Ordinal));
-        const string expectedDeclaration = """
+        var expectedDeclaration = """
             export interface PromiseContextPromise extends PromiseLike<PromiseContext> {
                 readOnly(): Promise<string>;
                 run(): PromiseContextPromise;
             }
-            """;
+            """.ReplaceLineEndings("\n");
 
         Assert.Equal(expectedDeclaration, declaration.Content);
         Assert.Contains(
@@ -2650,14 +2650,14 @@ public class AtsTypeScriptCodeGeneratorTests
             export interface RunAsEmulatorOptions {
                 configure?: (emulator: AzureEventHubsEmulatorResourceHandle) => Promise<void>;
             }
-            """,
+            """.ReplaceLineEndings("\n"),
             eventHubsOptions.Content);
         Assert.Equal(
             """
             export interface RunAsEmulatorOptions {
                 configure?: (emulator: AzureServiceBusEmulatorResourceHandle) => Promise<void>;
             }
-            """,
+            """.ReplaceLineEndings("\n"),
             serviceBusOptions.Content);
         Assert.NotEqual(eventHubsOptions.Content, serviceBusOptions.Content);
         AssertApiDeclarationsAreSelfContained(eventHubsModel);
