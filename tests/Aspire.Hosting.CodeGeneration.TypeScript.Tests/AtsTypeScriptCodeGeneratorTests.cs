@@ -1231,6 +1231,12 @@ public class AtsTypeScriptCodeGeneratorTests
     private static readonly Regex s_promiseReferencePattern =
         new(@"\b[A-Z]\w*Promise(?:Impl)?\b", RegexOptions.Compiled);
 
+    private static readonly Regex s_apiDeclarationPattern =
+        new(@"\b(?:interface|enum|type)\s+([A-Z]\w*)\b", RegexOptions.Compiled);
+
+    private static readonly Regex s_apiTypeReferencePattern =
+        new(@"\b[A-Z]\w*\b", RegexOptions.Compiled);
+
     /// <summary>
     /// Removes line and block comments from generated TypeScript. Deliberately simple: generated
     /// code has no string literals containing comment delimiters.
@@ -2610,11 +2616,19 @@ public class AtsTypeScriptCodeGeneratorTests
         var eventHubsCapability = CreateRunAsEmulatorCapability(
             eventHubsPackage,
             "DistributedApplicationBuilder",
-            new AtsTypeRef { TypeId = AtsConstants.String, Category = AtsTypeCategory.Primitive });
+            new AtsTypeRef
+            {
+                TypeId = $"{eventHubsPackage}/AzureEventHubsEmulatorResource",
+                Category = AtsTypeCategory.Handle
+            });
         var serviceBusCapability = CreateRunAsEmulatorCapability(
             serviceBusPackage,
             "DistributedApplicationBuilder",
-            new AtsTypeRef { TypeId = AtsConstants.Number, Category = AtsTypeCategory.Primitive });
+            new AtsTypeRef
+            {
+                TypeId = $"{serviceBusPackage}/AzureServiceBusEmulatorResource",
+                Category = AtsTypeCategory.Handle
+            });
 
         var eventHubsModel = ProjectApi(CreateApiContext(eventHubsCapability), eventHubsPackage);
         var serviceBusModel = ProjectApi(CreateApiContext(serviceBusCapability), serviceBusPackage);
@@ -2631,6 +2645,23 @@ public class AtsTypeScriptCodeGeneratorTests
         Assert.Equal(
             (serviceBusPackage, ApiExportPackageVersion, $"{serviceBusPackage}:options:RunAsEmulatorOptions"),
             (serviceBusModel.Package.Name, serviceBusModel.Package.Version, serviceBusOptions.Id));
+        Assert.Equal(
+            """
+            export interface RunAsEmulatorOptions {
+                configure?: (emulator: AzureEventHubsEmulatorResourceHandle) => Promise<void>;
+            }
+            """,
+            eventHubsOptions.Content);
+        Assert.Equal(
+            """
+            export interface RunAsEmulatorOptions {
+                configure?: (emulator: AzureServiceBusEmulatorResourceHandle) => Promise<void>;
+            }
+            """,
+            serviceBusOptions.Content);
+        Assert.NotEqual(eventHubsOptions.Content, serviceBusOptions.Content);
+        AssertApiDeclarationsAreSelfContained(eventHubsModel);
+        AssertApiDeclarationsAreSelfContained(serviceBusModel);
         Assert.Contains(
             "runAsEmulator(options?: RunAsEmulatorOptions)",
             Assert.Single(
@@ -2753,6 +2784,34 @@ public class AtsTypeScriptCodeGeneratorTests
             [packageName],
             CancellationToken.None);
 
+    private static void AssertApiDeclarationsAreSelfContained(TypeScriptApiModel model)
+    {
+        var completeSource = string.Join("\n", model.Declarations.Select(declaration => declaration.Content));
+        var declared = s_apiDeclarationPattern.Matches(completeSource)
+            .Select(match => match.Groups[1].Value)
+            .ToHashSet(StringComparer.Ordinal);
+
+        // The runtime declaration is a fixed compiler baseline. Scan every package-produced fragment
+        // after removing comments and branded-handle string literals so only TypeScript names remain.
+        var packageSource = string.Join(
+            "\n",
+            model.Declarations
+                .Where(declaration => declaration.Id != "aspire:runtime:base")
+                .Select(declaration => declaration.Content));
+        var referenced = s_apiTypeReferencePattern.Matches(StripCommentsAndStringLiterals(packageSource))
+            .Select(match => match.Value)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.NotEmpty(declared);
+        Assert.NotEmpty(referenced);
+        referenced.ExceptWith(declared);
+        referenced.ExceptWith(["Promise", "PromiseLike"]);
+        Assert.True(
+            referenced.Count == 0,
+            $"Package '{model.Package.Name}' declarations reference type(s) that are never declared: " +
+            string.Join(", ", referenced.Order(StringComparer.Ordinal)));
+    }
+
     private static AtsContext CreateApiContext(params AtsCapabilityInfo[] capabilities)
         => new()
         {
@@ -2767,7 +2826,7 @@ public class AtsTypeScriptCodeGeneratorTests
     private static AtsCapabilityInfo CreateRunAsEmulatorCapability(
         string packageName,
         string targetTypeName,
-        AtsTypeRef optionType)
+        AtsTypeRef callbackPayloadType)
     {
         var targetType = new AtsTypeRef
         {
@@ -2784,8 +2843,26 @@ public class AtsTypeScriptCodeGeneratorTests
                 new AtsParameterInfo
                 {
                     Name = "configure",
-                    Type = optionType,
-                    IsOptional = true
+                    Type = new AtsTypeRef
+                    {
+                        TypeId = "callback",
+                        Category = AtsTypeCategory.Callback
+                    },
+                    IsOptional = true,
+                    IsCallback = true,
+                    CallbackParameters =
+                    [
+                        new AtsCallbackParameterInfo
+                        {
+                            Name = "emulator",
+                            Type = callbackPayloadType
+                        }
+                    ],
+                    CallbackReturnType = new AtsTypeRef
+                    {
+                        TypeId = AtsConstants.Void,
+                        Category = AtsTypeCategory.Primitive
+                    }
                 }
             ],
             ReturnType = new AtsTypeRef
