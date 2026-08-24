@@ -1760,6 +1760,7 @@ public static partial class JavaHostingExtensions
                 return new JavaLaunchConfiguration
                 {
                     Mode = mode,
+                    JavaExec = TryResolveJavaExecutableForIde(builder.Resource),
                     WorkingDirectory = builder.Resource.WorkingDirectory,
                     MainClass = mainClass,
                     ClassPaths = classPaths,
@@ -1786,6 +1787,16 @@ public static partial class JavaHostingExtensions
                 };
             },
             "java");
+    }
+
+    private static string? TryResolveJavaExecutableForIde(JavaAppResource resource)
+    {
+        if (TryResolveConfiguredBuildTool(resource, out _))
+        {
+            return null;
+        }
+
+        return Path.IsPathFullyQualified(resource.Command) ? resource.Command : null;
     }
 
     /// <summary>

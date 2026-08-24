@@ -1365,6 +1365,22 @@ public class AddJavaAppTests
         return Assert.IsType<JavaLaunchConfiguration>(await annotation.LaunchConfigurationProducer(context));
     }
 
+    [Fact]
+    public async Task AddJavaApp_WithAbsoluteJavaCommand_DebugConfigurationSerializesJavaExecutable()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
+        using var tempDir = new TempJavaAppDirectory();
+        var javaExecutable = Path.Combine(tempDir.Path, OperatingSystem.IsWindows() ? "java.exe" : "java");
+        var app = builder.AddJavaApp("api", tempDir.Path, "app.jar")
+            .WithCommand(javaExecutable);
+
+        var launchConfiguration = await GetLaunchConfigurationAsync(app);
+        var serialized = JsonSerializer.SerializeToElement(launchConfiguration);
+
+        Assert.True(serialized.TryGetProperty("java_exec", out var javaExec));
+        Assert.Equal(javaExecutable, javaExec.GetString());
+    }
+
     [Theory]
     [InlineData("pom.xml", "maven")]
     [InlineData("settings.gradle", "gradle")]
@@ -1461,6 +1477,7 @@ public class AddJavaAppTests
         Assert.Null(launchConfiguration.MainClass);
         Assert.Null(launchConfiguration.ClassPaths);
         Assert.Equal("maven", launchConfiguration.BuildTool);
+        Assert.Null(launchConfiguration.JavaExec);
         Assert.Equal(tempDir.Path, launchConfiguration.WorkingDirectory);
     }
 
@@ -1481,6 +1498,7 @@ public class AddJavaAppTests
         Assert.Equal("com.example.catalog.CatalogApplication", launchConfiguration.MainClass);
         Assert.Equal(jarPath, Assert.Single(launchConfiguration.ClassPaths!));
         Assert.Null(launchConfiguration.BuildTool);
+        Assert.Null(launchConfiguration.JavaExec);
     }
 
     [Fact]

@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Reflection;
+using System.Diagnostics;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Aspire.Hosting.ApplicationModel;
@@ -496,6 +497,1255 @@ public class AtsJavaCodeGeneratorTests
         Assert.All(dictCapabilities, capability => Assert.Contains(capability, aspireDict, StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task GeneratedTransport_ConcurrentCallsRouteReverseResponsesToTheCorrectCaller()
+    {
+        using var workspace = await CreateJavaProbeWorkspaceAsync();
+        workspace.WriteSource(
+            "aspire/TransportConcurrencyProbe.java",
+            """
+            package aspire;
+
+            import java.io.ByteArrayOutputStream;
+            import java.io.InputStream;
+            import java.io.PipedInputStream;
+            import java.io.PipedOutputStream;
+            import java.lang.reflect.Field;
+            import java.nio.charset.StandardCharsets;
+            import java.util.Map;
+            import java.util.concurrent.CompletableFuture;
+            import java.util.concurrent.TimeUnit;
+
+            public class TransportConcurrencyProbe {
+                public static void main(String[] args) throws Exception {
+                    var clientInput = new PipedInputStream(32768);
+                    var serverOutput = new PipedOutputStream(clientInput);
+                    var serverInput = new PipedInputStream(32768);
+                    var clientOutput = new PipedOutputStream(serverInput);
+
+                    var client = new AspireClient("ignored");
+                    setField(client, "inputStream", clientInput);
+                    setField(client, "outputStream", clientOutput);
+
+                    var first = CompletableFuture.supplyAsync(() -> client.invokeCapability("cap.first", Map.of()));
+                    var second = CompletableFuture.supplyAsync(() -> client.invokeCapability("cap.second", Map.of()));
+
+                    var firstRequest = readMessage(serverInput);
+                    var secondRequest = readMessage(serverInput);
+
+                    int firstId = extractIdForCapability(firstRequest, secondRequest, "cap.first");
+                    int secondId = extractIdForCapability(firstRequest, secondRequest, "cap.second");
+
+                    writeResponse(serverOutput, secondId, "second-result");
+                    writeResponse(serverOutput, firstId, "first-result");
+
+                    var firstResult = first.get(2, TimeUnit.SECONDS);
+                    var secondResult = second.get(2, TimeUnit.SECONDS);
+
+                    if (!"first-result".equals(firstResult)) {
+                        throw new IllegalStateException("first call received wrong result: " + firstResult);
+                    }
+                    if (!"second-result".equals(secondResult)) {
+                        throw new IllegalStateException("second call received wrong result: " + secondResult);
+                    }
+
+                    System.out.println("OK");
+                }
+
+                private static void setField(AspireClient client, String name, Object value) throws Exception {
+                    Field field = AspireClient.class.getDeclaredField(name);
+                    field.setAccessible(true);
+                    field.set(client, value);
+                }
+
+                private static int extractId(String json) {
+                    int marker = json.indexOf("\"id\":");
+                    if (marker < 0) {
+                        throw new IllegalStateException("No request id in payload: " + json);
+                    }
+
+                    int start = marker + 5;
+                    int end = start;
+                    while (end < json.length() && Character.isDigit(json.charAt(end))) {
+                        end++;
+                    }
+
+                    if (end == start) {
+                        throw new IllegalStateException("Request id was not numeric: " + json);
+                    }
+
+                    return Integer.parseInt(json.substring(start, end));
+                }
+
+                private static int extractIdForCapability(String firstRequest, String secondRequest, String capabilityId) {
+                    String marker = "\"capabilityId\":\"" + capabilityId + "\"";
+                    if (firstRequest.contains(marker)) {
+                        return extractId(firstRequest);
+                    }
+                    if (secondRequest.contains(marker)) {
+                        return extractId(secondRequest);
+                    }
+                    throw new IllegalStateException("No request found for capability " + capabilityId);
+                }
+
+                private static void writeResponse(PipedOutputStream output, int id, String result) throws Exception {
+                    String payload = "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":\"" + result + "\"}";
+                    byte[] body = payload.getBytes(StandardCharsets.UTF_8);
+                    String header = "Content-Length: " + body.length + "\r\n\r\n";
+                    output.write(header.getBytes(StandardCharsets.UTF_8));
+                    output.write(body);
+                    output.flush();
+                }
+
+                private static String readMessage(InputStream input) throws Exception {
+                    int contentLength = -1;
+                    while (true) {
+                        String line = readLine(input);
+                        if (line.isEmpty()) {
+                            break;
+                        }
+                        if (line.startsWith("Content-Length:")) {
+                            contentLength = Integer.parseInt(line.substring(15).trim());
+                        }
+                    }
+
+                    if (contentLength < 0) {
+                        throw new IllegalStateException("Missing Content-Length header");
+                    }
+
+                    byte[] body = input.readNBytes(contentLength);
+                    return new String(body, StandardCharsets.UTF_8);
+                }
+
+                private static String readLine(InputStream input) throws Exception {
+                    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                    while (true) {
+                        int ch = input.read();
+                        if (ch == -1) {
+                            break;
+                        }
+                        if (ch == '\r') {
+                            int next = input.read();
+                            if (next == '\n') {
+                                break;
+                            }
+                            buffer.write(ch);
+                            if (next != -1) {
+                                buffer.write(next);
+                            }
+                            continue;
+                        }
+                        if (ch == '\n') {
+                            break;
+                        }
+                        buffer.write(ch);
+                    }
+
+                    return buffer.toString(StandardCharsets.UTF_8);
+                }
+            }
+            """);
+
+        await workspace.CompileAsync();
+        var run = await workspace.RunClassAsync("aspire.TransportConcurrencyProbe", TimeSpan.FromSeconds(6));
+
+        Assert.True(run.TimedOut is false, $"Probe timed out. stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.True(
+            run.ExitCode == 0,
+            $"Probe failed with exit code {run.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.Contains("OK", run.StdOut, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GeneratedTransport_CallbackCanInvokeNestedCapability()
+    {
+        using var workspace = await CreateJavaProbeWorkspaceAsync();
+        workspace.WriteSource(
+            "aspire/TransportReentrancyProbe.java",
+            """
+            package aspire;
+
+            import java.io.ByteArrayOutputStream;
+            import java.io.InputStream;
+            import java.io.PipedInputStream;
+            import java.io.PipedOutputStream;
+            import java.lang.reflect.Field;
+            import java.lang.reflect.Method;
+            import java.nio.charset.StandardCharsets;
+            import java.util.Map;
+            import java.util.concurrent.CompletableFuture;
+            import java.util.concurrent.ConcurrentHashMap;
+            import java.util.concurrent.CountDownLatch;
+            import java.util.concurrent.TimeUnit;
+            import java.util.concurrent.atomic.AtomicInteger;
+            import java.util.function.BiFunction;
+            import java.util.function.Function;
+
+            public class TransportReentrancyProbe {
+                public static void main(String[] args) throws Exception {
+                    var clientInput = new PipedInputStream(32768);
+                    var serverOutput = new PipedOutputStream(clientInput);
+                    var serverInput = new PipedInputStream(32768);
+                    var clientOutput = new PipedOutputStream(serverInput);
+
+                    var client = new AspireClient("ignored");
+                    setField(client, "inputStream", clientInput);
+                    setField(client, "outputStream", clientOutput);
+
+                    String callbackId = client.registerCallback(callbackArgs ->
+                        client.invokeCapability("cap.nested", Map.of()));
+                    startReader(client);
+
+                    writeMessage(
+                        serverOutput,
+                        "{\"jsonrpc\":\"2.0\",\"id\":9001,\"method\":\"invokeCallback\",\"params\":{\"callbackId\":\""
+                            + callbackId
+                            + "\",\"args\":[]}}");
+
+                    String nestedRequest = readMessage(serverInput);
+                    int nestedId = extractId(nestedRequest);
+                    if (!nestedRequest.contains("\"capabilityId\":\"cap.nested\"")) {
+                        throw new IllegalStateException("unexpected nested request: " + nestedRequest);
+                    }
+
+                    writeMessage(
+                        serverOutput,
+                        "{\"jsonrpc\":\"2.0\",\"id\":" + nestedId + ",\"result\":\"nested-result\"}");
+
+                    String callbackResponse = readMessage(serverInput);
+                    if (!callbackResponse.contains("\"id\":9001")
+                        || !callbackResponse.contains("\"result\":\"nested-result\"")) {
+                        throw new IllegalStateException("unexpected callback response: " + callbackResponse);
+                    }
+
+                    System.out.println("OK");
+                }
+
+                private static void setField(AspireClient client, String name, Object value) throws Exception {
+                    Field field = AspireClient.class.getDeclaredField(name);
+                    field.setAccessible(true);
+                    field.set(client, value);
+                }
+
+                private static void startReader(AspireClient client) throws Exception {
+                    Method method = AspireClient.class.getDeclaredMethod("ensureReaderLoopStarted");
+                    method.setAccessible(true);
+                    method.invoke(client);
+                }
+
+                private static int extractId(String json) {
+                    int marker = json.indexOf("\"id\":");
+                    int start = marker + 5;
+                    int end = start;
+                    while (end < json.length() && Character.isDigit(json.charAt(end))) {
+                        end++;
+                    }
+                    return Integer.parseInt(json.substring(start, end));
+                }
+
+                private static void writeMessage(PipedOutputStream output, String payload) throws Exception {
+                    byte[] body = payload.getBytes(StandardCharsets.UTF_8);
+                    String header = "Content-Length: " + body.length + "\r\n\r\n";
+                    output.write(header.getBytes(StandardCharsets.UTF_8));
+                    output.write(body);
+                    output.flush();
+                }
+
+                private static String readMessage(InputStream input) throws Exception {
+                    int contentLength = -1;
+                    while (true) {
+                        String line = readLine(input);
+                        if (line.isEmpty()) {
+                            break;
+                        }
+                        if (line.startsWith("Content-Length:")) {
+                            contentLength = Integer.parseInt(line.substring(15).trim());
+                        }
+                    }
+
+                    if (contentLength < 0) {
+                        throw new IllegalStateException("Missing Content-Length header");
+                    }
+
+                    return new String(input.readNBytes(contentLength), StandardCharsets.UTF_8);
+                }
+
+                private static String readLine(InputStream input) throws Exception {
+                    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                    while (true) {
+                        int ch = input.read();
+                        if (ch == -1) {
+                            break;
+                        }
+                        if (ch == '\r') {
+                            int next = input.read();
+                            if (next == '\n') {
+                                break;
+                            }
+                            buffer.write(ch);
+                            if (next != -1) {
+                                buffer.write(next);
+                            }
+                            continue;
+                        }
+                        if (ch == '\n') {
+                            break;
+                        }
+                        buffer.write(ch);
+                    }
+                    return buffer.toString(StandardCharsets.UTF_8);
+                }
+            }
+            """);
+
+        await workspace.CompileAsync();
+        var run = await workspace.RunClassAsync("aspire.TransportReentrancyProbe", TimeSpan.FromSeconds(6));
+
+        Assert.True(run.TimedOut is false, $"Probe timed out. stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.True(
+            run.ExitCode == 0,
+            $"Probe failed with exit code {run.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.Contains("OK", run.StdOut, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GeneratedTransport_MalformedResponseFailsPendingRequest()
+    {
+        using var workspace = await CreateJavaProbeWorkspaceAsync();
+        workspace.WriteSource(
+            "aspire/TransportMalformedResponseProbe.java",
+            """
+            package aspire;
+
+            import java.io.ByteArrayOutputStream;
+            import java.io.InputStream;
+            import java.io.PipedInputStream;
+            import java.io.PipedOutputStream;
+            import java.lang.reflect.Field;
+            import java.nio.charset.StandardCharsets;
+            import java.util.Map;
+            import java.util.concurrent.CompletableFuture;
+            import java.util.concurrent.ExecutionException;
+            import java.util.concurrent.TimeUnit;
+
+            public class TransportMalformedResponseProbe {
+                public static void main(String[] args) throws Exception {
+                    assertPayloadFails("{not-json}");
+                    assertPayloadFails("{\"jsonrpc\":\"2.0\",\"result\":42}");
+                    assertPayloadFails("{\"jsonrpc\":\"2.0\",\"id\":1.5,\"result\":42}");
+                    assertPayloadFails("{\"jsonrpc\":\"2.0\",\"id\":1.0000000000000001,\"result\":42}");
+                    assertPayloadFails("{\"jsonrpc\":\"2.0\",\"id\":4294967297,\"result\":42}");
+                    System.out.println("OK");
+                }
+
+                private static void assertPayloadFails(String payload) throws Exception {
+                    var clientInput = new PipedInputStream(32768);
+                    var serverOutput = new PipedOutputStream(clientInput);
+                    var serverInput = new PipedInputStream(32768);
+                    var clientOutput = new PipedOutputStream(serverInput);
+
+                    var client = new AspireClient("ignored");
+                    setField(client, "inputStream", clientInput);
+                    setField(client, "outputStream", clientOutput);
+
+                    var pending = CompletableFuture.supplyAsync(() ->
+                        client.invokeCapability("cap.malformed", Map.of()));
+                    readMessage(serverInput);
+                    writeMessage(serverOutput, payload);
+
+                    try {
+                        pending.get(2, TimeUnit.SECONDS);
+                        throw new IllegalStateException("malformed response unexpectedly succeeded");
+                    } catch (ExecutionException expected) {
+                        if (!String.valueOf(expected.getCause().getMessage()).contains("Disconnected from AppHost")) {
+                            throw new IllegalStateException("unexpected failure", expected);
+                        }
+                    }
+                }
+
+                private static void setField(AspireClient client, String name, Object value) throws Exception {
+                    Field field = AspireClient.class.getDeclaredField(name);
+                    field.setAccessible(true);
+                    field.set(client, value);
+                }
+
+                private static void writeMessage(PipedOutputStream output, String payload) throws Exception {
+                    byte[] body = payload.getBytes(StandardCharsets.UTF_8);
+                    String header = "Content-Length: " + body.length + "\r\n\r\n";
+                    output.write(header.getBytes(StandardCharsets.UTF_8));
+                    output.write(body);
+                    output.flush();
+                }
+
+                private static String readMessage(InputStream input) throws Exception {
+                    int contentLength = -1;
+                    while (true) {
+                        String line = readLine(input);
+                        if (line.isEmpty()) {
+                            break;
+                        }
+                        if (line.startsWith("Content-Length:")) {
+                            contentLength = Integer.parseInt(line.substring(15).trim());
+                        }
+                    }
+                    return new String(input.readNBytes(contentLength), StandardCharsets.UTF_8);
+                }
+
+                private static String readLine(InputStream input) throws Exception {
+                    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                    while (true) {
+                        int ch = input.read();
+                        if (ch == -1) {
+                            break;
+                        }
+                        if (ch == '\r') {
+                            int next = input.read();
+                            if (next == '\n') {
+                                break;
+                            }
+                            buffer.write(ch);
+                            if (next != -1) {
+                                buffer.write(next);
+                            }
+                            continue;
+                        }
+                        if (ch == '\n') {
+                            break;
+                        }
+                        buffer.write(ch);
+                    }
+                    return buffer.toString(StandardCharsets.UTF_8);
+                }
+            }
+            """);
+
+        await workspace.CompileAsync();
+        var run = await workspace.RunClassAsync("aspire.TransportMalformedResponseProbe", TimeSpan.FromSeconds(6));
+
+        Assert.True(run.TimedOut is false, $"Probe timed out. stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.True(
+            run.ExitCode == 0,
+            $"Probe failed with exit code {run.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.Contains("OK", run.StdOut, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GeneratedTransport_DisconnectCannotRacePastRequestRegistration()
+    {
+        using var workspace = await CreateJavaProbeWorkspaceAsync();
+        workspace.WriteSource(
+            "aspire/TransportDisconnectRaceProbe.java",
+            """
+            package aspire;
+
+            import java.io.ByteArrayOutputStream;
+            import java.io.PipedInputStream;
+            import java.io.PipedOutputStream;
+            import java.lang.reflect.Field;
+            import java.lang.reflect.Method;
+            import java.util.Map;
+            import java.util.concurrent.CompletableFuture;
+            import java.util.concurrent.ConcurrentHashMap;
+            import java.util.concurrent.CountDownLatch;
+            import java.util.concurrent.ExecutionException;
+            import java.util.concurrent.TimeUnit;
+
+            public class TransportDisconnectRaceProbe {
+                public static void main(String[] args) throws Exception {
+                    var clientInput = new PipedInputStream(32768);
+                    var serverOutput = new PipedOutputStream(clientInput);
+                    var client = new AspireClient("ignored");
+                    setField(client, "inputStream", clientInput);
+                    setField(client, "outputStream", new ByteArrayOutputStream());
+                    setField(client, "pendingRequests", new DisconnectingMap(client));
+
+                    var pending = CompletableFuture.supplyAsync(() ->
+                        client.invokeCapability("cap.race", Map.of()));
+
+                    try {
+                        pending.get(2, TimeUnit.SECONDS);
+                        throw new IllegalStateException("request unexpectedly succeeded");
+                    } catch (ExecutionException expected) {
+                        if (!String.valueOf(expected.getCause().getMessage()).contains("Disconnected from AppHost")) {
+                            throw new IllegalStateException("unexpected failure", expected);
+                        }
+                    }
+
+                    serverOutput.close();
+                    System.out.println("OK");
+                }
+
+                private static void setField(AspireClient client, String name, Object value) throws Exception {
+                    Field field = AspireClient.class.getDeclaredField(name);
+                    field.setAccessible(true);
+                    field.set(client, value);
+                }
+
+                private static final class DisconnectingMap extends ConcurrentHashMap<Integer, CompletableFuture<Object>> {
+                    private final AspireClient client;
+                    private boolean scheduled;
+
+                    DisconnectingMap(AspireClient client) {
+                        this.client = client;
+                    }
+
+                    @Override
+                    public CompletableFuture<Object> put(Integer id, CompletableFuture<Object> response) {
+                        if (!scheduled) {
+                            scheduled = true;
+                            CountDownLatch started = new CountDownLatch(1);
+                            Thread disconnect = new Thread(() -> {
+                                started.countDown();
+                                invokeDisconnect(client);
+                            });
+                            disconnect.start();
+
+                            try {
+                                if (!started.await(1, TimeUnit.SECONDS)) {
+                                    throw new IllegalStateException("disconnect thread did not start");
+                                }
+                                disconnect.join(250);
+                            } catch (InterruptedException e) {
+                                throw new RuntimeException(e);
+                            }
+                        }
+
+                        return super.put(id, response);
+                    }
+
+                    private static void invokeDisconnect(AspireClient client) {
+                        try {
+                            Method method = AspireClient.class.getDeclaredMethod("handleDisconnect");
+                            method.setAccessible(true);
+                            method.invoke(client);
+                        } catch (ReflectiveOperationException e) {
+                            throw new RuntimeException(e);
+                        }
+                    }
+                }
+            }
+            """);
+
+        await workspace.CompileAsync();
+        var run = await workspace.RunClassAsync("aspire.TransportDisconnectRaceProbe", TimeSpan.FromSeconds(6));
+
+        Assert.True(run.TimedOut is false, $"Probe timed out. stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.True(
+            run.ExitCode == 0,
+            $"Probe failed with exit code {run.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.Contains("OK", run.StdOut, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GeneratedTransport_LateDisconnectHandlerStillRuns()
+    {
+        using var workspace = await CreateJavaProbeWorkspaceAsync();
+        workspace.WriteSource(
+            "aspire/TransportLateDisconnectHandlerProbe.java",
+            """
+            package aspire;
+
+            import java.lang.reflect.Method;
+            import java.util.concurrent.atomic.AtomicInteger;
+
+            public class TransportLateDisconnectHandlerProbe {
+                public static void main(String[] args) throws Exception {
+                    var client = new AspireClient("ignored");
+                    Method disconnect = AspireClient.class.getDeclaredMethod("handleDisconnect");
+                    disconnect.setAccessible(true);
+                    disconnect.invoke(client);
+
+                    var calls = new AtomicInteger();
+                    client.onDisconnect(calls::incrementAndGet);
+                    if (calls.get() != 1) {
+                        throw new IllegalStateException("late disconnect handler was not invoked");
+                    }
+
+                    System.out.println("OK");
+                }
+            }
+            """);
+
+        await workspace.CompileAsync();
+        var run = await workspace.RunClassAsync("aspire.TransportLateDisconnectHandlerProbe", TimeSpan.FromSeconds(6));
+
+        Assert.True(run.TimedOut is false, $"Probe timed out. stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.True(
+            run.ExitCode == 0,
+            $"Probe failed with exit code {run.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.Contains("OK", run.StdOut, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GeneratedTransport_CancellationTokenApi_IsAccessibleFromExternalPackage()
+    {
+        using var workspace = await CreateJavaProbeWorkspaceAsync();
+        workspace.WriteSource(
+            "external/CancellationApiProbe.java",
+            """
+            package external;
+
+            import aspire.CancellationToken;
+
+            public class CancellationApiProbe {
+                public static void main(String[] args) {
+                    CancellationToken token = new CancellationToken();
+                    final boolean[] seen = new boolean[] { false };
+                    token.onCancel(() -> seen[0] = true);
+
+                    if (token.isCancelled()) {
+                        throw new IllegalStateException("token should start active");
+                    }
+
+                    token.cancel();
+
+                    if (!token.isCancelled()) {
+                        throw new IllegalStateException("token should be cancelled");
+                    }
+
+                    if (!seen[0]) {
+                        throw new IllegalStateException("cancel listener did not run");
+                    }
+
+                    System.out.println("OK");
+                }
+            }
+            """);
+
+        await workspace.CompileAsync();
+        var run = await workspace.RunClassAsync("external.CancellationApiProbe", TimeSpan.FromSeconds(6));
+
+        Assert.True(run.TimedOut is false, $"Probe timed out. stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.True(
+            run.ExitCode == 0,
+            $"Probe failed with exit code {run.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.Contains("OK", run.StdOut, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GeneratedTransport_SerializesPrimitiveArraysAsLists()
+    {
+        using var workspace = await CreateJavaProbeWorkspaceAsync();
+        workspace.WriteSource(
+            "aspire/PrimitiveArraySerializationProbe.java",
+            """
+            package aspire;
+
+            import java.util.List;
+
+            public class PrimitiveArraySerializationProbe {
+                public static void main(String[] args) {
+                    Object booleans = AspireClient.serializeValue(new boolean[] { true, false });
+                    Object doubles = AspireClient.serializeValue(new double[] { 1.5, 2.5 });
+
+                    if (!List.of(true, false).equals(booleans)) {
+                        throw new IllegalStateException("boolean array was not serialized as a list: " + booleans);
+                    }
+                    if (!List.of(1.5, 2.5).equals(doubles)) {
+                        throw new IllegalStateException("double array was not serialized as a list: " + doubles);
+                    }
+
+                    System.out.println("OK");
+                }
+            }
+            """);
+
+        await workspace.CompileAsync();
+        var run = await workspace.RunClassAsync("aspire.PrimitiveArraySerializationProbe", TimeSpan.FromSeconds(6));
+
+        Assert.True(run.TimedOut is false, $"Probe timed out. stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.True(
+            run.ExitCode == 0,
+            $"Probe failed with exit code {run.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.Contains("OK", run.StdOut, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GeneratedTransport_ReleasesRemoteTokensAfterCallbackCompletion()
+    {
+        using var workspace = await CreateJavaProbeWorkspaceAsync();
+        workspace.WriteSource(
+            "aspire/RemoteCancellationLifetimeProbe.java",
+            """
+            package aspire;
+
+            import java.io.ByteArrayOutputStream;
+            import java.io.InputStream;
+            import java.io.PipedInputStream;
+            import java.io.PipedOutputStream;
+            import java.lang.reflect.Field;
+            import java.lang.reflect.Method;
+            import java.nio.charset.StandardCharsets;
+            import java.util.Map;
+            import java.util.concurrent.CompletableFuture;
+            import java.util.concurrent.ConcurrentHashMap;
+            import java.util.concurrent.CountDownLatch;
+            import java.util.concurrent.TimeUnit;
+            import java.util.concurrent.atomic.AtomicInteger;
+            import java.util.function.BiFunction;
+            import java.util.function.Function;
+
+            public class RemoteCancellationLifetimeProbe {
+                public static void main(String[] args) throws Exception {
+                    var clientInput = new PipedInputStream(32768);
+                    var serverOutput = new PipedOutputStream(clientInput);
+                    var serverInput = new PipedInputStream(32768);
+                    var clientOutput = new PipedOutputStream(serverInput);
+                    var client = new AspireClient("ignored");
+                    setField(client, "inputStream", clientInput);
+                    setField(client, "outputStream", clientOutput);
+                    startReader(client);
+
+                    String callbackId = client.registerCallback(callbackArgs -> {
+                        CancellationToken.fromValue(callbackArgs[0]);
+                        return null;
+                    });
+                    writeCallbackRequest(serverOutput, 1, callbackId, "remote-ct");
+                    requireMessage(serverInput);
+
+                    Field tokensField = AspireClient.class.getDeclaredField("remoteCancellationTokens");
+                    tokensField.setAccessible(true);
+                    Map<?, ?> tokens = (Map<?, ?>) tokensField.get(client);
+                    if (!tokens.isEmpty()) {
+                        throw new IllegalStateException("completed callback retained remote tokens: " + tokens.keySet());
+                    }
+                    awaitNoActiveCallbacks(client);
+                    writeCancelRequest(serverOutput, 2, "remote-ct");
+                    String lateCancellation = requireMessage(serverInput);
+                    if (!lateCancellation.contains("\"result\":false")) {
+                        throw new IllegalStateException("late cancellation was retained: " + lateCancellation);
+                    }
+                    assertCancellationRegistriesEmpty(client, "late cancellation retained remote state");
+
+                    assertOverlappingCallbacksKeepTokenRegistered();
+                    assertCancellationBeforeAcquireIsPreserved();
+                    assertDisconnectBeforeAcquireIsPreserved();
+                    System.out.println("OK");
+                }
+
+                private static void assertOverlappingCallbacksKeepTokenRegistered() throws Exception {
+                    var clientInput = new PipedInputStream(32768);
+                    var serverOutput = new PipedOutputStream(clientInput);
+                    var serverInput = new PipedInputStream(32768);
+                    var clientOutput = new PipedOutputStream(serverInput);
+                    var client = new AspireClient("ignored");
+                    var tokens = new RacingTokenMap();
+                    setField(client, "inputStream", clientInput);
+                    setField(client, "outputStream", clientOutput);
+                    setField(client, "remoteCancellationTokens", tokens);
+                    startReader(client);
+
+                    var firstCompletion = new CompletableFuture<Void>();
+                    var secondCompletion = new CompletableFuture<Void>();
+                    var firstToken = new CompletableFuture<CancellationToken>();
+                    var secondToken = new CompletableFuture<CancellationToken>();
+                    String firstCallbackId = client.registerCallback(callbackArgs -> {
+                        CancellationToken token = CancellationToken.fromValue(callbackArgs[0]);
+                        firstToken.complete(token);
+                        return firstCompletion;
+                    });
+                    String secondCallbackId = client.registerCallback(callbackArgs -> {
+                        CancellationToken token = CancellationToken.fromValue(callbackArgs[0]);
+                        token.onCancel(() -> secondCompletion.complete(null));
+                        secondToken.complete(token);
+                        return secondCompletion;
+                    });
+
+                    writeCallbackRequest(serverOutput, 1, firstCallbackId, "shared-ct");
+                    CancellationToken first = firstToken.get(1, TimeUnit.SECONDS);
+                    writeCallbackRequest(serverOutput, 2, secondCallbackId, "shared-ct");
+                    tokens.awaitSecondLookup();
+                    firstCompletion.complete(null);
+                    requireMessage(serverInput);
+                    tokens.resumeSecondLookup();
+                    CancellationToken second = secondToken.get(1, TimeUnit.SECONDS);
+
+                    if (first != second || !tokens.containsKey("shared-ct")) {
+                        throw new IllegalStateException("overlapping callback lost its active remote token");
+                    }
+
+                    writeCancelRequest(serverOutput, 3, "shared-ct");
+                    String responses = requireMessage(serverInput) + requireMessage(serverInput);
+                    if (!responses.contains("\"id\":3") || !responses.contains("\"result\":true") || !second.isCancelled()) {
+                        throw new IllegalStateException("active overlapping callback was not cancelled: " + responses);
+                    }
+                    if (!tokens.isEmpty()) {
+                        throw new IllegalStateException("cancelled overlapping callbacks retained remote tokens");
+                    }
+                }
+
+                private static void assertCancellationBeforeAcquireIsPreserved() throws Exception {
+                    var clientInput = new PipedInputStream(32768);
+                    var serverOutput = new PipedOutputStream(clientInput);
+                    var serverInput = new PipedInputStream(32768);
+                    var clientOutput = new PipedOutputStream(serverInput);
+                    var client = new AspireClient("ignored");
+                    setField(client, "inputStream", clientInput);
+                    setField(client, "outputStream", clientOutput);
+                    startReader(client);
+
+                    var acquiredToken = new CompletableFuture<CancellationToken>();
+                    var callbackEntered = new CountDownLatch(1);
+                    var resumeAcquisition = new CountDownLatch(1);
+                    String callbackId = client.registerCallback(callbackArgs -> {
+                        callbackEntered.countDown();
+                        try {
+                            if (!resumeAcquisition.await(1, TimeUnit.SECONDS)) {
+                                throw new IllegalStateException("Timed out waiting to acquire early-cancelled token");
+                            }
+                        } catch (InterruptedException e) {
+                            throw new RuntimeException(e);
+                        }
+                        acquiredToken.complete(CancellationToken.fromValue(callbackArgs[0]));
+                        return null;
+                    });
+                    writeCallbackRequest(serverOutput, 1, callbackId, "early-ct");
+                    if (!callbackEntered.await(1, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("Timed out waiting for callback dispatch");
+                    }
+                    writeCancelRequest(serverOutput, 2, "early-ct");
+                    String cancellationResponse = requireMessage(serverInput);
+                    if (!cancellationResponse.contains("\"result\":true")) {
+                        throw new IllegalStateException("routed callback cancellation was not retained: " + cancellationResponse);
+                    }
+                    resumeAcquisition.countDown();
+                    CancellationToken token = acquiredToken.get(1, TimeUnit.SECONDS);
+                    requireMessage(serverInput);
+                    if (!token.isCancelled()) {
+                        throw new IllegalStateException("cancellation before token acquisition was lost");
+                    }
+                    assertCancellationRegistriesEmpty(client, "completed early cancellation retained remote state");
+                }
+
+                private static void assertDisconnectBeforeAcquireIsPreserved() throws Exception {
+                    var client = new AspireClient("ignored");
+                    setField(client, "outputStream", new ByteArrayOutputStream());
+                    Method disconnect = AspireClient.class.getDeclaredMethod("handleDisconnect");
+                    disconnect.setAccessible(true);
+                    disconnect.invoke(client);
+
+                    var acquiredToken = new CompletableFuture<CancellationToken>();
+                    String callbackId = client.registerCallback(callbackArgs -> {
+                        acquiredToken.complete(CancellationToken.fromValue(callbackArgs[0]));
+                        return null;
+                    });
+                    Method handleRequest = AspireClient.class.getDeclaredMethod("handleServerRequest", Map.class);
+                    handleRequest.setAccessible(true);
+                    handleRequest.invoke(client, Map.of(
+                        "jsonrpc", "2.0",
+                        "id", 1,
+                        "method", "invokeCallback",
+                        "params", Map.of("callbackId", callbackId, "args", java.util.List.of("disconnect-ct"))));
+
+                    CancellationToken token = acquiredToken.get(1, TimeUnit.SECONDS);
+                    if (!token.isCancelled()) {
+                        throw new IllegalStateException("disconnect before token acquisition was lost");
+                    }
+                    assertCancellationRegistriesEmpty(client, "disconnect-before-acquire retained remote state");
+                }
+
+                private static void assertCancellationRegistriesEmpty(AspireClient client, String message) throws Exception {
+                    Field tokensField = AspireClient.class.getDeclaredField("remoteCancellationTokens");
+                    tokensField.setAccessible(true);
+                    Field pendingField = AspireClient.class.getDeclaredField("pendingRemoteCancellations");
+                    pendingField.setAccessible(true);
+                    Map<?, ?> tokens = (Map<?, ?>) tokensField.get(client);
+                    Map<?, ?> pending = (Map<?, ?>) pendingField.get(client);
+                    if (!tokens.isEmpty() || !pending.isEmpty()) {
+                        throw new IllegalStateException(message + ": active=" + tokens.keySet() + ", pending=" + pending.keySet());
+                    }
+                }
+
+                private static void awaitNoActiveCallbacks(AspireClient client) throws Exception {
+                    Field callbacksField = AspireClient.class.getDeclaredField("activeServerCallbacks");
+                    callbacksField.setAccessible(true);
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+                    while (System.nanoTime() < deadline) {
+                        if (callbacksField.getInt(client) == 0) {
+                            return;
+                        }
+                        TimeUnit.MILLISECONDS.sleep(5);
+                    }
+                    throw new IllegalStateException("Timed out waiting for callback dispatch completion");
+                }
+
+                private static void setField(AspireClient client, String name, Object value) throws Exception {
+                    Field field = AspireClient.class.getDeclaredField(name);
+                    field.setAccessible(true);
+                    field.set(client, value);
+                }
+
+                private static void startReader(AspireClient client) throws Exception {
+                    Method method = AspireClient.class.getDeclaredMethod("ensureReaderLoopStarted");
+                    method.setAccessible(true);
+                    method.invoke(client);
+                }
+
+                private static void writeCallbackRequest(PipedOutputStream output, int id, String callbackId, String tokenId) throws Exception {
+                    String payload = "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":\"invokeCallback\",\"params\":{\"callbackId\":\"" + callbackId + "\",\"args\":[\"" + tokenId + "\"]}}";
+                    writeMessage(output, payload);
+                }
+
+                private static void writeCancelRequest(PipedOutputStream output, int id, String tokenId) throws Exception {
+                    String payload = "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":\"cancel\",\"params\":{\"cancellationId\":\"" + tokenId + "\"}}";
+                    writeMessage(output, payload);
+                }
+
+                private static void writeMessage(PipedOutputStream output, String payload) throws Exception {
+                    byte[] body = payload.getBytes(StandardCharsets.UTF_8);
+                    output.write(("Content-Length: " + body.length + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+                    output.write(body);
+                    output.flush();
+                }
+
+                private static final class RacingTokenMap extends ConcurrentHashMap<String, CancellationToken> {
+                    private final AtomicInteger lookups = new AtomicInteger();
+                    private final CountDownLatch secondLookup = new CountDownLatch(1);
+                    private final CountDownLatch resumeSecondLookup = new CountDownLatch(1);
+
+                    @Override
+                    public CancellationToken computeIfAbsent(String key, Function<? super String, ? extends CancellationToken> mappingFunction) {
+                        CancellationToken token = super.computeIfAbsent(key, mappingFunction);
+                        if (lookups.incrementAndGet() == 2) {
+                            secondLookup.countDown();
+                            try {
+                                if (!resumeSecondLookup.await(1, TimeUnit.SECONDS)) {
+                                    throw new IllegalStateException("Timed out waiting to resume second token lookup");
+                                }
+                            } catch (InterruptedException e) {
+                                throw new RuntimeException(e);
+                            }
+                        }
+                        return token;
+                    }
+
+                    @Override
+                    public CancellationToken compute(String key, BiFunction<? super String, ? super CancellationToken, ? extends CancellationToken> remappingFunction) {
+                        CancellationToken token = super.compute(key, remappingFunction);
+                        if (lookups.incrementAndGet() == 2) {
+                            secondLookup.countDown();
+                        }
+                        return token;
+                    }
+
+                    void awaitSecondLookup() throws Exception {
+                        if (!secondLookup.await(1, TimeUnit.SECONDS)) {
+                            throw new IllegalStateException("Timed out waiting for second token lookup");
+                        }
+                    }
+
+                    void resumeSecondLookup() {
+                        resumeSecondLookup.countDown();
+                    }
+                }
+
+                private static String requireMessage(InputStream input) throws Exception {
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+                    while (System.nanoTime() < deadline) {
+                        if (input.available() > 0) {
+                            return readMessage(input);
+                        }
+                        TimeUnit.MILLISECONDS.sleep(5);
+                    }
+                    throw new IllegalStateException("Timed out waiting for transport response");
+                }
+
+                private static String readMessage(InputStream input) throws Exception {
+                    int contentLength = -1;
+                    while (true) {
+                        String line = readLine(input);
+                        if (line.isEmpty()) {
+                            break;
+                        }
+                        if (line.startsWith("Content-Length:")) {
+                            contentLength = Integer.parseInt(line.substring(15).trim());
+                        }
+                    }
+                    return new String(input.readNBytes(contentLength), StandardCharsets.UTF_8);
+                }
+
+                private static String readLine(InputStream input) throws Exception {
+                    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                    while (true) {
+                        int ch = input.read();
+                        if (ch == -1) {
+                            break;
+                        }
+                        if (ch == '\r') {
+                            int next = input.read();
+                            if (next == '\n') {
+                                break;
+                            }
+                            buffer.write(ch);
+                            if (next != -1) {
+                                buffer.write(next);
+                            }
+                            continue;
+                        }
+                        if (ch == '\n') {
+                            break;
+                        }
+                        buffer.write(ch);
+                    }
+                    return buffer.toString(StandardCharsets.UTF_8);
+                }
+            }
+            """);
+
+        await workspace.CompileAsync();
+        var run = await workspace.RunClassAsync("aspire.RemoteCancellationLifetimeProbe", TimeSpan.FromSeconds(6));
+
+        Assert.True(run.TimedOut is false, $"Probe timed out. stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.True(
+            run.ExitCode == 0,
+            $"Probe failed with exit code {run.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.Contains("OK", run.StdOut, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GeneratedTransport_CancellationIsDirectionalAndLocalCancelNotifiesHostOnce()
+    {
+        using var workspace = await CreateJavaProbeWorkspaceAsync();
+        workspace.WriteSource(
+            "aspire/CancellationDirectionProbe.java",
+            """
+            package aspire;
+
+            import java.io.ByteArrayOutputStream;
+            import java.io.InputStream;
+            import java.io.PipedInputStream;
+            import java.io.PipedOutputStream;
+            import java.lang.reflect.Field;
+            import java.nio.charset.StandardCharsets;
+            import java.util.concurrent.CompletableFuture;
+            import java.util.concurrent.TimeUnit;
+            import java.util.regex.Matcher;
+            import java.util.regex.Pattern;
+
+            public class CancellationDirectionProbe {
+                public static void main(String[] args) throws Exception {
+                    var clientInput = new PipedInputStream(32768);
+                    var serverOutput = new PipedOutputStream(clientInput);
+                    var serverInput = new PipedInputStream(32768);
+                    var clientOutput = new PipedOutputStream(serverInput);
+
+                    var client = new AspireClient("ignored");
+                    setField(client, "inputStream", clientInput);
+                    setField(client, "outputStream", clientOutput);
+
+                    CancellationToken local = new CancellationToken();
+                    String localId = client.registerCancellation(local);
+                    local.cancel();
+                    local.cancel();
+
+                    String outbound = readMessage(serverInput);
+                    assertMethodAndToken(outbound, "cancelToken", localId);
+
+                    if (waitForMessage(serverInput, 250) != null) {
+                        throw new IllegalStateException("local cancel emitted more than one cancellation request");
+                    }
+
+                    var secondClientInput = new PipedInputStream(32768);
+                    var secondServerOutput = new PipedOutputStream(secondClientInput);
+                    var secondServerInput = new PipedInputStream(32768);
+                    var secondClientOutput = new PipedOutputStream(secondServerInput);
+                    var secondClient = new AspireClient("ignored");
+                    setField(secondClient, "inputStream", secondClientInput);
+                    setField(secondClient, "outputStream", secondClientOutput);
+                    startReader(secondClient);
+
+                    CancellationToken[] remoteTokens = new CancellationToken[2];
+                    CompletableFuture<Void>[] callbackCompletions = new CompletableFuture[] {
+                        new CompletableFuture<>(),
+                        new CompletableFuture<>()
+                    };
+                    String firstCallbackId = client.registerCallback(callbackArgs -> {
+                        remoteTokens[0] = CancellationToken.fromValue(callbackArgs[0]);
+                        remoteTokens[0].onCancel(() -> callbackCompletions[0].complete(null));
+                        return callbackCompletions[0];
+                    });
+                    String secondCallbackId = secondClient.registerCallback(callbackArgs -> {
+                        remoteTokens[1] = CancellationToken.fromValue(callbackArgs[0]);
+                        remoteTokens[1].onCancel(() -> callbackCompletions[1].complete(null));
+                        return callbackCompletions[1];
+                    });
+
+                    writeCallbackRequest(serverOutput, 9000, firstCallbackId, "shared-remote-ct");
+                    writeCallbackRequest(secondServerOutput, 9000, secondCallbackId, "shared-remote-ct");
+                    waitForToken(remoteTokens, 0);
+                    waitForToken(remoteTokens, 1);
+
+                    if (remoteTokens[0] == null || remoteTokens[1] == null || remoteTokens[0] == remoteTokens[1]) {
+                        throw new IllegalStateException("remote cancellation tokens were not isolated by client");
+                    }
+
+                    writeCancelRequest(serverOutput, 9001, "shared-remote-ct");
+
+                    assertCancellationResponses(serverInput);
+                    if (!remoteTokens[0].isCancelled() || remoteTokens[1].isCancelled()) {
+                        throw new IllegalStateException("remote cancellation crossed client boundaries");
+                    }
+
+                    writeCancelRequest(secondServerOutput, 9001, "shared-remote-ct");
+                    assertCancellationResponses(secondServerInput);
+                    if (!remoteTokens[1].isCancelled()) {
+                        throw new IllegalStateException("second client's remote token was not cancelled");
+                    }
+
+                    if (waitForMessage(serverInput, 250) != null) {
+                        throw new IllegalStateException("remote cancellation echoed back to host");
+                    }
+
+                    System.out.println("OK");
+                }
+
+                private static void setField(AspireClient client, String name, Object value) throws Exception {
+                    Field field = AspireClient.class.getDeclaredField(name);
+                    field.setAccessible(true);
+                    field.set(client, value);
+                }
+
+                private static void startReader(AspireClient client) throws Exception {
+                    var method = AspireClient.class.getDeclaredMethod("ensureReaderLoopStarted");
+                    method.setAccessible(true);
+                    method.invoke(client);
+                }
+
+                private static void writeCallbackRequest(PipedOutputStream output, int id, String callbackId, String tokenId) throws Exception {
+                    String payload = "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":\"invokeCallback\",\"params\":{\"callbackId\":\"" + callbackId + "\",\"args\":[\"" + tokenId + "\"]}}";
+                    writeMessage(output, payload);
+                }
+
+                private static void writeCancelRequest(PipedOutputStream output, int id, String tokenId) throws Exception {
+                    String payload = "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":\"cancel\",\"params\":{\"cancellationId\":\"" + tokenId + "\"}}";
+                    writeMessage(output, payload);
+                }
+
+                private static void writeMessage(PipedOutputStream output, String payload) throws Exception {
+                    byte[] body = payload.getBytes(StandardCharsets.UTF_8);
+                    String header = "Content-Length: " + body.length + "\r\n\r\n";
+                    output.write(header.getBytes(StandardCharsets.UTF_8));
+                    output.write(body);
+                    output.flush();
+                }
+
+                private static void waitForToken(CancellationToken[] tokens, int index) throws Exception {
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+                    while (tokens[index] == null && System.nanoTime() < deadline) {
+                        TimeUnit.MILLISECONDS.sleep(5);
+                    }
+                    if (tokens[index] == null) {
+                        throw new IllegalStateException("Timed out waiting for callback token " + index);
+                    }
+                }
+
+                private static void assertCancellationResponses(InputStream input) throws Exception {
+                    String first = requireMessage(input);
+                    String second = requireMessage(input);
+                    String combined = first + second;
+                    if (!combined.contains("\"id\":9001") || !combined.contains("\"result\":true")) {
+                        throw new IllegalStateException("unexpected cancellation responses: " + combined);
+                    }
+                    if (combined.contains("\"method\":\"cancelToken\"")) {
+                        throw new IllegalStateException("remote cancellation echoed back to host: " + combined);
+                    }
+                }
+
+                private static void assertMethodAndToken(String json, String expectedMethod, String expectedToken) {
+                    if (!json.contains("\"method\":\"" + expectedMethod + "\"")) {
+                        throw new IllegalStateException("unexpected method payload: " + json);
+                    }
+
+                    if (json.contains("\"params\":[")) {
+                        if (!json.contains("\"params\":[\"" + expectedToken + "\"]")) {
+                            throw new IllegalStateException("unexpected cancel token payload: " + json);
+                        }
+                        return;
+                    }
+
+                    if (!json.contains("\"tokenId\":\"" + expectedToken + "\"")) {
+                        throw new IllegalStateException("unexpected cancel token payload: " + json);
+                    }
+                }
+
+                private static String waitForMessage(InputStream input, long timeoutMs) throws Exception {
+                    long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+                    while (System.nanoTime() < deadline) {
+                        if (input.available() > 0) {
+                            return readMessage(input);
+                        }
+                        TimeUnit.MILLISECONDS.sleep(5);
+                    }
+                    return null;
+                }
+
+                private static String requireMessage(InputStream input) throws Exception {
+                    String message = waitForMessage(input, 1000);
+                    if (message == null) {
+                        throw new IllegalStateException("Timed out waiting for transport response");
+                    }
+                    return message;
+                }
+
+                private static String readMessage(InputStream input) throws Exception {
+                    int contentLength = -1;
+                    while (true) {
+                        String line = readLine(input);
+                        if (line.isEmpty()) {
+                            break;
+                        }
+                        if (line.startsWith("Content-Length:")) {
+                            contentLength = Integer.parseInt(line.substring(15).trim());
+                        }
+                    }
+
+                    if (contentLength < 0) {
+                        throw new IllegalStateException("Missing Content-Length header");
+                    }
+
+                    byte[] body = input.readNBytes(contentLength);
+                    return new String(body, StandardCharsets.UTF_8);
+                }
+
+                private static String readLine(InputStream input) throws Exception {
+                    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                    while (true) {
+                        int ch = input.read();
+                        if (ch == -1) {
+                            break;
+                        }
+                        if (ch == '\r') {
+                            int next = input.read();
+                            if (next == '\n') {
+                                break;
+                            }
+                            buffer.write(ch);
+                            if (next != -1) {
+                                buffer.write(next);
+                            }
+                            continue;
+                        }
+                        if (ch == '\n') {
+                            break;
+                        }
+                        buffer.write(ch);
+                    }
+
+                    return buffer.toString(StandardCharsets.UTF_8);
+                }
+            }
+            """);
+
+        await workspace.CompileAsync();
+        var run = await workspace.RunClassAsync("aspire.CancellationDirectionProbe", TimeSpan.FromSeconds(6));
+
+        Assert.True(run.TimedOut is false, $"Probe timed out. stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.True(
+            run.ExitCode == 0,
+            $"Probe failed with exit code {run.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.Contains("OK", run.StdOut, StringComparison.Ordinal);
+    }
+
     private static string JoinGeneratedFiles(Dictionary<string, string> files)
     {
         return string.Join(
@@ -594,7 +1844,7 @@ public class AtsJavaCodeGeneratorTests
     }
 
     [Fact]
-    public void DtoPropertyWithDictionaryNestedInArrayCastsToTheFieldType()
+    public void DtoPropertyWithDictionaryNestedInArrayRebuildsTheFieldType()
     {
         // The field type comes from MapDtoPropertyTypeToJava (Map/List) while the fromMap cast used to
         // fall through to MapTypeRefToJava, which renders a mutable dictionary as AspireDict. AspireDict
@@ -608,7 +1858,7 @@ public class AtsJavaCodeGeneratorTests
         var generated = JoinGeneratedFiles(_generator.GenerateDistributedApplication(context));
 
         Assert.Contains("private Map<String, String>[] metadataArray;", generated);
-        Assert.Contains("value.setMetadataArray((Map<String, String>[]) metadataArrayValue);", generated);
+        Assert.Contains("(Map<String, String>[]) AspireClient.convertArray(metadataArrayValue, Map[].class.getComponentType()", generated);
     }
 
     [Fact]
@@ -628,6 +1878,467 @@ public class AtsJavaCodeGeneratorTests
 
         Assert.Contains("private List<Map<String, String>> entries;", generated);
         Assert.Contains("item0 -> (Map<String, String>) item0", generated);
+    }
+
+    [Fact]
+    public async Task GeneratedDto_TypedArraysAreRebuiltRecursivelyFromTransportLists()
+    {
+        var stringType = new AtsTypeRef { TypeId = "string", Category = AtsTypeCategory.Primitive };
+        var innerArray = new AtsTypeRef { TypeId = "array", Category = AtsTypeCategory.Array, ElementType = stringType };
+        var context = CreateContextWithSingleDtoProperty(
+            "Matrix",
+            new AtsTypeRef { TypeId = "array", Category = AtsTypeCategory.Array, ElementType = innerArray });
+
+        using var workspace = await CreateJavaProbeWorkspaceAsync(context, "aspire/KeywordProbe.java");
+        workspace.WriteSource(
+            "aspire/TypedArrayProbe.java",
+            """
+            package aspire;
+
+            import java.util.List;
+            import java.util.Map;
+
+            public class TypedArrayProbe {
+                public static void main(String[] args) {
+                    var value = KeywordProbe.fromMap(Map.of(
+                        "Matrix",
+                        List.of(List.of("one", "two"), List.of("three"))));
+                    String[][] matrix = value.getMatrix();
+
+                    if (matrix.length != 2
+                        || matrix[0].length != 2
+                        || !"two".equals(matrix[0][1])
+                        || !"three".equals(matrix[1][0])) {
+                        throw new IllegalStateException("unexpected typed array contents");
+                    }
+
+                    System.out.println("OK");
+                }
+            }
+            """);
+
+        await workspace.CompileAsync();
+        var run = await workspace.RunClassAsync("aspire.TypedArrayProbe", TimeSpan.FromSeconds(6));
+
+        Assert.True(run.TimedOut is false, $"Probe timed out. stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.True(
+            run.ExitCode == 0,
+            $"Probe failed with exit code {run.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.Contains("OK", run.StdOut, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GeneratedCapabilitiesAndCallbacks_RebuildTypedArraysFromTransportLists()
+    {
+        var resourceType = new AtsTypeRef { TypeId = "Tests/ProbeResource", Category = AtsTypeCategory.Handle };
+        var stringType = new AtsTypeRef { TypeId = AtsConstants.String, Category = AtsTypeCategory.Primitive };
+        var innerArray = new AtsTypeRef { TypeId = "array", Category = AtsTypeCategory.Array, ElementType = stringType };
+        var matrixType = new AtsTypeRef { TypeId = "array", Category = AtsTypeCategory.Array, ElementType = innerArray };
+        var callback = new AtsParameterInfo
+        {
+            Name = "callback",
+            IsCallback = true,
+            Type = new AtsTypeRef { TypeId = "callback", Category = AtsTypeCategory.Callback },
+            CallbackParameters = [new AtsCallbackParameterInfo { Name = "matrix", Type = matrixType }],
+            CallbackReturnType = new AtsTypeRef { TypeId = AtsConstants.Void, Category = AtsTypeCategory.Primitive }
+        };
+        var callbackCapability = new AtsCapabilityInfo
+        {
+            CapabilityId = "Tests/withMatrix",
+            MethodName = "withMatrix",
+            Parameters = [callback],
+            ReturnType = new AtsTypeRef { TypeId = AtsConstants.Void, Category = AtsTypeCategory.Primitive },
+            TargetTypeId = resourceType.TypeId,
+            TargetType = resourceType,
+            TargetParameterName = "resource",
+            ExpandedTargetTypes = [resourceType],
+            CapabilityKind = AtsCapabilityKind.Method
+        };
+        var context = CreateContextWithProbeCapabilities(
+            resourceType,
+            CreateProbeCapability(resourceType, "getMatrix", matrixType),
+            callbackCapability);
+
+        var generated = _generator.GenerateDistributedApplication(context)["aspire/ProbeResource.java"];
+
+        Assert.Contains("AspireClient.convertArray(result, String[][].class.getComponentType()", generated);
+        Assert.Contains("AspireClient.convertArray(args[0], String[][].class.getComponentType()", generated);
+    }
+
+    [Fact]
+    public void GeneratedCancellationParameters_AreMarshalledByInvokeCapability()
+    {
+        var resourceType = new AtsTypeRef { TypeId = "Tests/ProbeResource", Category = AtsTypeCategory.Handle };
+        var cancellationParameter = new AtsParameterInfo
+        {
+            Name = "cancellationToken",
+            Type = new AtsTypeRef { TypeId = AtsConstants.CancellationToken, Category = AtsTypeCategory.Dto }
+        };
+        var capability = new AtsCapabilityInfo
+        {
+            CapabilityId = "Tests/cancellable",
+            MethodName = "cancellable",
+            Parameters = [cancellationParameter],
+            ReturnType = new AtsTypeRef { TypeId = AtsConstants.Void, Category = AtsTypeCategory.Primitive },
+            TargetTypeId = resourceType.TypeId,
+            TargetType = resourceType,
+            TargetParameterName = "resource",
+            ExpandedTargetTypes = [resourceType],
+            CapabilityKind = AtsCapabilityKind.Method
+        };
+        var generated = _generator.GenerateDistributedApplication(
+            CreateContextWithProbeCapabilities(resourceType, capability))["aspire/ProbeResource.java"];
+
+        Assert.Contains("reqArgs.put(\"cancellationToken\", cancellationToken);", generated);
+        Assert.DoesNotContain("registerCancellation(cancellationToken)", generated);
+    }
+
+    [Fact]
+    public async Task GeneratedCapabilities_NullablePrimitiveResultsReturnNull()
+    {
+        var resourceType = new AtsTypeRef
+        {
+            TypeId = "Tests/ProbeResource",
+            Category = AtsTypeCategory.Handle
+        };
+        var context = CreateContextWithProbeCapabilities(
+            resourceType,
+            CreateProbeCapability(
+                resourceType,
+                "nullableFlag",
+                new AtsTypeRef { TypeId = AtsConstants.Boolean, Category = AtsTypeCategory.Primitive, IsNullable = true }),
+            CreateProbeCapability(
+                resourceType,
+                "nullableNumber",
+                new AtsTypeRef { TypeId = AtsConstants.Number, Category = AtsTypeCategory.Primitive, IsNullable = true }));
+
+        using var workspace = await CreateJavaProbeWorkspaceAsync(context, "aspire/ProbeResource.java");
+        workspace.WriteSource(
+            "aspire/NullablePrimitiveProbe.java",
+            """
+            package aspire;
+
+            import java.io.ByteArrayOutputStream;
+            import java.io.InputStream;
+            import java.io.PipedInputStream;
+            import java.io.PipedOutputStream;
+            import java.lang.reflect.Field;
+            import java.nio.charset.StandardCharsets;
+            import java.util.concurrent.CompletableFuture;
+            import java.util.concurrent.TimeUnit;
+
+            public class NullablePrimitiveProbe {
+                public static void main(String[] args) throws Exception {
+                    var clientInput = new PipedInputStream(32768);
+                    var serverOutput = new PipedOutputStream(clientInput);
+                    var serverInput = new PipedInputStream(32768);
+                    var clientOutput = new PipedOutputStream(serverInput);
+
+                    var client = new AspireClient("ignored");
+                    setField(client, "inputStream", clientInput);
+                    setField(client, "outputStream", clientOutput);
+                    var resource = new ProbeResource(new Handle("probe", "Tests/ProbeResource"), client);
+
+                    var flagCall = CompletableFuture.supplyAsync(resource::nullableFlag);
+                    writeNullResponse(serverOutput, extractId(readMessage(serverInput)));
+                    Boolean flag = flagCall.get(2, TimeUnit.SECONDS);
+                    if (flag != null) {
+                        throw new IllegalStateException("nullable Boolean was not null");
+                    }
+
+                    var numberCall = CompletableFuture.supplyAsync(resource::nullableNumber);
+                    writeNullResponse(serverOutput, extractId(readMessage(serverInput)));
+                    Number number = numberCall.get(2, TimeUnit.SECONDS);
+                    if (number != null) {
+                        throw new IllegalStateException("nullable Number was not null");
+                    }
+
+                    System.out.println("OK");
+                }
+
+                private static void setField(AspireClient client, String name, Object value) throws Exception {
+                    Field field = AspireClient.class.getDeclaredField(name);
+                    field.setAccessible(true);
+                    field.set(client, value);
+                }
+
+                private static int extractId(String json) {
+                    int start = json.indexOf("\"id\":") + 5;
+                    int end = start;
+                    while (end < json.length() && Character.isDigit(json.charAt(end))) {
+                        end++;
+                    }
+                    return Integer.parseInt(json.substring(start, end));
+                }
+
+                private static void writeNullResponse(PipedOutputStream output, int id) throws Exception {
+                    writeMessage(output, "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":null}");
+                }
+
+                private static void writeMessage(PipedOutputStream output, String payload) throws Exception {
+                    byte[] body = payload.getBytes(StandardCharsets.UTF_8);
+                    output.write(("Content-Length: " + body.length + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+                    output.write(body);
+                    output.flush();
+                }
+
+                private static String readMessage(InputStream input) throws Exception {
+                    int contentLength = -1;
+                    while (true) {
+                        String line = readLine(input);
+                        if (line.isEmpty()) {
+                            break;
+                        }
+                        if (line.startsWith("Content-Length:")) {
+                            contentLength = Integer.parseInt(line.substring(15).trim());
+                        }
+                    }
+                    return new String(input.readNBytes(contentLength), StandardCharsets.UTF_8);
+                }
+
+                private static String readLine(InputStream input) throws Exception {
+                    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                    while (true) {
+                        int ch = input.read();
+                        if (ch == '\r') {
+                            if (input.read() == '\n') {
+                                break;
+                            }
+                        } else if (ch == '\n' || ch == -1) {
+                            break;
+                        } else {
+                            buffer.write(ch);
+                        }
+                    }
+                    return buffer.toString(StandardCharsets.UTF_8);
+                }
+            }
+            """);
+
+        await workspace.CompileAsync();
+        var run = await workspace.RunClassAsync("aspire.NullablePrimitiveProbe", TimeSpan.FromSeconds(6));
+
+        Assert.True(run.TimedOut is false, $"Probe timed out. stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.True(
+            run.ExitCode == 0,
+            $"Probe failed with exit code {run.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.Contains("OK", run.StdOut, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GeneratedCallbacks_VoidCallbackReturnsMutatedPositionalArguments()
+    {
+        var resourceType = new AtsTypeRef { TypeId = "Tests/ProbeResource", Category = AtsTypeCategory.Handle };
+        var contextType = new AtsTypeRef { TypeId = "Tests/MutableContext", Category = AtsTypeCategory.Dto };
+        var callback = new AtsParameterInfo
+        {
+            Name = "callback",
+            IsCallback = true,
+            Type = new AtsTypeRef { TypeId = "callback", Category = AtsTypeCategory.Callback },
+            CallbackParameters =
+            [
+                new AtsCallbackParameterInfo { Name = "context", Type = contextType }
+            ],
+            CallbackReturnType = new AtsTypeRef { TypeId = AtsConstants.Void, Category = AtsTypeCategory.Primitive }
+        };
+        var capability = new AtsCapabilityInfo
+        {
+            CapabilityId = "Tests/withCallback",
+            MethodName = "withCallback",
+            Parameters = [callback],
+            ReturnType = new AtsTypeRef { TypeId = AtsConstants.Void, Category = AtsTypeCategory.Primitive },
+            TargetTypeId = resourceType.TypeId,
+            TargetType = resourceType,
+            TargetParameterName = "resource",
+            ExpandedTargetTypes = [resourceType],
+            CapabilityKind = AtsCapabilityKind.Method
+        };
+        var context = new AtsContext
+        {
+            Capabilities = [capability],
+            HandleTypes = [new AtsTypeInfo { AtsTypeId = resourceType.TypeId! }],
+            DtoTypes =
+            [
+                new AtsDtoTypeInfo
+                {
+                    Name = "MutableContext",
+                    TypeId = contextType.TypeId!,
+                    Properties =
+                    [
+                        new AtsDtoPropertyInfo
+                        {
+                            Name = "Value",
+                            Type = new AtsTypeRef { TypeId = AtsConstants.String, Category = AtsTypeCategory.Primitive }
+                        }
+                    ]
+                }
+            ],
+            EnumTypes = []
+        };
+
+        using var workspace = await CreateJavaProbeWorkspaceAsync(
+            context,
+            "aspire/ProbeResource.java",
+            "aspire/MutableContext.java");
+        workspace.WriteSource(
+            "aspire/CallbackWriteBackProbe.java",
+            """
+            package aspire;
+
+            import java.io.ByteArrayOutputStream;
+            import java.io.InputStream;
+            import java.io.PipedInputStream;
+            import java.io.PipedOutputStream;
+            import java.lang.reflect.Field;
+            import java.nio.charset.StandardCharsets;
+            import java.util.concurrent.CompletableFuture;
+            import java.util.concurrent.TimeUnit;
+
+            public class CallbackWriteBackProbe {
+                public static void main(String[] args) throws Exception {
+                    var clientInput = new PipedInputStream(32768);
+                    var serverOutput = new PipedOutputStream(clientInput);
+                    var serverInput = new PipedInputStream(32768);
+                    var clientOutput = new PipedOutputStream(serverInput);
+
+                    var client = new AspireClient("ignored");
+                    setField(client, "inputStream", clientInput);
+                    setField(client, "outputStream", clientOutput);
+                    var resource = new ProbeResource(new Handle("probe", "Tests/ProbeResource"), client);
+
+                    var invocation = CompletableFuture.runAsync(() ->
+                        resource.withCallback(context -> context.setValue("after")));
+                    String request = readMessage(serverInput);
+                    int requestId = extractNumericId(request);
+                    String callbackId = extractStringProperty(request, "callback");
+
+                    writeMessage(serverOutput,
+                        "{\"jsonrpc\":\"2.0\",\"id\":9001,\"method\":\"invokeCallback\","
+                            + "\"params\":{\"callbackId\":\"" + callbackId + "\","
+                            + "\"args\":{\"p0\":{\"Value\":\"before\"}}}}" );
+
+                    String callbackResponse = readMessage(serverInput);
+                    if (!callbackResponse.contains("\"id\":9001")
+                        || !callbackResponse.contains("\"result\":[{\"Value\":\"after\"}]") ) {
+                        throw new IllegalStateException("callback did not return mutated arguments: " + callbackResponse);
+                    }
+
+                    writeMessage(serverOutput,
+                        "{\"jsonrpc\":\"2.0\",\"id\":" + requestId + ",\"result\":null}");
+                    invocation.get(2, TimeUnit.SECONDS);
+                    System.out.println("OK");
+                }
+
+                private static void setField(AspireClient client, String name, Object value) throws Exception {
+                    Field field = AspireClient.class.getDeclaredField(name);
+                    field.setAccessible(true);
+                    field.set(client, value);
+                }
+
+                private static int extractNumericId(String json) {
+                    int start = json.indexOf("\"id\":") + 5;
+                    int end = start;
+                    while (end < json.length() && Character.isDigit(json.charAt(end))) {
+                        end++;
+                    }
+                    return Integer.parseInt(json.substring(start, end));
+                }
+
+                private static String extractStringProperty(String json, String property) {
+                    String marker = "\"" + property + "\":\"";
+                    int start = json.indexOf(marker) + marker.length();
+                    return json.substring(start, json.indexOf('\"', start));
+                }
+
+                private static void writeMessage(PipedOutputStream output, String payload) throws Exception {
+                    byte[] body = payload.getBytes(StandardCharsets.UTF_8);
+                    output.write(("Content-Length: " + body.length + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+                    output.write(body);
+                    output.flush();
+                }
+
+                private static String readMessage(InputStream input) throws Exception {
+                    int contentLength = -1;
+                    while (true) {
+                        String line = readLine(input);
+                        if (line.isEmpty()) {
+                            break;
+                        }
+                        if (line.startsWith("Content-Length:")) {
+                            contentLength = Integer.parseInt(line.substring(15).trim());
+                        }
+                    }
+                    return new String(input.readNBytes(contentLength), StandardCharsets.UTF_8);
+                }
+
+                private static String readLine(InputStream input) throws Exception {
+                    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                    while (true) {
+                        int ch = input.read();
+                        if (ch == '\r') {
+                            if (input.read() == '\n') {
+                                break;
+                            }
+                        } else if (ch == '\n' || ch == -1) {
+                            break;
+                        } else {
+                            buffer.write(ch);
+                        }
+                    }
+                    return buffer.toString(StandardCharsets.UTF_8);
+                }
+            }
+            """);
+
+        await workspace.CompileAsync();
+        var run = await workspace.RunClassAsync("aspire.CallbackWriteBackProbe", TimeSpan.FromSeconds(6));
+
+        Assert.True(run.TimedOut is false, $"Probe timed out. stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.True(
+            run.ExitCode == 0,
+            $"Probe failed with exit code {run.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.Contains("OK", run.StdOut, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GeneratedSupportApis_AreAccessibleFromExternalPackages()
+    {
+        using var workspace = await CreateJavaProbeWorkspaceAsync();
+        workspace.WriteSource(
+            "external/SupportApiProbe.java",
+            """
+            package external;
+
+            import aspire.AspireUnion;
+            import aspire.CapabilityError;
+
+            public class SupportApiProbe {
+                public static void main(String[] args) {
+                    AspireUnion union = AspireUnion.of("value");
+                    AspireUnion transported = AspireUnion.fromValue(union);
+                    if (!transported.is(String.class)
+                        || !"value".equals(transported.getValue())
+                        || !"value".equals(transported.getValueAs(String.class))) {
+                        throw new IllegalStateException("union API returned unexpected values");
+                    }
+
+                    System.out.println("OK");
+                }
+
+                static String inspect(CapabilityError error) {
+                    return error.getCode() + ":" + error.getData();
+                }
+            }
+            """);
+
+        await workspace.CompileAsync();
+        var run = await workspace.RunClassAsync("external.SupportApiProbe", TimeSpan.FromSeconds(6));
+
+        Assert.True(run.TimedOut is false, $"Probe timed out. stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.True(
+            run.ExitCode == 0,
+            $"Probe failed with exit code {run.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.Contains("OK", run.StdOut, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -701,4 +2412,171 @@ public class AtsJavaCodeGeneratorTests
         KeyType = new AtsTypeRef { TypeId = "string", Category = AtsTypeCategory.Primitive },
         ValueType = new AtsTypeRef { TypeId = "string", Category = AtsTypeCategory.Primitive }
     };
+
+    private static AtsContext CreateContextWithProbeCapabilities(AtsTypeRef resourceType, params AtsCapabilityInfo[] capabilities)
+    {
+        return new AtsContext
+        {
+            Capabilities = capabilities,
+            HandleTypes = [new AtsTypeInfo { AtsTypeId = resourceType.TypeId! }],
+            DtoTypes = [],
+            EnumTypes = []
+        };
+    }
+
+    private static AtsCapabilityInfo CreateProbeCapability(AtsTypeRef resourceType, string methodName, AtsTypeRef returnType)
+    {
+        return new AtsCapabilityInfo
+        {
+            CapabilityId = $"Tests/{methodName}",
+            MethodName = methodName,
+            Parameters = [],
+            ReturnType = returnType,
+            TargetTypeId = resourceType.TypeId,
+            TargetType = resourceType,
+            TargetParameterName = "resource",
+            ExpandedTargetTypes = [resourceType],
+            CapabilityKind = AtsCapabilityKind.Method
+        };
+    }
+
+    private static async Task<JavaProbeWorkspace> CreateJavaProbeWorkspaceAsync(
+        AtsContext? context = null,
+        params string[] additionalFiles)
+    {
+        var workspace = new JavaProbeWorkspace();
+        var files = new AtsJavaCodeGenerator().GenerateDistributedApplication(context ?? new AtsContext
+        {
+            Capabilities = [],
+            HandleTypes = [],
+            EnumTypes = [],
+            DtoTypes = [],
+            ExportedValues = []
+        });
+
+        string[] transportFiles =
+        [
+            "aspire/AspireClient.java",
+            "aspire/Handle.java",
+            "aspire/CapabilityError.java",
+            "aspire/CancellationToken.java",
+            "aspire/JsonSerializable.java",
+            "aspire/HandleWrapperBase.java",
+            "aspire/ReferenceExpression.java",
+            "aspire/AspireUnion.java",
+            "aspire/AspireAction1.java",
+            "aspire/WireValueEnum.java",
+        ];
+
+        foreach (var path in transportFiles.Concat(additionalFiles))
+        {
+            if (files.TryGetValue(path, out var content))
+            {
+                workspace.WriteSource(path, content);
+            }
+        }
+
+        await Task.CompletedTask;
+        return workspace;
+    }
+
+    private sealed class JavaProbeWorkspace : IDisposable
+    {
+        private readonly DirectoryInfo _root = Directory.CreateTempSubdirectory("aspire-java-transport-probe-");
+        private readonly DirectoryInfo _classes;
+
+        public JavaProbeWorkspace()
+        {
+            _classes = Directory.CreateDirectory(Path.Combine(_root.FullName, "classes"));
+        }
+
+        public void WriteSource(string relativePath, string content)
+        {
+            var path = Path.Combine(_root.FullName, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, content);
+        }
+
+        public async Task CompileAsync()
+        {
+            var sourceFiles = Directory
+                .EnumerateFiles(_root.FullName, "*.java", SearchOption.AllDirectories)
+                .Select(path => Path.GetRelativePath(_root.FullName, path))
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+
+            var sourcesFile = Path.Combine(_root.FullName, "sources.txt");
+            await File.WriteAllLinesAsync(sourcesFile, sourceFiles);
+
+            var compile = await RunProcessAsync(
+                "javac",
+                ["--release", "25", "-d", _classes.FullName, "@sources.txt"],
+                TimeSpan.FromSeconds(30));
+
+            Assert.True(compile.TimedOut is false, $"javac timed out. stdout:{Environment.NewLine}{compile.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{compile.StdErr}");
+            Assert.True(
+                compile.ExitCode == 0,
+                $"javac failed with exit code {compile.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{compile.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{compile.StdErr}");
+        }
+
+        public Task<ProcessResult> RunClassAsync(string className, TimeSpan timeout)
+            => RunProcessAsync("java", ["-cp", _classes.FullName, className], timeout);
+
+        public void Dispose()
+        {
+            try
+            {
+                _root.Delete(recursive: true);
+            }
+            catch (IOException)
+            {
+                // Best effort temp cleanup.
+            }
+        }
+
+        private async Task<ProcessResult> RunProcessAsync(string fileName, string[] arguments, TimeSpan timeout)
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = fileName,
+                WorkingDirectory = _root.FullName,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+
+            foreach (var arg in arguments)
+            {
+                startInfo.ArgumentList.Add(arg);
+            }
+
+            using var process = new Process { StartInfo = startInfo };
+            process.Start();
+
+            var stdOutTask = process.StandardOutput.ReadToEndAsync();
+            var stdErrTask = process.StandardError.ReadToEndAsync();
+
+            using var timeoutCts = new CancellationTokenSource(timeout);
+            try
+            {
+                await process.WaitForExitAsync(timeoutCts.Token);
+                return new ProcessResult(process.ExitCode, await stdOutTask, await stdErrTask, TimedOut: false);
+            }
+            catch (OperationCanceledException)
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch
+                {
+                    // Ignore failures while attempting to kill timed-out process.
+                }
+
+                return new ProcessResult(-1, await stdOutTask, await stdErrTask, TimedOut: true);
+            }
+        }
+    }
+
+    private sealed record ProcessResult(int ExitCode, string StdOut, string StdErr, bool TimedOut);
 }

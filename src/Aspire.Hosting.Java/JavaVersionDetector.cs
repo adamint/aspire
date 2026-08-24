@@ -94,9 +94,11 @@ internal static partial class JavaVersionDetector
         // Element names are matched without their namespace so both the Maven 4 POM namespace and the
         // long-standing http://maven.apache.org/POM/4.0.0 namespace are handled.
         //
-        // Every element with a matching name is considered, not just the first: a POM often declares
-        // <release>${java.version}</release> on the compiler plugin and a literal elsewhere, and stopping
-        // at the unresolvable property reference would fall back to the default version instead.
+        // Every active project element with a matching name is considered, not just the first: a POM
+        // often declares <release>${java.version}</release> on the compiler plugin and a literal elsewhere,
+        // and stopping at the unresolvable property reference would fall back to the default version instead.
+        // Profile descendants are excluded because whether a profile is active depends on Maven's effective
+        // model and invocation; allowing an inactive profile to win is worse evidence than the project itself.
         // Ordered by how directly each one decides the bytecode version, most direct first, because the
         // runtime image has to be at least what the compiler actually emitted.
         //
@@ -106,6 +108,10 @@ internal static partial class JavaVersionDetector
         // java.version and maven.compiler.release overrides that mapping, so Maven compiles to the
         // latter and reading java.version would pick a runtime too old to load the classes.
         // https://docs.spring.io/spring-boot/maven-plugin/using.html
+        var activeProjectElements = document.Descendants()
+            .Where(element => !element.Ancestors().Any(ancestor =>
+                string.Equals(ancestor.Name.LocalName, "profile", StringComparison.Ordinal)));
+
         foreach (var (name, mustBePluginConfiguration) in ((string, bool)[])
         [
             // Explicit plugin configuration beats the property that merely supplies the parameter's
@@ -124,7 +130,7 @@ internal static partial class JavaVersionDetector
             ("java.version", false),
         ])
         {
-            foreach (var element in document.Descendants().Where(e => string.Equals(e.Name.LocalName, name, StringComparison.Ordinal)))
+            foreach (var element in activeProjectElements.Where(e => string.Equals(e.Name.LocalName, name, StringComparison.Ordinal)))
             {
                 if (mustBePluginConfiguration && !IsCompilerPluginConfiguration(element.Parent))
                 {
@@ -193,8 +199,9 @@ internal static partial class JavaVersionDetector
     /// sourceCompatibility = '17'
     /// targetCompatibility = 1.8
     /// </code>
-    /// The toolchain is checked first because it pins the JDK Gradle actually compiles with, whereas
-    /// source/target compatibility only constrain the bytecode level.
+    /// The final supported assignment is used because Gradle scripts can reassign these settings and the
+    /// later assignment is the effective one. This remains a best-effort textual detector rather than a
+    /// complete evaluation of the Gradle model.
     /// </remarks>
     private static string? DetectFromGradle(string buildScriptPath)
     {
@@ -215,26 +222,20 @@ internal static partial class JavaVersionDetector
 
         var script = StripComments(contents);
 
-        if (FirstActiveMatch(ToolchainRegex(), script) is { } toolchain)
+        var assignment = new[]
         {
-            return Normalize(toolchain.Groups[1].Value);
+            LastActiveMatch(ToolchainRegex(), script),
+            LastActiveMatch(JavaVersionEnumRegex(), script),
+            LastActiveMatch(CompatibilityRegex(), script),
         }
+            .OfType<Match>()
+            .MaxBy(match => match.Index);
 
-        if (FirstActiveMatch(JavaVersionEnumRegex(), script) is { } enumMatch)
-        {
-            return Normalize(enumMatch.Groups[1].Value.Replace('_', '.'));
-        }
-
-        if (FirstActiveMatch(CompatibilityRegex(), script) is { } compatibility)
-        {
-            return Normalize(compatibility.Groups[1].Value);
-        }
-
-        return null;
+        return Normalize(assignment?.Groups[1].Value.Replace('_', '.'));
     }
 
     /// <summary>
-    /// The first match that starts outside a string literal, or <c>null</c> when every match is inside one.
+    /// The last match that starts outside a string literal, or <c>null</c> when every match is inside one.
     /// </summary>
     /// <remarks>
     /// The patterns run over the raw script rather than a parsed model, so a version-shaped fragment quoted
@@ -252,17 +253,19 @@ internal static partial class JavaVersionDetector
     /// the quoted form that <see cref="CompatibilityRegex"/> exists to read.
     /// </para>
     /// </remarks>
-    private static Match? FirstActiveMatch(Regex regex, GradleScript script)
+    private static Match? LastActiveMatch(Regex regex, GradleScript script)
     {
+        Match? lastActiveMatch = null;
+
         for (var match = regex.Match(script.Text); match.Success; match = match.NextMatch())
         {
             if (!script.IsInsideStringLiteral(match.Index))
             {
-                return match;
+                lastActiveMatch = match;
             }
         }
 
-        return null;
+        return lastActiveMatch;
     }
 
     /// <summary>

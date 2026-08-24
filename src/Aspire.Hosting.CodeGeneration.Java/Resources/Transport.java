@@ -15,6 +15,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -22,9 +23,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.HashSet;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -71,28 +76,32 @@ class CapabilityError extends RuntimeException {
         this.data = data;
     }
 
-    String getCode() { return code; }
-    Object getData() { return data; }
+    public String getCode() { return code; }
+    public Object getData() { return data; }
 }
 
 /**
  * CancellationToken for cancelling operations.
  */
-class CancellationToken {
-    private volatile boolean cancelled = false;
+public class CancellationToken {
+    private final AtomicBoolean cancelled = new AtomicBoolean(false);
+    private final AtomicInteger remoteReferences = new AtomicInteger(0);
     private final List<Runnable> listeners = new CopyOnWriteArrayList<>();
 
     // Remote token id supplied by the AppHost when this token is materialized for a
     // callback argument. Null for locally-created tokens. Retained so cancellation can
     // be correlated back to the AppHost if needed.
     private final String remoteTokenId;
+    private final AspireClient remoteClient;
 
-    CancellationToken() {
+    public CancellationToken() {
         this.remoteTokenId = null;
+        this.remoteClient = null;
     }
 
-    private CancellationToken(String remoteTokenId) {
+    CancellationToken(String remoteTokenId, AspireClient remoteClient) {
         this.remoteTokenId = remoteTokenId;
+        this.remoteClient = remoteClient;
     }
 
     /**
@@ -101,33 +110,70 @@ class CancellationToken {
      * remote token id (a string); generated code calls this to turn that wire value into
      * a CancellationToken instance. Mirrors the TypeScript/Go SDK behavior.
      */
-    static CancellationToken fromValue(Object value) {
+    public static CancellationToken fromValue(Object value) {
         if (value instanceof CancellationToken token) {
             return token;
         }
         if (value instanceof String tokenId) {
-            return new CancellationToken(tokenId);
+            AspireClient client = AspireClient.currentCallbackClient();
+            return client == null
+                ? new CancellationToken(tokenId, null)
+                : client.getOrCreateRemoteCancellationToken(tokenId);
         }
         return new CancellationToken();
     }
 
     String getRemoteTokenId() { return remoteTokenId; }
 
-    void cancel() {
-        cancelled = true;
+    void retainRemoteReference() {
+        remoteReferences.incrementAndGet();
+    }
+
+    void releaseRemoteReference() {
+        if (remoteTokenId != null && remoteClient != null) {
+            remoteClient.releaseRemoteCancellationToken(remoteTokenId, this);
+        }
+    }
+
+    int decrementRemoteReference() {
+        return remoteReferences.decrementAndGet();
+    }
+
+    public void cancel() {
+        if (!markCancelled()) {
+            return;
+        }
+
+        if (remoteTokenId != null && remoteClient != null) {
+            remoteClient.removeRemoteCancellationToken(remoteTokenId, this);
+        }
+
+        notifyCancellationListeners();
+    }
+
+    boolean markCancelled() {
+        return cancelled.compareAndSet(false, true);
+    }
+
+    void notifyCancellationListeners() {
         for (Runnable listener : listeners) {
             listener.run();
         }
     }
 
-    boolean isCancelled() { return cancelled; }
+    public boolean isCancelled() { return cancelled.get(); }
 
-    void onCancel(Runnable listener) {
+    public void onCancel(Runnable listener) {
         listeners.add(listener);
-        if (cancelled) {
+        if (cancelled.get()) {
             listener.run();
         }
     }
+
+    void removeCancelListener(Runnable listener) {
+        listeners.remove(listener);
+    }
+
 }
 
 interface JsonSerializable {
@@ -139,6 +185,9 @@ interface JsonSerializable {
  */
 class AspireClient {
     private static final boolean DEBUG = System.getenv("ASPIRE_DEBUG") != null;
+    private static final int MAX_PENDING_REMOTE_CANCELLATIONS = 1024;
+    private static final ThreadLocal<AspireClient> callbackClient = new ThreadLocal<>();
+    private static final ThreadLocal<List<CancellationToken>> callbackRemoteTokens = new ThreadLocal<>();
     
     private final String socketPath;
     private OutputStream outputStream;
@@ -151,7 +200,17 @@ class AspireClient {
     private final AtomicInteger requestId = new AtomicInteger(0);
     private final Map<String, Function<Object[], Object>> callbacks = new ConcurrentHashMap<>();
     private final Map<String, Consumer<Void>> cancellations = new ConcurrentHashMap<>();
+    private final Map<Integer, CompletableFuture<Object>> pendingRequests = new ConcurrentHashMap<>();
+    private final Map<String, Runnable> cancellationRegistrations = new ConcurrentHashMap<>();
+    private final Map<String, CancellationToken> remoteCancellationTokens = new ConcurrentHashMap<>();
+    private final Map<String, CancellationToken> pendingRemoteCancellations = new LinkedHashMap<>();
+    private final Object readerLock = new Object();
+    private final Object connectionStateLock = new Object();
+    private volatile boolean readerStarted;
+    private volatile boolean disconnected;
+    private volatile Throwable disconnectCause;
     private Runnable disconnectHandler;
+    private int activeServerCallbacks;
 
     // Handle wrapper factory registry
     private static final Map<String, BiFunction<Handle, AspireClient, Object>> handleWrappers = new ConcurrentHashMap<>();
@@ -164,6 +223,76 @@ class AspireClient {
         this.socketPath = socketPath;
     }
 
+    static AspireClient currentCallbackClient() {
+        return callbackClient.get();
+    }
+
+    CancellationToken getOrCreateRemoteCancellationToken(String cancellationId) {
+        CancellationToken token;
+        synchronized (connectionStateLock) {
+            if (disconnected) {
+                token = new CancellationToken(cancellationId, this);
+                token.retainRemoteReference();
+                token.markCancelled();
+            } else {
+                CancellationToken pendingCancellation = pendingRemoteCancellations.remove(cancellationId);
+                token = remoteCancellationTokens.compute(cancellationId, (id, existing) -> {
+                    CancellationToken retained = existing != null
+                        ? existing
+                        : pendingCancellation != null ? pendingCancellation : new CancellationToken(id, this);
+                    retained.retainRemoteReference();
+                    return retained;
+                });
+            }
+        }
+        callbackRemoteTokens.get().add(token);
+        return token;
+    }
+
+    void removeRemoteCancellationToken(String cancellationId, CancellationToken token) {
+        remoteCancellationTokens.remove(cancellationId, token);
+    }
+
+    void releaseRemoteCancellationToken(String cancellationId, CancellationToken token) {
+        remoteCancellationTokens.computeIfPresent(cancellationId, (id, existing) -> {
+            if (existing != token) {
+                return existing;
+            }
+            return token.decrementRemoteReference() == 0 ? null : token;
+        });
+    }
+
+    private boolean cancelRemoteCancellationToken(String cancellationId) {
+        CancellationToken token;
+        boolean notifyListeners;
+        synchronized (connectionStateLock) {
+            if (disconnected) {
+                return false;
+            }
+            token = remoteCancellationTokens.get(cancellationId);
+            if (token == null && activeServerCallbacks == 0) {
+                return false;
+            }
+            if (token == null) {
+                token = pendingRemoteCancellations.computeIfAbsent(
+                    cancellationId,
+                    id -> new CancellationToken(id, this));
+            } else if (activeServerCallbacks > 0) {
+                pendingRemoteCancellations.put(cancellationId, token);
+            }
+            while (pendingRemoteCancellations.size() > MAX_PENDING_REMOTE_CANCELLATIONS) {
+                String oldestId = pendingRemoteCancellations.keySet().iterator().next();
+                pendingRemoteCancellations.remove(oldestId);
+            }
+            notifyListeners = token.markCancelled();
+        }
+
+        if (notifyListeners) {
+            token.notifyCancellationListeners();
+        }
+        return true;
+    }
+
     public void connect() throws IOException {
         debug("Connecting to AppHost server at " + socketPath);
         
@@ -172,6 +301,8 @@ class AspireClient {
         } else {
             connectUnixSocket();
         }
+
+        ensureReaderLoopStarted();
         
         debug("Connected successfully");
     }
@@ -211,37 +342,93 @@ class AspireClient {
     }
 
     public void onDisconnect(Runnable handler) {
-        this.disconnectHandler = handler;
+        boolean invokeImmediately;
+        synchronized (connectionStateLock) {
+            invokeImmediately = disconnected;
+            if (!invokeImmediately) {
+                disconnectHandler = handler;
+            }
+        }
+
+        if (invokeImmediately) {
+            handler.run();
+        }
     }
 
     public Object invokeCapability(String capabilityId, Map<String, Object> args) {
-        int id = requestId.incrementAndGet();
-        
+        List<String> cancellationIds = new ArrayList<>();
+
         Map<String, Object> params = new HashMap<>();
         params.put("capabilityId", capabilityId);
-        params.put("args", marshalTransportValue(args));
+        params.put("args", marshalTransportValue(args, cancellationIds));
+
+        try {
+            return sendRequest("invokeCapability", params);
+        } finally {
+            for (String cancellationId : new HashSet<>(cancellationIds)) {
+                unregisterCancellation(cancellationId);
+            }
+        }
+    }
+
+    private Object sendRequest(String method, Object params) {
+        CompletableFuture<Object> pendingResponse = new CompletableFuture<>();
+        int id;
+        synchronized (connectionStateLock) {
+            if (disconnected) {
+                throw disconnectedException();
+            }
+
+            id = requestId.incrementAndGet();
+            pendingRequests.put(id, pendingResponse);
+        }
 
         Map<String, Object> request = new HashMap<>();
         request.put("jsonrpc", "2.0");
         request.put("id", id);
-        request.put("method", "invokeCapability");
+        request.put("method", method);
         request.put("params", params);
 
-        debug("Sending request invokeCapability with id=" + id);
-        
+        debug("Sending request " + method + " with id=" + id);
+
         try {
+            ensureReaderLoopStarted();
             sendMessage(request);
-            return readResponse(id);
         } catch (IOException e) {
+            pendingRequests.remove(id);
             handleDisconnect();
-            throw new RuntimeException("Failed to invoke capability: " + e.getMessage(), e);
+            throw new RuntimeException("Failed to send request " + method + ": " + e.getMessage(), e);
+        }
+
+        try {
+            Object result = pendingResponse.join();
+            return unwrapResult(result);
+        } catch (CompletionException completionException) {
+            Throwable cause = completionException.getCause();
+            if (cause instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            throw new RuntimeException("Request " + method + " failed", cause);
         }
     }
 
     @SuppressWarnings("unchecked")
     private Object marshalTransportValue(Object value) {
+        return marshalTransportValue(value, null);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Object marshalTransportValue(Object value, List<String> cancellationIds) {
         if (value == null) {
             return null;
+        }
+
+        if (value instanceof CancellationToken token) {
+            String cancellationId = registerCancellation(token);
+            if (cancellationId != null && cancellationIds != null && cancellationRegistrations.containsKey(cancellationId)) {
+                cancellationIds.add(cancellationId);
+            }
+            return cancellationId;
         }
 
         if (value instanceof Function<?, ?> function) {
@@ -254,7 +441,7 @@ class AspireClient {
             Map<String, Object> map = (Map<String, Object>) serialized;
             Map<String, Object> result = new HashMap<>();
             for (Map.Entry<String, Object> entry : map.entrySet()) {
-                result.put(entry.getKey(), marshalTransportValue(entry.getValue()));
+                result.put(entry.getKey(), marshalTransportValue(entry.getValue(), cancellationIds));
             }
             return result;
         }
@@ -262,14 +449,14 @@ class AspireClient {
             List<Object> list = (List<Object>) serialized;
             List<Object> result = new ArrayList<>();
             for (Object item : list) {
-                result.add(marshalTransportValue(item));
+                result.add(marshalTransportValue(item, cancellationIds));
             }
             return result;
         }
         if (serialized instanceof Object[] array) {
             List<Object> result = new ArrayList<>();
             for (Object item : array) {
-                result.add(marshalTransportValue(item));
+                result.add(marshalTransportValue(item, cancellationIds));
             }
             return result;
         }
@@ -278,27 +465,9 @@ class AspireClient {
     }
 
     public void authenticate(String token) {
-        int id = requestId.incrementAndGet();
-
-        List<Object> params = List.of(token);
-
-        Map<String, Object> request = new HashMap<>();
-        request.put("jsonrpc", "2.0");
-        request.put("id", id);
-        request.put("method", "authenticate");
-        request.put("params", params);
-
-        debug("Sending request authenticate with id=" + id);
-
-        try {
-            sendMessage(request);
-            Object result = readResponse(id);
-            if (!(result instanceof Boolean authenticated) || !authenticated) {
-                throw new RuntimeException("Failed to authenticate to the AppHost server.");
-            }
-        } catch (IOException e) {
-            handleDisconnect();
-            throw new RuntimeException("Failed to authenticate: " + e.getMessage(), e);
+        Object result = sendRequest("authenticate", List.of(token));
+        if (!(result instanceof Boolean authenticated) || !authenticated) {
+            throw new RuntimeException("Failed to authenticate to the AppHost server.");
         }
     }
 
@@ -316,37 +485,118 @@ class AspireClient {
         }
     }
 
-    private Object readResponse(int expectedId) throws IOException {
-        while (true) {
-            Map<String, Object> message = readMessage();
-            
-            if (message.containsKey("method")) {
-                // This is a request from server (callback invocation)
-                handleServerRequest(message);
-                continue;
+    private void ensureReaderLoopStarted() {
+        synchronized (readerLock) {
+            if (readerStarted) {
+                return;
             }
-            
-            // This is a response
-            Object idObj = message.get("id");
-            int responseId = idObj instanceof Number ? ((Number) idObj).intValue() : Integer.parseInt(idObj.toString());
-            
-            if (responseId != expectedId) {
-                debug("Received response for different id: " + responseId + " (expected " + expectedId + ")");
-                continue;
+
+            if (inputStream == null) {
+                throw new IllegalStateException("Input stream is not initialized");
             }
-            
-            if (message.containsKey("error")) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> error = (Map<String, Object>) message.get("error");
-                String code = String.valueOf(error.get("code"));
-                String errorMessage = String.valueOf(error.get("message"));
-                Object data = error.get("data");
-                throw new CapabilityError(code, errorMessage, data);
-            }
-            
-            Object result = message.get("result");
-            return unwrapResult(result);
+
+            readerStarted = true;
+
+            Thread readerThread = new Thread(this::readLoop, "aspire-client-reader");
+            readerThread.setDaemon(true);
+            readerThread.start();
         }
+    }
+
+    private void readLoop() {
+        try {
+            while (true) {
+                Map<String, Object> message = readMessage();
+                routeMessage(message);
+            }
+        } catch (Exception e) {
+            disconnectCause = e;
+            handleDisconnect();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void routeMessage(Map<String, Object> message) throws IOException {
+        if (message.containsKey("method")) {
+            boolean isCallback = "invokeCallback".equals(message.get("method"));
+            if (isCallback) {
+                synchronized (connectionStateLock) {
+                    activeServerCallbacks++;
+                }
+            }
+            try {
+                Thread.startVirtualThread(() -> {
+                    try {
+                        handleServerRequest(message);
+                    } catch (IOException e) {
+                        disconnectCause = e;
+                        handleDisconnect();
+                    } finally {
+                        if (isCallback) {
+                            completeServerCallback();
+                        }
+                    }
+                });
+            } catch (RuntimeException e) {
+                if (isCallback) {
+                    completeServerCallback();
+                }
+                throw e;
+            }
+            return;
+        }
+
+        Integer responseId = toNumericId(message.get("id"));
+        if (responseId == null) {
+            throw new IOException("Invalid JSON-RPC response: numeric id is required.");
+        }
+
+        CompletableFuture<Object> pendingResponse = pendingRequests.get(responseId);
+        if (pendingResponse == null) {
+            return;
+        }
+
+        if (message.containsKey("error")) {
+            Map<String, Object> error = (Map<String, Object>) message.get("error");
+            String code = String.valueOf(error.get("code"));
+            String errorMessage = String.valueOf(error.get("message"));
+            Object data = error.get("data");
+            pendingResponse.completeExceptionally(new CapabilityError(code, errorMessage, data));
+            pendingRequests.remove(responseId, pendingResponse);
+            return;
+        }
+
+        pendingResponse.complete(message.get("result"));
+        pendingRequests.remove(responseId, pendingResponse);
+    }
+
+    private void completeServerCallback() {
+        synchronized (connectionStateLock) {
+            activeServerCallbacks--;
+            if (activeServerCallbacks == 0) {
+                pendingRemoteCancellations.clear();
+            }
+        }
+    }
+
+    private Integer toNumericId(Object id) {
+        if (id instanceof Number number) {
+            try {
+                return new BigDecimal(number.toString()).intValueExact();
+            } catch (ArithmeticException | NumberFormatException ignored) {
+                return null;
+            }
+        }
+
+        if (id instanceof String idString) {
+            try {
+                return Integer.parseInt(idString);
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+
+        return null;
     }
 
     @SuppressWarnings("unchecked")
@@ -429,21 +679,44 @@ class AspireClient {
                         Object[] unwrappedArgs = args.stream()
                             .map(this::unwrapResult)
                             .toArray();
-                        result = awaitValue(callback.apply(unwrappedArgs));
+                        AspireClient previousCallbackClient = callbackClient.get();
+                        List<CancellationToken> previousRemoteTokens = callbackRemoteTokens.get();
+                        List<CancellationToken> acquiredRemoteTokens = new ArrayList<>();
+                        callbackClient.set(this);
+                        callbackRemoteTokens.set(acquiredRemoteTokens);
+                        try {
+                            result = awaitValue(callback.apply(unwrappedArgs));
+                        } finally {
+                            for (CancellationToken token : acquiredRemoteTokens) {
+                                token.releaseRemoteReference();
+                            }
+                            if (previousCallbackClient == null) {
+                                callbackClient.remove();
+                            } else {
+                                callbackClient.set(previousCallbackClient);
+                            }
+                            if (previousRemoteTokens == null) {
+                                callbackRemoteTokens.remove();
+                            } else {
+                                callbackRemoteTokens.set(previousRemoteTokens);
+                            }
+                        }
                     } else {
                         error = createError(-32601, "Callback not found: " + callbackId);
                     }
                 }
-            } else if ("cancel".equals(method)) {
+            } else if ("cancel".equals(method) || "cancelToken".equals(method)) {
                 String cancellationId = getCancellationId(params);
                 if (cancellationId == null) {
                     error = createError(-32602, "Invalid params: cancellationId is required.");
                 } else {
+                    boolean cancelled = cancelRemoteCancellationToken(cancellationId);
                     Consumer<Void> handler = cancellations.get(cancellationId);
                     if (handler != null) {
                         handler.accept(null);
+                        cancelled = true;
                     }
-                    result = true;
+                    result = cancelled;
                 }
             } else {
                 error = createError(-32601, "Unknown method: " + method);
@@ -508,6 +781,10 @@ class AspireClient {
     }
 
     private String getCancellationId(Object params) {
+        if (params instanceof String id) {
+            return id;
+        }
+
         if (params instanceof List<?> list && !list.isEmpty()) {
             return asString(list.get(0));
         }
@@ -581,9 +858,51 @@ class AspireClient {
     }
 
     private void handleDisconnect() {
-        if (disconnectHandler != null) {
-            disconnectHandler.run();
+        Runnable handler;
+        List<CancellationToken> tokensToNotify = new ArrayList<>();
+        synchronized (connectionStateLock) {
+            if (disconnected) {
+                return;
+            }
+
+            disconnected = true;
+            failAllPendingRequests(disconnectedException());
+            for (CancellationToken remoteToken : remoteCancellationTokens.values()) {
+                if (remoteToken.markCancelled()) {
+                    tokensToNotify.add(remoteToken);
+                }
+            }
+            for (CancellationToken pendingToken : pendingRemoteCancellations.values()) {
+                if (pendingToken.markCancelled()) {
+                    tokensToNotify.add(pendingToken);
+                }
+            }
+            remoteCancellationTokens.clear();
+            pendingRemoteCancellations.clear();
+            handler = disconnectHandler;
         }
+
+        for (CancellationToken remoteToken : tokensToNotify) {
+            remoteToken.notifyCancellationListeners();
+        }
+
+        if (handler != null) {
+            handler.run();
+        }
+    }
+
+    private RuntimeException disconnectedException() {
+        Throwable cause = disconnectCause;
+        return cause == null
+            ? new RuntimeException("Disconnected from AppHost")
+            : new RuntimeException("Disconnected from AppHost", cause);
+    }
+
+    private void failAllPendingRequests(RuntimeException exception) {
+        for (Map.Entry<Integer, CompletableFuture<Object>> entry : pendingRequests.entrySet()) {
+            entry.getValue().completeExceptionally(exception);
+        }
+        pendingRequests.clear();
     }
 
     public String registerCallback(Function<Object[], Object> callback) {
@@ -593,9 +912,43 @@ class AspireClient {
     }
 
     public String registerCancellation(CancellationToken token) {
+        if (token == null) {
+            return null;
+        }
+
+        String remoteTokenId = token.getRemoteTokenId();
+        if (remoteTokenId != null) {
+            return remoteTokenId;
+        }
+
         String id = UUID.randomUUID().toString();
-        cancellations.put(id, v -> token.cancel());
+        AtomicBoolean notified = new AtomicBoolean(false);
+        Runnable listener = () -> {
+            if (notified.compareAndSet(false, true)) {
+                sendCancellationRequest(id);
+            }
+        };
+
+        token.onCancel(listener);
+        cancellationRegistrations.put(id, () -> token.removeCancelListener(listener));
         return id;
+    }
+
+    public void unregisterCancellation(String cancellationId) {
+        Runnable cleanup = cancellationRegistrations.remove(cancellationId);
+        if (cleanup != null) {
+            cleanup.run();
+        }
+    }
+
+    private void sendCancellationRequest(String cancellationId) {
+        CompletableFuture.runAsync(() -> {
+            try {
+                sendRequest("cancelToken", List.of(cancellationId));
+            } catch (RuntimeException ignored) {
+                // Cancellation is best-effort. The host may already have completed the operation.
+            }
+        });
     }
 
     public static Object awaitValue(Object value) {
@@ -603,6 +956,15 @@ class AspireClient {
             return stage.toCompletableFuture().join();
         }
         return value;
+    }
+
+    public static Object convertArray(Object value, Class<?> componentType, Function<Object, Object> converter) {
+        List<?> values = (List<?>) value;
+        Object array = java.lang.reflect.Array.newInstance(componentType, values.size());
+        for (int i = 0; i < values.size(); i++) {
+            java.lang.reflect.Array.set(array, i, converter.apply(values.get(i)));
+        }
+        return array;
     }
 
     // Simple JSON serialization (no external dependencies)
@@ -643,11 +1005,11 @@ class AspireClient {
             }
             return result;
         }
-        if (value instanceof Object[]) {
-            Object[] array = (Object[]) value;
+        if (value.getClass().isArray()) {
+            int length = java.lang.reflect.Array.getLength(value);
             List<Object> result = new ArrayList<>();
-            for (Object item : array) {
-                result.add(serializeValue(item));
+            for (int i = 0; i < length; i++) {
+                result.add(serializeValue(java.lang.reflect.Array.get(value, i)));
             }
             return result;
         }
@@ -842,7 +1204,7 @@ class AspireClient {
             }
             String numStr = json.substring(start, pos);
             if (numStr.contains(".") || numStr.contains("e") || numStr.contains("E")) {
-                return Double.parseDouble(numStr);
+                return new BigDecimal(numStr);
             }
             long l = Long.parseLong(numStr);
             if (l >= Integer.MIN_VALUE && l <= Integer.MAX_VALUE) {

@@ -1814,7 +1814,7 @@ internal sealed class AtsJavaCodeGenerator : ICodeGenerator
             if (IsCancellationToken(parameter))
             {
                 WriteLine($"        if ({paramName} != null) {{");
-                WriteLine($"            reqArgs.put(\"{parameter.Name}\", getClient().registerCancellation({paramName}));");
+                WriteLine($"            reqArgs.put(\"{parameter.Name}\", {paramName});");
                 WriteLine("        }");
                 continue;
             }
@@ -1873,7 +1873,10 @@ internal sealed class AtsJavaCodeGenerator : ICodeGenerator
         }
 
         var hasReturn = capability.ReturnType?.TypeId != AtsConstants.Void;
-        return new(hasReturn ? MapTypeRefToJava(capability.ReturnType, false) : "void", hasReturn, ReturnsCurrentBuilder: false);
+        return new(
+            hasReturn ? MapTypeRefToJava(capability.ReturnType, capability.ReturnType?.IsNullable == true) : "void",
+            hasReturn,
+            ReturnsCurrentBuilder: false);
     }
 
     private string GenerateCallbackTypeSignature(IReadOnlyList<AtsCallbackParameterInfo>? callbackParameters, AtsTypeRef? callbackReturnType)
@@ -1940,7 +1943,7 @@ internal sealed class AtsJavaCodeGenerator : ICodeGenerator
         else
         {
             WriteLine($"            {callbackInvocation};");
-            WriteLine("            return null;");
+            WriteLine($"            return new Object[] {{ {string.Join(", ", callArguments)} }};");
         }
     }
 
@@ -2031,7 +2034,7 @@ internal sealed class AtsJavaCodeGenerator : ICodeGenerator
             AtsTypeCategory.Enum => RenderJavaEnumTransportValueConversion(typeRef.TypeId, valueExpression, allowNull),
             AtsTypeCategory.Dto => RenderJavaDtoTransportValueConversion(typeRef.TypeId, valueExpression, allowNull),
             AtsTypeCategory.Handle => $"({MapTypeRefToJava(typeRef, allowNull)}) {valueExpression}",
-            AtsTypeCategory.Array => $"({MapTypeRefToJava(typeRef, allowNull)}) {valueExpression}",
+            AtsTypeCategory.Array => RenderJavaArrayTransportValueConversion(typeRef, valueExpression, allowNull, depth),
             AtsTypeCategory.List => RenderJavaListTransportValueConversion(typeRef, valueExpression, allowNull, depth),
             AtsTypeCategory.Dict => $"({MapTypeRefToJava(typeRef, allowNull, useBoxedTypes: true)}) {valueExpression}",
             AtsTypeCategory.Union => $"AspireUnion.of({valueExpression})",
@@ -2039,6 +2042,21 @@ internal sealed class AtsJavaCodeGenerator : ICodeGenerator
         };
 
         return converted;
+    }
+
+    private string RenderJavaArrayTransportValueConversion(AtsTypeRef typeRef, string valueExpression, bool allowNull, int depth)
+    {
+        var itemName = $"item{depth}";
+        var convertedItem = RenderJavaTransportValueConversion(
+            typeRef.ElementType,
+            itemName,
+            typeRef.ElementType?.IsNullable == true,
+            depth + 1);
+        var arrayType = MapTypeRefToJava(typeRef, allowNull);
+        var erasedArrayType = EraseJavaGenericArguments(arrayType);
+        var converted = $"({arrayType}) AspireClient.convertArray({valueExpression}, {erasedArrayType}.class.getComponentType(), {itemName} -> {convertedItem})";
+
+        return allowNull ? $"{valueExpression} == null ? null : {converted}" : converted;
     }
 
     private string RenderJavaDtoPropertyTransportValueConversion(AtsTypeRef? typeRef, string valueExpression, bool isOptional, int depth = 0)
@@ -2074,13 +2092,47 @@ internal sealed class AtsJavaCodeGenerator : ICodeGenerator
             return allowNull ? $"{valueExpression} == null ? null : {projected}" : projected;
         }
 
+        if (typeRef.Category == AtsTypeCategory.Array)
+        {
+            var itemName = $"item{depth}";
+            var convertedItem = RenderJavaDtoPropertyTransportValueConversion(
+                typeRef.ElementType,
+                itemName,
+                typeRef.ElementType?.IsNullable == true,
+                depth + 1);
+            var arrayType = MapDtoPropertyTypeToJava(typeRef, allowNull, useBoxedTypes: true);
+            var erasedArrayType = EraseJavaGenericArguments(arrayType);
+            var projected = $"({arrayType}) AspireClient.convertArray({valueExpression}, {erasedArrayType}.class.getComponentType(), {itemName} -> {convertedItem})";
+
+            return allowNull ? $"{valueExpression} == null ? null : {projected}" : projected;
+        }
+
         var converted = $"({MapDtoPropertyTypeToJava(typeRef, allowNull, useBoxedTypes: true)}) {valueExpression}";
 
-        // An array needs no null guard: casting null to an array type is legal Java and yields null,
-        // so guarding would only add noise the previous shape did not have.
-        return allowNull && typeRef.Category == AtsTypeCategory.Dict
-            ? $"{valueExpression} == null ? null : {converted}"
-            : converted;
+        return allowNull ? $"{valueExpression} == null ? null : {converted}" : converted;
+    }
+
+    private static string EraseJavaGenericArguments(string javaType)
+    {
+        var result = new StringBuilder(javaType.Length);
+        var depth = 0;
+        foreach (var character in javaType)
+        {
+            if (character == '<')
+            {
+                depth++;
+            }
+            else if (character == '>')
+            {
+                depth--;
+            }
+            else if (depth == 0)
+            {
+                result.Append(character);
+            }
+        }
+
+        return result.ToString();
     }
 
     private static string RenderJavaPrimitiveTransportValueConversion(string typeId, string valueExpression, bool allowNull)

@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Text.Json;
 using Aspire.Cli.Commands;
 using Aspire.Cli.Projects;
 using Aspire.Cli.Templating;
@@ -77,6 +78,27 @@ public class JavaStarterScaffoldTests(ITestOutputHelper outputHelper)
 
         Assert.True(File.Exists(Path.Combine(outputDirectory, "frontend", "vite.config.ts")));
         Assert.True(File.Exists(Path.Combine(outputDirectory, "AppHost.java")));
+    }
+
+    [Fact]
+    public async Task JavaStarter_ScaffoldsRootJavaProjectWithoutChangingCliOwnership()
+    {
+        using var scaffold = await ScaffoldJavaStarterAsync();
+        var outputDirectory = scaffold.OutputDirectory;
+
+        Assert.True(File.Exists(Path.Combine(outputDirectory, ".project")));
+        Assert.True(File.Exists(Path.Combine(outputDirectory, ".classpath")));
+        Assert.True(File.Exists(Path.Combine(outputDirectory, ".settings", "org.eclipse.jdt.core.prefs")));
+        Assert.Contains("<name>JavaStarterOut</name>", File.ReadAllText(Path.Combine(outputDirectory, ".project")));
+
+        using var config = JsonDocument.Parse(File.ReadAllText(Path.Combine(outputDirectory, "aspire.config.json")));
+        var appHost = config.RootElement.GetProperty("appHost");
+        Assert.Equal("AppHost.java", appHost.GetProperty("path").GetString());
+        Assert.Equal("java", appHost.GetProperty("language").GetString());
+
+        var toolchain = JavaAppHostToolchainResolver.Resolve(new DirectoryInfo(outputDirectory));
+        Assert.Equal(JavaAppHostToolchain.Javac, toolchain.Toolchain);
+        Assert.Equal(outputDirectory, toolchain.ProjectDirectory.FullName);
     }
 
     private async Task<ScaffoldedTemplate> ScaffoldJavaStarterAsync()

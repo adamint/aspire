@@ -248,6 +248,10 @@ export const javaDebuggerExtension: ResourceDebuggerExtension = {
             debugConfiguration.cwd = launchConfig.working_directory;
         }
 
+        if (launchConfig.java_exec) {
+            debugConfiguration.javaExec = launchConfig.java_exec;
+        }
+
         // vscjava.vscode-java-debug requires mainClass to start a launch session, and accepts a fully
         // qualified class name, optionally prefixed with a module name, or the path of a .java source
         // file.
@@ -311,7 +315,7 @@ export const javaDebuggerExtension: ResourceDebuggerExtension = {
 // before the main class, so the main class is located as the first non-option argument that is not
 // itself an option's value. Returns null when the command does not match, which keeps an
 // unrecognised command on the non-debug launch path instead of starting a JVM with wrong arguments.
-export function parseJavaAppHostCommand(args: string[]): { mainClass: string; classPaths: string[]; vmArgs: string[]; appHostArgs: string[] } | null {
+export function parseJavaAppHostCommand(args: string[]): { mainClass: string; classPaths: string[]; vmArgs: string[]; appHostArgs: string[]; javaExec?: string } | null {
     // args[0] is the "java" executable itself, prepended by the CLI.
     if (args.length < 2) {
         return null;
@@ -322,8 +326,13 @@ export function parseJavaAppHostCommand(args: string[]): { mainClass: string; cl
     // than the JVM's and the first bare token is a goal or task, not a main class. Without this check
     // "exec:java" would be handed to the debug adapter as the class to launch.
     // The path may be absolute (a JAVA_HOME-qualified launcher), so compare only the file name.
+    // Bare "java" is the legacy wire shape. Any path must be absolute because only the CLI's
+    // resolved launcher is authoritative; retaining a relative path would make the adapter resolve
+    // it against a different working directory.
     const executable = args[0].split(/[\\/]/).pop() ?? args[0];
-    if (executable.toLowerCase().replace(/\.exe$/, '') !== 'java') {
+    const normalizedExecutable = executable.toLowerCase().replace(/\.(exe|com|bat|cmd)$/, '');
+    const isBareJava = args[0].toLowerCase() === 'java';
+    if (normalizedExecutable !== 'java' || (!isBareJava && !isAbsolutePath(args[0]))) {
         return null;
     }
 
@@ -335,6 +344,9 @@ export function parseJavaAppHostCommand(args: string[]): { mainClass: string; cl
     // anything looking wrong. The "--name=value" spelling is a single token and needs no entry here.
     // https://docs.oracle.com/en/java/javase/25/docs/specs/man/java.html
     const valueTakingOptions = new Set([
+        '--module-path', '-p',
+        '--upgrade-module-path',
+        '--add-modules',
         '--limit-modules',
         '--add-exports', '--add-opens', '--add-reads',
         '--patch-module',
@@ -388,7 +400,13 @@ export function parseJavaAppHostCommand(args: string[]): { mainClass: string; cl
 
         // First bare token after the options is the main class; everything after it is the
         // application's own arguments, which the JVM never interprets.
-        return { mainClass: arg, classPaths, vmArgs, appHostArgs: args.slice(i + 1) };
+        return {
+            mainClass: arg,
+            classPaths,
+            vmArgs,
+            appHostArgs: args.slice(i + 1),
+            ...(isAbsolutePath(args[0]) ? { javaExec: args[0] } : {})
+        };
     }
 
     return null;

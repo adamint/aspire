@@ -3,6 +3,8 @@
 
 using Aspire.TypeSystem;
 using Microsoft.Extensions.Logging;
+using System.Xml;
+using System.Xml.Linq;
 
 namespace Aspire.Cli.Projects;
 
@@ -266,6 +268,9 @@ internal static class JavaAppHostToolchainResolver
     private static StringComparison PathComparison =>
         OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
 
+    private static StringComparer PathComparer =>
+        OperatingSystem.IsLinux() ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
+
     public static string GetDisplayName(JavaAppHostToolchain toolchain)
     {
         return toolchain switch
@@ -310,6 +315,8 @@ internal static class JavaAppHostToolchainResolver
                 $"with '{generateCommand}', or remove the build file to build the AppHost with javac instead.");
         }
 
+        var wrapperDirectory = new DirectoryInfo(Path.GetDirectoryName(wrapperPath)!);
+
         if (!OperatingSystem.IsWindows())
         {
             // Invoked through "sh" rather than executed directly because a wrapper checked out on
@@ -320,7 +327,7 @@ internal static class JavaAppHostToolchainResolver
             //
             // The absolute path is kept because the process is started without a shell, so a bare
             // "mvnw" would be looked up on PATH and never found in the project directory.
-            return new JavaToolInvocation("sh", [wrapperPath]);
+            return new JavaToolInvocation("sh", [wrapperPath], wrapperDirectory);
         }
 
         // On Windows the wrappers are batch files. Launching one directly with redirected stdout can
@@ -339,7 +346,8 @@ internal static class JavaAppHostToolchainResolver
 
         return new JavaToolInvocation(
             Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
-            ["/c", "call", relativeWrapperPath]);
+            ["/c", "call", relativeWrapperPath],
+            wrapperDirectory);
     }
 
     /// <summary>
@@ -369,7 +377,7 @@ internal static class JavaAppHostToolchainResolver
             CodeGenLanguage = baseRuntimeSpec.CodeGenLanguage,
             DetectionPatterns = baseRuntimeSpec.DetectionPatterns,
             Initialize = baseRuntimeSpec.Initialize,
-            InstallDependencies = CreateInstallCommand(toolchain, invocation, projectPath),
+            InstallDependencies = CreateInstallCommand(toolchain, invocation, resolution.ProjectDirectory, appHostDirectory, projectPath),
             PreExecute = [CreateCompileCommand(toolchain, baseRuntimeSpec, projectPath, classesDirectory, dependencyDirectory)],
             Execute = CreateExecuteCommand(classesDirectory, dependencyDirectory),
             WatchExecute = baseRuntimeSpec.WatchExecute,
@@ -521,6 +529,80 @@ internal static class JavaAppHostToolchainResolver
         };
     }
 
+    private static string[] GetMavenProjectSelectionArgs(
+        JavaToolInvocation invocation,
+        DirectoryInfo projectDirectory,
+        DirectoryInfo appHostDirectory,
+        string? projectPath,
+        bool usesMavenReactor)
+    {
+        if (!usesMavenReactor)
+        {
+            return GetProjectSelectionArgs(JavaAppHostToolchain.Maven, projectPath);
+        }
+
+        var reactorPath = Path.GetRelativePath(appHostDirectory.FullName, invocation.WrapperDirectory.FullName);
+        var modulePath = Path.GetRelativePath(invocation.WrapperDirectory.FullName, projectDirectory.FullName);
+
+        return
+        [
+            "-f", Path.Combine(reactorPath, MavenPomFileName),
+            "-pl", modulePath,
+            "-am"
+        ];
+    }
+
+    private static bool IsMavenReactorModule(DirectoryInfo reactorDirectory, DirectoryInfo projectDirectory)
+    {
+        var visited = new HashSet<string>(PathComparer);
+        return IsMavenReactorModule(reactorDirectory, projectDirectory.FullName, visited);
+    }
+
+    private static bool IsMavenReactorModule(
+        DirectoryInfo aggregatorDirectory,
+        string projectDirectory,
+        HashSet<string> visited)
+    {
+        if (!visited.Add(aggregatorDirectory.FullName))
+        {
+            return false;
+        }
+
+        try
+        {
+            var document = XDocument.Load(Path.Combine(aggregatorDirectory.FullName, MavenPomFileName));
+            var modules = document.Root?
+                .Elements()
+                .FirstOrDefault(static element => element.Name.LocalName == "modules")?
+                .Elements()
+                .Where(static element => element.Name.LocalName == "module")
+                ?? [];
+
+            foreach (var module in modules)
+            {
+                var modulePath = module.Value.Trim();
+                if (modulePath.Length == 0 || modulePath.Contains("${", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var moduleDirectory = new DirectoryInfo(Path.GetFullPath(Path.Combine(aggregatorDirectory.FullName, modulePath)));
+                if (string.Equals(moduleDirectory.FullName, projectDirectory, PathComparison)
+                    || (File.Exists(Path.Combine(moduleDirectory.FullName, MavenPomFileName))
+                        && IsMavenReactorModule(moduleDirectory, projectDirectory, visited)))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or XmlException)
+        {
+            return false;
+        }
+
+        return false;
+    }
+
     private static string GetClassesDirectory(JavaAppHostToolchain toolchain)
     {
         return toolchain switch
@@ -547,17 +629,26 @@ internal static class JavaAppHostToolchainResolver
     private static CommandSpec CreateInstallCommand(
         JavaAppHostToolchain toolchain,
         JavaToolInvocation invocation,
+        DirectoryInfo projectDirectory,
+        DirectoryInfo appHostDirectory,
         string? projectPath)
     {
+        var usesMavenReactor = toolchain == JavaAppHostToolchain.Maven
+            && !string.Equals(invocation.WrapperDirectory.FullName, projectDirectory.FullName, PathComparison)
+            && IsMavenReactorModule(invocation.WrapperDirectory, projectDirectory);
         var toolArgs = toolchain switch
         {
             // Batch mode keeps the transfer progress spinner out of the CLI's captured output.
             // Only runtime-scoped dependencies are staged: test and provided dependencies are not
             // on the application's runtime classpath and staging them can shadow real versions.
+            // An ancestor wrapper means this is a reactor module. Package the selected module and its
+            // upstream projects first because -am orders reactor artifacts but does not create their JARs.
             JavaAppHostToolchain.Maven => (string[])
             [
                 "-B", "-q",
-                .. GetProjectSelectionArgs(toolchain, projectPath),
+                .. GetMavenProjectSelectionArgs(invocation, projectDirectory, appHostDirectory, projectPath, usesMavenReactor),
+                .. (usesMavenReactor ? (string[])["package"] : []),
+                .. (usesMavenReactor ? (string[])["-Dmaven.test.skip=true"] : []),
                 "dependency:copy-dependencies",
                 // Maven resolves a relative outputDirectory against the project's base directory, so
                 // the path is expressed relative to the project rather than the working directory.
@@ -699,6 +790,9 @@ internal static class JavaAppHostToolchainResolver
                         $"{CombineProjectPath(projectPath, Path.Combine("src", "main", "java"))}/**",
                         .. GetDependencyInputs(toolchain, projectPath, dependencyDirectory)
                     ],
+                    Outputs = baseCompile.UpToDateCheck.Outputs?
+                        .Select(output => Path.Combine(classesDirectory, Path.GetFileName(output)))
+                        .ToArray(),
                     FileExtensions = baseCompile.UpToDateCheck.FileExtensions,
                     StampFile = Path.Combine(classesDirectory, Path.GetFileName(baseCompile.UpToDateCheck.StampFile))
                 }
@@ -724,11 +818,11 @@ internal static class JavaAppHostToolchainResolver
 }
 
 /// <summary>
-/// How a build tool wrapper is launched: the executable, plus any arguments that must precede the
-/// tool's own. Windows needs a command interpreter in front of the batch wrapper, other platforms
-/// invoke it directly.
+/// How a build tool wrapper is launched: the executable, arguments that must precede the tool's own,
+/// and the directory containing the wrapper. Windows needs a command interpreter in front of the
+/// batch wrapper, while other platforms invoke it through <c>sh</c>.
 /// </summary>
-internal readonly record struct JavaToolInvocation(string Command, string[] PrefixArgs)
+internal readonly record struct JavaToolInvocation(string Command, string[] PrefixArgs, DirectoryInfo WrapperDirectory)
 {
     public CommandSpec CreateCommand(string[] args)
     {

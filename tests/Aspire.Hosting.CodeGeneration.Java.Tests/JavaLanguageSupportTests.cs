@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Xml.Linq;
+
 using Aspire.TypeSystem;
 
 namespace Aspire.Hosting.CodeGeneration.Java.Tests;
@@ -14,6 +16,36 @@ public class JavaLanguageSupportTests
         var compile = Assert.Single(runtimeSpec.PreExecute!);
 
         AssertCompileUpToDateCheck(compile);
+    }
+
+    [Fact]
+    public void JavaStarter_UsesRuntimeSpecJavaRelease()
+    {
+        var runtimeSpec = new JavaLanguageSupport().GetRuntimeSpec();
+        var compile = Assert.Single(runtimeSpec.PreExecute!);
+        var releaseArgumentIndex = Array.IndexOf(compile.Args, "--release");
+
+        Assert.InRange(releaseArgumentIndex, 0, compile.Args.Length - 2);
+        var runtimeRelease = compile.Args[releaseArgumentIndex + 1];
+
+        var pomPath = Path.Combine(
+            GetRepoRoot(),
+            "src",
+            "Aspire.Cli",
+            "Templating",
+            "Templates",
+            "java-starter",
+            "api",
+            "pom.xml");
+        var pom = XDocument.Load(pomPath);
+        XNamespace maven = "http://maven.apache.org/POM/4.0.0";
+        var templateRelease = pom.Root?
+            .Element(maven + "properties")?
+            .Element(maven + "java.version")?
+            .Value;
+
+        Assert.NotNull(templateRelease);
+        Assert.Equal(runtimeRelease, templateRelease);
     }
 
     [Fact]
@@ -41,15 +73,45 @@ public class JavaLanguageSupportTests
         Assert.Null(exception);
     }
 
+    [Fact]
+    public void SetCompileUpToDateCheckIfSupported_IgnoresLegacyUpToDateCheckWithoutOutputs()
+    {
+        var command = new LegacyCommandSpecWithUpToDateCheck();
+
+        var exception = Record.Exception(() =>
+            JavaLanguageSupport.SetCompileUpToDateCheckIfSupported(
+                command,
+                ".java-build"));
+
+        Assert.Null(exception);
+        Assert.Null(command.UpToDateCheck);
+    }
+
     private sealed class LegacyCommandSpec
     {
     }
+
+    private sealed class LegacyCommandSpecWithUpToDateCheck
+    {
+        public LegacyCommandUpToDateCheck? UpToDateCheck { get; set; }
+    }
+
+    private sealed class LegacyCommandUpToDateCheck
+    {
+        public string[]? Inputs { get; set; }
+        public string[]? FileExtensions { get; set; }
+        public string? StampFile { get; set; }
+    }
+
+    private static string GetRepoRoot()
+        => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
 
     private static void AssertCompileUpToDateCheck(CommandSpec compile)
     {
         var check = Assert.IsType<CommandUpToDateCheck>(compile.UpToDateCheck);
 
         Assert.Equal(["{appHostFile}", "./**", ".aspire/modules/**", "src/main/java/**"], check.Inputs);
+        Assert.Equal([Path.Combine(".java-build", "AppHost.class")], check.Outputs!);
         Assert.Equal([".java"], check.FileExtensions!);
         Assert.Equal(Path.Combine(".java-build", ".aspire-compile-stamp"), check.StampFile);
     }

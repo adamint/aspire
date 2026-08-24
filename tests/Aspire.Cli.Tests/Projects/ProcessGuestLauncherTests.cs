@@ -23,7 +23,6 @@ public class ProcessGuestLauncherTests(ITestOutputHelper outputHelper) : IDispos
             "test",
             _loggerFactory.CreateLogger<ProcessGuestLauncher>(),
             fileLoggerProvider: null,
-            commandResolver: PathLookupHelper.FindFullPathFromPath,
             processExecutionFactory: processExecutionFactory ?? new ProcessExecutionFactory(new TestEnvironment(), _loggerFactory.CreateLogger<ProcessExecutionFactory>()));
 
     [Fact]

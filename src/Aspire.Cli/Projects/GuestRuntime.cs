@@ -20,7 +20,6 @@ internal sealed class GuestRuntime
     private readonly RuntimeSpec _spec;
     private readonly ILogger _logger;
     private readonly FileLoggerProvider? _fileLoggerProvider;
-    private readonly Func<string, string?> _commandResolver;
     private readonly IEnvironment _environment;
     private readonly ProfilingTelemetry _profilingTelemetry;
 
@@ -29,22 +28,25 @@ internal sealed class GuestRuntime
     /// </summary>
     /// <param name="spec">The runtime specification describing how to execute the guest language.</param>
     /// <param name="logger">Logger for debugging output.</param>
-    /// <param name="commandResolver">Command resolver used to locate executables on PATH.</param>
     /// <param name="environment">The environment abstraction for OS detection.</param>
     /// <param name="profilingTelemetry">Profiling telemetry for child-process diagnostics.</param>
     /// <param name="fileLoggerProvider">Optional file logger for writing output to disk.</param>
-    public GuestRuntime(RuntimeSpec spec, ILogger logger, Func<string, string?> commandResolver, IEnvironment environment, ProfilingTelemetry profilingTelemetry, FileLoggerProvider? fileLoggerProvider = null)
+    public GuestRuntime(RuntimeSpec spec, ILogger logger, IEnvironment environment, ProfilingTelemetry profilingTelemetry, FileLoggerProvider? fileLoggerProvider = null)
     {
-        ArgumentNullException.ThrowIfNull(commandResolver);
         ArgumentNullException.ThrowIfNull(environment);
         ArgumentNullException.ThrowIfNull(profilingTelemetry);
 
         _spec = spec;
         _logger = logger;
         _fileLoggerProvider = fileLoggerProvider;
-        _commandResolver = commandResolver;
         _environment = environment;
         _profilingTelemetry = profilingTelemetry;
+    }
+
+    public GuestRuntime(RuntimeSpec spec, ILogger logger, Func<string, string?> commandResolver, IEnvironment environment, ProfilingTelemetry profilingTelemetry, FileLoggerProvider? fileLoggerProvider = null)
+        : this(spec, logger, environment, profilingTelemetry, fileLoggerProvider)
+    {
+        ArgumentNullException.ThrowIfNull(commandResolver);
     }
 
     /// <summary>
@@ -297,7 +299,7 @@ internal sealed class GuestRuntime
     }
 
     /// <summary>
-    /// Determines whether every declared input is older than the stamp file.
+    /// Determines whether every declared output exists and every declared input is older than the stamp file.
     /// </summary>
     /// <remarks>
     /// Comparison is strictly "no input newer than the stamp". An input written in the same second as
@@ -310,6 +312,16 @@ internal sealed class GuestRuntime
         if (!stampFile.Exists)
         {
             return false;
+        }
+
+        var outputs = ReplacePlaceholders(check.Outputs ?? [], appHostFile, directory, null);
+        foreach (var output in outputs)
+        {
+            var path = Path.IsPathRooted(output) ? output : Path.Combine(directory.FullName, output);
+            if (!File.Exists(path) && !Directory.Exists(path))
+            {
+                return false;
+            }
         }
 
         var stampWriteTime = stampFile.LastWriteTimeUtc;
@@ -601,7 +613,6 @@ internal sealed class GuestRuntime
         _spec.Language,
         _logger,
         fileLoggerProvider: _fileLoggerProvider,
-        commandResolver: _commandResolver,
         // The launcher logs each guest stdout/stderr line itself, so the execution factory is given
         // a NullLogger to avoid double-logging those lines.
         processExecutionFactory: new ProcessExecutionFactory(_environment, NullLogger<ProcessExecutionFactory>.Instance));
