@@ -21,7 +21,7 @@ suite('Java starter project model E2E', function () {
         await waitForJavaLanguageServerImport();
     });
 
-    test('assigns the root AppHost and generated Aspire SDK to one semantic project while keeping the API in Maven', async () => {
+    test('assigns the root AppHost and generated Aspire SDK to one semantic project while keeping the API in Gradle', async () => {
         const workspaceRoot = getWorkspaceRoot();
         const appHostPath = getJavaStarterAppHostSourcePath();
         const source = fs.readFileSync(appHostPath, 'utf8');
@@ -47,7 +47,7 @@ suite('Java starter project model E2E', function () {
         const projectUris = (await executeE2eControlCommand({ name: 'getJavaProjects' })).result as string[];
         const projectPaths = projectUris.map(uri => fileURLToPath(uri));
         assert.ok(projectPaths.some(projectPath => isSamePath(projectPath, workspaceRoot)), `Expected a Java project rooted at ${workspaceRoot}. Projects: ${JSON.stringify(projectPaths)}`);
-        assert.ok(projectPaths.some(projectPath => isSamePath(projectPath, path.join(workspaceRoot, 'api'))), `Expected the nested Maven API project. Projects: ${JSON.stringify(projectPaths)}`);
+        assert.ok(projectPaths.some(projectPath => isSamePath(projectPath, path.join(workspaceRoot, 'api'))), `Expected the nested Gradle API project. Projects: ${JSON.stringify(projectPaths)}`);
     });
 });
 
