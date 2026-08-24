@@ -967,6 +967,11 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
 
     private void GenerateBuilderPromiseInterface(BuilderModel builder)
     {
+        if (!_projector.TypesWithPromiseWrappers.Contains(builder.TypeId))
+        {
+            return;
+        }
+
         var capabilities = builder.Capabilities.Where(c =>
             c.CapabilityKind != AtsCapabilityKind.PropertyGetter &&
             c.CapabilityKind != AtsCapabilityKind.PropertySetter).ToList();
@@ -975,11 +980,6 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         var getterOnlyProperties = TypeScriptApiProjector.GroupPropertiesByName(getters, setters)
             .Where(p => TypeScriptApiProjector.IsGetterOnlyProperty(p.Getter, p.Setter))
             .ToList();
-
-        if (capabilities.Count == 0 && getterOnlyProperties.Count == 0)
-        {
-            return;
-        }
 
         var interfaceName = TypeScriptApiProjector.GetInterfaceName(builder.BuilderClassName);
         var promiseInterfaceName = TypeScriptApiProjector.GetPromiseInterfaceName(builder.BuilderClassName);
@@ -1222,7 +1222,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
                 ?? TypeScriptApiProjector.DeriveClassName(returnTypeId);
         }
         var returnHandle = capability.ReturnsBuilder
-            ? TypeScriptApiProjector.GetHandleTypeName(returnTypeId)
+            ? _projector.GetConcreteHandleTypeName(returnTypeId)
             : "void";
         var returnsBuilder = capability.ReturnsBuilder;
         var returnImplementationClassName = TypeScriptApiProjector.GetImplementationClassName(returnClassName);
@@ -1236,7 +1236,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
                 var wrappedReturnTypeId = capability.ReturnType!.TypeId;
                 var wrappedReturnClassName = _projector.GetConcreteClassName(wrappedReturnTypeId);
                 var returnImplementationClassNameForWrapper = TypeScriptApiProjector.GetImplementationClassName(wrappedReturnClassName);
-                var returnHandleType = TypeScriptApiProjector.GetHandleTypeName(wrappedReturnTypeId);
+                var returnHandleType = _projector.GetConcreteHandleTypeName(wrappedReturnTypeId);
 
                 WriteCapabilityDocComment("    ", capability, requiredParams, hasOptionals ? publicOptionsParamName : null);
                 Write($"    {methodName}(");
@@ -1666,6 +1666,11 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
     /// </remarks>
     private void GenerateThenableClass(BuilderModel builder)
     {
+        if (!_projector.TypesWithPromiseWrappers.Contains(builder.TypeId))
+        {
+            return;
+        }
+
         var capabilities = builder.Capabilities.Where(c =>
             c.CapabilityKind != AtsCapabilityKind.PropertyGetter &&
             c.CapabilityKind != AtsCapabilityKind.PropertySetter).ToList();
@@ -1674,11 +1679,6 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         var getterOnlyProperties = TypeScriptApiProjector.GroupPropertiesByName(getters, setters)
             .Where(p => TypeScriptApiProjector.IsGetterOnlyProperty(p.Getter, p.Setter))
             .ToList();
-
-        if (capabilities.Count == 0 && getterOnlyProperties.Count == 0)
-        {
-            return;
-        }
 
         var promiseClass = $"{builder.BuilderClassName}Promise";
         var promiseImplementationClass = TypeScriptApiProjector.GetImplementationPromiseClassName(builder.BuilderClassName);
@@ -1864,7 +1864,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
                 ?? TypeScriptApiProjector.DeriveClassName(capReturnTypeId);
             var returnWrapperImplementationClass = TypeScriptApiProjector.GetImplementationClassName(returnWrapperClass);
             var returnPromiseImplementationClass = TypeScriptApiProjector.GetImplementationPromiseClassName(returnWrapperClass);
-            var handleType = TypeScriptApiProjector.GetHandleTypeName(capReturnTypeId);
+            var handleType = _projector.GetConcreteHandleTypeName(capReturnTypeId);
 
             Write($"export function {methodName}(");
             Write(paramsString);
@@ -2058,7 +2058,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         }
         else if (_projector.WrapperClassNames.TryGetValue(cbTypeId, out var wrapperClassName))
         {
-            var handleType = TypeScriptApiProjector.GetHandleTypeName(cbTypeId);
+            var handleType = _projector.GetConcreteHandleTypeName(cbTypeId);
             WriteLine($"{indent}const {callbackParameter.Name}Handle = wrapIfHandle({callbackArgName}) as {handleType};");
             WriteLine($"{indent}const {callbackParameter.Name} = new {TypeScriptApiProjector.GetImplementationClassName(wrapperClassName)}({callbackParameter.Name}Handle, {clientExpression});");
         }
@@ -2222,7 +2222,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         foreach (var typeClass in typeClasses)
         {
             var className = _projector.WrapperClassNames.GetValueOrDefault(typeClass.TypeId) ?? TypeScriptApiProjector.DeriveClassName(typeClass.TypeId);
-            var handleType = TypeScriptApiProjector.GetHandleTypeName(typeClass.TypeId);
+            var handleType = _projector.GetConcreteHandleTypeName(typeClass.TypeId);
             WriteLine($"registerHandleWrapper('{typeClass.TypeId}', (handle, client) => new {TypeScriptApiProjector.GetImplementationClassName(className)}(handle as {handleType}, client));");
         }
 
@@ -2230,8 +2230,20 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         foreach (var builder in resourceBuilders)
         {
             var className = _projector.WrapperClassNames.GetValueOrDefault(builder.TypeId) ?? TypeScriptApiProjector.DeriveClassName(builder.TypeId);
-            var handleType = TypeScriptApiProjector.GetHandleTypeName(builder.TypeId);
+            var handleType = _projector.GetConcreteHandleTypeName(builder.TypeId);
             WriteLine($"registerHandleWrapper('{builder.TypeId}', (handle, client) => new {TypeScriptApiProjector.GetImplementationClassName(className)}(handle as {handleType}, client));");
+        }
+
+        // Returned aliases keep their marshalled TypeId, so register each one against the retained
+        // implementation. wrapIfHandle uses these registrations for handles nested in callback data.
+        foreach (var aliasTypeId in _projector.ConcreteTypeIds
+            .Where(mapping => !string.Equals(mapping.Key, mapping.Value, StringComparison.Ordinal))
+            .Select(mapping => mapping.Key)
+            .OrderBy(typeId => typeId, StringComparer.Ordinal))
+        {
+            var className = _projector.WrapperClassNames[aliasTypeId];
+            var handleType = _projector.GetConcreteHandleTypeName(aliasTypeId);
+            WriteLine($"registerHandleWrapper('{aliasTypeId}', (handle, client) => new {TypeScriptApiProjector.GetImplementationClassName(className)}(handle as {handleType}, client));");
         }
 
         WriteLine();
@@ -2483,7 +2495,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
 
     private void GenerateWrapperGetterOnlyPropertyMethod(string propertyName, AtsCapabilityInfo getter, string wrapperClassName)
     {
-        var handleType = TypeScriptApiProjector.GetHandleTypeName(getter.ReturnType!.TypeId);
+        var handleType = _projector.GetConcreteHandleTypeName(getter.ReturnType!.TypeId);
         var wrapperImplementationClassName = TypeScriptApiProjector.GetImplementationClassName(wrapperClassName);
 
         if (_projector.TryGetPromiseWrapperType(getter.ReturnType, out var promiseInterfaceName, out var promiseImplementationClassName))
@@ -2537,7 +2549,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
     /// </remarks>
     private void GenerateWrapperPropertyObject(string propertyName, AtsCapabilityInfo getter, AtsCapabilityInfo? setter, string wrapperClassName)
     {
-        var handleType = TypeScriptApiProjector.GetHandleTypeName(getter.ReturnType!.TypeId);
+        var handleType = _projector.GetConcreteHandleTypeName(getter.ReturnType!.TypeId);
         var wrapperImplementationClassName = TypeScriptApiProjector.GetImplementationClassName(wrapperClassName);
 
         WriteLine($"    {propertyName} = {{");
@@ -2763,7 +2775,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
             var returnTypeId = method.ReturnType!.TypeId;
             var returnClassName = _projector.GetConcreteClassName(returnTypeId);
             var returnImplementationClassName = TypeScriptApiProjector.GetImplementationClassName(returnClassName);
-            var returnHandleType = TypeScriptApiProjector.GetHandleTypeName(returnTypeId);
+            var returnHandleType = _projector.GetConcreteHandleTypeName(returnTypeId);
 
             WriteCapabilityDocComment("    ", method, requiredParams, hasOptionals ? publicOptionsParamName : null);
             Write($"    {methodName}(");
@@ -2876,7 +2888,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
             var returnTypeId = capability.ReturnType!.TypeId;
             var returnClassName = _projector.GetConcreteClassName(returnTypeId);
             var returnImplementationClassName = TypeScriptApiProjector.GetImplementationClassName(returnClassName);
-            var returnHandleType = TypeScriptApiProjector.GetHandleTypeName(returnTypeId);
+            var returnHandleType = _projector.GetConcreteHandleTypeName(returnTypeId);
 
             WriteCapabilityDocComment("    ", capability, requiredParams, hasOptionals ? publicOptionsParamName : null);
             Write($"    {methodName}(");
@@ -3008,7 +3020,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
                 ?? TypeScriptApiProjector.DeriveClassName(capability.ReturnType.TypeId);
             var returnWrapperImplementationClass = TypeScriptApiProjector.GetImplementationClassName(returnWrapperClass);
             var returnPromiseImplementationClass = TypeScriptApiProjector.GetImplementationPromiseClassName(returnWrapperClass);
-            var returnHandleType = TypeScriptApiProjector.GetHandleTypeName(capability.ReturnType.TypeId);
+            var returnHandleType = _projector.GetConcreteHandleTypeName(capability.ReturnType.TypeId);
 
             // Generate internal async method
             WriteLine($"    /** @internal */");

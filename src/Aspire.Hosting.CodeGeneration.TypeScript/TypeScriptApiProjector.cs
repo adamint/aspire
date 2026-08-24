@@ -94,6 +94,9 @@ internal sealed partial class TypeScriptApiProjector
     /// <summary>Gets the mapping of ATS type ID to generated wrapper class name.</summary>
     internal Dictionary<string, string> WrapperClassNames => _wrapperClassNames;
 
+    /// <summary>Gets the mapping of ATS type ID to the retained concrete type ID for its wrapper.</summary>
+    internal Dictionary<string, string> ConcreteTypeIds => _concreteTypeIds;
+
     /// <summary>Gets the mapping of ATS type ID to the type reference it was resolved from.</summary>
     internal Dictionary<string, AtsTypeRef> TypeRefsById => _typeRefsById;
 
@@ -122,6 +125,14 @@ internal sealed partial class TypeScriptApiProjector
     {
         var capabilities = context.Capabilities;
         var dtoTypes = context.DtoTypes;
+        var directlyReturnedResourceTypesByClassName = capabilities
+            .Where(capability => capability.CapabilityKind != AtsCapabilityKind.PropertySetter)
+            .Select(capability => capability.ReturnType)
+            .Where(typeRef => typeRef?.IsResourceBuilder == true)
+            .Select(typeRef => typeRef!)
+            .DistinctBy(typeRef => typeRef.TypeId, StringComparer.Ordinal)
+            .GroupBy(typeRef => DeriveClassName(typeRef.TypeId), StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
 
         var builders = CreateBuilderModels(capabilities);
         var clientMethods = GetEntryPointCapabilities(capabilities)
@@ -161,6 +172,7 @@ internal sealed partial class TypeScriptApiProjector
         // Build wrapper class name mapping before anything consumes the mappings so callback
         // properties can reference wrapper classes instead of raw handle aliases.
         _wrapperClassNames.Clear();
+        _concreteTypeIds.Clear();
         _typeRefsById.Clear();
         _typesWithPromiseWrappers.Clear();
         _generatedOptionsInterfaces.Clear();
@@ -187,17 +199,38 @@ internal sealed partial class TypeScriptApiProjector
         foreach (var builder in resourceBuilders)
         {
             _wrapperClassNames[builder.TypeId] = builder.BuilderClassName;
+            _concreteTypeIds[builder.TypeId] = builder.TypeId;
             if (builder.TargetType is { } targetType)
             {
                 _typeRefsById[builder.TypeId] = targetType;
             }
-            // All resource builders get Promise wrappers
-            _typesWithPromiseWrappers.Add(builder.TypeId);
+
+            directlyReturnedResourceTypesByClassName.TryGetValue(builder.BuilderClassName, out var directlyReturnedAliases);
+
+            // Builder models are deduplicated by generated class name, so the retained TypeId may
+            // differ from a directly returned interface TypeId. Register the retained TypeId to emit
+            // one declaration pair and every returned alias so return sites resolve to that pair.
+            if (HasChainableMethods(builder) || directlyReturnedAliases is not null)
+            {
+                _typesWithPromiseWrappers.Add(builder.TypeId);
+
+                if (directlyReturnedAliases is not null)
+                {
+                    foreach (var alias in directlyReturnedAliases)
+                    {
+                        _typesWithPromiseWrappers.Add(alias.TypeId);
+                        _wrapperClassNames[alias.TypeId] = builder.BuilderClassName;
+                        _concreteTypeIds[alias.TypeId] = builder.TypeId;
+                        _typeRefsById[alias.TypeId] = builder.TargetType ?? alias;
+                    }
+                }
+            }
         }
 
         foreach (var typeClass in typeClasses)
         {
             _wrapperClassNames[typeClass.TypeId] = DeriveClassName(typeClass.TypeId);
+            _concreteTypeIds[typeClass.TypeId] = typeClass.TypeId;
             if (typeClass.TargetType is { } targetType)
             {
                 _typeRefsById[typeClass.TypeId] = targetType;
@@ -1218,12 +1251,15 @@ internal sealed partial class TypeScriptApiProjector
 
     // Mapping of typeId -> wrapper class name for all generated wrapper types
     // Used to resolve parameter types to wrapper classes instead of handle types
-
     private readonly Dictionary<string, string> _wrapperClassNames = new(StringComparer.Ordinal);
+
+    // Wrapper classes are deduplicated by generated class name, but their handles are branded by
+    // TypeId. Keep the retained TypeId so every canonical implementation receives its branded handle.
+    private readonly Dictionary<string, string> _concreteTypeIds = new(StringComparer.Ordinal);
 
     private readonly Dictionary<string, AtsTypeRef> _typeRefsById = new(StringComparer.Ordinal);
 
-    // Set of type IDs that have Promise wrappers (types with chainable methods)
+    // Set of type IDs that have Promise wrappers (chainable or directly returned resource builders)
     // Used to determine return types for methods
 
     private readonly HashSet<string> _typesWithPromiseWrappers = new(StringComparer.Ordinal);
@@ -1287,6 +1323,11 @@ internal sealed partial class TypeScriptApiProjector
 
     internal string GetConcreteClassName(string typeId) => _wrapperClassNames.GetValueOrDefault(typeId)
         ?? DeriveClassName(typeId);
+
+    internal string GetConcreteTypeId(string typeId) => _concreteTypeIds.GetValueOrDefault(typeId)
+        ?? typeId;
+
+    internal string GetConcreteHandleTypeName(string typeId) => GetHandleTypeName(GetConcreteTypeId(typeId));
 
     internal string GetPublicPromiseInterfaceName(string typeId) => GetPromiseInterfaceName(GetConcreteClassName(typeId));
 
@@ -2384,16 +2425,75 @@ internal sealed partial class TypeScriptApiProjector
             builders.Add(builder);
         }
 
-        // Deduplicate builders by class name, preferring concrete types over interfaces.
-        // This handles cases where both a concrete type (e.g. AzureKeyVaultResource) and
-        // its interface (IAzureKeyVaultResource → AzureKeyVaultResource) produce the same class name.
-        // Sort: concrete types first, then interfaces
+        // Deduplicate a concrete type and its interfaces by class name. Unrelated CLR types can have
+        // the same simple name, but treating them as aliases would bind one type's branded handle to
+        // the other's wrapper implementation.
         return builders
-            .OrderBy(b => b.IsInterface)
-            .ThenBy(b => b.BuilderClassName)
-            .GroupBy(b => b.BuilderClassName)
-            .Select(g => g.First())
+            .OrderBy(builder => builder.IsInterface)
+            .ThenBy(builder => builder.BuilderClassName)
+            .GroupBy(builder => builder.BuilderClassName, StringComparer.Ordinal)
+            .Select(group =>
+            {
+                var candidates = group
+                    .OrderBy(builder => builder.IsInterface)
+                    .ThenBy(builder => builder.TypeId, StringComparer.Ordinal)
+                    .ToList();
+                var retainedBuilder = candidates[0];
+                var unrelatedBuilder = candidates
+                    .Skip(1)
+                    .FirstOrDefault(candidate => !IsBuilderAlias(retainedBuilder, candidate));
+
+                if (unrelatedBuilder is not null)
+                {
+                    var collidingTypeIds = candidates
+                        .Select(candidate => candidate.TypeId)
+                        .Order(StringComparer.Ordinal);
+                    throw new InvalidOperationException(
+                        $"Resource types {string.Join(", ", collidingTypeIds.Select(typeId => $"'{typeId}'"))} " +
+                        $"all map to the generated TypeScript name '{group.Key}', but they are not a concrete type and its interfaces.");
+                }
+
+                return retainedBuilder;
+            })
             .ToList();
+    }
+
+    private static bool IsBuilderAlias(BuilderModel retainedBuilder, BuilderModel candidate)
+    {
+        if (string.Equals(retainedBuilder.TypeId, candidate.TypeId, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (retainedBuilder.IsInterface == candidate.IsInterface ||
+            retainedBuilder.TargetType is not { } retainedType ||
+            candidate.TargetType is not { } candidateType)
+        {
+            return false;
+        }
+
+        if (retainedType.ClrType is { } retainedClrType && candidateType.ClrType is { } candidateClrType)
+        {
+            return retainedClrType.IsAssignableFrom(candidateClrType) ||
+                candidateClrType.IsAssignableFrom(retainedClrType);
+        }
+
+        return IsTypeInHierarchy(retainedType, candidateType.TypeId) ||
+            IsTypeInHierarchy(candidateType, retainedType.TypeId);
+    }
+
+    private static bool IsTypeInHierarchy(AtsTypeRef typeRef, string typeId)
+    {
+        if (typeRef.ImplementedInterfaces.Any(interfaceType =>
+            string.Equals(interfaceType.TypeId, typeId, StringComparison.Ordinal) ||
+            IsTypeInHierarchy(interfaceType, typeId)))
+        {
+            return true;
+        }
+
+        return typeRef.BaseType is { } baseType &&
+            (string.Equals(baseType.TypeId, typeId, StringComparison.Ordinal) ||
+             IsTypeInHierarchy(baseType, typeId));
     }
 
     /// <summary>
