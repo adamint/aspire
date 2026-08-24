@@ -10,6 +10,4 @@ The Aspire Dashboard keeps your running app in one place:
 
 Open it from the Aspire view whenever you need to understand what your app is doing.
 
-![The Aspire Dashboard showing running resources.](../resources/aspire-dashboard-dark.png)
-
 [Explore the Aspire Dashboard](https://aspire.dev/dashboard/overview/)
