@@ -1177,6 +1177,7 @@ internal sealed class AuxiliaryBackchannelRpcTarget(
         return new ResourceSnapshot
         {
             Name = resourceEvent.ResourceId,
+            Version = snapshot.Version,
             DisplayName = resource.Name,
             ResourceType = snapshot.ResourceType,
             State = snapshot.State?.Text,

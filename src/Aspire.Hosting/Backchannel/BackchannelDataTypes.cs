@@ -1076,6 +1076,11 @@ internal sealed class ResourceSnapshot
     public required string Name { get; init; }
 
     /// <summary>
+    /// Gets the monotonically increasing version of this resource snapshot, or <c>0</c> when unavailable.
+    /// </summary>
+    public long Version { get; init; }
+
+    /// <summary>
     /// Gets the display name of the resource.
     /// </summary>
     public string? DisplayName { get; init; }
