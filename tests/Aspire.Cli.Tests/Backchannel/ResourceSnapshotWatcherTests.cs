@@ -183,6 +183,96 @@ public class ResourceSnapshotWatcherTests
     }
 
     [Fact]
+    public async Task ResourceSnapshotWatcher_PrefersNewerGetSnapshotOverReplayedWatchSnapshot()
+    {
+        var replayObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var connection = new TestAppHostAuxiliaryBackchannel
+        {
+            GetResourceSnapshotsHandler = async cancellationToken =>
+            {
+                await replayObserved.Task.WaitAsync(cancellationToken);
+                return
+                [
+                    new ResourceSnapshot
+                    {
+                        Name = "api",
+                        DisplayName = "api",
+                        ResourceType = "Project",
+                        State = "Running",
+                        Version = 2
+                    }
+                ];
+            },
+            WatchResourceSnapshotsHandler = (_, cancellationToken) =>
+                YieldSnapshotAndWait(
+                    Task.CompletedTask,
+                    new ResourceSnapshot
+                    {
+                        Name = "api",
+                        DisplayName = "api",
+                        ResourceType = "Project",
+                        State = "Starting",
+                        Version = 1
+                    },
+                    replayObserved,
+                    cancellationToken)
+        };
+        using var watcher = new ResourceSnapshotWatcher(connection);
+
+        await watcher.WaitForInitialLoadAsync().DefaultTimeout();
+
+        var snapshot = Assert.Single(watcher.CaptureAllResources().Resources);
+        Assert.Equal(2, snapshot.Version);
+        Assert.Equal("Running", snapshot.State);
+    }
+
+    [Fact]
+    public async Task ResourceSnapshotWatcher_PrefersNewerWatchSnapshotOverStaleGetSnapshot()
+    {
+        var getCaptured = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var watchObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var connection = new TestAppHostAuxiliaryBackchannel
+        {
+            GetResourceSnapshotsHandler = async cancellationToken =>
+            {
+                getCaptured.TrySetResult();
+                await watchObserved.Task.WaitAsync(cancellationToken);
+                return
+                [
+                    new ResourceSnapshot
+                    {
+                        Name = "api",
+                        DisplayName = "api",
+                        ResourceType = "Project",
+                        State = "Starting",
+                        Version = 1
+                    }
+                ];
+            },
+            WatchResourceSnapshotsHandler = (_, cancellationToken) =>
+                YieldSnapshotAndWait(
+                    getCaptured.Task,
+                    new ResourceSnapshot
+                    {
+                        Name = "api",
+                        DisplayName = "api",
+                        ResourceType = "Project",
+                        State = "Running",
+                        Version = 2
+                    },
+                    watchObserved,
+                    cancellationToken)
+        };
+        using var watcher = new ResourceSnapshotWatcher(connection);
+
+        await watcher.WaitForInitialLoadAsync().DefaultTimeout();
+
+        var snapshot = Assert.Single(watcher.CaptureAllResources().Resources);
+        Assert.Equal(2, snapshot.Version);
+        Assert.Equal("Running", snapshot.State);
+    }
+
+    [Fact]
     public async Task ResourceSnapshotWatcher_AllowsOnlyOneUpdateConsumer()
     {
         var watchStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -298,6 +388,21 @@ public class ResourceSnapshotWatcherTests
         Assert.Equal(totalUpdateCount, producedUpdateCount);
         Assert.Equal(resourceCount, updates.Count);
         Assert.Equal(expectedUpdates, actualUpdates);
+    }
+
+    private static async IAsyncEnumerable<ResourceSnapshot> YieldSnapshotAndWait(
+        Task prerequisite,
+        ResourceSnapshot snapshot,
+        TaskCompletionSource snapshotObserved,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await prerequisite.WaitAsync(cancellationToken);
+        yield return snapshot;
+
+        // Code after the yield runs only when the watcher asks for the next item, which means
+        // the yielded snapshot has already been applied to the watcher's resource dictionary.
+        snapshotObserved.TrySetResult();
+        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
     }
 
     private static async IAsyncEnumerable<ResourceSnapshot> ProduceResourceSnapshotsAfter(

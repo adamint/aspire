@@ -67,8 +67,8 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
         try
         {
             // Start the watch before fetching the initial snapshot so a resource transition cannot
-            // fall into the gap between those two backchannel calls. Changes win over the initial
-            // snapshot because the snapshot may already be stale by the time it is returned.
+            // fall into the gap between those two backchannel calls. Version-aware reconciliation
+            // selects the newest known snapshot while retaining watch values for compatibility.
             using var watchCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var cancellationArbitrationLock = new object();
             var cleanupCancellationStarted = false;
@@ -154,7 +154,13 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
             {
                 foreach (var snapshot in snapshots)
                 {
-                    _resources.TryAdd(snapshot.Name, snapshot);
+                    if (!_resources.TryGetValue(snapshot.Name, out var currentSnapshot) ||
+                        snapshot.Version > currentSnapshot.Version)
+                    {
+                        // Version 0 is the compatibility value from older AppHosts. Equal or unknown
+                        // versions retain the watch value, while a newer GET replaces a stale replay.
+                        _resources[snapshot.Name] = snapshot;
+                    }
                 }
             }
 
