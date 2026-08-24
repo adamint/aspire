@@ -1,10 +1,11 @@
 # See the whole system
 
-The Aspire Dashboard keeps your running app in one place:
+The Aspire Dashboard gives you one place to inspect your running app:
 
 - **Resources** show what is running, waiting, or unhealthy.
 - **Endpoints** take you straight to each service.
-- **Logs** combine console output and structured OpenTelemetry data.
+- **Console Logs** show resource output.
+- **Structured Logs** show OpenTelemetry data.
 - **Traces** follow a request across service boundaries.
 - **Metrics** show how the app behaves over time.
 

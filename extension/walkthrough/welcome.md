@@ -5,7 +5,7 @@ An **AppHost** is the map of your distributed app: services, databases, containe
 With Aspire, you can:
 
 - **Define** your app in code, with code completion and version control built in.
-- **Run and debug** every resource in the right order from one editor.
+- **Run** every resource in the right order and **debug** supported application resources from one editor.
 - **See** resource health, endpoints, logs, traces, and metrics in the Aspire Dashboard.
 
 Bring the stack you already use. Aspire works across languages, frameworks, containers, and cloud services.

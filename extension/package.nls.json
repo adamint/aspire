@@ -265,7 +265,7 @@
   "walkthrough.getStarted.installCli.description": "Choose a package manager, install the Aspire CLI, and get ready to run your first app.\n\n[Install the Aspire CLI](command:aspire-vscode.installCli)",
   "walkthrough.getStarted.createProject.title": "Create your first Aspire app",
   "walkthrough.getStarted.createProject.description": "Choose a starter for your stack, or begin with an empty AppHost.\n\n[Create a new Aspire project](command:aspire-vscode.new)",
-  "walkthrough.getStarted.runApp.title": "Press F5",
+  "walkthrough.getStarted.runApp.title": "Debug AppHost",
   "walkthrough.getStarted.runApp.description": "Run or debug your AppHost and let Aspire start every resource in the right order.\n\n[Run AppHost](command:aspire-vscode.runAppHostCommand)\n\n[Debug AppHost](command:aspire-vscode.debugAppHostCommand)",
   "walkthrough.getStarted.dashboard.title": "See the whole system",
   "walkthrough.getStarted.dashboard.description": "Follow resources, endpoints, logs, traces, and metrics from one dashboard.\n\n[Open dashboard](command:aspire-vscode.openDashboard)",
