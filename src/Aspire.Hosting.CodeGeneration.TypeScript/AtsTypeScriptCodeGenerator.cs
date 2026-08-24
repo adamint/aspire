@@ -3,8 +3,6 @@
 
 using System.Globalization;
 using System.Text;
-using System.Text.Json.Nodes;
-using Aspire.Shared.Json;
 using Aspire.TypeSystem;
 
 namespace Aspire.Hosting.CodeGeneration.TypeScript;
@@ -20,13 +18,6 @@ internal sealed class BuilderModel
     public required List<AtsCapabilityInfo> Capabilities { get; init; }
     public bool IsInterface { get; init; }
     public AtsTypeRef? TargetType { get; init; }
-}
-
-internal sealed class ExportedValueTreeNode
-{
-    public Dictionary<string, ExportedValueTreeNode> Children { get; } = new(StringComparer.Ordinal);
-
-    public AtsExportedValueInfo? Value { get; set; }
 }
 
 /// <summary>
@@ -530,7 +521,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         GenerateDtoInterfaces(dtoTypes);
 
         // Generate exported immutable values
-        GenerateExportedValues(exportedValues, dtoTypes.ToDictionary(dto => dto.TypeId, StringComparer.Ordinal));
+        GenerateExportedValues(exportedValues);
 
         // Generate collected options interfaces
         GenerateOptionsInterfaces();
@@ -693,130 +684,25 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         }
     }
 
-    private void GenerateExportedValues(
-        IReadOnlyList<AtsExportedValueInfo> exportedValues,
-        IReadOnlyDictionary<string, AtsDtoTypeInfo> dtoTypesById)
+    private void GenerateExportedValues(IReadOnlyList<AtsExportedValueInfo> exportedValues)
     {
         if (exportedValues.Count == 0)
         {
             return;
         }
 
-        var root = BuildExportedValueTree(exportedValues);
+        var namespaces = _projector.ProjectExportedValues(exportedValues);
 
         WriteLine("// ============================================================================");
         WriteLine("// Exported Values");
         WriteLine("// ============================================================================");
         WriteLine();
 
-        foreach (var (name, node) in root.Children.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        foreach (var exportedNamespace in namespaces)
         {
-            WriteLine($"export namespace {name} {{");
-            WriteTypeScriptExportedValueChildren(node, dtoTypesById, indentLevel: 1);
-            WriteLine("}");
+            WriteLine(exportedNamespace.Content);
             WriteLine();
         }
-    }
-
-    private void WriteTypeScriptExportedValueChildren(
-        ExportedValueTreeNode node,
-        IReadOnlyDictionary<string, AtsDtoTypeInfo> dtoTypesById,
-        int indentLevel)
-    {
-        var indent = new string(' ', indentLevel * 4);
-
-        foreach (var (name, child) in node.Children.OrderBy(pair => pair.Key, StringComparer.Ordinal))
-        {
-            if (child.Value is { } valueInfo)
-            {
-                WriteDocumentationComment(indent, valueInfo.Documentation, valueInfo.Description);
-
-                var literal = RenderTypeScriptExportedValue(valueInfo.Value, valueInfo.Type, dtoTypesById);
-                var exportedType = _projector.MapTypeRefToTypeScript(valueInfo.Type);
-                var needsCast = valueInfo.Type.Category is not AtsTypeCategory.Primitive;
-                var expression = needsCast ? $"{literal} as {exportedType}" : literal;
-                WriteLine($"{indent}export const {name} = {expression};");
-            }
-            else
-            {
-                WriteLine($"{indent}export namespace {name} {{");
-                WriteTypeScriptExportedValueChildren(child, dtoTypesById, indentLevel + 1);
-                WriteLine($"{indent}}}");
-            }
-
-            WriteLine();
-        }
-    }
-
-    private string RenderTypeScriptExportedValue(
-        JsonNode? value,
-        AtsTypeRef typeRef,
-        IReadOnlyDictionary<string, AtsDtoTypeInfo> dtoTypesById)
-    {
-        if (value is null)
-        {
-            return "null";
-        }
-
-        return typeRef.Category switch
-        {
-            AtsTypeCategory.Dto when value is JsonObject obj && dtoTypesById.TryGetValue(typeRef.TypeId, out var dtoInfo)
-                => RenderTypeScriptDtoValue(obj, dtoInfo, dtoTypesById),
-            AtsTypeCategory.Array or AtsTypeCategory.List when value is JsonArray arr
-                => $"[{string.Join(", ", arr.Select(item => RenderTypeScriptExportedValue(item, typeRef.ElementType!, dtoTypesById)))}]",
-            AtsTypeCategory.Dict when value is JsonObject obj
-                => "{ " + string.Join(", ", obj.Select(pair => $"{RenderTypeScriptPropertyKey(pair.Key)}: {RenderTypeScriptExportedValue(pair.Value, typeRef.ValueType!, dtoTypesById)}")) + " }",
-            _ => value.ToRelaxedJsonString()
-        };
-    }
-
-    private string RenderTypeScriptDtoValue(
-        JsonObject value,
-        AtsDtoTypeInfo dtoInfo,
-        IReadOnlyDictionary<string, AtsDtoTypeInfo> dtoTypesById)
-    {
-        var members = new List<string>();
-
-        foreach (var property in dtoInfo.Properties)
-        {
-            if (!value.TryGetPropertyValue(property.Name, out var propertyValue))
-            {
-                continue;
-            }
-
-            members.Add($"{TypeScriptApiProjector.ToCamelCase(property.Name)}: {RenderTypeScriptExportedValue(propertyValue, property.Type, dtoTypesById)}");
-        }
-
-        return "{ " + string.Join(", ", members) + " }";
-    }
-
-    private static string RenderTypeScriptPropertyKey(string key)
-    {
-        return AtsJsonCodeWriter.ToRelaxedJsonString(key);
-    }
-
-    private static ExportedValueTreeNode BuildExportedValueTree(IReadOnlyList<AtsExportedValueInfo> exportedValues)
-    {
-        var root = new ExportedValueTreeNode();
-
-        foreach (var exportedValue in exportedValues)
-        {
-            var current = root;
-            foreach (var segment in exportedValue.PathSegments)
-            {
-                if (!current.Children.TryGetValue(segment, out var child))
-                {
-                    child = new ExportedValueTreeNode();
-                    current.Children[segment] = child;
-                }
-
-                current = child;
-            }
-
-            current.Value = exportedValue;
-        }
-
-        return root;
     }
 
     /// <summary>

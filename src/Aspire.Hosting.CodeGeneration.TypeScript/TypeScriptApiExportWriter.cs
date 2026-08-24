@@ -162,6 +162,8 @@ internal static class TypeScriptApiExportWriter
         TypeScriptApiItemKind.Enum => "enum",
         TypeScriptApiItemKind.Dto => "dto",
         TypeScriptApiItemKind.Options => "options",
+        TypeScriptApiItemKind.Namespace => "namespace",
+        TypeScriptApiItemKind.Constant => "constant",
         TypeScriptApiItemKind.Augmentation => "augmentation",
         TypeScriptApiItemKind.Method => "method",
         TypeScriptApiItemKind.Property => "property",

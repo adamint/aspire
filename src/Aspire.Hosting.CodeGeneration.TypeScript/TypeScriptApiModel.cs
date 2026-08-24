@@ -22,6 +22,12 @@ internal enum TypeScriptApiItemKind
     /// <summary>A generated options bag interface for a method's optional parameters.</summary>
     Options,
 
+    /// <summary>A namespace containing immutable exported values.</summary>
+    Namespace,
+
+    /// <summary>An immutable exported value.</summary>
+    Constant,
+
     /// <summary>
     /// The members this package contributes to an interface another package owns. The owning package
     /// publishes the type itself, so this is deliberately not a second page for that type.
@@ -170,27 +176,42 @@ internal sealed record TypeScriptApiModule
 }
 
 /// <summary>
+/// A fully rendered exported-value namespace shared by source generation and canonical projection.
+/// </summary>
+internal sealed record TypeScriptExportedValueNamespace
+{
+    /// <summary>Gets the namespace name.</summary>
+    public required string Name { get; init; }
+
+    /// <summary>Gets the complete TypeScript namespace declaration.</summary>
+    public required string Content { get; init; }
+
+    /// <summary>Gets the namespace and constant members exposed for canonical documentation.</summary>
+    public required IReadOnlyList<TypeScriptApiMember> Members { get; init; }
+}
+
+/// <summary>
 /// A generator-owned TypeScript declaration fragment.
 /// </summary>
 /// <remarks>
-/// Concatenating the fragments of one complete manifest, ordered and deduplicated by
-/// <see cref="Id"/>, must type-check on its own. Fragments contributed by the referenced-type
-/// closure carry the owning assembly of the referenced type so consumers can avoid creating
-/// duplicate documentation pages for another package's symbols.
+/// Declaration IDs are scoped to the containing package export. The canonical identity of a
+/// declaration is the tuple <c>(package.name, package.version, declaration.id)</c>; declarations
+/// from separate package exports cannot be flattened into one global declaration set because
+/// package-local TypeScript names may intentionally overlap. The complete declaration list in one
+/// export must type-check on its own.
 /// </remarks>
 internal sealed record TypeScriptApiDeclaration
 {
     private readonly string _content = string.Empty;
 
-    /// <summary>Gets the stable, generator-owned identifier used for ordering and deduplication.</summary>
+    /// <summary>Gets the stable, generator-owned identifier within the containing package export.</summary>
     public required string Id { get; init; }
 
     /// <summary>Gets the TypeScript declaration text.</summary>
     /// <remarks>
     /// Line endings are normalized to <c>\n</c>. Some fragments come from raw string literals, which
-    /// carry whatever line endings the source file was checked out with, and consumers deduplicate
-    /// fragments by comparing content across packages — so a CLI built on Windows would otherwise
-    /// disagree with one built on Linux about the very same declaration.
+    /// carry whatever line endings the source file was checked out with, so the same package export
+    /// would otherwise differ between a CLI built on Windows and one built on Linux.
     /// </remarks>
     public required string Content
     {
@@ -222,7 +243,9 @@ internal sealed record TypeScriptApiModel
     /// <summary>Gets the package-owned documentation modules.</summary>
     public required IReadOnlyList<TypeScriptApiModule> Modules { get; init; }
 
-    /// <summary>Gets the declaration fragments needed to type-check the exported surface.</summary>
+    /// <summary>
+    /// Gets the package-scoped declaration fragments needed to type-check the exported surface.
+    /// </summary>
     public required IReadOnlyList<TypeScriptApiDeclaration> Declarations { get; init; }
 }
 

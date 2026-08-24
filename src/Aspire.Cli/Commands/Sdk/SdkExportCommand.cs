@@ -2,10 +2,12 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.CommandLine;
+using System.Globalization;
 using System.Text.Json;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Projects;
+using Aspire.Cli.Resources;
 using Aspire.Cli.Utils;
 using Microsoft.Extensions.Logging;
 using Semver;
@@ -106,6 +108,16 @@ internal sealed class SdkExportCommand : BaseCommand
         }
 
         var languageInfo = await FindLanguageAsync(language, cancellationToken);
+        if (languageInfo is not null && string.IsNullOrWhiteSpace(languageInfo.CodeGenerator))
+        {
+            return CommandResult.Failure(
+                CliExitCodes.InvalidCommand,
+                string.Format(
+                    CultureInfo.CurrentCulture,
+                    ErrorStrings.SdkExportLanguageDoesNotSupportCodeGeneration,
+                    languageInfo.DisplayName));
+        }
+
         if (languageInfo is not null)
         {
             var codeGenerationPackage = await _languageDiscovery.GetPackageForLanguageAsync(
@@ -309,22 +321,41 @@ internal sealed class SdkExportCommand : BaseCommand
     {
         normalizedVersion = string.Empty;
 
-        // NuGet accepts a four-component numeric version that SemVer does not:
+        // NuGet accepts a four-component numeric core that SemVer does not:
         //   1.2.3.4
+        //   1.2.3.4-preview.1+build
         // Keep SemVersion as the primary parser so ordinary versions and prerelease labels retain
-        // their existing normalization, then narrowly fall back to System.Version for this shape.
-        var components = version.Split('.');
+        // their existing normalization. For the fallback, parse the numeric core with System.Version
+        // and validate the remaining prerelease/build suffix independently as SemVer.
+        var suffixIndex = version.IndexOfAny(['-', '+']);
+        var numericCore = suffixIndex >= 0 ? version[..suffixIndex] : version;
+        var suffix = suffixIndex >= 0 ? version[suffixIndex..] : string.Empty;
+        var components = numericCore.Split('.');
         if (components.Length != 4 ||
             components.Any(static component =>
                 component.Length == 0 || component.Any(static character => !char.IsAsciiDigit(character))) ||
-            !Version.TryParse(version, out var parsedVersion))
+            !Version.TryParse(numericCore, out var parsedVersion))
         {
             return false;
         }
 
-        normalizedVersion = parsedVersion.Revision == 0
+        var normalizedCore = parsedVersion.Revision == 0
             ? parsedVersion.ToString(3)
             : parsedVersion.ToString(4);
+
+        if (suffix.Length == 0)
+        {
+            normalizedVersion = normalizedCore;
+            return true;
+        }
+
+        const string SemVerCore = "0.0.0";
+        if (!SemVersion.TryParse($"{SemVerCore}{suffix}", SemVersionStyles.Strict, out var parsedSuffix))
+        {
+            return false;
+        }
+
+        normalizedVersion = normalizedCore + parsedSuffix.ToString()[SemVerCore.Length..];
         return true;
     }
 }

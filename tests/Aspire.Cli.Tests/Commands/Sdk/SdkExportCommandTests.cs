@@ -96,6 +96,8 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
     [Theory]
     [InlineData("1.2.3.4", "1.2.3.4")]
     [InlineData("1.2.3.0", "1.2.3")]
+    [InlineData("1.0.0.0-beta", "1.0.0-beta")]
+    [InlineData("1.2.3.4-preview.1+meta", "1.2.3.4-preview.1")]
     public async Task SdkExportRestoresNormalizedFourPartNuGetVersion(string requestedVersion, string normalizedVersion)
     {
         var interactionService = new TestInteractionService();
@@ -169,6 +171,9 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
     [InlineData("Contoso@not-a-version")]
     [InlineData("Contoso@13.5.*")]
     [InlineData("Contoso@[13.5.0]")]
+    [InlineData("Contoso@1.2.3.4-")]
+    [InlineData("Contoso@1.2.3.4+")]
+    [InlineData("Contoso@1.2.3.4-preview..1")]
     public async Task SdkExportRejectsMalformedOrNonExactPackages(string package)
     {
         var interactionService = new TestInteractionService();
@@ -252,6 +257,29 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         Assert.Contains(
             interactionService.DisplayedErrors,
             error => error.Contains("klingon", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task SdkExportRejectsLanguageWithoutCodeGeneratorBeforePreparation()
+    {
+        var interactionService = new TestInteractionService();
+        using var provider = CreateProvider(
+            interactionService,
+            out var workspace,
+            out var rpcClient,
+            out var project);
+        using var workspaceLease = workspace;
+
+        var exitCode = await InvokeAsync(provider, "sdk export --language csharp");
+
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
+        Assert.Collection(
+            interactionService.DisplayedErrors,
+            error => Assert.Equal(
+                "SDK API export is not supported for C# (.NET) because it does not use a code generator.",
+                error));
+        Assert.Equal(0, project.PrepareCallCount);
+        Assert.Null(rpcClient.LastExportRequest);
     }
 
     [Fact]
@@ -386,6 +414,8 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
 
         public IReadOnlyList<IntegrationReference> Integrations { get; private set; } = [];
 
+        public int PrepareCallCount { get; private set; }
+
         public string GetInstanceIdentifier() => AppDirectoryPath;
 
         public Task<AppHostServerPrepareResult> PrepareAsync(
@@ -395,6 +425,7 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
             string? packageSourceOverride = null,
             CancellationToken cancellationToken = default)
         {
+            PrepareCallCount++;
             Integrations = [.. integrations];
             return Task.FromResult(new AppHostServerPrepareResult(Success: true, Output: null));
         }

@@ -3,8 +3,10 @@
 
 using System.Reflection;
 using System.Text;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Aspire.Shared.CodeGeneration;
+using Aspire.Shared.Json;
 using Aspire.TypeSystem;
 
 namespace Aspire.Hosting.CodeGeneration.TypeScript;
@@ -34,10 +36,9 @@ internal sealed partial class TypeScriptApiProjector
 
     /// <summary>
     /// Base library symbols that generated declarations reference but that the SDK ships by hand in
-    /// <c>base.mts</c>/<c>transport.mts</c> rather than generating per package. They are emitted as a
-    /// single declaration fragment with a well-known ID so that concatenating the fragments of a
-    /// complete manifest type-checks without site-authored shims, and so that deduplication by ID
-    /// collapses the copies contributed by every package in the manifest to exactly one.
+    /// <c>base.mts</c>/<c>transport.mts</c> rather than generating per package. Each package export
+    /// includes these symbols under a well-known package-local declaration ID so its declarations
+    /// type-check without site-authored shims.
     /// </summary>
     private const string RuntimeDeclarationId = "aspire:runtime:base";
 
@@ -268,15 +269,17 @@ internal sealed partial class TypeScriptApiProjector
 
         // Pre-scan all capabilities to collect options interfaces.
         // This must happen AFTER wrapper class names are populated so types resolve correctly.
-        foreach (var builder in builders)
+        // Options names are public TypeScript API. Allocate collision suffixes after sorting by the
+        // stable capability identity so a combined context produces byte-identical output regardless
+        // of the order in which package capabilities were discovered.
+        foreach (var cap in builders
+            .SelectMany(builder => builder.Capabilities)
+            .OrderBy(capability => capability.CapabilityId, StringComparer.Ordinal))
         {
-            foreach (var cap in builder.Capabilities)
+            var (_, optionalParams) = SeparateParameters(cap.Parameters);
+            if (optionalParams.Count > 0 && !TryGetDirectOptionsParameter(optionalParams, out _))
             {
-                var (_, optionalParams) = SeparateParameters(cap.Parameters);
-                if (optionalParams.Count > 0 && !TryGetDirectOptionsParameter(optionalParams, out _))
-                {
-                    RegisterOptionsInterface(cap.CapabilityId, cap.MethodName, optionalParams, GetCapabilityOwningAssemblyName(context, cap));
-                }
+                RegisterOptionsInterface(cap.CapabilityId, cap.MethodName, optionalParams, GetCapabilityOwningAssemblyName(context, cap));
             }
         }
 
@@ -430,9 +433,9 @@ internal sealed partial class TypeScriptApiProjector
     /// Builds the canonical API export model for one package from the already-resolved projection.
     /// </summary>
     /// <remarks>
-    /// Declaration fragment IDs are keyed by the assembly that owns the symbol rather than by the
-    /// exporting package, so a manifest that concatenates several packages collapses shared
-    /// referenced types to a single declaration instead of one copy per package.
+    /// Declaration fragment IDs are local to <paramref name="package"/>. Their canonical identity is
+    /// <c>(package.name, package.version, declaration.id)</c>; consumers must not flatten declarations
+    /// from separate package exports because their package-local TypeScript names can overlap.
     /// </remarks>
     /// <param name="package">The exact package identity the export is produced for.</param>
     /// <param name="ownedAssemblyNames">
@@ -522,11 +525,36 @@ internal sealed partial class TypeScriptApiProjector
             }
         }
 
+        var exportedValues = _resolved.Context.ExportedValues
+            .Where(value => owned.Contains(value.OwningAssemblyName))
+            .ToList();
+        foreach (var exportedNamespace in ProjectExportedValues(exportedValues))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var item = new TypeScriptApiItem
+            {
+                Id = $"namespace:{exportedNamespace.Name}",
+                TypeId = $"namespace:{exportedNamespace.Name}",
+                Kind = TypeScriptApiItemKind.Namespace,
+                Name = exportedNamespace.Name,
+                Declaration = $"export namespace {exportedNamespace.Name}",
+                OwningAssemblyName = package.Name,
+                Members = exportedNamespace.Members
+            };
+            var declaration = new TypeScriptApiDeclaration
+            {
+                Id = $"{package.Name}:namespace:{exportedNamespace.Name}",
+                Content = exportedNamespace.Content,
+                OwningAssemblyName = package.Name
+            };
+
+            items.Add(item);
+            declarations[declaration.Id] = declaration;
+        }
+
         // Options interfaces belong to the assembly whose capability produced them, which is what
-        // both their fragment ID and their documented-item gate key off. Attributing them to the
-        // requesting package instead would give the same interface a different ID in every export
-        // that reaches it, so concatenated fragments would redeclare it rather than dedupe, and a
-        // package would document options interfaces belonging to its dependencies.
+        // both their fragment ID and their documented-item gate key off. Otherwise, a package could
+        // document options interfaces belonging to its dependencies.
         foreach (var (interfaceName, optionalParams) in _optionsInterfacesToGenerate.OrderBy(kvp => kvp.Key, StringComparer.Ordinal))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -543,9 +571,9 @@ internal sealed partial class TypeScriptApiProjector
 
         // Types reached through the referenced-type closure are named by generated unions and
         // parameters but have no capabilities of their own in this context, so nothing above
-        // declared them. Emit an opaque interface for each so the concatenated declarations
-        // type-check standalone. They deliberately produce no documented item: the package that
-        // owns them publishes their real surface.
+        // declared them. Emit an opaque interface for each so this package's declarations type-check
+        // standalone. They deliberately produce no documented item: the package that owns them
+        // publishes their real surface.
         // Deduplicate by declared name rather than by type ID: several ATS type IDs can resolve to
         // the same generated interface name, and emitting a stub for one of them would redeclare a
         // type another fragment already declares in full.
@@ -640,6 +668,282 @@ internal sealed partial class TypeScriptApiProjector
         };
     }
 
+    /// <summary>
+    /// Projects exported values into namespace declarations shared by source generation and API export.
+    /// </summary>
+    /// <param name="exportedValues">The values to project.</param>
+    /// <returns>The rendered top-level namespaces and their canonical members.</returns>
+    internal IReadOnlyList<TypeScriptExportedValueNamespace> ProjectExportedValues(
+        IReadOnlyList<AtsExportedValueInfo> exportedValues)
+    {
+        var root = BuildExportedValueTree(exportedValues);
+        var namespaces = new List<TypeScriptExportedValueNamespace>();
+
+        foreach (var (name, node) in root.Children.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            var content = new StringBuilder();
+            var members = new List<TypeScriptApiMember>();
+            content.Append("export namespace ").Append(name).Append(" {\n");
+            AppendExportedValueChildren(content, node, [name], members, indentLevel: 1);
+            content.Append('}');
+            namespaces.Add(new TypeScriptExportedValueNamespace
+            {
+                Name = name,
+                Content = content.ToString(),
+                Members = members
+            });
+        }
+
+        return namespaces;
+    }
+
+    private void AppendExportedValueChildren(
+        StringBuilder content,
+        ExportedValueTreeNode node,
+        IReadOnlyList<string> parentPath,
+        List<TypeScriptApiMember> members,
+        int indentLevel)
+    {
+        var indent = new string(' ', indentLevel * 4);
+
+        foreach (var (name, child) in node.Children.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            var path = parentPath.Append(name).ToArray();
+            if (child.Value is { } valueInfo)
+            {
+                foreach (var documentationLine in RenderDocumentationComment(
+                    indent,
+                    valueInfo.Documentation,
+                    valueInfo.Description))
+                {
+                    content.Append(documentationLine).Append('\n');
+                }
+
+                var declaration = $"export const {name} = {RenderTypeScriptExportedValueExpression(valueInfo)}";
+                content.Append(indent).Append(declaration).Append(";\n");
+                members.Add(new TypeScriptApiMember
+                {
+                    Id = $"constant:{string.Join(".", path)}",
+                    Kind = TypeScriptApiItemKind.Constant,
+                    Name = name,
+                    Declaration = declaration,
+                    Summary = valueInfo.Documentation?.Summary ?? valueInfo.Description,
+                    Remarks = valueInfo.Documentation?.Remarks,
+                    OwningAssemblyName = valueInfo.OwningAssemblyName
+                });
+            }
+            else
+            {
+                var declaration = $"export namespace {name}";
+                content.Append(indent).Append(declaration).Append(" {\n");
+                members.Add(new TypeScriptApiMember
+                {
+                    Id = $"namespace:{string.Join(".", path)}",
+                    Kind = TypeScriptApiItemKind.Namespace,
+                    Name = name,
+                    Declaration = declaration
+                });
+                AppendExportedValueChildren(content, child, path, members, indentLevel + 1);
+                content.Append(indent).Append("}\n");
+            }
+
+            content.Append('\n');
+        }
+    }
+
+    private string RenderTypeScriptExportedValueExpression(AtsExportedValueInfo exportedValue)
+    {
+        var literal = RenderTypeScriptExportedValue(exportedValue.Value, exportedValue.Type);
+        var exportedType = MapTypeRefToTypeScript(exportedValue.Type);
+
+        return exportedValue.Type.Category is AtsTypeCategory.Primitive
+            ? literal
+            : $"{literal} as {exportedType}";
+    }
+
+    private string RenderTypeScriptExportedValue(JsonNode? value, AtsTypeRef typeRef)
+    {
+        if (value is null)
+        {
+            return "null";
+        }
+
+        return typeRef.Category switch
+        {
+            AtsTypeCategory.Dto when value is JsonObject obj && _dtoTypesById.TryGetValue(typeRef.TypeId, out var dtoInfo)
+                => RenderTypeScriptDtoValue(obj, dtoInfo),
+            AtsTypeCategory.Array or AtsTypeCategory.List when value is JsonArray arr
+                => $"[{string.Join(", ", arr.Select(item => RenderTypeScriptExportedValue(item, typeRef.ElementType!)))}]",
+            AtsTypeCategory.Dict when value is JsonObject obj
+                => "{ " + string.Join(", ", obj.Select(pair => $"{AtsJsonCodeWriter.ToRelaxedJsonString(pair.Key)}: {RenderTypeScriptExportedValue(pair.Value, typeRef.ValueType!)}")) + " }",
+            _ => value.ToRelaxedJsonString()
+        };
+    }
+
+    private string RenderTypeScriptDtoValue(JsonObject value, AtsDtoTypeInfo dtoInfo)
+    {
+        var members = new List<string>();
+
+        foreach (var property in dtoInfo.Properties)
+        {
+            if (value.TryGetPropertyValue(property.Name, out var propertyValue))
+            {
+                members.Add($"{ToCamelCase(property.Name)}: {RenderTypeScriptExportedValue(propertyValue, property.Type)}");
+            }
+        }
+
+        return "{ " + string.Join(", ", members) + " }";
+    }
+
+    private static IReadOnlyList<string> RenderDocumentationComment(
+        string indent,
+        AtsDocumentationInfo? documentation,
+        string? fallbackSummary)
+    {
+        var lines = new List<string>();
+        AddDocumentationLines(lines, documentation?.Summary ?? fallbackSummary);
+        AddDocumentationLines(lines, documentation?.Remarks, addBlankLineBefore: lines.Count > 0);
+        AddTaggedDocumentationLines(lines, "@returns", documentation?.Returns);
+
+        if (lines.Count == 0)
+        {
+            return [];
+        }
+
+        if (lines.Count == 1 && !lines[0].StartsWith('@'))
+        {
+            return [$"{indent}/** {lines[0]} */"];
+        }
+
+        var comment = new List<string> { $"{indent}/**" };
+        comment.AddRange(lines.Select(line => line.Length == 0 ? $"{indent} *" : $"{indent} * {line}"));
+        comment.Add($"{indent} */");
+        return comment;
+    }
+
+    private static void AddTaggedDocumentationLines(List<string> lines, string tag, string? text)
+    {
+        var tagLines = SplitDocumentationLines(text);
+        if (tagLines.Count == 0)
+        {
+            return;
+        }
+
+        lines.Add($"{tag} {tagLines[0]}");
+        lines.AddRange(tagLines.Skip(1));
+    }
+
+    private static void AddDocumentationLines(List<string> lines, string? text, bool addBlankLineBefore = false)
+    {
+        var textLines = SplitDocumentationLines(text);
+        if (textLines.Count == 0)
+        {
+            return;
+        }
+
+        if (addBlankLineBefore)
+        {
+            lines.Add(string.Empty);
+        }
+
+        lines.AddRange(textLines);
+    }
+
+    private static List<string> SplitDocumentationLines(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return [];
+        }
+
+        return text
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Select(EscapeJSDocText)
+            .ToList();
+    }
+
+    private static string EscapeJSDocText(string text) =>
+        ConvertAtsReferencesToJsDocLinks(text).Replace("*/", "* /", StringComparison.Ordinal);
+
+    private static string ConvertAtsReferencesToJsDocLinks(string text)
+    {
+        const string markerStart = "{@ats-ref ";
+        var startIndex = text.IndexOf(markerStart, StringComparison.Ordinal);
+        if (startIndex < 0)
+        {
+            return text;
+        }
+
+        var builder = new StringBuilder(text.Length);
+        var currentIndex = 0;
+
+        while (startIndex >= 0)
+        {
+            builder.Append(text, currentIndex, startIndex - currentIndex);
+            var markerBodyStartIndex = startIndex + markerStart.Length;
+            var markerEndIndex = text.IndexOf('}', markerBodyStartIndex);
+            if (markerEndIndex < 0)
+            {
+                builder.Append(text, startIndex, text.Length - startIndex);
+                return builder.ToString();
+            }
+
+            var markerBody = text[markerBodyStartIndex..markerEndIndex];
+            var labelSeparatorIndex = markerBody.IndexOf('|', StringComparison.Ordinal);
+            var reference = labelSeparatorIndex < 0 ? markerBody : markerBody[..labelSeparatorIndex];
+            var label = labelSeparatorIndex < 0 ? null : markerBody[(labelSeparatorIndex + 1)..];
+            var targetSeparatorIndex = reference.IndexOf(':', StringComparison.Ordinal);
+
+            if (targetSeparatorIndex < 0 || targetSeparatorIndex == reference.Length - 1)
+            {
+                builder.Append(text, startIndex, markerEndIndex - startIndex + 1);
+            }
+            else
+            {
+                var target = reference[(targetSeparatorIndex + 1)..];
+                builder.Append("{@link ").Append(target);
+                if (!string.IsNullOrWhiteSpace(label))
+                {
+                    builder.Append('|').Append(label);
+                }
+
+                builder.Append('}');
+            }
+
+            currentIndex = markerEndIndex + 1;
+            startIndex = text.IndexOf(markerStart, currentIndex, StringComparison.Ordinal);
+        }
+
+        builder.Append(text, currentIndex, text.Length - currentIndex);
+        return builder.ToString();
+    }
+
+    private static ExportedValueTreeNode BuildExportedValueTree(IReadOnlyList<AtsExportedValueInfo> exportedValues)
+    {
+        var root = new ExportedValueTreeNode();
+
+        foreach (var exportedValue in exportedValues)
+        {
+            var current = root;
+            foreach (var segment in exportedValue.PathSegments)
+            {
+                if (!current.Children.TryGetValue(segment, out var child))
+                {
+                    child = new ExportedValueTreeNode();
+                    current.Children[segment] = child;
+                }
+
+                current = child;
+            }
+
+            current.Value = exportedValue;
+        }
+
+        return root;
+    }
+
     private static TypeScriptApiGeneratorIdentity CreateGeneratorIdentity()
     {
         var assembly = typeof(TypeScriptApiProjector).Assembly;
@@ -657,8 +961,8 @@ internal sealed partial class TypeScriptApiProjector
     /// <remarks>
     /// A package can extend a type another package owns. When that happens the type itself is not
     /// documented here — the owning package publishes it — but the members this package contributes
-    /// still are, and they are emitted as a separate interface augmentation fragment so TypeScript
-    /// declaration merging reassembles the full type when a manifest concatenates every package.
+    /// still are. They are emitted as a separate interface augmentation fragment so TypeScript
+    /// declaration merging reassembles the referenced stub and this package's contributed surface.
     /// </remarks>
     private (TypeScriptApiItem? Item, List<TypeScriptApiDeclaration> Declarations) ProjectBuilder(
         TypeScriptApiPackageIdentity package,
@@ -674,12 +978,18 @@ internal sealed partial class TypeScriptApiProjector
             .Where(capability => ownedAssemblyNames.Contains(GetCapabilityOwningAssemblyName(capability)))
             .ToList();
 
+        var promiseMembers = new List<TypeScriptApiMember>();
         var getters = exportedCapabilities.Where(c => c.CapabilityKind == AtsCapabilityKind.PropertyGetter).ToList();
         var setters = exportedCapabilities.Where(c => c.CapabilityKind == AtsCapabilityKind.PropertySetter).ToList();
 
         foreach (var property in GroupPropertiesByName(getters, setters))
         {
-            members.Add(ProjectProperty(interfaceName, property.PropertyName, property.Getter, property.Setter));
+            var member = ProjectProperty(interfaceName, property.PropertyName, property.Getter, property.Setter);
+            members.Add(member);
+            if (IsGetterOnlyProperty(property.Getter, property.Setter))
+            {
+                promiseMembers.Add(member);
+            }
         }
 
         // Type classes only surface instance and static methods; resource builders surface every
@@ -694,7 +1004,9 @@ internal sealed partial class TypeScriptApiProjector
 
         foreach (var capability in methods)
         {
-            members.Add(ProjectMethod(interfaceName, builderModel, capability));
+            var member = ProjectMethod(interfaceName, builderModel, capability);
+            members.Add(member);
+            promiseMembers.Add(member);
         }
 
         var documentation = _handleDocumentationById.GetValueOrDefault(builderModel.TypeId);
@@ -722,7 +1034,7 @@ internal sealed partial class TypeScriptApiProjector
                 declarations.Add(new TypeScriptApiDeclaration
                 {
                     Id = $"{typeOwner}:interface:{promiseInterfaceName}",
-                    Content = BuildInterfaceBody(promiseInterfaceName, [$"PromiseLike<{interfaceName}>"], members, includeToJson: false),
+                    Content = BuildInterfaceBody(promiseInterfaceName, [$"PromiseLike<{interfaceName}>"], promiseMembers, includeToJson: false),
                     OwningAssemblyName = typeOwner
                 });
             }
@@ -730,8 +1042,7 @@ internal sealed partial class TypeScriptApiProjector
             return (BuildInterfaceItem(builderModel, $"interface:{interfaceName}", interfaceName, extends, typeOwner, documentation, members, TypeScriptApiItemKind.Interface), declarations);
         }
 
-        // The referenced type gets an opaque stub keyed by its real owner so every package that
-        // references it contributes the identical fragment and deduplication collapses them.
+        // The referenced type gets one opaque stub keyed by its real owner within this package export.
         declarations.Add(new TypeScriptApiDeclaration
         {
             Id = $"{typeOwner}:opaque:{interfaceName}",
@@ -766,16 +1077,14 @@ internal sealed partial class TypeScriptApiProjector
             declarations.Add(new TypeScriptApiDeclaration
             {
                 Id = $"{package.Name}:augment:{promiseInterfaceName}",
-                Content = BuildInterfaceBody(promiseInterfaceName, [], members, includeToJson: false),
+                Content = BuildInterfaceBody(promiseInterfaceName, [], promiseMembers, includeToJson: false),
                 OwningAssemblyName = package.Name
             });
         }
 
-        // The item carries the real owner and a distinct ID: the owning package already publishes a
-        // page for this type, and reusing "interface:{name}" here would collide with it across a
-        // manifest and claim the type belongs to whichever package happened to extend it. The
-        // contributing package is part of the ID because every integration that extends
-        // DistributedApplicationBuilder produces an augmentation for the same interface name.
+        // The item carries the real owner and a distinct ID because it describes only this package's
+        // contribution, not a second copy of the referenced type. Include the contributing package
+        // because an aggregate export can contain several augmentations for the same interface name.
         return (BuildInterfaceItem(builderModel, $"augmentation:{package.Name}:{interfaceName}", interfaceName, extends, typeOwner, documentation, members, TypeScriptApiItemKind.Augmentation), declarations);
     }
 
@@ -1881,12 +2190,19 @@ internal sealed partial class TypeScriptApiProjector
     {
         if (_optionsInterfacesToGenerate.TryGetValue(interfaceName, out var declaredParams))
         {
-            var declaredNames = new HashSet<string>(declaredParams.Select(p => p.Name), StringComparer.Ordinal);
             foreach (var param in optionalParams)
             {
-                if (declaredNames.Add(param.Name))
+                var declaredIndex = declaredParams.FindIndex(
+                    declared => string.Equals(declared.Name, param.Name, StringComparison.Ordinal));
+                if (declaredIndex < 0)
                 {
                     declaredParams.Add(param);
+                }
+                else if (declaredParams[declaredIndex].Documentation is null && param.Documentation is not null)
+                {
+                    // Compatible overloads can contribute the same option with different metadata.
+                    // Keep the documented form regardless of which capability has the lower stable ID.
+                    declaredParams[declaredIndex] = param;
                 }
             }
         }
@@ -2341,6 +2657,7 @@ internal sealed partial class TypeScriptApiProjector
                 .GroupBy(c => c.CapabilityId)
                 .Select(g => g.First())
                 .ToList();
+            SortOptionsInterfaceCollisionsByCapabilityIdentity(uniqueCapabilities);
 
             var builder = new BuilderModel
             {
@@ -2374,6 +2691,7 @@ internal sealed partial class TypeScriptApiProjector
                 .GroupBy(c => c.CapabilityId)
                 .Select(g => g.First())
                 .ToList();
+            SortOptionsInterfaceCollisionsByCapabilityIdentity(uniqueCapabilities);
 
             var builder = new BuilderModel
             {
@@ -2456,6 +2774,38 @@ internal sealed partial class TypeScriptApiProjector
                 return retainedBuilder;
             })
             .ToList();
+    }
+
+    private static void SortOptionsInterfaceCollisionsByCapabilityIdentity(List<AtsCapabilityInfo> capabilities)
+    {
+        // Reorder only colliding option-interface slots. Sorting every capability would rewrite
+        // long-established source order for methods unrelated to the collision.
+        var collisionGroups = capabilities
+            .Select((capability, index) => (Capability: capability, Index: index))
+            .Where(entry =>
+            {
+                var (_, optionalParameters) = SeparateParameters(entry.Capability.Parameters);
+                return optionalParameters.Count > 0 &&
+                    !TryGetDirectOptionsParameter(optionalParameters, out _);
+            })
+            .GroupBy(
+                entry => GetOptionsInterfaceName(entry.Capability.MethodName),
+                StringComparer.Ordinal)
+            .Where(group => group.Count() > 1);
+
+        foreach (var group in collisionGroups)
+        {
+            var indexes = group.Select(entry => entry.Index).Order().ToList();
+            var orderedCapabilities = group
+                .Select(entry => entry.Capability)
+                .OrderBy(capability => capability.CapabilityId, StringComparer.Ordinal)
+                .ToList();
+
+            for (var i = 0; i < indexes.Count; i++)
+            {
+                capabilities[indexes[i]] = orderedCapabilities[i];
+            }
+        }
     }
 
     private static bool IsBuilderAlias(BuilderModel retainedBuilder, BuilderModel candidate)
@@ -2687,6 +3037,13 @@ internal sealed partial class TypeScriptApiProjector
 
         // Callbacks are always async in TypeScript
         return $"({paramsString}) => Promise<{returnType}>";
+    }
+
+    private sealed class ExportedValueTreeNode
+    {
+        public Dictionary<string, ExportedValueTreeNode> Children { get; } = new(StringComparer.Ordinal);
+
+        public AtsExportedValueInfo? Value { get; set; }
     }
 }
 

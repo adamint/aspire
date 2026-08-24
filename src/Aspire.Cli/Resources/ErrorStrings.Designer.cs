@@ -506,5 +506,14 @@ namespace Aspire.Cli.Resources {
                 return ResourceManager.GetString("IntegrationBuildPackageDowngradeFailed", resourceCulture);
             }
         }
+
+        /// <summary>
+        ///   Looks up a localized string similar to SDK API export is not supported for {0} because it does not use a code generator..
+        /// </summary>
+        public static string SdkExportLanguageDoesNotSupportCodeGeneration {
+            get {
+                return ResourceManager.GetString("SdkExportLanguageDoesNotSupportCodeGeneration", resourceCulture);
+            }
+        }
     }
 }

@@ -1446,6 +1446,32 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task PrepareAsync_WhenPackageRestoreIsCanceled_PropagatesCancellation()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        using var cancellation = new CancellationTokenSource();
+        var (server, executionFactory) = CreatePackageReferenceServer(workspace);
+        executionFactory.AsyncAttemptCallback = (_, _, cancellationToken) =>
+        {
+            cancellation.Cancel();
+            return Task.FromCanceled<(int ExitCode, string? Stdout)>(cancellationToken);
+        };
+        var workingDirectory = GetWorkingDirectory(server);
+
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => server.PrepareAsync(
+                "13.2.0",
+                [IntegrationReference.FromPackage("Aspire.Hosting.Redis", "13.2.0")],
+                cancellationToken: cancellation.Token));
+        }
+        finally
+        {
+            DeleteWorkingDirectory(workingDirectory);
+        }
+    }
+
+    [Fact]
     public async Task PrepareAsync_WithPackageReferences_UsesPackageSourceOverride()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
