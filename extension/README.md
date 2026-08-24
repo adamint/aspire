@@ -12,21 +12,17 @@ The official Aspire extension for Visual Studio Code brings your AppHost, resour
 
 An **AppHost** defines your app in code: services, containers, databases, front ends, and the connections between them.
 
-1. Open an Aspire project, or run **Aspire: New Aspire project** from the Command Palette.
+1. Open an Aspire project or create a new one using the Aspire view.
 2. Choose your AppHost and press **F5**. Aspire starts every resource in the right order and connects supported debuggers.
 3. Use the **Aspire** view and **Aspire Dashboard** to follow resources, endpoints, logs, traces, and metrics.
 
-![The Aspire view showing an AppHost and its running resources.](https://raw.githubusercontent.com/microsoft/aspire/main/extension/resources/vscode-extension-apphost-view.png)
+## A better inner dev loop
 
-## Everything in one loop
-
-- **Run the app, not a pile of terminals.** Start, stop, and restart the full application or a single resource from the Aspire view.
-- **Debug across your stack.** Set breakpoints in supported services and let the extension connect the right VS Code debugger.
-- **See the whole system.** Open the dashboard for resource health, endpoints, console logs, structured logs, distributed traces, and metrics.
-- **Stay close to the code.** See live resource state and quick actions beside resource definitions in your AppHost.
-- **Move toward production.** Deploy, publish artifacts, and run pipeline steps without leaving the editor.
-
-![The Aspire Dashboard showing running resources.](https://raw.githubusercontent.com/microsoft/aspire/main/extension/resources/aspire-dashboard-dark.png)
+- **Run your apps:** Start, stop, and restart an Aspire application or a single resource from the Aspire view.
+- **Debug across your stack:** Aspire debug sessions can debug all C#, JS, Python, Java (13.6+), and Rust (13.6+) resources.
+- **See live health and analytics:** Open the Aspire dashboard for resource health, endpoints, console logs, structured logs, distributed traces, and metrics.
+- **Monitor without leaving VS Code:** See resource health summaries and quick actions beside resource definitions in your AppHost.
+- **Move toward production.** Deploy, publish artifacts, and run pipeline steps using the Aspire view.
 
 ## Bring your stack
 
@@ -43,7 +39,7 @@ Aspire can bring together C#, TypeScript and JavaScript, Python, Go, Java, conta
 
 Found a bug or have an idea? [Report an issue](https://github.com/microsoft/aspire/issues/new?template=10_bug_report.yml&labels=area-vscode-extension) or [request a feature](https://github.com/microsoft/aspire/issues/new?template=20_feature-request.yml&labels=area-vscode-extension).
 
-Want to help build the extension? Read the [contributor guide](https://github.com/microsoft/aspire/blob/main/extension/CONTRIBUTING.md) or pick up a [`good first issue`](https://github.com/microsoft/aspire/issues?q=is%3Aissue+is%3Aopen+label%3Aarea-vscode-extension+label%3A%22good+first+issue%22).
+Interested in contributing to the Aspire VS Code experience? Read the [contributor guide](https://github.com/microsoft/aspire/blob/main/extension/CONTRIBUTING.md) and pick up a [`good first issue`](https://github.com/microsoft/aspire/issues?q=is%3Aissue+is%3Aopen+label%3Aarea-vscode-extension+label%3A%22good+first+issue%22).
 
 ## License
 
