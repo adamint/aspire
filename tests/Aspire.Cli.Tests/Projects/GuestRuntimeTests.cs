@@ -870,9 +870,10 @@ public class GuestRuntimeTests(ITestOutputHelper outputHelper)
             activity.OperationName == ProfilingTelemetry.Activities.Process &&
             activity.GetTagItem(ProfilingTelemetry.Tags.ProfilingSessionId) as string == "session-1" &&
             activity.GetTagItem(ProfilingTelemetry.Tags.GuestCommand) as string == "dotnet");
-        Assert.Equal("process dotnet", activity.DisplayName);
+        var resolvedDotNet = PathLookupHelper.ResolveExecutablePath("dotnet");
+        Assert.Equal($"process {Path.GetFileName(resolvedDotNet)}", activity.DisplayName);
         Assert.Equal(
-            PathLookupHelper.ResolveExecutablePath("dotnet"),
+            resolvedDotNet,
             Assert.IsType<string>(activity.GetTagItem(TelemetryConstants.Tags.ProcessExecutablePath)),
             OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
         Assert.Equal(new[] { "--version" }, Assert.IsType<string[]>(activity.GetTagItem(ProfilingTelemetry.Tags.ProcessCommandArgs)));

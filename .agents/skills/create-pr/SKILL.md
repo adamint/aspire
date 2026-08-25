@@ -204,9 +204,24 @@ If a PR already exists for the branch:
 
 - Return the existing PR URL.
 
-### 7. Clean up
+### 7. Converge CI and Copilot review
 
-After you are completely finished creating or updating the PR (after step 5 and, if needed, step 6), delete the temporary body file:
+Creating or updating the PR is not the end of the workflow. After every push:
+
+1. Capture the pushed head commit SHA.
+2. Wait for the complete CI check set for that SHA to reach a terminal state with no failures or cancellations. Diagnose failures; fix branch regressions and push again, or report an unrecoverable infrastructure failure as blocked.
+3. Re-read the PR head SHA. If it changed during the CI wait, immediately restart the loop for the new head instead of classifying cancelled old-head checks.
+4. Request or re-request Copilot review, then wait for Copilot to submit a review for that SHA.
+5. Re-read the PR head SHA. If it changed during the review wait, immediately restart the loop for the new head.
+6. Refresh unresolved review threads, review bodies, and PR comments. Suppressed comments in a Copilot review body are informational only; do not treat them as actionable review threads.
+7. Evaluate each new actionable thread against the codebase. Fix valid feedback, run focused validation, commit, and push. Reply in the existing thread and resolve it after the fix is pushed.
+8. Re-read the PR head SHA. If it changed at any point, start the loop again for the new head: re-request Copilot review and wait for both CI and the new Copilot review.
+
+Repeat until CI is green for the latest pushed head, Copilot review for that head has completed, and no actionable review threads remain. Do not report the PR as ready before all three conditions are true.
+
+### 8. Clean up
+
+After the PR has passed the convergence loop in step 7, delete the temporary body file:
 - **bash:** `rm pr-body.md`
 - **PowerShell:** `Remove-Item pr-body.md`
 
