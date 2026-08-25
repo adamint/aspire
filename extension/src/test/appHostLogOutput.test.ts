@@ -429,7 +429,12 @@ suite('AppHost log output coordinator', () => {
 
         assert.deepStrictEqual(
             coordinator.handleDebugAdapterOutput(
-                `Example.Category: Information: ${message}\n`,
+                'Example.Category: Information: first\n',
+                'console'),
+            []);
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(
+                'Other.Category: Warning: second\n',
                 'console'),
             []);
         assert.deepStrictEqual(
@@ -1519,17 +1524,24 @@ suite('AppHost log output coordinator', () => {
                 coordinator.handleDebugAdapterOutput(
                     'Replacement.DebugCategory: Information: replacement\n',
                     'console'),
-                [{
-                    output: 'Replaced.DebugCategory: Information: old\n',
-                    category: 'stdout'
-                }]);
+                []);
 
             await clock.tickAsync(150);
 
-            assert.deepStrictEqual(emitted, [{
-                output: 'Extended.Category: Information: first\nsecond\n',
-                category: 'stdout'
-            }]);
+            assert.deepStrictEqual(emitted, [
+                {
+                    output: 'Extended.Category: Information: first\nsecond\n',
+                    category: 'stdout'
+                },
+                {
+                    output: 'Replaced.DebugCategory: Information: old\n',
+                    category: 'stdout'
+                },
+                {
+                    output: 'Replacement.DebugCategory: Information: replacement\n',
+                    category: 'stdout'
+                }
+            ]);
 
             await clock.tickAsync(100);
 
@@ -1539,11 +1551,15 @@ suite('AppHost log output coordinator', () => {
                     category: 'stdout'
                 },
                 {
-                    output: 'Replacement.Category: Information: replacement\n',
+                    output: 'Replaced.DebugCategory: Information: old\n',
                     category: 'stdout'
                 },
                 {
                     output: 'Replacement.DebugCategory: Information: replacement\n',
+                    category: 'stdout'
+                },
+                {
+                    output: 'Replacement.Category: Information: replacement\n',
                     category: 'stdout'
                 }
             ]);

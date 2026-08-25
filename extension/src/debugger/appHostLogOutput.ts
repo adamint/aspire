@@ -125,15 +125,8 @@ export class AppHostLogOutputCoordinator {
         const lastBreak = findLastCompletedLineBreak(buffered);
         const completed = buffered.slice(0, lastBreak + 1);
         const partial = buffered.slice(lastBreak + 1);
-        const hadPendingDebugRecord = this._pendingDebugRecords.has(normalizedCategory);
 
         for (const line of completed.match(/[^\r\n]*(?:\r\n|\r|\n)/g) ?? []) {
-            if (hadPendingDebugRecord
-                && normalizedCategory === 'console'
-                && isDebugLoggerHeader(line)
-                && this._pendingDebugRecords.has(normalizedCategory)) {
-                this.flushPendingDebugRecord(normalizedCategory, outputs);
-            }
             this.consumeLine(line, normalizedCategory, outputs);
         }
 
@@ -291,6 +284,14 @@ export class AppHostLogOutputCoordinator {
                     return true;
                 }
                 return false;
+            }
+
+            const pendingRecord = parseDebugLoggerRecord(pending.raw);
+            if (isDebugLoggerHeader(line) && pendingRecord && isLowLevel(pendingRecord)) {
+                this.flushPendingDebugRecord(category, outputs);
+                this._pendingDebugRecords.set(category, createPendingDebugRecord(line, category));
+                this.resetFallbackFilter(category);
+                return true;
             }
 
             if (isDebugLoggerHeader(line)) {
