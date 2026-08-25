@@ -34,6 +34,30 @@ public class ConsoleInteractionServiceTests
     }
 
     [Fact]
+    public async Task DisplayLiveAsync_WhenNonInteractive_WritesRenderablesStatically()
+    {
+        var output = new StringBuilder();
+        var console = AnsiConsole.Create(new AnsiConsoleSettings
+        {
+            Ansi = AnsiSupport.Yes,
+            ColorSystem = ColorSystemSupport.NoColors,
+            Out = new AnsiConsoleOutput(new StringWriter(output)),
+            Enrichment = new ProfileEnrichment { UseDefaultEnrichers = false }
+        });
+        console.Profile.Width = int.MaxValue;
+        var interactionService = CreateInteractionService(console, hostEnvironment: TestHelpers.CreateNonInteractiveHostEnvironment());
+
+        await interactionService.DisplayLiveAsync(new Text("Initial\n"), update =>
+        {
+            update(new Text("Updated once\n"));
+            update(new Text("Updated twice\n"));
+            return Task.CompletedTask;
+        });
+
+        Assert.Equal("Initial\nUpdated once\nUpdated twice\n", output.ToString(), ignoreLineEndingDifferences: true);
+    }
+
+    [Fact]
     public async Task PromptForSelectionAsync_EmptyChoices_ThrowsEmptyChoicesException()
     {
         // Arrange
