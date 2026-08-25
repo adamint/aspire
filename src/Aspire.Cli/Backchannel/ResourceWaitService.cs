@@ -1,7 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using Microsoft.Extensions.Logging;
+using Aspire.Hosting.ApplicationModel;
 
 namespace Aspire.Cli.Backchannel;
 
@@ -40,12 +40,8 @@ internal sealed record ResourceWaitResult(
 /// <summary>
 /// Applies the shared Aspire backchannel wait semantics for a resource.
 /// </summary>
-internal sealed class ResourceWaitService(
-    TimeProvider timeProvider,
-    ILogger<ResourceWaitService> logger)
+internal sealed class ResourceWaitService(TimeProvider timeProvider)
 {
-    private const string FailedToStartState = "FailedToStart";
-
     public async Task<ResourceWaitResult> WaitAsync(
         IAppHostAuxiliaryBackchannel connection,
         string resourceName,
@@ -61,86 +57,6 @@ internal sealed class ResourceWaitService(
             timeoutSeconds,
             startTimestamp,
             cancellationToken).ConfigureAwait(false);
-    }
-
-    public async Task<IReadOnlyList<ResourceWaitResult>> WaitForResourcesAsync(
-        IAppHostAuxiliaryBackchannel connection,
-        IReadOnlyList<string> resourceNames,
-        ResourceWaitTarget target,
-        int timeoutSeconds,
-        CancellationToken cancellationToken)
-    {
-        // Capture one monotonic start timestamp before dispatch so every concurrent backchannel
-        // call consumes the same timeout budget instead of receiving a fresh timeout.
-        var batchStartTimestamp = timeProvider.GetTimestamp();
-        var timeout = TimeSpan.FromSeconds(timeoutSeconds);
-        var waitTasks = resourceNames
-            .Select(resourceName => WaitUntilDeadlineAsync(
-                connection,
-                resourceName,
-                target,
-                batchStartTimestamp,
-                timeout,
-                cancellationToken))
-            .ToArray();
-
-        return await Task.WhenAll(waitTasks).ConfigureAwait(false);
-    }
-
-    private async Task<ResourceWaitResult> WaitUntilDeadlineAsync(
-        IAppHostAuxiliaryBackchannel connection,
-        string resourceName,
-        ResourceWaitTarget target,
-        long batchStartTimestamp,
-        TimeSpan timeout,
-        CancellationToken cancellationToken)
-    {
-        var startTimestamp = timeProvider.GetTimestamp();
-        var remaining = timeout - timeProvider.GetElapsedTime(batchStartTimestamp);
-        if (remaining <= TimeSpan.Zero)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return new ResourceWaitResult(
-                ResourceWaitOutcome.Timeout,
-                resourceName,
-                State: null,
-                Health: null,
-                ResourceNotFound: false,
-                ErrorMessage: null,
-                timeProvider.GetElapsedTime(startTimestamp));
-        }
-
-        // The backchannel accepts whole seconds. Round up so a fractional second remaining on
-        // the shared deadline is not truncated into an early timeout. Clamp to the original
-        // timeout in case a custom time provider reports a timestamp before the batch start.
-        var remainingSeconds = (int)Math.Min(
-            Math.Ceiling(remaining.TotalSeconds),
-            timeout.TotalSeconds);
-        try
-        {
-            return await WaitCoreAsync(
-                connection,
-                resourceName,
-                target,
-                remainingSeconds,
-                startTimestamp,
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            logger.LogError(
-                "Wait for resource '{ResourceName}' failed with {ExceptionType}",
-                resourceName,
-                ex.GetType().Name);
-            return new ResourceWaitResult(
-                ResourceWaitOutcome.Failure,
-                resourceName,
-                State: null,
-                Health: null,
-                ResourceNotFound: false,
-                ErrorMessage: null,
-                timeProvider.GetElapsedTime(startTimestamp));
-        }
     }
 
     private async Task<ResourceWaitResult> WaitCoreAsync(
@@ -182,7 +98,7 @@ internal sealed class ResourceWaitService(
     {
         return string.Equals(
             state,
-            FailedToStartState,
+            KnownResourceStates.FailedToStart,
             StringComparisons.ResourceState);
     }
 
