@@ -66,6 +66,80 @@ public sealed class SmokeTests(ITestOutputHelper output)
 
     [CaptureWorkspaceOnFailure]
     [Fact]
+    public async Task RedirectedRemoteSshRunUsesStaticOutput()
+    {
+        var repoRoot = CliE2ETestHelpers.GetRepoRoot();
+        var strategy = CliInstallStrategy.Detect(output.WriteLine);
+
+        var workspace = TemporaryWorkspace.Create(output);
+
+        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, strategy, output, mountDockerSocket: true, workspace: workspace);
+
+        var counter = new SequenceCounter();
+        var auto = new Hex1bTerminalAutomator(terminal, defaultTimeout: TimeSpan.FromSeconds(500));
+        await using var terminalRun = CliE2ETestHelpers.StartRun(terminal, workspace, auto, counter, output, TestContext.Current.CancellationToken);
+
+        await auto.PrepareDockerEnvironmentAsync(counter, workspace);
+        await auto.InstallAspireCliAsync(strategy, counter);
+
+        const string projectName = "RemoteSshRedirectedApp";
+        await auto.AspireNewAsync(projectName, counter, useRedisCache: false);
+        await auto.RunCommandAsync($"cd {projectName}", counter);
+
+        var runCommand =
+            "env " +
+            "-u CI -u GITHUB_ACTIONS -u AZURE_PIPELINES -u TF_BUILD -u JENKINS_URL -u GITLAB_CI " +
+            "-u CIRCLECI -u TRAVIS -u BUILDKITE -u APPVEYOR -u TEAMCITY_VERSION " +
+            "-u BITBUCKET_BUILD_NUMBER -u CODEBUILD_BUILD_ID -u ASPIRE_NON_INTERACTIVE " +
+            "-u ASPIRE_PLAYGROUND -u ASPIRE_ANSI_PASS_THRU " +
+            "TERM=dumb LINES=0 COLUMNS=80 " +
+            "VSCODE_IPC_HOOK_CLI=/tmp/vscode-ipc-remote-ssh " +
+            "SSH_CONNECTION='127.0.0.1 12345 127.0.0.1 22' " +
+            $"ASPIRE_CLI_START_TIMEOUT={CliE2EAutomatorHelpers.AspireRunStartupBudgetSeconds} " +
+            "aspire run > remote-ssh.stdout 2> remote-ssh.stderr & echo $! > remote-ssh.pid";
+        await auto.RunCommandAsync(runCommand, counter);
+
+        // Static resource updates are emitted as lines such as:
+        //   worker has endpoint http://localhost:5830
+        await auto.RunCommandAsync(
+            $"endpoint_seen=0; cli_alive=1; " +
+            $"for attempt in $(seq 1 {CliE2EAutomatorHelpers.AspireRunReadyTimeout.TotalSeconds}); do " +
+            "if grep -Fq 'has endpoint' remote-ssh.stdout; then endpoint_seen=1; break; fi; " +
+            "if ! kill -0 \"$(cat remote-ssh.pid)\" 2>/dev/null; then cli_alive=0; break; fi; " +
+            "sleep 1; " +
+            "done; " +
+            "if [ \"$endpoint_seen\" -eq 1 ]; then true; " +
+            "else " +
+            "if [ \"$cli_alive\" -eq 0 ]; then echo 'aspire run exited before an endpoint update' >&2; " +
+            "else echo 'timed out waiting for an endpoint update' >&2; fi; " +
+            "echo '--- remote-ssh.stdout ---' >&2; cat remote-ssh.stdout >&2; " +
+            "echo '--- remote-ssh.stderr ---' >&2; cat remote-ssh.stderr >&2; false; " +
+            "fi",
+            counter,
+            CliE2EAutomatorHelpers.AspireRunReadyTimeout + TimeSpan.FromSeconds(30));
+
+        await auto.RunCommandAsync("kill -0 \"$(cat remote-ssh.pid)\"", counter);
+        await auto.RunCommandAsync("aspire ps --format json > remote-ssh-ps.json", counter);
+        await auto.RunCommandAsync(
+            $"grep -Fq '{projectName}' remote-ssh-ps.json && grep -Fq '\"status\": \"running\"' remote-ssh-ps.json",
+            counter);
+        await auto.RunCommandAsync(
+            "test -f remote-ssh.stdout && test -f remote-ssh.stderr && " +
+            "! grep -F -e 'LiveRenderable' -e 'System.ArgumentException' " +
+            "-e 'An unexpected error occurred' remote-ssh.stdout remote-ssh.stderr",
+            counter);
+        await auto.RunCommandAsync(
+            "test \"$(tr -cd '\\033\\r' < remote-ssh.stdout | wc -c)\" -eq 0",
+            counter);
+        await auto.RunCommandAsync(
+            "cli_pid=$(cat remote-ssh.pid); kill -INT \"$cli_pid\"; wait \"$cli_pid\"; " +
+            "cli_exit=$?; test \"$cli_exit\" -eq 0 && ! kill -0 \"$cli_pid\" 2>/dev/null",
+            counter,
+            TimeSpan.FromMinutes(1));
+    }
+
+    [CaptureWorkspaceOnFailure]
+    [Fact]
     public async Task CreateAndRunPolyglotAppHostWithDevLocalhostUrls()
     {
         var repoRoot = CliE2ETestHelpers.GetRepoRoot();
