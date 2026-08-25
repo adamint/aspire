@@ -1943,7 +1943,12 @@ internal sealed class AtsJavaCodeGenerator : ICodeGenerator
         else
         {
             WriteLine($"            {callbackInvocation};");
-            WriteLine($"            return new Object[] {{ {string.Join(", ", callArguments)} }};");
+            WriteLine("            var __aspireCallbackArguments = new HashMap<String, Object>();");
+            for (var i = 0; i < callArguments.Count; i++)
+            {
+                WriteLine($"            __aspireCallbackArguments.put(\"p{i}\", {callArguments[i]});");
+            }
+            WriteLine("            return __aspireCallbackArguments;");
         }
     }
 

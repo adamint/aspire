@@ -1,7 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Xml.Linq;
+using System.Text.RegularExpressions;
 
 using Aspire.TypeSystem;
 
@@ -28,7 +28,7 @@ public class JavaLanguageSupportTests
         Assert.InRange(releaseArgumentIndex, 0, compile.Args.Length - 2);
         var runtimeRelease = compile.Args[releaseArgumentIndex + 1];
 
-        var pomPath = Path.Combine(
+        var buildFilePath = Path.Combine(
             GetRepoRoot(),
             "src",
             "Aspire.Cli",
@@ -36,16 +36,14 @@ public class JavaLanguageSupportTests
             "Templates",
             "java-starter",
             "api",
-            "pom.xml");
-        var pom = XDocument.Load(pomPath);
-        XNamespace maven = "http://maven.apache.org/POM/4.0.0";
-        var templateRelease = pom.Root?
-            .Element(maven + "properties")?
-            .Element(maven + "java.version")?
-            .Value;
+            "build.gradle");
+        var buildFile = File.ReadAllText(buildFilePath);
+        var match = Regex.Match(
+            buildFile,
+            @"languageVersion\s*=\s*JavaLanguageVersion\.of\((?<release>\d+)\)");
 
-        Assert.NotNull(templateRelease);
-        Assert.Equal(runtimeRelease, templateRelease);
+        Assert.True(match.Success, $"Could not find the Java toolchain language version in '{buildFilePath}'.");
+        Assert.Equal(runtimeRelease, match.Groups["release"].Value);
     }
 
     [Fact]

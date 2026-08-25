@@ -980,6 +980,7 @@ function prepareJavaWorkspace(bundledCliPath, appHostSdkVersion) {
     encoding: 'utf8',
     timeout: 600000,
   });
+  fs.writeFileSync(workspaceMarkerFile, `${runId}\n`);
 
   if (result.error) {
     throw new Error(`Unable to generate the Java starter: ${result.error.message}`);
@@ -993,7 +994,6 @@ stderr:
 ${result.stderr}`);
   }
 
-  fs.writeFileSync(workspaceMarkerFile, `${runId}\n`);
   ensureJavaAppHostSdkGenerated(bundledCliPath, workspaceRoot);
 
   const settingsPath = path.join(workspaceRoot, '.vscode', 'settings.json');

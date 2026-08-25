@@ -74,7 +74,10 @@ public class ExtensionGuestLauncherTests
                 CancellationToken.None);
 
             Assert.NotNull(capturedArgs);
-            Assert.Equal(effectiveJava, capturedArgs[0]);
+            Assert.Equal(
+                effectiveJava,
+                capturedArgs[0],
+                OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
         }
         finally
         {

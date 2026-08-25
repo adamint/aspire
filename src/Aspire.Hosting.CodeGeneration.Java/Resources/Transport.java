@@ -28,7 +28,6 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
@@ -86,7 +85,8 @@ class CapabilityError extends RuntimeException {
 public class CancellationToken {
     private final AtomicBoolean cancelled = new AtomicBoolean(false);
     private final AtomicInteger remoteReferences = new AtomicInteger(0);
-    private final List<Runnable> listeners = new CopyOnWriteArrayList<>();
+    private final Object cancellationLock = new Object();
+    private final List<Runnable> listeners = new ArrayList<>();
 
     // Remote token id supplied by the AppHost when this token is materialized for a
     // callback argument. Null for locally-created tokens. Retained so cancellation can
@@ -152,11 +152,18 @@ public class CancellationToken {
     }
 
     boolean markCancelled() {
-        return cancelled.compareAndSet(false, true);
+        synchronized (cancellationLock) {
+            return cancelled.compareAndSet(false, true);
+        }
     }
 
     void notifyCancellationListeners() {
-        for (Runnable listener : listeners) {
+        List<Runnable> listenersToNotify;
+        synchronized (cancellationLock) {
+            listenersToNotify = new ArrayList<>(listeners);
+            listeners.clear();
+        }
+        for (Runnable listener : listenersToNotify) {
             listener.run();
         }
     }
@@ -164,14 +171,19 @@ public class CancellationToken {
     public boolean isCancelled() { return cancelled.get(); }
 
     public void onCancel(Runnable listener) {
-        listeners.add(listener);
-        if (cancelled.get()) {
-            listener.run();
+        synchronized (cancellationLock) {
+            if (!cancelled.get()) {
+                listeners.add(listener);
+                return;
+            }
         }
+        listener.run();
     }
 
     void removeCancelListener(Runnable listener) {
-        listeners.remove(listener);
+        synchronized (cancellationLock) {
+            listeners.remove(listener);
+        }
     }
 
 }
@@ -201,7 +213,7 @@ class AspireClient {
     private final Map<String, Function<Object[], Object>> callbacks = new ConcurrentHashMap<>();
     private final Map<String, Consumer<Void>> cancellations = new ConcurrentHashMap<>();
     private final Map<Integer, CompletableFuture<Object>> pendingRequests = new ConcurrentHashMap<>();
-    private final Map<String, Runnable> cancellationRegistrations = new ConcurrentHashMap<>();
+    private final Map<String, CancellationRegistration> cancellationRegistrations = new ConcurrentHashMap<>();
     private final Map<String, CancellationToken> remoteCancellationTokens = new ConcurrentHashMap<>();
     private final Map<String, CancellationToken> pendingRemoteCancellations = new LinkedHashMap<>();
     private final Object readerLock = new Object();
@@ -361,17 +373,29 @@ class AspireClient {
         Map<String, Object> params = new HashMap<>();
         params.put("capabilityId", capabilityId);
         params.put("args", marshalTransportValue(args, cancellationIds));
+        var uniqueCancellationIds = new HashSet<>(cancellationIds);
 
         try {
-            return sendRequest("invokeCapability", params);
+            return sendRequest("invokeCapability", params, () -> {
+                for (String cancellationId : uniqueCancellationIds) {
+                    CancellationRegistration registration = cancellationRegistrations.get(cancellationId);
+                    if (registration != null) {
+                        registration.enable();
+                    }
+                }
+            });
         } finally {
-            for (String cancellationId : new HashSet<>(cancellationIds)) {
+            for (String cancellationId : uniqueCancellationIds) {
                 unregisterCancellation(cancellationId);
             }
         }
     }
 
     private Object sendRequest(String method, Object params) {
+        return sendRequest(method, params, null);
+    }
+
+    private Object sendRequest(String method, Object params, Runnable requestSent) {
         CompletableFuture<Object> pendingResponse = new CompletableFuture<>();
         int id;
         synchronized (connectionStateLock) {
@@ -394,6 +418,9 @@ class AspireClient {
         try {
             ensureReaderLoopStarted();
             sendMessage(request);
+            if (requestSent != null) {
+                requestSent.run();
+            }
         } catch (IOException e) {
             pendingRequests.remove(id);
             handleDisconnect();
@@ -424,7 +451,7 @@ class AspireClient {
         }
 
         if (value instanceof CancellationToken token) {
-            String cancellationId = registerCancellation(token);
+            String cancellationId = registerCancellation(token, false);
             if (cancellationId != null && cancellationIds != null && cancellationRegistrations.containsKey(cancellationId)) {
                 cancellationIds.add(cancellationId);
             }
@@ -912,6 +939,10 @@ class AspireClient {
     }
 
     public String registerCancellation(CancellationToken token) {
+        return registerCancellation(token, true);
+    }
+
+    private String registerCancellation(CancellationToken token, boolean enabled) {
         if (token == null) {
             return null;
         }
@@ -922,22 +953,56 @@ class AspireClient {
         }
 
         String id = UUID.randomUUID().toString();
-        AtomicBoolean notified = new AtomicBoolean(false);
-        Runnable listener = () -> {
-            if (notified.compareAndSet(false, true)) {
-                sendCancellationRequest(id);
-            }
-        };
-
-        token.onCancel(listener);
-        cancellationRegistrations.put(id, () -> token.removeCancelListener(listener));
+        var registration = new CancellationRegistration(id, token, enabled);
+        cancellationRegistrations.put(id, registration);
+        registration.attach();
         return id;
     }
 
     public void unregisterCancellation(String cancellationId) {
-        Runnable cleanup = cancellationRegistrations.remove(cancellationId);
-        if (cleanup != null) {
-            cleanup.run();
+        CancellationRegistration registration = cancellationRegistrations.remove(cancellationId);
+        if (registration != null) {
+            registration.dispose();
+        }
+    }
+
+    private final class CancellationRegistration {
+        private final String id;
+        private final CancellationToken token;
+        private final Runnable listener;
+        private final AtomicBoolean enabled;
+        private final AtomicBoolean requested = new AtomicBoolean(false);
+        private final AtomicBoolean sent = new AtomicBoolean(false);
+
+        CancellationRegistration(String id, CancellationToken token, boolean enabled) {
+            this.id = id;
+            this.token = token;
+            this.enabled = new AtomicBoolean(enabled);
+            this.listener = this::requestCancellation;
+        }
+
+        void attach() {
+            token.onCancel(listener);
+        }
+
+        void enable() {
+            enabled.set(true);
+            trySend();
+        }
+
+        void dispose() {
+            token.removeCancelListener(listener);
+        }
+
+        private void requestCancellation() {
+            requested.set(true);
+            trySend();
+        }
+
+        private void trySend() {
+            if (enabled.get() && requested.get() && sent.compareAndSet(false, true)) {
+                sendCancellationRequest(id);
+            }
         }
     }
 

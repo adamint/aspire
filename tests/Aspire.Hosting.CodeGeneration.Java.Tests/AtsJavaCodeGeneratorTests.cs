@@ -1086,12 +1086,13 @@ public class AtsJavaCodeGeneratorTests
             package external;
 
             import aspire.CancellationToken;
+            import java.util.concurrent.atomic.AtomicInteger;
 
             public class CancellationApiProbe {
                 public static void main(String[] args) {
                     CancellationToken token = new CancellationToken();
-                    final boolean[] seen = new boolean[] { false };
-                    token.onCancel(() -> seen[0] = true);
+                    var calls = new AtomicInteger();
+                    token.onCancel(calls::incrementAndGet);
 
                     if (token.isCancelled()) {
                         throw new IllegalStateException("token should start active");
@@ -1103,8 +1104,14 @@ public class AtsJavaCodeGeneratorTests
                         throw new IllegalStateException("token should be cancelled");
                     }
 
-                    if (!seen[0]) {
-                        throw new IllegalStateException("cancel listener did not run");
+                    token.cancel();
+                    if (calls.get() != 1) {
+                        throw new IllegalStateException("cancel listener ran more than once: " + calls.get());
+                    }
+
+                    token.onCancel(calls::incrementAndGet);
+                    if (calls.get() != 2) {
+                        throw new IllegalStateException("late cancel listener did not run exactly once: " + calls.get());
                     }
 
                     System.out.println("OK");
@@ -1517,7 +1524,10 @@ public class AtsJavaCodeGeneratorTests
             import java.io.PipedOutputStream;
             import java.lang.reflect.Field;
             import java.nio.charset.StandardCharsets;
+            import java.util.LinkedHashMap;
+            import java.util.Map;
             import java.util.concurrent.CompletableFuture;
+            import java.util.concurrent.CountDownLatch;
             import java.util.concurrent.TimeUnit;
             import java.util.regex.Matcher;
             import java.util.regex.Pattern;
@@ -1544,6 +1554,8 @@ public class AtsJavaCodeGeneratorTests
                     if (waitForMessage(serverInput, 250) != null) {
                         throw new IllegalStateException("local cancel emitted more than one cancellation request");
                     }
+
+                    assertInvocationPrecedesCancellation();
 
                     var secondClientInput = new PipedInputStream(32768);
                     var secondServerOutput = new PipedOutputStream(secondClientInput);
@@ -1597,6 +1609,73 @@ public class AtsJavaCodeGeneratorTests
                     }
 
                     System.out.println("OK");
+                }
+
+                private static void assertInvocationPrecedesCancellation() throws Exception {
+                    var clientInput = new PipedInputStream(32768);
+                    var serverOutput = new PipedOutputStream(clientInput);
+                    var serverInput = new PipedInputStream(32768);
+                    var clientOutput = new PipedOutputStream(serverInput);
+                    var client = new AspireClient("ignored");
+                    setField(client, "inputStream", clientInput);
+                    setField(client, "outputStream", clientOutput);
+
+                    var token = new CancellationToken();
+                    token.cancel();
+                    var marshallingStarted = new CountDownLatch(1);
+                    var resumeMarshalling = new CountDownLatch(1);
+                    JsonSerializable blockingArgument = () -> {
+                        marshallingStarted.countDown();
+                        try {
+                            if (!resumeMarshalling.await(1, TimeUnit.SECONDS)) {
+                                throw new IllegalStateException("Timed out waiting to resume argument marshalling");
+                            }
+                        } catch (InterruptedException exception) {
+                            throw new RuntimeException(exception);
+                        }
+                        return Map.of();
+                    };
+
+                    var invocationArgs = new LinkedHashMap<String, Object>();
+                    invocationArgs.put("token", token);
+                    invocationArgs.put("blocking", blockingArgument);
+                    var invocation = CompletableFuture.supplyAsync(() ->
+                        client.invokeCapability("cap.cancelled", invocationArgs));
+
+                    if (!marshallingStarted.await(1, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("Timed out waiting for argument marshalling");
+                    }
+                    String earlyMessage = waitForMessage(serverInput, 250);
+                    resumeMarshalling.countDown();
+                    if (earlyMessage != null) {
+                        throw new IllegalStateException("cancellation preceded invocation: " + earlyMessage);
+                    }
+
+                    String invokeRequest = requireMessage(serverInput);
+                    String cancelRequest = requireMessage(serverInput);
+                    if (!invokeRequest.contains("\"method\":\"invokeCapability\"")
+                        || !cancelRequest.contains("\"method\":\"cancelToken\"")) {
+                        throw new IllegalStateException("unexpected request order: " + invokeRequest + cancelRequest);
+                    }
+
+                    Matcher tokenMatcher = Pattern.compile("\\\"params\\\":\\[\\\"([^\\\"]+)\\\"\\]").matcher(cancelRequest);
+                    if (!tokenMatcher.find() || !invokeRequest.contains("\"token\":\"" + tokenMatcher.group(1) + "\"")) {
+                        throw new IllegalStateException("cancellation token did not match invocation: " + invokeRequest + cancelRequest);
+                    }
+
+                    int invokeId = extractNumericId(invokeRequest);
+                    int cancelId = extractNumericId(cancelRequest);
+                    writeMessage(serverOutput, "{\"jsonrpc\":\"2.0\",\"id\":" + cancelId + ",\"result\":true}");
+                    writeMessage(serverOutput, "{\"jsonrpc\":\"2.0\",\"id\":" + invokeId + ",\"result\":null}");
+                    invocation.get(1, TimeUnit.SECONDS);
+                }
+
+                private static int extractNumericId(String json) {
+                    Matcher matcher = Pattern.compile("\\\"id\\\":(\\d+)").matcher(json);
+                    if (!matcher.find()) {
+                        throw new IllegalStateException("missing request id: " + json);
+                    }
+                    return Integer.parseInt(matcher.group(1));
                 }
 
                 private static void setField(AspireClient client, String name, Object value) throws Exception {
@@ -2219,7 +2298,7 @@ public class AtsJavaCodeGeneratorTests
 
                     String callbackResponse = readMessage(serverInput);
                     if (!callbackResponse.contains("\"id\":9001")
-                        || !callbackResponse.contains("\"result\":[{\"Value\":\"after\"}]") ) {
+                        || !callbackResponse.contains("\"result\":{\"p0\":{\"Value\":\"after\"}}") ) {
                         throw new IllegalStateException("callback did not return mutated arguments: " + callbackResponse);
                     }
 
@@ -2508,9 +2587,10 @@ public class AtsJavaCodeGeneratorTests
             var sourcesFile = Path.Combine(_root.FullName, "sources.txt");
             await File.WriteAllLinesAsync(sourcesFile, sourceFiles);
 
+            // These probes target the minimum supported Java API level, independently of the Java 25 single-file AppHost contract.
             var compile = await RunProcessAsync(
                 "javac",
-                ["--release", "25", "-d", _classes.FullName, "@sources.txt"],
+                ["--release", "21", "-d", _classes.FullName, "@sources.txt"],
                 TimeSpan.FromSeconds(30));
 
             Assert.True(compile.TimedOut is false, $"javac timed out. stdout:{Environment.NewLine}{compile.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{compile.StdErr}");

@@ -607,6 +607,11 @@ public class AddJavaAppPublishTests(ITestOutputHelper outputHelper)
     [InlineData("sourceCompatibility = '17'", "17")]
     [InlineData("targetCompatibility = 1.8", "8")]
     [InlineData("", JavaVersionDetector.DefaultJavaVersion)]
+    [InlineData("""
+        java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
+        java { toolchain { languageVersion = JavaLanguageVersion.of(25) } }
+        sourceCompatibility = '17'
+        """, "25")]
     // A commented-out setting must not win over the active one below it.
     [InlineData("""
         java {

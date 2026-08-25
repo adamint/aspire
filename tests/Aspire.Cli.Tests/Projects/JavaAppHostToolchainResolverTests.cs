@@ -4,6 +4,7 @@
 using System.Diagnostics;
 
 using Aspire.Cli.Projects;
+using Aspire.TestUtilities;
 using Aspire.TypeSystem;
 
 namespace Aspire.Cli.Tests.Projects;
@@ -367,6 +368,7 @@ public class JavaAppHostToolchainResolverTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    [OuterloopTest("Downloads Maven plugins and dependencies into an empty local repository")]
     public async Task ApplyToRuntimeSpec_ForMavenReactor_StagesAnUninstalledSiblingFromAnEmptyLocalRepository()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
@@ -443,7 +445,7 @@ public class JavaAppHostToolchainResolverTests(ITestOutputHelper outputHelper)
               <version>1.0-SNAPSHOT</version>
               <packaging>pom</packaging>
                             <properties>
-                                <maven.compiler.release>25</maven.compiler.release>
+                                <maven.compiler.release>21</maven.compiler.release>
                             </properties>
               <modules>
                 <module>library</module>
@@ -496,12 +498,9 @@ public class JavaAppHostToolchainResolverTests(ITestOutputHelper outputHelper)
 
         var wrapperSource = Path.Combine(
             GetRepoRoot(),
-            "src",
-            "Aspire.Cli",
-            "Templating",
-            "Templates",
-            "java-starter",
-            "api");
+            "playground",
+            "JavaAppHost",
+            "forecast");
         File.Copy(
             Path.Combine(wrapperSource, OperatingSystem.IsWindows() ? "mvnw.cmd" : "mvnw"),
             Path.Combine(root, OperatingSystem.IsWindows() ? "mvnw.cmd" : "mvnw"));

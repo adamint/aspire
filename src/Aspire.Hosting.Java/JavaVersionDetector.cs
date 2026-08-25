@@ -199,9 +199,9 @@ internal static partial class JavaVersionDetector
     /// sourceCompatibility = '17'
     /// targetCompatibility = 1.8
     /// </code>
-    /// The final supported assignment is used because Gradle scripts can reassign these settings and the
-    /// later assignment is the effective one. This remains a best-effort textual detector rather than a
-    /// complete evaluation of the Gradle model.
+    /// Toolchain declarations take precedence over compatibility settings. Within each supported category,
+    /// the final assignment is used because Gradle scripts can reassign the same setting. This remains a
+    /// best-effort textual detector rather than a complete evaluation of the Gradle model.
     /// </remarks>
     private static string? DetectFromGradle(string buildScriptPath)
     {
@@ -222,14 +222,9 @@ internal static partial class JavaVersionDetector
 
         var script = StripComments(contents);
 
-        var assignment = new[]
-        {
-            LastActiveMatch(ToolchainRegex(), script),
-            LastActiveMatch(JavaVersionEnumRegex(), script),
-            LastActiveMatch(CompatibilityRegex(), script),
-        }
-            .OfType<Match>()
-            .MaxBy(match => match.Index);
+        var assignment = LastActiveMatch(ToolchainRegex(), script)
+            ?? LastActiveMatch(JavaVersionEnumRegex(), script)
+            ?? LastActiveMatch(CompatibilityRegex(), script);
 
         return Normalize(assignment?.Groups[1].Value.Replace('_', '.'));
     }

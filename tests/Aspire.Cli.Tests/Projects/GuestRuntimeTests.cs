@@ -588,8 +588,14 @@ public class GuestRuntimeTests(ITestOutputHelper outputHelper)
             Assert.Equal(0, exitCode);
             Assert.Collection(
                 processExecutionFactory.CreatedExecutions,
-                preExecute => Assert.Equal(effectiveJava, preExecute.FileName),
-                execute => Assert.Equal(effectiveJava, execute.FileName));
+                preExecute => Assert.Equal(
+                    effectiveJava,
+                    preExecute.FileName,
+                    OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal),
+                execute => Assert.Equal(
+                    effectiveJava,
+                    execute.FileName,
+                    OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal));
         }
         finally
         {
@@ -865,7 +871,10 @@ public class GuestRuntimeTests(ITestOutputHelper outputHelper)
             activity.GetTagItem(ProfilingTelemetry.Tags.ProfilingSessionId) as string == "session-1" &&
             activity.GetTagItem(ProfilingTelemetry.Tags.GuestCommand) as string == "dotnet");
         Assert.Equal("process dotnet", activity.DisplayName);
-        Assert.Equal(PathLookupHelper.ResolveExecutablePath("dotnet"), activity.GetTagItem(TelemetryConstants.Tags.ProcessExecutablePath));
+        Assert.Equal(
+            PathLookupHelper.ResolveExecutablePath("dotnet"),
+            Assert.IsType<string>(activity.GetTagItem(TelemetryConstants.Tags.ProcessExecutablePath)),
+            OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
         Assert.Equal(new[] { "--version" }, Assert.IsType<string[]>(activity.GetTagItem(ProfilingTelemetry.Tags.ProcessCommandArgs)));
         Assert.Equal(1, activity.GetTagItem(ProfilingTelemetry.Tags.ProcessCommandArgsCount));
         Assert.Equal(0, activity.GetTagItem(TelemetryConstants.Tags.ProcessExitCode));
