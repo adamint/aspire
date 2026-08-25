@@ -36,6 +36,16 @@ public class CliHostEnvironmentTests
         _ = env.SupportsInteractiveOutput;
     }
 
+    [Fact]
+    public void SupportsInteractiveOutput_ReturnsFalse_WhenOutputIsRedirected()
+    {
+        var configuration = new ConfigurationBuilder().Build();
+
+        var env = new CliHostEnvironment(configuration, nonInteractive: false, isOutputRedirected: true);
+
+        Assert.False(env.SupportsInteractiveOutput);
+    }
+
     [Theory]
     [InlineData("ASPIRE_NON_INTERACTIVE", "true")]
     [InlineData("ASPIRE_NON_INTERACTIVE", "1")]

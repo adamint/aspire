@@ -68,6 +68,11 @@ internal sealed class CliHostEnvironment : ICliHostEnvironment
     public bool SupportsAnsi { get; }
 
     public CliHostEnvironment(IConfiguration configuration, bool nonInteractive)
+        : this(configuration, nonInteractive, Console.IsOutputRedirected)
+    {
+    }
+
+    internal CliHostEnvironment(IConfiguration configuration, bool nonInteractive, bool isOutputRedirected)
     {
         // If --non-interactive is explicitly set, disable interactive input and output.
         // ANSI support is still determined from the host configuration so explicit
@@ -88,7 +93,7 @@ internal sealed class CliHostEnvironment : ICliHostEnvironment
         else
         {
             SupportsInteractiveInput = DetectInteractiveInput(configuration);
-            SupportsInteractiveOutput = DetectInteractiveOutput(configuration);
+            SupportsInteractiveOutput = DetectInteractiveOutput(configuration, isOutputRedirected);
             SupportsAnsi = DetectAnsiSupport(configuration);
         }
     }
@@ -134,7 +139,7 @@ internal sealed class CliHostEnvironment : ICliHostEnvironment
         return true;
     }
 
-    private static bool DetectInteractiveOutput(IConfiguration configuration)
+    private static bool DetectInteractiveOutput(IConfiguration configuration, bool isOutputRedirected)
     {
         // Check if explicitly disabled via configuration
         var nonInteractive = configuration["ASPIRE_NON_INTERACTIVE"];
@@ -147,6 +152,11 @@ internal sealed class CliHostEnvironment : ICliHostEnvironment
 
         // Check if running in CI environment (spinners pollute logs)
         if (IsCI(configuration))
+        {
+            return false;
+        }
+
+        if (isOutputRedirected)
         {
             return false;
         }
