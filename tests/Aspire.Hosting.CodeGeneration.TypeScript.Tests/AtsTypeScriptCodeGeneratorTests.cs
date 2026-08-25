@@ -2491,7 +2491,7 @@ public class AtsTypeScriptCodeGeneratorTests
         Assert.Equal(expectedDeclaration, declaration.Content);
         Assert.Contains(
             expectedDeclaration,
-            _generator.GenerateDistributedApplication(context)["aspire.mts"],
+            _generator.GenerateDistributedApplication(context)["aspire.mts"].ReplaceLineEndings("\n"),
             StringComparison.Ordinal);
     }
 

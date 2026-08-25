@@ -141,18 +141,18 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal(0, project.PrepareCallCount);
         Assert.Null(rpcClient.LastExportRequest);
         Assert.Equal(
-            "SDK API export can only export Aspire.Hosting.CodeGeneration.TypeScript at 13.5.0 when that package supplies the selected language's code generator; 13.4.0 was requested.",
+            "SDK API export cannot export Aspire.Hosting.CodeGeneration.TypeScript because that package supplies the selected language's code generator instead of an integration API surface.",
             Assert.Single(interactionService.DisplayedErrors));
     }
 
     [Fact]
-    public async Task SdkExportUsesOneReferenceForRequestedGeneratorPackageAtCliVersion()
+    public async Task SdkExportRejectsRequestedGeneratorPackageAtCliVersion()
     {
         var interactionService = new TestInteractionService();
         using var provider = CreateProvider(
             interactionService,
             out var workspace,
-            out _,
+            out var rpcClient,
             out var project,
             identityVersion: "13.5.0");
         using var workspaceLease = workspace;
@@ -161,11 +161,12 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
             provider,
             "sdk export --language typescript --package Aspire.Hosting.CodeGeneration.TypeScript@13.5.0.0");
 
-        Assert.Equal(CliExitCodes.Success, exitCode);
-        var package = Assert.Single(
-            project.Integrations,
-            integration => integration.Name == "Aspire.Hosting.CodeGeneration.TypeScript");
-        Assert.Equal("[13.5.0]", package.Version);
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
+        Assert.Equal(0, project.PrepareCallCount);
+        Assert.Null(rpcClient.LastExportRequest);
+        Assert.Equal(
+            "SDK API export cannot export Aspire.Hosting.CodeGeneration.TypeScript because that package supplies the selected language's code generator instead of an integration API surface.",
+            Assert.Single(interactionService.DisplayedErrors));
     }
 
     [Fact]

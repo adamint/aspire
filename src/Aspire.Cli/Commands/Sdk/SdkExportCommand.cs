@@ -128,27 +128,21 @@ internal sealed class SdkExportCommand : BaseCommand
             {
                 var requestedCodeGenerationPackage = integrations.FirstOrDefault(integration =>
                     integration.Name.Equals(codeGenerationPackage, StringComparison.OrdinalIgnoreCase));
-                if (requestedCodeGenerationPackage is not null &&
-                    !packageVersion.Equals(ExecutionContext.IdentitySdkVersion, StringComparison.OrdinalIgnoreCase))
+                if (requestedCodeGenerationPackage is not null)
                 {
                     return CommandResult.Failure(
                         CliExitCodes.InvalidCommand,
                         string.Format(
                             CultureInfo.CurrentCulture,
-                            ErrorStrings.SdkExportGeneratorPackageVersionMismatch,
-                            codeGenerationPackage,
-                            ExecutionContext.IdentitySdkVersion,
-                            packageVersion));
+                            ErrorStrings.SdkExportGeneratorPackageNotExportable,
+                            codeGenerationPackage));
                 }
 
-                if (requestedCodeGenerationPackage is null)
-                {
-                    // Match sdk generate: repository mode uses the generator from this checkout, while
-                    // installed CLIs restore the package that accompanies their build.
-                    integrations.Add(IntegrationReference.FromPackage(
-                        codeGenerationPackage,
-                        ExecutionContext.IdentityVersion));
-                }
+                // Match sdk generate: repository mode uses the generator from this checkout, while
+                // installed CLIs restore the package that accompanies their build.
+                integrations.Add(IntegrationReference.FromPackage(
+                    codeGenerationPackage,
+                    ExecutionContext.IdentityVersion));
             }
         }
 

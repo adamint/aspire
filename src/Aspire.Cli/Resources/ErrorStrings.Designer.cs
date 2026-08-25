@@ -517,11 +517,11 @@ namespace Aspire.Cli.Resources {
         }
 
         /// <summary>
-        ///   Looks up a localized string similar to SDK API export can only export {0} at {1} when that package supplies the selected language&apos;s code generator; {2} was requested..
+        ///   Looks up a localized string similar to SDK API export cannot export {0} because that package supplies the selected language&apos;s code generator instead of an integration API surface..
         /// </summary>
-        public static string SdkExportGeneratorPackageVersionMismatch {
+        public static string SdkExportGeneratorPackageNotExportable {
             get {
-                return ResourceManager.GetString("SdkExportGeneratorPackageVersionMismatch", resourceCulture);
+                return ResourceManager.GetString("SdkExportGeneratorPackageNotExportable", resourceCulture);
             }
         }
     }

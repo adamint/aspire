@@ -302,8 +302,8 @@
     <value>SDK API export is not supported for {0} because it does not use a code generator.</value>
     <comment>{0} is the AppHost language display name, for example "C# (.NET)".</comment>
   </data>
-  <data name="SdkExportGeneratorPackageVersionMismatch" xml:space="preserve">
-    <value>SDK API export can only export {0} at {1} when that package supplies the selected language's code generator; {2} was requested.</value>
-    <comment>{0} is the code-generation package name. {1} is the version bundled with the running CLI. {2} is the requested package version.</comment>
+  <data name="SdkExportGeneratorPackageNotExportable" xml:space="preserve">
+    <value>SDK API export cannot export {0} because that package supplies the selected language's code generator instead of an integration API surface.</value>
+    <comment>{0} is the code-generation package name.</comment>
   </data>
 </root>
