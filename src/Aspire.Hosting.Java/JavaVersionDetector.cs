@@ -94,11 +94,14 @@ internal static partial class JavaVersionDetector
         // Element names are matched without their namespace so both the Maven 4 POM namespace and the
         // long-standing http://maven.apache.org/POM/4.0.0 namespace are handled.
         //
-        // Every active project element with a matching name is considered, not just the first: a POM
+        // Every project element with a matching name is considered, not just the first: a POM
         // often declares <release>${java.version}</release> on the compiler plugin and a literal elsewhere,
         // and stopping at the unresolvable property reference would fall back to the default version instead.
-        // Profile descendants are excluded because whether a profile is active depends on Maven's effective
-        // model and invocation; allowing an inactive profile to win is worse evidence than the project itself.
+        // Project declarations are checked before profiles because profile activation can change with Maven's
+        // effective model, environment, and invocation. When the project declares no version, profiles with
+        // <activeByDefault>true</activeByDefault> are still better evidence than the generic fallback. Other
+        // profile activation rules are not evaluated because they can depend on the JDK, operating system,
+        // system properties, files, settings, or command-line profile selection.
         // Ordered by how directly each one decides the bytecode version, most direct first, because the
         // runtime image has to be at least what the compiler actually emitted.
         //
@@ -108,44 +111,85 @@ internal static partial class JavaVersionDetector
         // java.version and maven.compiler.release overrides that mapping, so Maven compiles to the
         // latter and reading java.version would pick a runtime too old to load the classes.
         // https://docs.spring.io/spring-boot/maven-plugin/using.html
-        var activeProjectElements = document.Descendants()
-            .Where(element => !element.Ancestors().Any(ancestor =>
-                string.Equals(ancestor.Name.LocalName, "profile", StringComparison.Ordinal)));
-
-        foreach (var (name, mustBePluginConfiguration) in ((string, bool)[])
+        IEnumerable<XElement>[] candidateGroups =
         [
-            // Explicit plugin configuration beats the property that merely supplies the parameter's
-            // default, and release beats target within the plugin.
-            // https://maven.apache.org/plugins/maven-compiler-plugin/compile-mojo.html
-            //
-            // <release> and <target> are only meaningful inside the compiler plugin's <configuration>.
-            // Matched merely by having a <configuration> parent they would also pick up unrelated
-            // plugins: maven-antrun-plugin's canonical configuration is literally
-            // <configuration><target>...</target></configuration>, holding Ant XML rather than a Java
-            // release, and any plugin is free to name a <release> of its own.
-            ("release", true),
-            ("maven.compiler.release", false),
-            ("target", true),
-            ("maven.compiler.target", false),
-            ("java.version", false),
-        ])
-        {
-            foreach (var element in activeProjectElements.Where(e => string.Equals(e.Name.LocalName, name, StringComparison.Ordinal)))
-            {
-                if (mustBePluginConfiguration && !IsCompilerPluginConfiguration(element.Parent))
-                {
-                    continue;
-                }
+            document.Descendants().Where(element => !IsInProfile(element)),
+            // Maven merges active profiles in declaration order, with later profile values taking precedence.
+            document.Descendants().Where(IsInActiveByDefaultProfile).Reverse(),
+        ];
 
-                if (Normalize(element.Value) is { } version)
+        foreach (var candidateElements in candidateGroups)
+        {
+            foreach (var (name, mustBePluginConfiguration) in ((string, bool)[])
+            [
+                // Explicit plugin configuration beats the property that merely supplies the parameter's
+                // default, and release beats target within the plugin.
+                // https://maven.apache.org/plugins/maven-compiler-plugin/compile-mojo.html
+                //
+                // <release> and <target> are only meaningful inside the compiler plugin's <configuration>.
+                // Matched merely by having a <configuration> parent they would also pick up unrelated
+                // plugins: maven-antrun-plugin's canonical configuration is literally
+                // <configuration><target>...</target></configuration>, holding Ant XML rather than a Java
+                // release, and any plugin is free to name a <release> of its own.
+                ("release", true),
+                ("maven.compiler.release", false),
+                ("target", true),
+                ("maven.compiler.target", false),
+                ("java.version", false),
+            ])
+            {
+                foreach (var element in candidateElements.Where(e => string.Equals(e.Name.LocalName, name, StringComparison.Ordinal)))
                 {
-                    return version;
+                    if (mustBePluginConfiguration && !IsCompilerPluginConfiguration(element.Parent))
+                    {
+                        continue;
+                    }
+
+                    if (Normalize(element.Value) is { } version)
+                    {
+                        return version;
+                    }
                 }
             }
         }
 
         return null;
     }
+
+    /// <summary>
+    /// Determines whether an element belongs to a Maven profile that is active by default.
+    /// </summary>
+    /// <remarks>
+    /// Maven expresses this activation as:
+    /// <code>
+    /// &lt;profile&gt;
+    ///   &lt;activation&gt;&lt;activeByDefault&gt;true&lt;/activeByDefault&gt;&lt;/activation&gt;
+    /// &lt;/profile&gt;
+    /// </code>
+    /// Other activation forms are not evaluated because they can depend on the JDK, operating system,
+    /// system properties, files, or command-line profile selection.
+    /// </remarks>
+    private static bool IsInActiveByDefaultProfile(XElement element)
+    {
+        var profile = element.Ancestors().FirstOrDefault(IsProfile);
+        if (profile is null)
+        {
+            return false;
+        }
+
+        var activation = profile.Elements().FirstOrDefault(e =>
+            string.Equals(e.Name.LocalName, "activation", StringComparison.Ordinal));
+
+        return activation?.Elements().Any(e =>
+            string.Equals(e.Name.LocalName, "activeByDefault", StringComparison.Ordinal)
+            && bool.TryParse(e.Value.Trim(), out var activeByDefault)
+            && activeByDefault) is true;
+    }
+
+    private static bool IsInProfile(XElement element) => element.Ancestors().Any(IsProfile);
+
+    private static bool IsProfile(XElement element) =>
+        string.Equals(element.Name.LocalName, "profile", StringComparison.Ordinal);
 
     /// <summary>
     /// Determines whether an element is a <c>&lt;configuration&gt;</c> belonging to

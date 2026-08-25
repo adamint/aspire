@@ -552,28 +552,103 @@ public class AddJavaAppPublishTests(ITestOutputHelper outputHelper)
         Assert.Equal("17", JavaVersionDetector.Detect(appDirectory.Path));
     }
 
-        [Fact]
-        public void JavaVersionDetector_IgnoresInactiveProfileProperties()
-        {
-                using var appDirectory = new TempJavaAppDirectory();
+    [Fact]
+    public void JavaVersionDetector_ReadsActiveByDefaultProfileProperties()
+    {
+        using var appDirectory = new TempJavaAppDirectory();
 
-                File.WriteAllText(Path.Combine(appDirectory.Path, "pom.xml"), """
-                        <?xml version="1.0" encoding="UTF-8"?>
-                        <project xmlns="http://maven.apache.org/POM/4.0.0">
-                            <modelVersion>4.0.0</modelVersion>
-                            <artifactId>demo</artifactId>
-                            <profiles>
-                                <profile>
-                                    <id>legacy</id>
-                                    <properties><java.version>17</java.version></properties>
-                                </profile>
-                            </profiles>
-                            <properties><java.version>21</java.version></properties>
-                        </project>
-                        """);
+        File.WriteAllText(Path.Combine(appDirectory.Path, "pom.xml"), """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <project xmlns="http://maven.apache.org/POM/4.0.0">
+              <modelVersion>4.0.0</modelVersion>
+              <artifactId>demo</artifactId>
+              <profiles>
+                <profile>
+                  <id>java-25</id>
+                  <activation><activeByDefault>true</activeByDefault></activation>
+                  <properties><java.version>25</java.version></properties>
+                </profile>
+              </profiles>
+            </project>
+            """);
 
-                Assert.Equal("21", JavaVersionDetector.Detect(appDirectory.Path));
-        }
+        Assert.Equal("25", JavaVersionDetector.Detect(appDirectory.Path));
+    }
+
+    [Fact]
+    public void JavaVersionDetector_PrefersProjectPropertiesToActiveByDefaultProfileProperties()
+    {
+        using var appDirectory = new TempJavaAppDirectory();
+
+        File.WriteAllText(Path.Combine(appDirectory.Path, "pom.xml"), """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <project xmlns="http://maven.apache.org/POM/4.0.0">
+              <modelVersion>4.0.0</modelVersion>
+              <artifactId>demo</artifactId>
+              <properties><java.version>21</java.version></properties>
+              <profiles>
+                <profile>
+                  <id>java-25</id>
+                  <activation><activeByDefault>true</activeByDefault></activation>
+                  <properties><java.version>25</java.version></properties>
+                </profile>
+              </profiles>
+            </project>
+            """);
+
+        Assert.Equal("21", JavaVersionDetector.Detect(appDirectory.Path));
+    }
+
+    [Fact]
+    public void JavaVersionDetector_UsesTheFinalActiveByDefaultProfileProperty()
+    {
+        using var appDirectory = new TempJavaAppDirectory();
+
+        File.WriteAllText(Path.Combine(appDirectory.Path, "pom.xml"), """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <project xmlns="http://maven.apache.org/POM/4.0.0">
+              <modelVersion>4.0.0</modelVersion>
+              <artifactId>demo</artifactId>
+              <profiles>
+                <profile>
+                  <id>java-17</id>
+                  <activation><activeByDefault>true</activeByDefault></activation>
+                  <properties><java.version>17</java.version></properties>
+                </profile>
+                <profile>
+                  <id>java-25</id>
+                  <activation><activeByDefault>true</activeByDefault></activation>
+                  <properties><java.version>25</java.version></properties>
+                </profile>
+              </profiles>
+            </project>
+            """);
+
+        Assert.Equal("25", JavaVersionDetector.Detect(appDirectory.Path));
+    }
+
+    [Fact]
+    public void JavaVersionDetector_IgnoresInactiveProfileProperties()
+    {
+        using var appDirectory = new TempJavaAppDirectory();
+
+        File.WriteAllText(Path.Combine(appDirectory.Path, "pom.xml"), """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <project xmlns="http://maven.apache.org/POM/4.0.0">
+              <modelVersion>4.0.0</modelVersion>
+              <artifactId>demo</artifactId>
+              <profiles>
+                <profile>
+                  <id>legacy</id>
+                  <properties><java.version>17</java.version></properties>
+                </profile>
+              </profiles>
+              <properties><java.version>21</java.version></properties>
+            </project>
+            """);
+
+        Assert.Equal("21", JavaVersionDetector.Detect(appDirectory.Path));
+    }
 
     [Fact]
     public void JavaVersionDetector_IgnoresATargetOutsideAPluginConfiguration()
