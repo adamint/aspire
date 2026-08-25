@@ -297,6 +297,46 @@ public class BaseCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task BaseCommand_OnFailure_WithExtensionAndRelativeCliLog_OpensAbsoluteEditorPath()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var absoluteCliLogPath = Path.Combine(workspace.WorkspaceRoot.FullName, "relative-cli.log");
+        var relativeCliLogPath = Path.GetRelativePath(Environment.CurrentDirectory, absoluteCliLogPath);
+        File.WriteAllText(absoluteCliLogPath, "Current CLI diagnostics");
+        var backchannelMonitor = new TestAuxiliaryBackchannelMonitor
+        {
+            ScanAsyncCallback = _ => throw new InvalidOperationException("Something went wrong")
+        };
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.ExtensionBackchannelFactory = _ => new TestExtensionBackchannel();
+            options.InteractionServiceFactory = serviceProvider => new TestExtensionInteractionService(serviceProvider);
+            options.AuxiliaryBackchannelMonitorFactory = _ => backchannelMonitor;
+            options.CliExecutionContextFactory = _ => workspace.CreateExecutionContext(logFilePath: relativeCliLogPath);
+        });
+        using var provider = services.BuildServiceProvider();
+
+        var testInteractionService = Assert.IsType<TestExtensionInteractionService>(provider.GetRequiredService<IInteractionService>());
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("ps");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.NotEqual(CliExitCodes.Success, exitCode);
+
+        var expectedLogMessage = string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.SeeLogsAt, relativeCliLogPath);
+        Assert.Collection(
+            testInteractionService.DisplayedMessages,
+            message =>
+            {
+                Assert.Equal(expectedLogMessage, message.Message);
+                Assert.Equal(ConsoleOutput.Error, message.ConsoleOverride);
+            });
+        Assert.Equal([absoluteCliLogPath], testInteractionService.OpenEditorPaths);
+    }
+
+    [Fact]
     public async Task BaseCommand_OnFailure_WithExtensionAndExistingCliAndAppHostLogs_DisplaysMessagesAndOpensEditorsInOrder()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);

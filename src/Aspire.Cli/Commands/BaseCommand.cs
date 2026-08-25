@@ -279,7 +279,7 @@ internal abstract class BaseCommand : Command
     {
         if (interactionService is IExtensionInteractionService extensionInteractionService && File.Exists(logFilePath))
         {
-            extensionInteractionService.OpenEditor(logFilePath);
+            extensionInteractionService.OpenEditor(Path.GetFullPath(logFilePath));
         }
     }
 
