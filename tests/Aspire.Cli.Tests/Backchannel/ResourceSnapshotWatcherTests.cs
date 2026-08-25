@@ -1,10 +1,14 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using System.Threading.Channels;
 using Aspire.Cli.Backchannel;
 using Aspire.Cli.Tests.TestServices;
 using Microsoft.AspNetCore.InternalTesting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Testing;
 
 namespace Aspire.Cli.Tests.Backchannel;
 
@@ -279,6 +283,7 @@ public class ResourceSnapshotWatcherTests
         var staleSnapshotProcessed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var newerSnapshotGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var newerSnapshotProcessed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var logger = new FakeLogger<ResourceSnapshotWatcher>();
         var connection = new TestAppHostAuxiliaryBackchannel
         {
             GetResourceSnapshotsHandler = _ => Task.FromResult(
@@ -317,9 +322,13 @@ public class ResourceSnapshotWatcherTests
                     newerSnapshotProcessed,
                     cancellationToken)
         };
-        using var watcher = new ResourceSnapshotWatcher(connection, bufferUpdates: true);
+        using var watcher = new ResourceSnapshotWatcher(connection, logger, bufferUpdates: true);
         await watcher.WaitForInitialLoadAsync().DefaultTimeout();
         var initialCapture = watcher.CaptureAllResources();
+        await using var consumer = watcher
+            .WatchResourceSnapshotBatchesAsync(initialCapture.UpdateSequence)
+            .GetAsyncEnumerator();
+        var moveNextTask = consumer.MoveNextAsync().AsTask();
 
         staleSnapshotGate.TrySetResult();
         await staleSnapshotProcessed.Task.DefaultTimeout();
@@ -329,6 +338,12 @@ public class ResourceSnapshotWatcherTests
         Assert.Equal(2, retainedSnapshot.Version);
         Assert.Equal("Running", retainedSnapshot.State);
         Assert.Equal(initialCapture.UpdateSequence, staleCapture.UpdateSequence);
+        Assert.Contains(logger.Collector.GetSnapshot(), record =>
+            record.Level == LogLevel.Debug &&
+            record.Message.Contains("api", StringComparison.Ordinal) &&
+            record.Message.Contains('1') &&
+            record.Message.Contains('2'));
+        Assert.False(moveNextTask.IsCompleted);
 
         newerSnapshotGate.TrySetResult();
         await newerSnapshotProcessed.Task.DefaultTimeout();
@@ -336,11 +351,9 @@ public class ResourceSnapshotWatcherTests
         var currentSnapshot = Assert.Single(watcher.CaptureAllResources().Resources);
         Assert.Equal(3, currentSnapshot.Version);
         Assert.Equal("Finished", currentSnapshot.State);
-        var updates = await watcher
-            .WatchResourceSnapshotsAsync(initialCapture.UpdateSequence)
-            .ToListAsync()
-            .DefaultTimeout();
-        var update = Assert.Single(updates);
+        Assert.True(await moveNextTask.DefaultTimeout());
+        Assert.False(consumer.Current.IsResync);
+        var update = Assert.Single(consumer.Current.Snapshots);
         Assert.Equal(3, update.Version);
         Assert.Equal("Finished", update.State);
     }
@@ -361,13 +374,13 @@ public class ResourceSnapshotWatcherTests
 
         using var consumersCts = new CancellationTokenSource();
         await using var firstConsumer = watcher
-            .WatchResourceSnapshotsAsync(afterSequence: 0, consumersCts.Token)
+            .WatchResourceSnapshotBatchesAsync(afterSequence: 0, consumersCts.Token)
             .GetAsyncEnumerator();
         var firstMoveNextTask = firstConsumer.MoveNextAsync().AsTask();
         Assert.False(firstMoveNextTask.IsCompleted);
 
         await using var secondConsumer = watcher
-            .WatchResourceSnapshotsAsync(afterSequence: 0, consumersCts.Token)
+            .WatchResourceSnapshotBatchesAsync(afterSequence: 0, consumersCts.Token)
             .GetAsyncEnumerator();
         var secondMoveNextTask = secondConsumer.MoveNextAsync().AsTask();
         try
@@ -439,10 +452,11 @@ public class ResourceSnapshotWatcherTests
         updatesGate.TrySetResult();
         await producerCompleted.Task.DefaultTimeout();
 
-        var updates = await watcher
-            .WatchResourceSnapshotsAsync(initialCapture.UpdateSequence)
+        var batches = await watcher
+            .WatchResourceSnapshotBatchesAsync(initialCapture.UpdateSequence)
             .ToListAsync()
             .DefaultTimeout();
+        var batch = Assert.Single(batches);
 
         var expectedUpdates = Enumerable.Range(0, resourceCount)
             .Select(index => new
@@ -453,14 +467,102 @@ public class ResourceSnapshotWatcherTests
             })
             .OrderBy(update => update.Name, StringComparer.Ordinal)
             .ToList();
-        var actualUpdates = updates
+        var actualUpdates = batch.Snapshots
             .Select(update => new { update.Name, update.DisplayName, update.State })
             .OrderBy(update => update.Name, StringComparer.Ordinal)
             .ToList();
 
         Assert.Equal(totalUpdateCount, producedUpdateCount);
-        Assert.Equal(resourceCount, updates.Count);
+        Assert.True(batch.IsResync);
+        Assert.Equal(resourceCount, batch.Snapshots.Count);
         Assert.Equal(expectedUpdates, actualUpdates);
+    }
+
+    [Fact]
+    public async Task ResourceSnapshotWatcher_OverlapsProducerConsumerAndReaders()
+    {
+        var source = Channel.CreateUnbounded<ResourceSnapshot>();
+        var connection = new TestAppHostAuxiliaryBackchannel
+        {
+            GetResourceSnapshotsHandler = _ => Task.FromResult(new List<ResourceSnapshot>()),
+            WatchResourceSnapshotsHandler = (_, cancellationToken) =>
+                source.Reader.ReadAllAsync(cancellationToken)
+        };
+        using var watcher = new ResourceSnapshotWatcher(connection, bufferUpdates: true);
+        await watcher.WaitForInitialLoadAsync().DefaultTimeout();
+        var initialCapture = watcher.CaptureAllResources();
+        var resourceCount = ResourceSnapshotWatcher.UpdateBufferCapacity + 1;
+        var observedVersions = new ConcurrentDictionary<string, long>(StringComparer.Ordinal);
+        var consumerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var readerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var readerIterations = 0;
+
+        var producerTask = Task.Run(async () =>
+        {
+            await Task.WhenAll(consumerStarted.Task, readerStarted.Task);
+            try
+            {
+                for (var resourceIndex = 0; resourceIndex < resourceCount; resourceIndex++)
+                {
+                    for (var version = 1L; version <= 3; version++)
+                    {
+                        await source.Writer.WriteAsync(new ResourceSnapshot
+                        {
+                            Name = $"resource-{resourceIndex}",
+                            DisplayName = $"resource-{resourceIndex}",
+                            ResourceType = "Project",
+                            State = $"State-{version}",
+                            Version = version
+                        });
+                        await Task.Yield();
+                    }
+                }
+            }
+            finally
+            {
+                source.Writer.TryComplete();
+            }
+        });
+        var consumerTask = Task.Run(async () =>
+        {
+            consumerStarted.TrySetResult();
+            await foreach (var batch in watcher.WatchResourceSnapshotBatchesAsync(initialCapture.UpdateSequence))
+            {
+                foreach (var snapshot in batch.Snapshots)
+                {
+                    observedVersions.AddOrUpdate(
+                        snapshot.Name,
+                        snapshot.Version,
+                        (_, currentVersion) => Math.Max(currentVersion, snapshot.Version));
+                }
+            }
+        });
+        var readerTask = Task.Run(async () =>
+        {
+            do
+            {
+                _ = watcher.GetResource("resource-0");
+                _ = watcher.GetAllResources().ToList();
+                _ = watcher.CaptureAllResources();
+                Interlocked.Increment(ref readerIterations);
+                readerStarted.TrySetResult();
+                await Task.Yield();
+            }
+            while (!consumerTask.IsCompleted);
+        });
+
+        await Task.WhenAll(producerTask, consumerTask, readerTask).DefaultTimeout();
+
+        var finalCapture = watcher.CaptureAllResources();
+        Assert.Equal(resourceCount, finalCapture.Resources.Count);
+        Assert.All(finalCapture.Resources, snapshot => Assert.Equal(3, snapshot.Version));
+        Assert.Equal(resourceCount, observedVersions.Count);
+        for (var resourceIndex = 0; resourceIndex < resourceCount; resourceIndex++)
+        {
+            Assert.True(observedVersions.TryGetValue($"resource-{resourceIndex}", out var version));
+            Assert.Equal(3, version);
+        }
+        Assert.True(Volatile.Read(ref readerIterations) > 0);
     }
 
     private static async IAsyncEnumerable<ResourceSnapshot> YieldSnapshotAndWait(
