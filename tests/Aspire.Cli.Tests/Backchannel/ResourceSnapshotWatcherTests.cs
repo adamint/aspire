@@ -273,6 +273,79 @@ public class ResourceSnapshotWatcherTests
     }
 
     [Fact]
+    public async Task ResourceSnapshotWatcher_IgnoresStaleWatchSnapshotAfterInitialLoad()
+    {
+        var staleSnapshotGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var staleSnapshotProcessed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var newerSnapshotGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var newerSnapshotProcessed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var connection = new TestAppHostAuxiliaryBackchannel
+        {
+            GetResourceSnapshotsHandler = _ => Task.FromResult(
+                new List<ResourceSnapshot>
+                {
+                    new()
+                    {
+                        Name = "api",
+                        DisplayName = "api",
+                        ResourceType = "Project",
+                        State = "Running",
+                        Version = 2
+                    }
+                }),
+            WatchResourceSnapshotsHandler = (_, cancellationToken) =>
+                YieldSnapshotsInSequence(
+                    staleSnapshotGate.Task,
+                    new ResourceSnapshot
+                    {
+                        Name = "api",
+                        DisplayName = "api",
+                        ResourceType = "Project",
+                        State = "Starting",
+                        Version = 1
+                    },
+                    staleSnapshotProcessed,
+                    newerSnapshotGate.Task,
+                    new ResourceSnapshot
+                    {
+                        Name = "api",
+                        DisplayName = "api",
+                        ResourceType = "Project",
+                        State = "Finished",
+                        Version = 3
+                    },
+                    newerSnapshotProcessed,
+                    cancellationToken)
+        };
+        using var watcher = new ResourceSnapshotWatcher(connection, bufferUpdates: true);
+        await watcher.WaitForInitialLoadAsync().DefaultTimeout();
+        var initialCapture = watcher.CaptureAllResources();
+
+        staleSnapshotGate.TrySetResult();
+        await staleSnapshotProcessed.Task.DefaultTimeout();
+
+        var staleCapture = watcher.CaptureAllResources();
+        var retainedSnapshot = Assert.Single(staleCapture.Resources);
+        Assert.Equal(2, retainedSnapshot.Version);
+        Assert.Equal("Running", retainedSnapshot.State);
+        Assert.Equal(initialCapture.UpdateSequence, staleCapture.UpdateSequence);
+
+        newerSnapshotGate.TrySetResult();
+        await newerSnapshotProcessed.Task.DefaultTimeout();
+
+        var currentSnapshot = Assert.Single(watcher.CaptureAllResources().Resources);
+        Assert.Equal(3, currentSnapshot.Version);
+        Assert.Equal("Finished", currentSnapshot.State);
+        var updates = await watcher
+            .WatchResourceSnapshotsAsync(initialCapture.UpdateSequence)
+            .ToListAsync()
+            .DefaultTimeout();
+        var update = Assert.Single(updates);
+        Assert.Equal(3, update.Version);
+        Assert.Equal("Finished", update.State);
+    }
+
+    [Fact]
     public async Task ResourceSnapshotWatcher_AllowsOnlyOneUpdateConsumer()
     {
         var watchStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -403,6 +476,26 @@ public class ResourceSnapshotWatcherTests
         // the yielded snapshot has already been applied to the watcher's resource dictionary.
         snapshotObserved.TrySetResult();
         await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+    }
+
+    private static async IAsyncEnumerable<ResourceSnapshot> YieldSnapshotsInSequence(
+        Task firstGate,
+        ResourceSnapshot firstSnapshot,
+        TaskCompletionSource firstSnapshotProcessed,
+        Task secondGate,
+        ResourceSnapshot secondSnapshot,
+        TaskCompletionSource secondSnapshotProcessed,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await firstGate.WaitAsync(cancellationToken);
+        yield return firstSnapshot;
+
+        // Code after each yield runs only after the watcher requests the next item, proving the
+        // previous snapshot passed through WatchChangesAsync before the test inspects its effects.
+        firstSnapshotProcessed.TrySetResult();
+        await secondGate.WaitAsync(cancellationToken);
+        yield return secondSnapshot;
+        secondSnapshotProcessed.TrySetResult();
     }
 
     private static async IAsyncEnumerable<ResourceSnapshot> ProduceResourceSnapshotsAfter(

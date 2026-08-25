@@ -190,6 +190,17 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
         {
             lock (_resourcesLock)
             {
+                if (_resources.TryGetValue(snapshot.Name, out var currentSnapshot) &&
+                    snapshot.Version > 0 &&
+                    currentSnapshot.Version > 0 &&
+                    snapshot.Version < currentSnapshot.Version)
+                {
+                    // Version 0 is the compatibility value from older AppHosts and cannot establish
+                    // ordering. Known lower versions can be stale replay events that arrive after
+                    // initial GET/watch reconciliation, so they must not regress state or buffering.
+                    continue;
+                }
+
                 _resources[snapshot.Name] = snapshot;
                 var update = new ResourceSnapshotUpdate(++_updateSequence, snapshot);
                 if (_pendingUpdates is not null && !_resyncPending)
