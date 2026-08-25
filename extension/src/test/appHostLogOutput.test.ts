@@ -423,6 +423,134 @@ suite('AppHost log output coordinator', () => {
             undefined);
     });
 
+    test('deduplicates a DebugLogger-first multiline message whose continuation looks like a header', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const message = 'first\nOther.Category: Warning: second';
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(
+                `Example.Category: Information: ${message}\n`,
+                'console'),
+            []);
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message })),
+            {
+                output: 'Example.Category: Information: first\nOther.Category: Warning: second\n',
+                category: 'stdout'
+            });
+        assert.deepStrictEqual(coordinator.flush(), []);
+    });
+
+    test('separates an unconfirmed DebugLogger gap from a confirmed header tail', () => {
+        for (const lineEnding of ['\n', '\r\n']) {
+            const coordinator = new AppHostLogOutputCoordinator();
+
+            assert.deepStrictEqual(
+                coordinator.handleDebugAdapterOutput(
+                    `First.Category: Information: first${lineEnding}`
+                        + `unconfirmed${lineEnding}`
+                        + `Example.Category: Error: failed${lineEnding}`,
+                    'console'),
+                []);
+            assert.deepStrictEqual(
+                coordinator.handleBackchannelEntry(createEntry({ logLevel: 'Error', message: 'failed' })),
+                {
+                    output: 'Example.Category: Error: failed\n',
+                    category: 'stderr'
+                });
+            assert.deepStrictEqual(coordinator.flush(), [{
+                output: 'First.Category: Information: first\nunconfirmed\n',
+                category: 'stdout'
+            }]);
+        }
+    });
+
+    test('finds a confirmed DebugLogger header after bounded ambiguous boundaries', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const before = Array.from({ length: 65 }, (_, index) => `before-${index}\n`).join('');
+        const after = Array.from({ length: 65 }, (_, index) => `after-${index}\n`).join('');
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(
+                `First.Category: Information: first\n${before}`
+                    + `Example.Category: Error: failed\n${after}`,
+                'console'),
+            []);
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ logLevel: 'Error', message: 'failed' })),
+            {
+                output: 'Example.Category: Error: failed\n',
+                category: 'stderr'
+            });
+        assert.deepStrictEqual(coordinator.flush(), [
+            {
+                output: `First.Category: Information: first\n${before}`,
+                category: 'stdout'
+            }
+        ]);
+    });
+
+    test('prefers a fully confirmed DebugLogger record over an inner header twin', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const message = 'first\nOther.Category: Warning: second';
+
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({
+                categoryName: 'Other.Category',
+                logLevel: 'Warning',
+                message: 'second'
+            })),
+            {
+                output: '\x1b[33mOther.Category: Warning: second\x1b[0m\n',
+                category: 'stdout'
+            });
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(
+                `Example.Category: Information: ${message}\n`,
+                'console'),
+            []);
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ sequenceNumber: 2, message })),
+            {
+                output: 'Example.Category: Information: first\nOther.Category: Warning: second\n',
+                category: 'stdout'
+            });
+        assert.deepStrictEqual(coordinator.flush(), []);
+    });
+
+    test('does not confirm a DebugLogger boundary before an indented continuation', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ message: 'first' })),
+            {
+                output: 'Example.Category: Information: first\n',
+                category: 'stdout'
+            });
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(
+                'Example.Category: Information: first\n'
+                    + '   indented\n'
+                    + 'Other.Category: Error: failed\n',
+                'console'),
+            []);
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({
+                sequenceNumber: 2,
+                categoryName: 'Other.Category',
+                logLevel: 'Error',
+                message: 'failed'
+            })),
+            {
+                output: 'Other.Category: Error: failed\n',
+                category: 'stderr'
+            });
+        assert.deepStrictEqual(coordinator.flush(), [{
+            output: 'Example.Category: Information: first\n   indented\n',
+            category: 'stdout'
+        }]);
+    });
+
     test('matches timestamped multiline output with scopes', () => {
         const coordinator = new AppHostLogOutputCoordinator();
         const raw = '2026-08-10 17:40:09 warn: Example.Category[7]\n'

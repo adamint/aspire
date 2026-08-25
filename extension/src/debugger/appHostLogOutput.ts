@@ -125,8 +125,15 @@ export class AppHostLogOutputCoordinator {
         const lastBreak = findLastCompletedLineBreak(buffered);
         const completed = buffered.slice(0, lastBreak + 1);
         const partial = buffered.slice(lastBreak + 1);
+        const hadPendingDebugRecord = this._pendingDebugRecords.has(normalizedCategory);
 
         for (const line of completed.match(/[^\r\n]*(?:\r\n|\r|\n)/g) ?? []) {
+            if (hadPendingDebugRecord
+                && normalizedCategory === 'console'
+                && isDebugLoggerHeader(line)
+                && this._pendingDebugRecords.has(normalizedCategory)) {
+                this.flushPendingDebugRecord(normalizedCategory, outputs);
+            }
             this.consumeLine(line, normalizedCategory, outputs);
         }
 
@@ -287,14 +294,14 @@ export class AppHostLogOutputCoordinator {
             }
 
             if (isDebugLoggerHeader(line)) {
-                if (this.mergedDebugRecordHasTwin(pending, line)) {
-                    appendPendingDebugLine(pending, line);
-                    return true;
+                if (!this.mergedDebugRecordHasTwin(pending, line)) {
+                    // DebugLogger does not mark multiline message boundaries. A continuation can itself
+                    // have the shape of another record, so retain both interpretations until another
+                    // provider confirms whether this is a continuation or a separate record.
+                    this.recordAmbiguousDebugLineBoundary(pending);
                 }
 
-                this.flushPendingDebugRecord(category, outputs);
-                this._pendingDebugRecords.set(category, createPendingDebugRecord(line, category));
-                this.resetFallbackFilter(category);
+                appendPendingDebugLine(pending, line);
                 return true;
             }
 
@@ -375,7 +382,8 @@ export class AppHostLogOutputCoordinator {
             return;
         }
 
-        if (hardBoundary && this.hasCorrelatedTwin(record, 'debugLogger')) {
+        const hasCorrelatedTwin = this.hasCorrelatedTwin(record, 'debugLogger');
+        if (hasCorrelatedTwin) {
             const output = this.correlate({ record }, 'debugLogger');
             if (output) {
                 outputs.push(output);
@@ -383,9 +391,15 @@ export class AppHostLogOutputCoordinator {
             return;
         }
 
-        const matchingBoundary = !this.hasCorrelatedTwin(record, 'debugLogger')
-            ? this.findConfirmedDebugLineBoundary(pending, record)
-            : undefined;
+        const boundaries = getAmbiguousDebugLineBoundaries(pending.raw);
+        const headerBoundaries = boundaries.filter(boundary =>
+            isDebugLoggerHeader(getFirstLine(pending.raw.slice(boundary.rawOffset))));
+        if (headerBoundaries.length > 0) {
+            this.flushDebugHeaderSegments(pending, boundaries, headerBoundaries, outputs);
+            return;
+        }
+
+        const matchingBoundary = this.findConfirmedDebugLineBoundary(pending);
         const selectedBoundary = hardBoundary
             ? matchingBoundary ?? pending.ambiguousLineBoundaries[0]
             : matchingBoundary;
@@ -424,8 +438,7 @@ export class AppHostLogOutputCoordinator {
     }
 
     private findConfirmedDebugLineBoundary(
-        pending: PendingDebugRecord,
-        record: LogRecord): PendingDebugRecord['ambiguousLineBoundaries'][number] | undefined {
+        pending: PendingDebugRecord): PendingDebugRecord['ambiguousLineBoundaries'][number] | undefined {
         // DebugLogger does not identify multiline message boundaries. Prefer the longest
         // candidate another provider has confirmed so only the remaining raw tail falls back.
         for (let index = pending.ambiguousLineBoundaries.length - 1; index >= 0; index--) {
@@ -437,6 +450,75 @@ export class AppHostLogOutputCoordinator {
         }
 
         return undefined;
+    }
+
+    private findConfirmedDebugHeaderSegmentEnd(
+        raw: string,
+        startOffset: number,
+        endOffsets: readonly number[]): number | undefined {
+        const headerRecord = parseDebugLoggerRecord(getFirstLine(raw.slice(startOffset)));
+        const matchingRecords = headerRecord
+            ? this.correlatedRecordsFor(headerRecord).filter(candidate =>
+                !candidate.sources.has('debugLogger')
+                && candidate.identity.record.categoryName === headerRecord.categoryName
+                && candidate.identity.record.logLevel === headerRecord.logLevel)
+            : [];
+        if (!headerRecord || matchingRecords.length === 0) {
+            return undefined;
+        }
+
+        const maxBodyLength = Math.max(...matchingRecords.map(candidate => candidate.identity.record.body.length));
+        let confirmedEnd: number | undefined;
+        for (const endOffset of endOffsets) {
+            const candidate = parseDebugLoggerRecord(raw.slice(startOffset, endOffset));
+            if (candidate && candidate.body.length > maxBodyLength) {
+                break;
+            }
+            if (candidate && this.hasCorrelatedTwin(candidate, 'debugLogger')) {
+                confirmedEnd = endOffset;
+            }
+        }
+
+        return confirmedEnd;
+    }
+
+    private flushDebugHeaderSegments(
+        pending: PendingDebugRecord,
+        boundaries: readonly { rawOffset: number }[],
+        headerBoundaries: readonly { rawOffset: number }[],
+        outputs: AppHostParentOutput[]): void {
+        const segmentOffsets = [0, ...headerBoundaries.map(boundary => boundary.rawOffset), pending.raw.length];
+        let segmentIndex = 0;
+        while (segmentIndex < segmentOffsets.length - 1) {
+            const startOffset = segmentOffsets[segmentIndex];
+            const remainingEndOffsets = segmentOffsets.slice(segmentIndex + 1);
+            const endOffset = this.findConfirmedDebugHeaderSegmentEnd(
+                pending.raw,
+                startOffset,
+                remainingEndOffsets) ?? remainingEndOffsets[0];
+            const segment = pending.raw.slice(startOffset, endOffset);
+            const record = parseDebugLoggerRecord(segment);
+            if (!record) {
+                this.emitFallback(segment, pending.category, outputs);
+            } else {
+                const trailingBodyEndOffsets = [...new Set(
+                    boundaries
+                        .filter(boundary =>
+                            boundary.rawOffset > startOffset && boundary.rawOffset < endOffset)
+                        .map(boundary => parseDebugLoggerRecord(
+                            pending.raw.slice(startOffset, boundary.rawOffset))?.body.length)
+                        .filter((offset): offset is number =>
+                            offset !== undefined && offset >= 0 && offset < record.body.length))];
+                const output = this.correlate(
+                    trailingBodyEndOffsets.length > 0 ? { record, trailingBodyEndOffsets } : { record },
+                    'debugLogger');
+                if (output) {
+                    outputs.push(output);
+                }
+            }
+
+            segmentIndex = segmentOffsets.indexOf(endOffset, segmentIndex + 1);
+        }
     }
 
     private correlate(
@@ -637,6 +719,38 @@ const debugLoggerRecordRegex = new RegExp(
     String.raw`^(${debugLoggerCategoryPattern})(?:\[(-?\d+)\])?: (Trace|Debug|Information|Warning|Error|Critical): ([\s\S]*)$`);
 const debugLoggerHeaderRegex = new RegExp(
     String.raw`^${debugLoggerCategoryPattern}(?:\[-?\d+\])?: (Trace|Debug|Information|Warning|Error|Critical): .*(?:\r\n|\r|\n)?$`);
+
+function getFirstLine(value: string): string {
+    return value.match(/^[^\r\n]*(?:\r\n|\r|\n)?/)?.[0] ?? '';
+}
+
+function getLineStartOffsets(value: string): number[] {
+    const offsets: number[] = [];
+    for (const match of value.matchAll(/\r\n|\r|\n/g)) {
+        const offset = match.index + match[0].length;
+        if (offset < value.length) {
+            offsets.push(offset);
+        }
+    }
+    return offsets;
+}
+
+function getAmbiguousDebugLineBoundaries(raw: string): { rawOffset: number }[] {
+    const lineStartOffsets = getLineStartOffsets(raw);
+    const pending = createPendingDebugRecord(raw.slice(0, lineStartOffsets[0] ?? raw.length), '');
+    const boundaries: { rawOffset: number }[] = [];
+
+    for (let index = 0; index < lineStartOffsets.length; index++) {
+        const rawOffset = lineStartOffsets[index];
+        const line = raw.slice(rawOffset, lineStartOffsets[index + 1] ?? raw.length);
+        if (isDebugLoggerHeader(line) || !isDebugLoggerContinuation(pending, line)) {
+            boundaries.push({ rawOffset });
+        }
+        appendPendingDebugLine(pending, line);
+    }
+
+    return boundaries;
+}
 
 function createPendingDebugRecord(line: string, category: string): PendingDebugRecord {
     return {
