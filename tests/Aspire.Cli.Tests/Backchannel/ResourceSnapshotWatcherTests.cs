@@ -8,6 +8,7 @@ using Aspire.Cli.Backchannel;
 using Aspire.Cli.Tests.TestServices;
 using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Logging.Testing;
 
 namespace Aspire.Cli.Tests.Backchannel;
@@ -36,7 +37,7 @@ public class ResourceSnapshotWatcherTests
             WatchResourceSnapshotsHandler = (_, cancellationToken) =>
                 WaitForResourceSnapshotGate(watchStarted, watchGate.Task, watchStopped, cancellationToken)
         };
-        var watcher = new ResourceSnapshotWatcher(connection);
+        var watcher = new ResourceSnapshotWatcher(connection, NullLogger<ResourceSnapshotWatcher>.Instance);
 
         using (watcher)
         {
@@ -65,7 +66,7 @@ public class ResourceSnapshotWatcherTests
             WatchResourceSnapshotsHandler = (_, cancellationToken) =>
                 WaitForResourceSnapshotCancellation(watchStarted, watchStopped, cancellationToken)
         };
-        using var watcher = new ResourceSnapshotWatcher(connection);
+        using var watcher = new ResourceSnapshotWatcher(connection, NullLogger<ResourceSnapshotWatcher>.Instance);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => watcher.WaitForInitialLoadAsync()).DefaultTimeout();
 
@@ -89,7 +90,7 @@ public class ResourceSnapshotWatcherTests
             WatchResourceSnapshotsHandler = (_, cancellationToken) =>
                 ThrowUnrelatedCancellationAfterWatchCancellation(watchStarted, unrelatedCts.Token, cancellationToken)
         };
-        using var watcher = new ResourceSnapshotWatcher(connection);
+        using var watcher = new ResourceSnapshotWatcher(connection, NullLogger<ResourceSnapshotWatcher>.Instance);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => watcher.WaitForInitialLoadAsync()).DefaultTimeout();
 
@@ -108,7 +109,7 @@ public class ResourceSnapshotWatcherTests
             WatchResourceSnapshotsHandler = (_, cancellationToken) =>
                 ThrowTokenlessCancellationImmediately(expectedWatchException, cancellationToken)
         };
-        using var watcher = new ResourceSnapshotWatcher(connection);
+        using var watcher = new ResourceSnapshotWatcher(connection, NullLogger<ResourceSnapshotWatcher>.Instance);
 
         var initialException = await Assert.ThrowsAsync<InvalidOperationException>(
             () => watcher.WaitForInitialLoadAsync()).DefaultTimeout();
@@ -132,7 +133,7 @@ public class ResourceSnapshotWatcherTests
             WatchResourceSnapshotsHandler = (_, cancellationToken) =>
                 ThrowTokenlessCancellationAfterWatchCancellation(watchStarted, cancellationToken)
         };
-        using var watcher = new ResourceSnapshotWatcher(connection);
+        using var watcher = new ResourceSnapshotWatcher(connection, NullLogger<ResourceSnapshotWatcher>.Instance);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => watcher.WaitForInitialLoadAsync()).DefaultTimeout();
 
@@ -154,7 +155,7 @@ public class ResourceSnapshotWatcherTests
             WatchResourceSnapshotsHandler = (_, cancellationToken) =>
                 WaitForCancellationWithThrowingCallback(watchStarted, watchStopped, cancellationToken)
         };
-        using var watcher = new ResourceSnapshotWatcher(connection);
+        using var watcher = new ResourceSnapshotWatcher(connection, NullLogger<ResourceSnapshotWatcher>.Instance);
 
         var initialException = await Assert.ThrowsAsync<InvalidOperationException>(() => watcher.WaitForInitialLoadAsync()).DefaultTimeout();
 
@@ -177,7 +178,7 @@ public class ResourceSnapshotWatcherTests
             WatchResourceSnapshotsHandler = (_, cancellationToken) =>
                 ThrowWatchFailureWithThrowingCancellationCallback(watchStarted, cancellationToken)
         };
-        using var watcher = new ResourceSnapshotWatcher(connection);
+        using var watcher = new ResourceSnapshotWatcher(connection, NullLogger<ResourceSnapshotWatcher>.Instance);
 
         var initialException = await Assert.ThrowsAsync<InvalidOperationException>(() => watcher.WaitForInitialLoadAsync()).DefaultTimeout();
 
@@ -221,7 +222,7 @@ public class ResourceSnapshotWatcherTests
                     replayObserved,
                     cancellationToken)
         };
-        using var watcher = new ResourceSnapshotWatcher(connection);
+        using var watcher = new ResourceSnapshotWatcher(connection, NullLogger<ResourceSnapshotWatcher>.Instance);
 
         await watcher.WaitForInitialLoadAsync().DefaultTimeout();
 
@@ -267,7 +268,7 @@ public class ResourceSnapshotWatcherTests
                     watchObserved,
                     cancellationToken)
         };
-        using var watcher = new ResourceSnapshotWatcher(connection);
+        using var watcher = new ResourceSnapshotWatcher(connection, NullLogger<ResourceSnapshotWatcher>.Instance);
 
         await watcher.WaitForInitialLoadAsync().DefaultTimeout();
 
@@ -369,7 +370,10 @@ public class ResourceSnapshotWatcherTests
             WatchResourceSnapshotsHandler = (_, cancellationToken) =>
                 WaitForResourceSnapshotCancellation(watchStarted, watchStopped, cancellationToken)
         };
-        using var watcher = new ResourceSnapshotWatcher(connection, bufferUpdates: true);
+        using var watcher = new ResourceSnapshotWatcher(
+            connection,
+            NullLogger<ResourceSnapshotWatcher>.Instance,
+            bufferUpdates: true);
         await watcher.WaitForInitialLoadAsync().DefaultTimeout();
 
         using var consumersCts = new CancellationTokenSource();
@@ -445,7 +449,10 @@ public class ResourceSnapshotWatcherTests
                     cancellationToken)
         };
 
-        using var watcher = new ResourceSnapshotWatcher(connection, bufferUpdates: true);
+        using var watcher = new ResourceSnapshotWatcher(
+            connection,
+            NullLogger<ResourceSnapshotWatcher>.Instance,
+            bufferUpdates: true);
         await watcher.WaitForInitialLoadAsync().DefaultTimeout();
         var initialCapture = watcher.CaptureAllResources();
 
@@ -488,7 +495,10 @@ public class ResourceSnapshotWatcherTests
             WatchResourceSnapshotsHandler = (_, cancellationToken) =>
                 source.Reader.ReadAllAsync(cancellationToken)
         };
-        using var watcher = new ResourceSnapshotWatcher(connection, bufferUpdates: true);
+        using var watcher = new ResourceSnapshotWatcher(
+            connection,
+            NullLogger<ResourceSnapshotWatcher>.Instance,
+            bufferUpdates: true);
         await watcher.WaitForInitialLoadAsync().DefaultTimeout();
         var initialCapture = watcher.CaptureAllResources();
         var resourceCount = ResourceSnapshotWatcher.UpdateBufferCapacity + 1;

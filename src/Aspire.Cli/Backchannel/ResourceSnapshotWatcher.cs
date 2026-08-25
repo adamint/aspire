@@ -1,9 +1,9 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
+using Microsoft.Extensions.Logging;
 
 namespace Aspire.Cli.Backchannel;
 
@@ -16,7 +16,8 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
     internal const int UpdateBufferCapacity = 256;
 
     private readonly IAppHostAuxiliaryBackchannel _connection;
-    private readonly ConcurrentDictionary<string, ResourceSnapshot> _resources = new(StringComparers.ResourceName);
+    private readonly Dictionary<string, ResourceSnapshot> _resources = new(StringComparers.ResourceName);
+    private readonly ILogger<ResourceSnapshotWatcher> _logger;
     private readonly Channel<bool>? _updateSignal;
     private readonly Dictionary<string, ResourceSnapshotUpdate>? _pendingUpdates;
     private readonly object _resourcesLock = new();
@@ -30,10 +31,12 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
 
     public ResourceSnapshotWatcher(
         IAppHostAuxiliaryBackchannel connection,
+        ILogger<ResourceSnapshotWatcher> logger,
         bool includeHidden = false,
         bool bufferUpdates = false)
     {
         _connection = connection;
+        _logger = logger;
         IncludeHidden = includeHidden;
         if (bufferUpdates)
         {
@@ -66,9 +69,9 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
     {
         try
         {
-            // Start the watch before fetching the initial snapshot so a resource transition cannot
-            // fall into the gap between those two backchannel calls. Version-aware reconciliation
-            // selects the newest known snapshot while retaining watch values for compatibility.
+            // Start the watch before fetching the initial snapshot. The AppHost subscribes before replaying
+            // its current snapshots, so the watch establishes a replay point even though the two JSON-RPC
+            // calls are not ordered. Version-aware reconciliation then retains the newest observed snapshot.
             using var watchCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var cancellationArbitrationLock = new object();
             var cleanupCancellationStarted = false;
@@ -188,6 +191,7 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
     {
         await foreach (var snapshot in _connection.WatchResourceSnapshotsAsync(includeHidden: true, cancellationToken).ConfigureAwait(false))
         {
+            long? retainedVersion = null;
             lock (_resourcesLock)
             {
                 if (_resources.TryGetValue(snapshot.Name, out var currentSnapshot) &&
@@ -198,27 +202,40 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
                     // Version 0 is the compatibility value from older AppHosts and cannot establish
                     // ordering. Known lower versions can be stale replay events that arrive after
                     // initial GET/watch reconciliation, so they must not regress state or buffering.
-                    continue;
+                    retainedVersion = currentSnapshot.Version;
                 }
-
-                _resources[snapshot.Name] = snapshot;
-                var update = new ResourceSnapshotUpdate(++_updateSequence, snapshot);
-                if (_pendingUpdates is not null && !_resyncPending)
+                else
                 {
-                    if (_pendingUpdates.ContainsKey(snapshot.Name) || _pendingUpdates.Count < UpdateBufferCapacity)
+                    _resources[snapshot.Name] = snapshot;
+                    var update = new ResourceSnapshotUpdate(++_updateSequence, snapshot);
+                    if (_pendingUpdates is not null && !_resyncPending)
                     {
-                        _pendingUpdates[snapshot.Name] = update;
-                    }
-                    else
-                    {
-                        // Once the bounded per-resource buffer is full, the current dictionary is the
-                        // coalesced representation. The consumer will resynchronize from it rather than
-                        // retaining every intermediate transition or stalling the AppHost event stream.
-                        _pendingUpdates.Clear();
-                        _resyncPending = true;
+                        if (_pendingUpdates.ContainsKey(snapshot.Name) || _pendingUpdates.Count < UpdateBufferCapacity)
+                        {
+                            _pendingUpdates[snapshot.Name] = update;
+                        }
+                        else
+                        {
+                            // Once the bounded per-resource buffer is full, the current dictionary is the
+                            // coalesced representation. The consumer will resynchronize from it rather than
+                            // retaining every intermediate transition or stalling the AppHost event stream.
+                            _pendingUpdates.Clear();
+                            _resyncPending = true;
+                        }
                     }
                 }
             }
+
+            if (retainedVersion is not null)
+            {
+                _logger.LogDebug(
+                    "Ignoring stale snapshot version {IncomingVersion} for resource '{ResourceName}'; retained version is {RetainedVersion}.",
+                    snapshot.Version,
+                    snapshot.Name,
+                    retainedVersion);
+                continue;
+            }
+
             _updateSignal?.Writer.TryWrite(true);
         }
     }
@@ -228,7 +245,7 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
     /// Callers should first capture the initial state with <see cref="CaptureAllResources"/>.
     /// The update stream can be enumerated only once over the lifetime of the watcher.
     /// </summary>
-    public async IAsyncEnumerable<ResourceSnapshot> WatchResourceSnapshotsAsync(
+    public async IAsyncEnumerable<ResourceSnapshotUpdateBatch> WatchResourceSnapshotBatchesAsync(
         long afterSequence,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
@@ -242,31 +259,41 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
         await foreach (var _ in updateSignal.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
             ResourceSnapshotUpdate[] updates;
+            bool isResync;
             lock (_resourcesLock)
             {
                 if (_resyncPending)
                 {
                     updates = _resources.Values
                         .Select(snapshot => new ResourceSnapshotUpdate(_updateSequence, snapshot))
-                        .OrderBy(update => update.Snapshot.Name, StringComparer.OrdinalIgnoreCase)
                         .ToArray();
                     _resyncPending = false;
+                    isResync = true;
                 }
                 else
                 {
                     updates = _pendingUpdates!.Values
-                        .OrderBy(update => update.Sequence)
                         .ToArray();
                     _pendingUpdates.Clear();
+                    isResync = false;
                 }
             }
 
-            foreach (var update in updates)
+            var snapshots = isResync
+                ? updates
+                    .Where(update => update.Sequence > afterSequence)
+                    .OrderBy(update => update.Snapshot.Name, StringComparer.OrdinalIgnoreCase)
+                    .Select(update => update.Snapshot)
+                    .ToArray()
+                : updates
+                    .Where(update => update.Sequence > afterSequence)
+                    .OrderBy(update => update.Sequence)
+                    .Select(update => update.Snapshot)
+                    .ToArray();
+
+            if (snapshots.Length > 0)
             {
-                if (update.Sequence > afterSequence)
-                {
-                    yield return update.Snapshot;
-                }
+                yield return new ResourceSnapshotUpdateBatch(snapshots, isResync);
             }
         }
     }
@@ -290,14 +317,17 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
     public ResourceSnapshot? GetResource(string name)
     {
         EnsureInitialLoadComplete();
-        return _resources.GetValueOrDefault(name);
+        lock (_resourcesLock)
+        {
+            return _resources.GetValueOrDefault(name);
+        }
     }
 
     /// <summary>
     /// Gets all current resource snapshots, using <see cref="IncludeHidden"/> to determine visibility.
     /// </summary>
     /// <returns>Resource snapshots, ordered by name.</returns>
-    public IEnumerable<ResourceSnapshot> GetResources()
+    public IReadOnlyList<ResourceSnapshot> GetResources()
     {
         return GetResources(IncludeHidden);
     }
@@ -306,7 +336,7 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
     /// Gets all current resource snapshots, including hidden resources.
     /// </summary>
     /// <returns>All resource snapshots, ordered by name.</returns>
-    public IEnumerable<ResourceSnapshot> GetAllResources()
+    public IReadOnlyList<ResourceSnapshot> GetAllResources()
     {
         return GetResources(includeHidden: true);
     }
@@ -317,27 +347,44 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
     public ResourceSnapshotCapture CaptureAllResources()
     {
         EnsureInitialLoadComplete();
+        ResourceSnapshot[] resources;
+        long updateSequence;
         lock (_resourcesLock)
         {
-            return new(GetResources(includeHidden: true).ToList(), _updateSequence);
+            resources = CopyResourcesNoLock();
+            updateSequence = _updateSequence;
         }
+
+        return new(FilterAndOrderResources(resources, includeHidden: true), updateSequence);
     }
 
-    private IEnumerable<ResourceSnapshot> GetResources(bool includeHidden)
+    private IReadOnlyList<ResourceSnapshot> GetResources(bool includeHidden)
     {
         EnsureInitialLoadComplete();
 
+        ResourceSnapshot[] resources;
         lock (_resourcesLock)
         {
-            var snapshots = _resources.Values.AsEnumerable();
-
-            if (!includeHidden)
-            {
-                snapshots = snapshots.Where(s => !ResourceSnapshotMapper.IsHiddenResource(s));
-            }
-
-            return snapshots.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase).ToArray();
+            resources = CopyResourcesNoLock();
         }
+
+        return FilterAndOrderResources(resources, includeHidden);
+    }
+
+    private ResourceSnapshot[] CopyResourcesNoLock() => [.. _resources.Values];
+
+    private static IReadOnlyList<ResourceSnapshot> FilterAndOrderResources(
+        IEnumerable<ResourceSnapshot> resources,
+        bool includeHidden)
+    {
+        if (!includeHidden)
+        {
+            resources = resources.Where(snapshot => !ResourceSnapshotMapper.IsHiddenResource(snapshot));
+        }
+
+        return resources
+            .OrderBy(snapshot => snapshot.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     public void Dispose()
@@ -349,6 +396,10 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
     internal readonly record struct ResourceSnapshotCapture(
         IReadOnlyList<ResourceSnapshot> Resources,
         long UpdateSequence);
+
+    internal readonly record struct ResourceSnapshotUpdateBatch(
+        IReadOnlyList<ResourceSnapshot> Snapshots,
+        bool IsResync);
 
     private readonly record struct ResourceSnapshotUpdate(
         long Sequence,
