@@ -515,5 +515,14 @@ namespace Aspire.Cli.Resources {
                 return ResourceManager.GetString("SdkExportLanguageDoesNotSupportCodeGeneration", resourceCulture);
             }
         }
+
+        /// <summary>
+        ///   Looks up a localized string similar to SDK API export can only export {0} at {1} when that package supplies the selected language&apos;s code generator; {2} was requested..
+        /// </summary>
+        public static string SdkExportGeneratorPackageVersionMismatch {
+            get {
+                return ResourceManager.GetString("SdkExportGeneratorPackageVersionMismatch", resourceCulture);
+            }
+        }
     }
 }

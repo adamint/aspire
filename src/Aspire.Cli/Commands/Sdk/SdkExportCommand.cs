@@ -124,15 +124,31 @@ internal sealed class SdkExportCommand : BaseCommand
                 languageInfo.LanguageId,
                 cancellationToken);
 
-            if (codeGenerationPackage is not null &&
-                !integrations.Any(integration =>
-                    integration.Name.Equals(codeGenerationPackage, StringComparison.OrdinalIgnoreCase)))
+            if (codeGenerationPackage is not null)
             {
-                // Match sdk generate: repository mode uses the generator from this checkout, while
-                // installed CLIs restore the package that accompanies their build.
-                integrations.Add(IntegrationReference.FromPackage(
-                    codeGenerationPackage,
-                    ExecutionContext.IdentityVersion));
+                var requestedCodeGenerationPackage = integrations.FirstOrDefault(integration =>
+                    integration.Name.Equals(codeGenerationPackage, StringComparison.OrdinalIgnoreCase));
+                if (requestedCodeGenerationPackage is not null &&
+                    !packageVersion.Equals(ExecutionContext.IdentitySdkVersion, StringComparison.OrdinalIgnoreCase))
+                {
+                    return CommandResult.Failure(
+                        CliExitCodes.InvalidCommand,
+                        string.Format(
+                            CultureInfo.CurrentCulture,
+                            ErrorStrings.SdkExportGeneratorPackageVersionMismatch,
+                            codeGenerationPackage,
+                            ExecutionContext.IdentitySdkVersion,
+                            packageVersion));
+                }
+
+                if (requestedCodeGenerationPackage is null)
+                {
+                    // Match sdk generate: repository mode uses the generator from this checkout, while
+                    // installed CLIs restore the package that accompanies their build.
+                    integrations.Add(IntegrationReference.FromPackage(
+                        codeGenerationPackage,
+                        ExecutionContext.IdentityVersion));
+                }
             }
         }
 

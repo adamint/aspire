@@ -615,6 +615,6 @@ The top-level arrays are:
 
 ### `aspire sdk export`
 
-`aspire sdk export --package Name@Version --language typescript` restores the exact package version and writes one canonical JSON document to standard output. Omit `--package` to export `Aspire.Hosting` at the running CLI's SDK version. Diagnostics are written to standard error.
+`aspire sdk export --package Name@Version --language typescript` restores the exact integration package version and writes one canonical JSON document to standard output. Two package surfaces are tied to the running CLI: `Aspire.Hosting` can only be exported at the CLI's SDK version, and the selected language's code-generation package can only be exported at the generator version bundled with that CLI. Omit `--package` to export `Aspire.Hosting` at the running CLI's SDK version. Diagnostics are written to standard error.
 
 The top-level fields are `schemaVersion`, `language`, `generator`, `package`, `modules`, and `declarations`. The language exporter owns the schema; the CLI passes it through without reshaping it.

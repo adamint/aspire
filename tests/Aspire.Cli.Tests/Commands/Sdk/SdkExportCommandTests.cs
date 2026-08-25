@@ -122,25 +122,50 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task SdkExportDoesNotAddTheRequestedGeneratorPackageTwice()
+    public async Task SdkExportRejectsRequestedGeneratorPackageAtDifferentVersion()
+    {
+        var interactionService = new TestInteractionService();
+        using var provider = CreateProvider(
+            interactionService,
+            out var workspace,
+            out var rpcClient,
+            out var project,
+            identityVersion: "13.5.0");
+        using var workspaceLease = workspace;
+
+        var exitCode = await InvokeAsync(
+            provider,
+            "sdk export --language typescript --package Aspire.Hosting.CodeGeneration.TypeScript@13.4.0");
+
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
+        Assert.Equal(0, project.PrepareCallCount);
+        Assert.Null(rpcClient.LastExportRequest);
+        Assert.Equal(
+            "SDK API export can only export Aspire.Hosting.CodeGeneration.TypeScript at 13.5.0 when that package supplies the selected language's code generator; 13.4.0 was requested.",
+            Assert.Single(interactionService.DisplayedErrors));
+    }
+
+    [Fact]
+    public async Task SdkExportUsesOneReferenceForRequestedGeneratorPackageAtCliVersion()
     {
         var interactionService = new TestInteractionService();
         using var provider = CreateProvider(
             interactionService,
             out var workspace,
             out _,
-            out var project);
+            out var project,
+            identityVersion: "13.5.0");
         using var workspaceLease = workspace;
 
         var exitCode = await InvokeAsync(
             provider,
-            "sdk export --language typescript --package Aspire.Hosting.CodeGeneration.TypeScript@2.0.0");
+            "sdk export --language typescript --package Aspire.Hosting.CodeGeneration.TypeScript@13.5.0.0");
 
         Assert.Equal(CliExitCodes.Success, exitCode);
         var package = Assert.Single(
             project.Integrations,
             integration => integration.Name == "Aspire.Hosting.CodeGeneration.TypeScript");
-        Assert.Equal("[2.0.0]", package.Version);
+        Assert.Equal("[13.5.0]", package.Version);
     }
 
     [Fact]

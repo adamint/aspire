@@ -267,6 +267,11 @@
         <target state="needs-review-translation">Projekt neobsahuje hostitele aplikací Aspire.</target>
         <note />
       </trans-unit>
+      <trans-unit id="SdkExportGeneratorPackageVersionMismatch">
+        <source>SDK API export can only export {0} at {1} when that package supplies the selected language's code generator; {2} was requested.</source>
+        <target state="new">SDK API export can only export {0} at {1} when that package supplies the selected language's code generator; {2} was requested.</target>
+        <note>{0} is the code-generation package name. {1} is the version bundled with the running CLI. {2} is the requested package version.</note>
+      </trans-unit>
       <trans-unit id="SdkExportLanguageDoesNotSupportCodeGeneration">
         <source>SDK API export is not supported for {0} because it does not use a code generator.</source>
         <target state="new">SDK API export is not supported for {0} because it does not use a code generator.</target>
