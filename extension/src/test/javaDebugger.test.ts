@@ -671,13 +671,20 @@ suite('Java AppHost Command Parsing Tests', () => {
         assert.strictEqual(parsed?.javaExec, javaExec);
     });
 
-    test('accepts supported Windows Java launcher suffixes', () => {
-        for (const suffix of ['.exe', '.com', '.bat', '.cmd']) {
+    test('accepts directly executable Windows Java launcher suffixes', () => {
+        for (const suffix of ['.exe', '.com']) {
             const javaExec = `C:\\Program Files\\Java\\jdk-25\\bin\\java${suffix}`;
             const parsed = parseJavaAppHostCommand([javaExec, '-cp', 'out', 'AppHost']);
 
             assert.strictEqual(parsed?.mainClass, 'AppHost', suffix);
             assert.strictEqual(parsed?.javaExec, javaExec, suffix);
+        }
+    });
+
+    test('rejects Windows command shims that the debug adapter cannot spawn directly', () => {
+        for (const suffix of ['.bat', '.cmd']) {
+            const javaExec = `C:\\Program Files\\Java\\jdk-25\\bin\\java${suffix}`;
+            assert.strictEqual(parseJavaAppHostCommand([javaExec, '-cp', 'out', 'AppHost']), null, suffix);
         }
     });
 

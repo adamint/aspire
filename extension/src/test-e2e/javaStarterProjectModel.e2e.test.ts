@@ -12,6 +12,10 @@ interface DefinitionInfo {
     line: number;
 }
 
+// A cold Java language server can report import completion before its semantic project commands
+// become responsive under CI load, so these requests need a separate post-import timeout budget.
+const javaLanguageServerCommandTimeoutMs = 120000;
+
 suite('Java starter project model E2E', function () {
     this.timeout(1200000);
 
@@ -37,14 +41,14 @@ suite('Java starter project model E2E', function () {
             filePath: appHostPath,
             line,
             character,
-        })).result as DefinitionInfo[];
+        }, { timeoutMs: javaLanguageServerCommandTimeoutMs })).result as DefinitionInfo[];
 
         const generatedModulesRoot = path.join(workspaceRoot, '.aspire', 'modules');
         assert.ok(
             definitions.some(definition => isPathInside(definition.filePath, generatedModulesRoot)),
             `Expected ${symbol} to resolve under ${generatedModulesRoot}. Definitions: ${JSON.stringify(definitions)}`);
 
-        const projectUris = (await executeE2eControlCommand({ name: 'getJavaProjects' })).result as string[];
+        const projectUris = (await executeE2eControlCommand({ name: 'getJavaProjects' }, { timeoutMs: javaLanguageServerCommandTimeoutMs })).result as string[];
         const projectPaths = projectUris.map(uri => fileURLToPath(uri));
         assert.ok(projectPaths.some(projectPath => isSamePath(projectPath, workspaceRoot)), `Expected a Java project rooted at ${workspaceRoot}. Projects: ${JSON.stringify(projectPaths)}`);
         assert.ok(projectPaths.some(projectPath => isSamePath(projectPath, path.join(workspaceRoot, 'api'))), `Expected the nested Gradle API project. Projects: ${JSON.stringify(projectPaths)}`);

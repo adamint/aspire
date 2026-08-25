@@ -3,6 +3,7 @@
 
 using Aspire.Cli.Diagnostics;
 using Aspire.Cli.DotNet;
+using Aspire.Cli.Processes;
 using Aspire.Cli.Telemetry;
 using Aspire.Cli.Utils;
 using Aspire.TypeSystem;
@@ -129,9 +130,13 @@ internal sealed class GuestRuntime
     /// Installs dependencies for the guest language project.
     /// </summary>
     /// <param name="directory">The project directory.</param>
+    /// <param name="environmentVariables">Environment variables inherited by each dependency installation command.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A tuple containing the exit code and captured output from the dependency installation commands.</returns>
-    public async Task<(int ExitCode, OutputCollector Output)> InstallDependenciesAsync(DirectoryInfo directory, CancellationToken cancellationToken)
+    public async Task<(int ExitCode, OutputCollector Output)> InstallDependenciesAsync(
+        DirectoryInfo directory,
+        IDictionary<string, string> environmentVariables,
+        CancellationToken cancellationToken)
     {
         var outputCollector = new OutputCollector();
 
@@ -146,7 +151,7 @@ internal sealed class GuestRuntime
         foreach (var command in _installDependencies)
         {
             var args = ReplacePlaceholders(command.Args, null, directory, null);
-            var environmentVariables = command.EnvironmentVariables ?? new Dictionary<string, string>();
+            var mergedEnvironment = MergeEnvironmentVariables(environmentVariables, command);
 
             using var activity = _profilingTelemetry.StartGuestInstallDependencies(
                 _spec.Language,
@@ -158,7 +163,7 @@ internal sealed class GuestRuntime
                 command.Command,
                 args,
                 directory,
-                environmentVariables,
+                mergedEnvironment,
                 afterLaunchAsync: null,
                 options: null,
                 cancellationToken);
@@ -596,7 +601,7 @@ internal sealed class GuestRuntime
         IDictionary<string, string> environmentVariables,
         CommandSpec commandSpec)
     {
-        var mergedEnvironment = new Dictionary<string, string>(environmentVariables);
+        var mergedEnvironment = new Dictionary<string, string>(environmentVariables, ProcessEnvironment.Comparer);
         if (commandSpec.EnvironmentVariables is not null)
         {
             foreach (var (key, value) in commandSpec.EnvironmentVariables)

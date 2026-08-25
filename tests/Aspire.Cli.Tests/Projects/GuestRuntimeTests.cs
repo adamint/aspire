@@ -711,7 +711,10 @@ public class GuestRuntimeTests(ITestOutputHelper outputHelper)
         var spec = CreateTestSpec();
         var runtime = CreateRuntime(spec);
 
-        var (exitCode, output) = await runtime.InstallDependenciesAsync(new DirectoryInfo("/tmp"), CancellationToken.None);
+        var (exitCode, output) = await runtime.InstallDependenciesAsync(
+            new DirectoryInfo("/tmp"),
+            new Dictionary<string, string>(),
+            CancellationToken.None);
 
         Assert.Equal(0, exitCode);
         Assert.Empty(output.GetLines());
@@ -729,6 +732,7 @@ public class GuestRuntimeTests(ITestOutputHelper outputHelper)
 
         var (exitCode, output) = await runtime.InstallDependenciesAsync(
             new DirectoryInfo(Path.GetTempPath()),
+            new Dictionary<string, string>(),
             CancellationToken.None);
 
         Assert.Equal(-1, exitCode);
@@ -737,6 +741,76 @@ public class GuestRuntimeTests(ITestOutputHelper outputHelper)
             line => Assert.Equal(
                 "Command 'aspire-command-that-does-not-exist' not found. Please ensure it is installed and in your PATH.",
                 line.Line));
+    }
+
+    [Fact]
+    public async Task InstallDependenciesAsync_MergesChildEnvironmentIntoEveryCommand()
+    {
+        var temporaryDirectory = Directory.CreateTempSubdirectory();
+        try
+        {
+            var scriptPath = Path.Combine(
+                temporaryDirectory.FullName,
+                OperatingSystem.IsWindows() ? "check-environment.cmd" : "check-environment.sh");
+            var script = OperatingSystem.IsWindows()
+                ? """
+                  @echo off
+                  if not "%CHILD_VALUE%"=="from-child" exit /b 1
+                  if not "%OVERRIDDEN_VALUE%"=="%1" exit /b 2
+                  """
+                : """
+                  #!/bin/sh
+                  [ "$CHILD_VALUE" = "from-child" ] && [ "$OVERRIDDEN_VALUE" = "$1" ]
+                  """;
+            await File.WriteAllTextAsync(scriptPath, script);
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+            }
+
+            var command = OperatingSystem.IsWindows() ? "cmd.exe" : scriptPath;
+            string[] GetArguments(string expectedValue) => OperatingSystem.IsWindows()
+                ? ["/d", "/c", scriptPath, expectedValue]
+                : [expectedValue];
+
+            var runtime = CreateRuntime(
+                installDependencies:
+                [
+                    new CommandSpec
+                    {
+                        Command = command,
+                        Args = GetArguments("from-first-command"),
+                        EnvironmentVariables = new Dictionary<string, string>
+                        {
+                            ["overridden_value"] = "from-first-command"
+                        }
+                    },
+                    new CommandSpec
+                    {
+                        Command = command,
+                        Args = GetArguments("from-second-command"),
+                        EnvironmentVariables = new Dictionary<string, string>
+                        {
+                            ["OVERRIDDEN_VALUE"] = "from-second-command"
+                        }
+                    }
+                ]);
+
+            var (exitCode, _) = await runtime.InstallDependenciesAsync(
+                temporaryDirectory,
+                new Dictionary<string, string>
+                {
+                    ["CHILD_VALUE"] = "from-child",
+                    ["OVERRIDDEN_VALUE"] = "from-child"
+                },
+                CancellationToken.None);
+
+            Assert.Equal(0, exitCode);
+        }
+        finally
+        {
+            temporaryDirectory.Delete(recursive: true);
+        }
     }
 
     [Fact]
@@ -758,7 +832,10 @@ public class GuestRuntimeTests(ITestOutputHelper outputHelper)
                 }
             });
 
-        var (exitCode, output) = await runtime.InstallDependenciesAsync(new DirectoryInfo(Path.GetTempPath()), CancellationToken.None);
+        var (exitCode, output) = await runtime.InstallDependenciesAsync(
+            new DirectoryInfo(Path.GetTempPath()),
+            new Dictionary<string, string>(),
+            CancellationToken.None);
 
         Assert.Equal(-1, exitCode);
         Assert.Collection(

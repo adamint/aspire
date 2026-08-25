@@ -330,7 +330,7 @@ export function parseJavaAppHostCommand(args: string[]): { mainClass: string; cl
     // resolved launcher is authoritative; retaining a relative path would make the adapter resolve
     // it against a different working directory.
     const executable = args[0].split(/[\\/]/).pop() ?? args[0];
-    const normalizedExecutable = executable.toLowerCase().replace(/\.(exe|com|bat|cmd)$/, '');
+    const normalizedExecutable = executable.toLowerCase().replace(/\.(exe|com)$/, '');
     const isBareJava = args[0].toLowerCase() === 'java';
     if (normalizedExecutable !== 'java' || (!isBareJava && !isAbsolutePath(args[0]))) {
         return null;
