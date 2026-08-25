@@ -70,7 +70,7 @@ public static class KnownResourceStates
     public static readonly string ValueMissing = nameof(ValueMissing);
 
     /// <summary>
-    /// The not active state. Useful for resources without a lifetime.
+    /// The active state. Useful for resources without a lifetime.
     /// </summary>
     public static readonly string Active = nameof(Active);
 
