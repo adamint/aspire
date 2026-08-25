@@ -19,6 +19,7 @@ using Aspire.Cli.Telemetry;
 using Aspire.Cli.Utils;
 using Aspire.Hosting;
 using Aspire.Shared.UserSecrets;
+using Aspire.TypeSystem;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Semver;
@@ -2047,6 +2048,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         if (_guestRuntime is null)
         {
             var runtimeSpec = await rpcClient.GetRuntimeSpecAsync(_resolvedLanguage.LanguageId, cancellationToken);
+            CommandSpec[]? installDependencies = null;
             if (TypeScriptAppHostToolchainResolver.IsTypeScriptLanguage(_resolvedLanguage))
             {
                 var toolchain = TypeScriptAppHostToolchainResolver.Resolve(directory, _environment, _logger);
@@ -2056,11 +2058,21 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
             {
                 var resolution = JavaAppHostToolchainResolver.Resolve(directory, _logger);
                 await JavaAppHostToolchainResolver.EnsureToolchainFilesExistAsync(resolution, cancellationToken);
-                runtimeSpec = JavaAppHostToolchainResolver.ApplyToRuntimeSpec(runtimeSpec, resolution, directory);
+                runtimeSpec = JavaAppHostToolchainResolver.ApplyToRuntimeSpec(
+                    runtimeSpec,
+                    resolution,
+                    directory,
+                    out installDependencies);
                 _javaToolchainResolution = resolution;
             }
 
-            _guestRuntime = new GuestRuntime(runtimeSpec, _logger, _environment, _profilingTelemetry, _fileLoggerProvider);
+            _guestRuntime = new GuestRuntime(
+                runtimeSpec,
+                _logger,
+                _environment,
+                _profilingTelemetry,
+                _fileLoggerProvider,
+                installDependencies);
 
             _logger.LogDebug("Created GuestRuntime for {RuntimeDisplayName}: Execute={Command} {Args}",
                 runtimeSpec.DisplayName,

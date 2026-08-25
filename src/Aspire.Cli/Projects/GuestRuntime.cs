@@ -22,6 +22,7 @@ internal sealed class GuestRuntime
     private readonly FileLoggerProvider? _fileLoggerProvider;
     private readonly IEnvironment _environment;
     private readonly ProfilingTelemetry _profilingTelemetry;
+    private readonly CommandSpec[]? _installDependencies;
 
     /// <summary>
     /// Creates a new GuestRuntime for the given runtime specification.
@@ -31,7 +32,16 @@ internal sealed class GuestRuntime
     /// <param name="environment">The environment abstraction for OS detection.</param>
     /// <param name="profilingTelemetry">Profiling telemetry for child-process diagnostics.</param>
     /// <param name="fileLoggerProvider">Optional file logger for writing output to disk.</param>
-    public GuestRuntime(RuntimeSpec spec, ILogger logger, IEnvironment environment, ProfilingTelemetry profilingTelemetry, FileLoggerProvider? fileLoggerProvider = null)
+    /// <param name="installDependencies">
+    /// Optional internal command sequence that replaces <see cref="RuntimeSpec.InstallDependencies"/>.
+    /// </param>
+    public GuestRuntime(
+        RuntimeSpec spec,
+        ILogger logger,
+        IEnvironment environment,
+        ProfilingTelemetry profilingTelemetry,
+        FileLoggerProvider? fileLoggerProvider = null,
+        CommandSpec[]? installDependencies = null)
     {
         ArgumentNullException.ThrowIfNull(environment);
         ArgumentNullException.ThrowIfNull(profilingTelemetry);
@@ -41,6 +51,8 @@ internal sealed class GuestRuntime
         _fileLoggerProvider = fileLoggerProvider;
         _environment = environment;
         _profilingTelemetry = profilingTelemetry;
+        _installDependencies = installDependencies
+            ?? (spec.InstallDependencies is null ? null : [spec.InstallDependencies]);
     }
 
     public GuestRuntime(RuntimeSpec spec, ILogger logger, Func<string, string?> commandResolver, IEnvironment environment, ProfilingTelemetry profilingTelemetry, FileLoggerProvider? fileLoggerProvider = null)
@@ -118,37 +130,49 @@ internal sealed class GuestRuntime
     /// </summary>
     /// <param name="directory">The project directory.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>A tuple containing the exit code and captured output from the dependency installation command.</returns>
+    /// <returns>A tuple containing the exit code and captured output from the dependency installation commands.</returns>
     public async Task<(int ExitCode, OutputCollector Output)> InstallDependenciesAsync(DirectoryInfo directory, CancellationToken cancellationToken)
     {
         var outputCollector = new OutputCollector();
 
-        if (_spec.InstallDependencies is null)
+        if (_installDependencies is null or { Length: 0 })
         {
             _logger.LogDebug("No dependency installation configured for {Language}", _spec.Language);
             return (0, outputCollector);
         }
 
-        var args = ReplacePlaceholders(_spec.InstallDependencies.Args, null, directory, null);
-        var environmentVariables = _spec.InstallDependencies.EnvironmentVariables ?? new Dictionary<string, string>();
-
         var launcher = CreateDefaultLauncher();
-        using var activity = _profilingTelemetry.StartGuestInstallDependencies(_spec.Language, _spec.DisplayName, _spec.InstallDependencies.Command, args, directory);
-        var (exitCode, output) = await launcher.LaunchAsync(
-            _spec.InstallDependencies.Command,
-            args,
-            directory,
-            environmentVariables,
-            afterLaunchAsync: null,
-            options: null,
-            cancellationToken);
-        activity.SetProcessExitCode(exitCode);
-        if (exitCode != 0)
+        OutputCollector lastOutput = outputCollector;
+        foreach (var command in _installDependencies)
         {
-            activity.SetError($"{_spec.DisplayName} dependency installation exited with code {exitCode}.");
+            var args = ReplacePlaceholders(command.Args, null, directory, null);
+            var environmentVariables = command.EnvironmentVariables ?? new Dictionary<string, string>();
+
+            using var activity = _profilingTelemetry.StartGuestInstallDependencies(
+                _spec.Language,
+                _spec.DisplayName,
+                command.Command,
+                args,
+                directory);
+            var (exitCode, output) = await launcher.LaunchAsync(
+                command.Command,
+                args,
+                directory,
+                environmentVariables,
+                afterLaunchAsync: null,
+                options: null,
+                cancellationToken);
+            activity.SetProcessExitCode(exitCode);
+            if (exitCode != 0)
+            {
+                activity.SetError($"{_spec.DisplayName} dependency installation exited with code {exitCode}.");
+                return (exitCode, output ?? outputCollector);
+            }
+
+            lastOutput = output ?? outputCollector;
         }
 
-        return (exitCode, output ?? outputCollector);
+        return (0, lastOutput);
     }
 
     /// <summary>

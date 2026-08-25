@@ -32,13 +32,15 @@ public class GuestRuntimeTests(ITestOutputHelper outputHelper)
 
     private GuestRuntime CreateRuntime(
         RuntimeSpec? spec = null,
-        ProfilingTelemetry? profilingTelemetry = null)
+        ProfilingTelemetry? profilingTelemetry = null,
+        CommandSpec[]? installDependencies = null)
     {
         return new GuestRuntime(
             spec ?? CreateTestSpec(),
             _loggerFactory.CreateLogger<GuestRuntime>(),
             new TestEnvironment(),
-            profilingTelemetry ?? new ProfilingTelemetry(new ConfigurationBuilder().Build()));
+            profilingTelemetry ?? new ProfilingTelemetry(new ConfigurationBuilder().Build()),
+            installDependencies: installDependencies);
     }
 
     private static RuntimeSpec CreateTestSpec(
@@ -713,6 +715,28 @@ public class GuestRuntimeTests(ITestOutputHelper outputHelper)
 
         Assert.Equal(0, exitCode);
         Assert.Empty(output.GetLines());
+    }
+
+    [Fact]
+    public async Task InstallDependenciesAsync_WithAnInternalCommandSequence_RunsEveryCommand()
+    {
+        var runtime = CreateRuntime(
+            installDependencies:
+            [
+                new CommandSpec { Command = "dotnet", Args = ["--version"] },
+                new CommandSpec { Command = "aspire-command-that-does-not-exist", Args = [] }
+            ]);
+
+        var (exitCode, output) = await runtime.InstallDependenciesAsync(
+            new DirectoryInfo(Path.GetTempPath()),
+            CancellationToken.None);
+
+        Assert.Equal(-1, exitCode);
+        Assert.Collection(
+            output.GetLines(),
+            line => Assert.Equal(
+                "Command 'aspire-command-that-does-not-exist' not found. Please ensure it is installed and in your PATH.",
+                line.Line));
     }
 
     [Fact]

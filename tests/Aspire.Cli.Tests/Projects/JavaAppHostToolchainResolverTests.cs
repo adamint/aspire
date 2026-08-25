@@ -376,36 +376,61 @@ public class JavaAppHostToolchainResolverTests(ITestOutputHelper outputHelper)
         var localRepository = Directory.CreateDirectory(Path.Combine(workspace.Path, "empty-maven-repository"));
 
         var resolution = JavaAppHostToolchainResolver.Resolve(appHostDirectory);
-        var spec = JavaAppHostToolchainResolver.ApplyToRuntimeSpec(CreateJavacRuntimeSpec(), resolution, appHostDirectory);
+        JavaAppHostToolchainResolver.ApplyToRuntimeSpec(
+            CreateJavacRuntimeSpec(),
+            resolution,
+            appHostDirectory,
+            out var installDependencies);
 
         AssertWrapperInvocation(
             Path.Combine(workspace.Path, OperatingSystem.IsWindows() ? "mvnw.cmd" : "mvnw"),
             appHostDirectory.FullName,
             [
                 "-B", "-q",
-                "-f", Path.Combine("..", "pom.xml"),
-                "-pl", "apphost",
+                "-f", Path.Combine("..", "..", "..", "..", "pom.xml"),
+                "-pl", "apphost,!apphost",
                 "-am",
-                "package",
-                "-Dmaven.test.skip=true",
-                "dependency:copy-dependencies",
-                $"-DoutputDirectory={Path.Combine("target", "aspire-deps")}",
-                "-DincludeScope=runtime"
+                "install",
+                "-Dmaven.test.skip=true"
             ],
-            spec.InstallDependencies!);
+            installDependencies![0]);
 
-        var result = await RunCommandAsync(
-            spec.InstallDependencies!,
+        var installResult = await RunCommandAsync(
+            installDependencies[0],
             appHostDirectory.FullName,
             new Dictionary<string, string>
             {
                 ["MAVEN_OPTS"] = $"-Dmaven.repo.local={localRepository.FullName}"
             });
 
-        Assert.True(result.ExitCode == 0, result.Output);
+        Assert.True(installResult.ExitCode == 0, installResult.Output);
+
+        var copyDependencies = installDependencies[1];
+        AssertWrapperInvocation(
+            Path.Combine(workspace.Path, OperatingSystem.IsWindows() ? "mvnw.cmd" : "mvnw"),
+            appHostDirectory.FullName,
+            [
+                "-B", "-q",
+                "-f", Path.Combine("..", "..", "..", "..", "pom.xml"),
+                "-pl", "apphost",
+                "dependency:copy-dependencies",
+                $"-DoutputDirectory={Path.Combine("target", "aspire-deps")}",
+                "-DincludeScope=runtime"
+            ],
+            copyDependencies);
+
+        var copyResult = await RunCommandAsync(
+            copyDependencies,
+            appHostDirectory.FullName,
+            new Dictionary<string, string>
+            {
+                ["MAVEN_OPTS"] = $"-Dmaven.repo.local={localRepository.FullName}"
+            });
+
+        Assert.True(copyResult.ExitCode == 0, copyResult.Output);
         Assert.True(
-            File.Exists(Path.Combine(appHostDirectory.FullName, "target", "aspire-deps", "library-1.0-SNAPSHOT.jar")),
-            result.Output);
+            File.Exists(Path.Combine(resolution.ProjectDirectory.FullName, "target", "aspire-deps", "library-1.0-SNAPSHOT.jar")),
+            copyResult.Output);
     }
 
     [Fact]
@@ -472,8 +497,8 @@ public class JavaAppHostToolchainResolverTests(ITestOutputHelper outputHelper)
             Path.Combine(librarySources.FullName, "Library.java"),
             "package com.example; public final class Library { }");
 
-        var appHostDirectory = Directory.CreateDirectory(Path.Combine(root, "apphost"));
-        File.WriteAllText(Path.Combine(appHostDirectory.FullName, "pom.xml"), """
+        var appHostProjectDirectory = Directory.CreateDirectory(Path.Combine(root, "apphost"));
+        File.WriteAllText(Path.Combine(appHostProjectDirectory.FullName, "pom.xml"), """
             <project xmlns="http://maven.apache.org/POM/4.0.0">
               <modelVersion>4.0.0</modelVersion>
               <parent>
@@ -492,9 +517,11 @@ public class JavaAppHostToolchainResolverTests(ITestOutputHelper outputHelper)
               </dependencies>
             </project>
             """);
+        var appHostDirectory = Directory.CreateDirectory(
+            Path.Combine(appHostProjectDirectory.FullName, "src", "main", "java"));
         File.WriteAllText(
             Path.Combine(appHostDirectory.FullName, "AppHost.java"),
-            "import aspire.*; void main() { }");
+            "import aspire.*; public final class AppHost { }");
 
         var wrapperSource = Path.Combine(
             GetRepoRoot(),

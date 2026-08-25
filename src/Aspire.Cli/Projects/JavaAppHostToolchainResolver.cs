@@ -355,10 +355,24 @@ internal static class JavaAppHostToolchainResolver
     /// spec is returned unchanged so an AppHost without build files behaves exactly as before.
     /// </summary>
     public static RuntimeSpec ApplyToRuntimeSpec(RuntimeSpec baseRuntimeSpec, JavaAppHostToolchainResolution resolution, DirectoryInfo appHostDirectory)
+        => ApplyToRuntimeSpec(baseRuntimeSpec, resolution, appHostDirectory, out _);
+
+    /// <summary>
+    /// Rewrites the runtime spec and returns the dependency installation commands required by the
+    /// selected Java build layout.
+    /// </summary>
+    public static RuntimeSpec ApplyToRuntimeSpec(
+        RuntimeSpec baseRuntimeSpec,
+        JavaAppHostToolchainResolution resolution,
+        DirectoryInfo appHostDirectory,
+        out CommandSpec[]? installDependencies)
     {
         var toolchain = resolution.Toolchain;
         if (toolchain == JavaAppHostToolchain.Javac)
         {
+            installDependencies = baseRuntimeSpec.InstallDependencies is null
+                ? null
+                : [baseRuntimeSpec.InstallDependencies];
             return baseRuntimeSpec;
         }
 
@@ -369,6 +383,16 @@ internal static class JavaAppHostToolchainResolver
         var projectPath = GetRelativeProjectPath(resolution.ProjectDirectory, appHostDirectory);
         var classesDirectory = CombineProjectPath(projectPath, GetClassesDirectory(toolchain));
         var dependencyDirectory = CombineProjectPath(projectPath, GetDependencyDirectory(toolchain));
+        var usesMavenReactor = toolchain == JavaAppHostToolchain.Maven
+            && !string.Equals(invocation.WrapperDirectory.FullName, resolution.ProjectDirectory.FullName, PathComparison)
+            && IsMavenReactorModule(invocation.WrapperDirectory, resolution.ProjectDirectory);
+        installDependencies = CreateInstallCommands(
+            toolchain,
+            invocation,
+            resolution.ProjectDirectory,
+            appHostDirectory,
+            projectPath,
+            usesMavenReactor);
 
         return new RuntimeSpec
         {
@@ -377,7 +401,9 @@ internal static class JavaAppHostToolchainResolver
             CodeGenLanguage = baseRuntimeSpec.CodeGenLanguage,
             DetectionPatterns = baseRuntimeSpec.DetectionPatterns,
             Initialize = baseRuntimeSpec.Initialize,
-            InstallDependencies = CreateInstallCommand(toolchain, invocation, resolution.ProjectDirectory, appHostDirectory, projectPath),
+            // RuntimeSpec has a single-command public contract. GuestRuntime receives the full internal
+            // sequence above; keeping the first command here preserves the spec's diagnostic shape.
+            InstallDependencies = installDependencies[0],
             PreExecute = [CreateCompileCommand(toolchain, baseRuntimeSpec, projectPath, classesDirectory, dependencyDirectory)],
             Execute = CreateExecuteCommand(classesDirectory, dependencyDirectory),
             WatchExecute = baseRuntimeSpec.WatchExecute,
@@ -534,7 +560,8 @@ internal static class JavaAppHostToolchainResolver
         DirectoryInfo projectDirectory,
         DirectoryInfo appHostDirectory,
         string? projectPath,
-        bool usesMavenReactor)
+        bool usesMavenReactor,
+        bool upstreamOnly)
     {
         if (!usesMavenReactor)
         {
@@ -547,8 +574,10 @@ internal static class JavaAppHostToolchainResolver
         return
         [
             "-f", Path.Combine(reactorPath, MavenPomFileName),
-            "-pl", modulePath,
-            "-am"
+            // Maven first expands -am from the included module, then applies the exclusion. The
+            // resulting reactor contains exactly the selected module's upstream projects.
+            "-pl", upstreamOnly ? $"{modulePath},!{modulePath}" : modulePath,
+            .. (upstreamOnly ? (string[])["-am"] : [])
         ];
     }
 
@@ -626,29 +655,62 @@ internal static class JavaAppHostToolchainResolver
         };
     }
 
-    private static CommandSpec CreateInstallCommand(
+    private static CommandSpec[] CreateInstallCommands(
         JavaAppHostToolchain toolchain,
         JavaToolInvocation invocation,
         DirectoryInfo projectDirectory,
         DirectoryInfo appHostDirectory,
-        string? projectPath)
+        string? projectPath,
+        bool usesMavenReactor)
     {
-        var usesMavenReactor = toolchain == JavaAppHostToolchain.Maven
-            && !string.Equals(invocation.WrapperDirectory.FullName, projectDirectory.FullName, PathComparison)
-            && IsMavenReactorModule(invocation.WrapperDirectory, projectDirectory);
-        var toolArgs = toolchain switch
+        if (toolchain == JavaAppHostToolchain.Maven && usesMavenReactor)
+        {
+            // The AppHost cannot be compiled before Aspire generates .aspire/modules. Install only its
+            // upstream reactor projects first, then stage the selected module's runtime classpath. Both
+            // commands stay in dependency installation so restore and --no-build cannot skip staging.
+            // Install rather than package because the second Maven invocation resolves those sibling
+            // artifacts from the local repository after the first reactor session has ended.
+            return
+            [
+                invocation.CreateCommand(
+                [
+                    "-B", "-q",
+                    .. GetMavenProjectSelectionArgs(
+                        invocation,
+                        projectDirectory,
+                        appHostDirectory,
+                        projectPath,
+                        usesMavenReactor: true,
+                        upstreamOnly: true),
+                    "install",
+                    "-Dmaven.test.skip=true"
+                ]),
+                invocation.CreateCommand(
+                [
+                    "-B", "-q",
+                    .. GetMavenProjectSelectionArgs(
+                        invocation,
+                        projectDirectory,
+                        appHostDirectory,
+                        projectPath,
+                        usesMavenReactor: true,
+                        upstreamOnly: false),
+                    "dependency:copy-dependencies",
+                    $"-DoutputDirectory={GetDependencyDirectory(toolchain)}",
+                    "-DincludeScope=runtime"
+                ])
+            ];
+        }
+
+        string[] toolArgs = toolchain switch
         {
             // Batch mode keeps the transfer progress spinner out of the CLI's captured output.
             // Only runtime-scoped dependencies are staged: test and provided dependencies are not
             // on the application's runtime classpath and staging them can shadow real versions.
-            // An ancestor wrapper means this is a reactor module. Package the selected module and its
-            // upstream projects first because -am orders reactor artifacts but does not create their JARs.
-            JavaAppHostToolchain.Maven => (string[])
+            JavaAppHostToolchain.Maven =>
             [
                 "-B", "-q",
-                .. GetMavenProjectSelectionArgs(invocation, projectDirectory, appHostDirectory, projectPath, usesMavenReactor),
-                .. (usesMavenReactor ? (string[])["package"] : []),
-                .. (usesMavenReactor ? (string[])["-Dmaven.test.skip=true"] : []),
+                .. GetProjectSelectionArgs(JavaAppHostToolchain.Maven, projectPath),
                 "dependency:copy-dependencies",
                 // Maven resolves a relative outputDirectory against the project's base directory, so
                 // the path is expressed relative to the project rather than the working directory.
@@ -665,7 +727,7 @@ internal static class JavaAppHostToolchainResolver
             _ => throw new ArgumentOutOfRangeException(nameof(toolchain), toolchain, null)
         };
 
-        return invocation.CreateCommand(toolArgs);
+        return [invocation.CreateCommand(toolArgs)];
     }
 
     /// <summary>
