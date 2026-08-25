@@ -489,11 +489,12 @@ public class ResourceSnapshotWatcherTests
     public async Task ResourceSnapshotWatcher_OverlapsProducerConsumerAndReaders()
     {
         var source = Channel.CreateUnbounded<ResourceSnapshot>();
+        var firstSnapshotApplied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var connection = new TestAppHostAuxiliaryBackchannel
         {
             GetResourceSnapshotsHandler = _ => Task.FromResult(new List<ResourceSnapshot>()),
             WatchResourceSnapshotsHandler = (_, cancellationToken) =>
-                source.Reader.ReadAllAsync(cancellationToken)
+                ReadSnapshotsAndSignalFirstApplied(source.Reader, firstSnapshotApplied, cancellationToken)
         };
         using var watcher = new ResourceSnapshotWatcher(
             connection,
@@ -503,19 +504,36 @@ public class ResourceSnapshotWatcherTests
         var initialCapture = watcher.CaptureAllResources();
         var resourceCount = ResourceSnapshotWatcher.UpdateBufferCapacity + 1;
         var observedVersions = new ConcurrentDictionary<string, long>(StringComparer.Ordinal);
-        var consumerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var readerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var readerIterations = 0;
+        var producerBlocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseProducer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstBatchConsumed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstSnapshotRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstSnapshot = new ResourceSnapshot
+        {
+            Name = "resource-0",
+            DisplayName = "resource-0",
+            ResourceType = "Project",
+            State = "State-1",
+            Version = 1
+        };
 
         var producerTask = Task.Run(async () =>
         {
-            await Task.WhenAll(consumerStarted.Task, readerStarted.Task);
             try
             {
+                await source.Writer.WriteAsync(firstSnapshot);
+                producerBlocked.TrySetResult();
+                await releaseProducer.Task;
+
                 for (var resourceIndex = 0; resourceIndex < resourceCount; resourceIndex++)
                 {
                     for (var version = 1L; version <= 3; version++)
                     {
+                        if (resourceIndex == 0 && version == 1)
+                        {
+                            continue;
+                        }
+
                         await source.Writer.WriteAsync(new ResourceSnapshot
                         {
                             Name = $"resource-{resourceIndex}",
@@ -535,7 +553,6 @@ public class ResourceSnapshotWatcherTests
         });
         var consumerTask = Task.Run(async () =>
         {
-            consumerStarted.TrySetResult();
             await foreach (var batch in watcher.WatchResourceSnapshotBatchesAsync(initialCapture.UpdateSequence))
             {
                 foreach (var snapshot in batch.Snapshots)
@@ -545,21 +562,27 @@ public class ResourceSnapshotWatcherTests
                         snapshot.Version,
                         (_, currentVersion) => Math.Max(currentVersion, snapshot.Version));
                 }
+
+                if (batch.Snapshots.Contains(firstSnapshot))
+                {
+                    firstBatchConsumed.TrySetResult();
+                }
             }
         });
         var readerTask = Task.Run(async () =>
         {
-            do
-            {
-                _ = watcher.GetResource("resource-0");
-                _ = watcher.GetAllResources().ToList();
-                _ = watcher.CaptureAllResources();
-                Interlocked.Increment(ref readerIterations);
-                readerStarted.TrySetResult();
-                await Task.Yield();
-            }
-            while (!consumerTask.IsCompleted);
+            await Task.WhenAll(producerBlocked.Task, firstSnapshotApplied.Task);
+
+            Assert.Same(firstSnapshot, watcher.GetResource(firstSnapshot.Name));
+            Assert.Equal([firstSnapshot], watcher.GetAllResources());
+            Assert.Equal([firstSnapshot], watcher.CaptureAllResources().Resources);
+            firstSnapshotRead.TrySetResult();
         });
+
+        await producerBlocked.Task.DefaultTimeout();
+        await Task.WhenAll(firstSnapshotRead.Task, firstBatchConsumed.Task).DefaultTimeout();
+        Assert.False(producerTask.IsCompleted);
+        releaseProducer.TrySetResult();
 
         await Task.WhenAll(producerTask, consumerTask, readerTask).DefaultTimeout();
 
@@ -572,7 +595,26 @@ public class ResourceSnapshotWatcherTests
             Assert.True(observedVersions.TryGetValue($"resource-{resourceIndex}", out var version));
             Assert.Equal(3, version);
         }
-        Assert.True(Volatile.Read(ref readerIterations) > 0);
+    }
+
+    private static async IAsyncEnumerable<ResourceSnapshot> ReadSnapshotsAndSignalFirstApplied(
+        ChannelReader<ResourceSnapshot> source,
+        TaskCompletionSource firstSnapshotApplied,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var firstSnapshot = true;
+        await foreach (var snapshot in source.ReadAllAsync(cancellationToken))
+        {
+            yield return snapshot;
+
+            if (firstSnapshot)
+            {
+                // Code after the yield runs only when the watcher asks for the next item, proving
+                // that the first snapshot passed through WatchChangesAsync before readers inspect it.
+                firstSnapshotApplied.TrySetResult();
+                firstSnapshot = false;
+            }
+        }
     }
 
     private static async IAsyncEnumerable<ResourceSnapshot> YieldSnapshotAndWait(
