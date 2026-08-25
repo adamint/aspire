@@ -543,6 +543,31 @@ suite('InteractionService endpoints', () => {
 		stub.restore();
 	});
 
+	test("openEditor opens multiple files in non-preview editors", async () => {
+		const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'aspire-open-editor-'));
+		const cliLogPath = path.join(tempRoot, 'cli-diagnostics.log');
+		const appHostLogPath = path.join(tempRoot, 'apphost-diagnostics.log');
+		const sandbox = sinon.createSandbox();
+
+		try {
+			const testInfo = await createTestRpcServer();
+			const showTextDocumentStub = sandbox.stub(vscode.window, 'showTextDocument').resolves({} as vscode.TextEditor);
+
+			await testInfo.interactionService.openEditor(cliLogPath);
+			await testInfo.interactionService.openEditor(appHostLogPath);
+
+			assert.strictEqual(showTextDocumentStub.callCount, 2, 'Should open both diagnostic log files');
+			assertPathEqual(showTextDocumentStub.getCall(0).args[0].fsPath, cliLogPath);
+			assert.deepStrictEqual(showTextDocumentStub.getCall(0).args[1], { preview: false });
+			assertPathEqual(showTextDocumentStub.getCall(1).args[0].fsPath, appHostLogPath);
+			assert.deepStrictEqual(showTextDocumentStub.getCall(1).args[1], { preview: false });
+		}
+		finally {
+			sandbox.restore();
+			await fs.rm(tempRoot, { recursive: true, force: true });
+		}
+	});
+
 	test("openEditor adds folder to existing workspace", async () => {
 		const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'aspire-open-editor-'));
 		const workspacePath = path.join(tempRoot, 'workspace');
