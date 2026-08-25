@@ -13,6 +13,8 @@ namespace Aspire.Cli.Tests.TestServices;
 
 internal sealed class TestExtensionInteractionService(IServiceProvider serviceProvider) : IExtensionInteractionService
 {
+    private readonly object _recordingLock = new();
+
     public ConsoleOutput Console { get; set; }
     public bool SupportsLinks { get; set; }
     public Action<string>? DisplayErrorCallback { get; set; }
@@ -27,7 +29,9 @@ internal sealed class TestExtensionInteractionService(IServiceProvider servicePr
     public Func<string, Func<string, ValidationResult>?, bool, bool, PromptBinding<string?>?, CancellationToken, Task<string>>? PromptForStringCallback { get; set; }
     public Func<string, IReadOnlyList<string>, string>? SelectionCallback { get; set; }
     public Func<IRenderable, Func<Action<IRenderable>, Task>, Task>? DisplayLiveAsyncCallback { get; set; }
+    public List<(KnownEmoji Emoji, string Message, ConsoleOutput? ConsoleOverride)> DisplayedMessages { get; } = [];
     public List<(OutputLineStream Stream, string Line)> DisplayedLines { get; } = [];
+    public List<string> OpenEditorPaths { get; } = [];
     public bool FlushAsyncCalled { get; private set; }
 
     public IExtensionBackchannel Backchannel { get; } = serviceProvider.GetRequiredService<IExtensionBackchannel>();
@@ -116,6 +120,10 @@ internal sealed class TestExtensionInteractionService(IServiceProvider servicePr
 
     public void DisplayMessage(KnownEmoji emoji, string message, bool allowMarkup = false, ConsoleOutput? consoleOverride = null)
     {
+        lock (_recordingLock)
+        {
+            DisplayedMessages.Add((emoji, message, consoleOverride));
+        }
     }
 
     public void DisplaySuccess(string message, bool allowMarkup = false)
@@ -218,6 +226,11 @@ internal sealed class TestExtensionInteractionService(IServiceProvider servicePr
 
     public void OpenEditor(string projectPath)
     {
+        lock (_recordingLock)
+        {
+            OpenEditorPaths.Add(projectPath);
+        }
+
         OpenEditorCallback?.Invoke(projectPath);
     }
 

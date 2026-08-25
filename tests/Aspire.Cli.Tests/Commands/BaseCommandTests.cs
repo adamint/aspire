@@ -222,7 +222,7 @@ public class BaseCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task BaseCommand_OnFailure_DisplaysLogFilePathOnStderr()
+    public async Task BaseCommand_OnFailure_WithConsoleInteraction_DisplaysLogFilePathOnStderr()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var testInteractionService = new TestInteractionService();
@@ -248,8 +248,154 @@ public class BaseCommandTests(ITestOutputHelper outputHelper)
 
         var executionContext = provider.GetRequiredService<CliExecutionContext>();
         var expectedLogMessage = string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.SeeLogsAt, executionContext.LogFilePath);
-        var logMessage = Assert.Single(testInteractionService.DisplayedMessages, m => m.Message == expectedLogMessage);
-        Assert.Equal(ConsoleOutput.Error, logMessage.ConsoleOverride);
+        Assert.Collection(
+            testInteractionService.DisplayedMessages,
+            message =>
+            {
+                Assert.Equal(expectedLogMessage, message.Message);
+                Assert.Equal(ConsoleOutput.Error, message.ConsoleOverride);
+            });
+    }
+
+    [Fact]
+    public async Task BaseCommand_OnFailure_WithExtensionAndExistingCliLog_DisplaysMessageAndOpensEditor()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var currentCliLogPath = Path.Combine(workspace.WorkspaceRoot.FullName, "current-cli.log");
+        File.WriteAllText(currentCliLogPath, "Current CLI diagnostics");
+        var backchannelMonitor = new TestAuxiliaryBackchannelMonitor
+        {
+            ScanAsyncCallback = _ => throw new InvalidOperationException("Something went wrong")
+        };
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.ExtensionBackchannelFactory = _ => new TestExtensionBackchannel();
+            options.InteractionServiceFactory = serviceProvider => new TestExtensionInteractionService(serviceProvider);
+            options.AuxiliaryBackchannelMonitorFactory = _ => backchannelMonitor;
+            options.CliExecutionContextFactory = _ => workspace.CreateExecutionContext(logFilePath: currentCliLogPath);
+        });
+        using var provider = services.BuildServiceProvider();
+
+        var testInteractionService = Assert.IsType<TestExtensionInteractionService>(provider.GetRequiredService<IInteractionService>());
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("ps");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.NotEqual(CliExitCodes.Success, exitCode);
+
+        var expectedLogMessage = string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.SeeLogsAt, currentCliLogPath);
+        Assert.Collection(
+            testInteractionService.DisplayedMessages,
+            message =>
+            {
+                Assert.Equal(expectedLogMessage, message.Message);
+                Assert.Equal(ConsoleOutput.Error, message.ConsoleOverride);
+            });
+        Assert.Equal([currentCliLogPath], testInteractionService.OpenEditorPaths);
+    }
+
+    [Fact]
+    public async Task BaseCommand_OnFailure_WithExtensionAndExistingCliAndAppHostLogs_DisplaysMessagesAndOpensEditorsInOrder()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var currentCliLogPath = Path.Combine(workspace.WorkspaceRoot.FullName, "current-cli.log");
+        var appHostCliLogPath = Path.Combine(workspace.WorkspaceRoot.FullName, "apphost-cli.log");
+        File.WriteAllText(currentCliLogPath, "Current CLI diagnostics");
+        File.WriteAllText(appHostCliLogPath, "AppHost CLI diagnostics");
+        var backchannelMonitor = new TestAuxiliaryBackchannelMonitor
+        {
+            ScanAsyncCallback = _ => throw new InvalidOperationException("Something went wrong")
+        };
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.ExtensionBackchannelFactory = _ => new TestExtensionBackchannel();
+            options.InteractionServiceFactory = serviceProvider => new TestExtensionInteractionService(serviceProvider);
+            options.AuxiliaryBackchannelMonitorFactory = _ => backchannelMonitor;
+            options.CliExecutionContextFactory = _ =>
+            {
+                var executionContext = workspace.CreateExecutionContext(logFilePath: currentCliLogPath);
+                executionContext.AppHostCliLogFilePath = appHostCliLogPath;
+                return executionContext;
+            };
+        });
+        using var provider = services.BuildServiceProvider();
+
+        var testInteractionService = Assert.IsType<TestExtensionInteractionService>(provider.GetRequiredService<IInteractionService>());
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("ps");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.NotEqual(CliExitCodes.Success, exitCode);
+
+        var expectedCliLogMessage = string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.SeeLogsAt, currentCliLogPath);
+        var expectedAppHostLogMessage = string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.SeeAppHostLogsAt, appHostCliLogPath);
+        Assert.Collection(
+            testInteractionService.DisplayedMessages,
+            message =>
+            {
+                Assert.Equal(expectedCliLogMessage, message.Message);
+                Assert.Equal(ConsoleOutput.Error, message.ConsoleOverride);
+            },
+            message =>
+            {
+                Assert.Equal(expectedAppHostLogMessage, message.Message);
+                Assert.Equal(ConsoleOutput.Error, message.ConsoleOverride);
+            });
+        Assert.Equal([currentCliLogPath, appHostCliLogPath], testInteractionService.OpenEditorPaths);
+    }
+
+    [Fact]
+    public async Task BaseCommand_OnFailure_WithExtensionAndMissingCliAndAppHostLogs_DisplaysMessagesWithoutOpeningEditors()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var currentCliLogPath = Path.Combine(workspace.WorkspaceRoot.FullName, "missing-current-cli.log");
+        var appHostCliLogPath = Path.Combine(workspace.WorkspaceRoot.FullName, "missing-apphost-cli.log");
+        var backchannelMonitor = new TestAuxiliaryBackchannelMonitor
+        {
+            ScanAsyncCallback = _ => throw new InvalidOperationException("Something went wrong")
+        };
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.ExtensionBackchannelFactory = _ => new TestExtensionBackchannel();
+            options.InteractionServiceFactory = serviceProvider => new TestExtensionInteractionService(serviceProvider);
+            options.AuxiliaryBackchannelMonitorFactory = _ => backchannelMonitor;
+            options.CliExecutionContextFactory = _ =>
+            {
+                var executionContext = workspace.CreateExecutionContext(logFilePath: currentCliLogPath);
+                executionContext.AppHostCliLogFilePath = appHostCliLogPath;
+                return executionContext;
+            };
+        });
+        using var provider = services.BuildServiceProvider();
+
+        var testInteractionService = Assert.IsType<TestExtensionInteractionService>(provider.GetRequiredService<IInteractionService>());
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("ps");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.NotEqual(CliExitCodes.Success, exitCode);
+
+        var expectedCliLogMessage = string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.SeeLogsAt, currentCliLogPath);
+        var expectedAppHostLogMessage = string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.SeeAppHostLogsAt, appHostCliLogPath);
+        Assert.Collection(
+            testInteractionService.DisplayedMessages,
+            message =>
+            {
+                Assert.Equal(expectedCliLogMessage, message.Message);
+                Assert.Equal(ConsoleOutput.Error, message.ConsoleOverride);
+            },
+            message =>
+            {
+                Assert.Equal(expectedAppHostLogMessage, message.Message);
+                Assert.Equal(ConsoleOutput.Error, message.ConsoleOverride);
+            });
+        Assert.Empty(testInteractionService.OpenEditorPaths);
     }
 
     [Fact]

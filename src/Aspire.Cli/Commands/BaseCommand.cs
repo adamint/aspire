@@ -223,6 +223,7 @@ internal abstract class BaseCommand : Command
                 string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.SeeLogsAt, MarkupHelpers.SafeFileLink(InteractionService, _executionContext.LogFilePath)),
                 allowMarkup: true,
                 consoleOverride: ConsoleOutput.Error);
+            OpenLogFileInEditorIfAvailable(InteractionService, _executionContext.LogFilePath);
 
             // If we connected to a running app host, also display the log file path of
             // the CLI process that launched it so users can diagnose issues in both processes.
@@ -233,6 +234,7 @@ internal abstract class BaseCommand : Command
                     string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.SeeAppHostLogsAt, MarkupHelpers.SafeFileLink(InteractionService, ExecutionContext.AppHostCliLogFilePath)),
                     allowMarkup: true,
                     consoleOverride: ConsoleOutput.Error);
+                OpenLogFileInEditorIfAvailable(InteractionService, ExecutionContext.AppHostCliLogFilePath);
             }
         }
 
@@ -271,6 +273,14 @@ internal abstract class BaseCommand : Command
         }
 
         return false;
+    }
+
+    private static void OpenLogFileInEditorIfAvailable(IInteractionService interactionService, string logFilePath)
+    {
+        if (interactionService is IExtensionInteractionService extensionInteractionService && File.Exists(logFilePath))
+        {
+            extensionInteractionService.OpenEditor(logFilePath);
+        }
     }
 
     private static async Task FlushExtensionInteractionServiceAsync(IInteractionService interactionService)
