@@ -320,6 +320,83 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task DescribeCommand_Follow_JsonFormat_ResyncEmitsOnlyChangedSnapshots()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var resourceCount = ResourceSnapshotWatcher.UpdateBufferCapacity + 1;
+        var initialSnapshots = Enumerable.Range(0, resourceCount)
+            .Select(index => new ResourceSnapshot
+            {
+                Name = $"resource-{index}",
+                DisplayName = $"resource-{index}",
+                ResourceType = "Container",
+                State = "Starting"
+            })
+            .ToList();
+        var changedSnapshots = new[]
+        {
+            new ResourceSnapshot
+            {
+                Name = initialSnapshots[0].Name,
+                DisplayName = initialSnapshots[0].DisplayName,
+                ResourceType = "Container",
+                State = "Running"
+            },
+            new ResourceSnapshot
+            {
+                Name = initialSnapshots[^1].Name,
+                DisplayName = initialSnapshots[^1].DisplayName,
+                ResourceType = "Container",
+                State = "Running"
+            }
+        };
+        var initialSnapshotsDisplayed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var displayedSnapshotCount = 0;
+        var outputWriter = new TestOutputTextWriter(outputHelper, line =>
+        {
+            if (line.TrimStart().StartsWith("{", StringComparison.Ordinal) &&
+                Interlocked.Increment(ref displayedSnapshotCount) == resourceCount)
+            {
+                initialSnapshotsDisplayed.TrySetResult();
+            }
+        });
+        using var provider = CreateDescribeTestServices(
+            workspace,
+            outputWriter,
+            initialSnapshots,
+            configureConnection: connection =>
+            {
+                connection.WatchResourceSnapshotsHandler = (_, cancellationToken) =>
+                    YieldResourceSnapshotsImmediatelyAfter(
+                        initialSnapshotsDisplayed.Task,
+                        initialSnapshots.Concat(changedSnapshots),
+                        cancellationToken);
+            });
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("describe --follow --format json");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        var resourcesByName = outputWriter.Logs
+            .Where(line => line.TrimStart().StartsWith("{", StringComparison.Ordinal))
+            .Select(line => JsonSerializer.Deserialize(line, ResourcesCommandJsonContext.Ndjson.ResourceJson))
+            .OfType<ResourceJson>()
+            .GroupBy(resource => resource.Name!, StringComparers.ResourceName)
+            .ToDictionary(group => group.Key, group => group.Select(resource => resource.State).ToList(), StringComparers.ResourceName);
+
+        Assert.Equal(resourceCount, resourcesByName.Count);
+        foreach (var snapshot in initialSnapshots)
+        {
+            var expectedStates = changedSnapshots.Any(changed => StringComparers.ResourceName.Equals(changed.Name, snapshot.Name))
+                ? new[] { "Starting", "Running" }
+                : ["Starting"];
+            Assert.Equal(expectedStates, resourcesByName[snapshot.Name]);
+        }
+    }
+
+    [Fact]
     public async Task DescribeCommand_Follow_JsonFormat_EmitsInitialSnapshotWithoutResourceChanges()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
@@ -936,6 +1013,19 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
         await prerequisite.WaitAsync(cancellationToken);
         await foreach (var snapshot in YieldResourceSnapshots(snapshots, cancellationToken))
         {
+            yield return snapshot;
+        }
+    }
+
+    private static async IAsyncEnumerable<ResourceSnapshot> YieldResourceSnapshotsImmediatelyAfter(
+        Task prerequisite,
+        IEnumerable<ResourceSnapshot> snapshots,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        await prerequisite.WaitAsync(cancellationToken);
+        foreach (var snapshot in snapshots)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             yield return snapshot;
         }
     }

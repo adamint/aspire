@@ -288,19 +288,40 @@ internal sealed class DescribeCommand : BaseCommand
         }
 
         var initialCapture = resourceWatcher.CaptureAllResources();
-        var initialSnapshots = initialCapture.Resources;
-        foreach (var snapshot in initialSnapshots)
+        var currentSnapshots = initialCapture.Resources.ToList();
+        var snapshotIndexes = currentSnapshots
+            .Select((snapshot, index) => (snapshot.Name, index))
+            .ToDictionary(item => item.Name, item => item.index, StringComparers.ResourceName);
+        foreach (var snapshot in currentSnapshots)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            DisplaySnapshot(snapshot, initialSnapshots);
+            DisplaySnapshot(snapshot, currentSnapshots);
         }
 
-        // Stream resource snapshots. The watcher keeps its dictionary up to date in the
-        // background, so we use it for relationship resolution and display name deduplication.
         await foreach (var batch in resourceWatcher.WatchResourceSnapshotBatchesAsync(initialCapture.UpdateSequence, cancellationToken).ConfigureAwait(false))
         {
-            var currentSnapshots = resourceWatcher.GetAllResources();
+            var changedSnapshots = new List<ResourceSnapshot>(batch.Snapshots.Count);
             foreach (var snapshot in batch.Snapshots)
+            {
+                if (snapshotIndexes.TryGetValue(snapshot.Name, out var index))
+                {
+                    if (batch.IsResync && ReferenceEquals(currentSnapshots[index], snapshot))
+                    {
+                        continue;
+                    }
+
+                    currentSnapshots[index] = snapshot;
+                }
+                else
+                {
+                    snapshotIndexes.Add(snapshot.Name, currentSnapshots.Count);
+                    currentSnapshots.Add(snapshot);
+                }
+
+                changedSnapshots.Add(snapshot);
+            }
+
+            foreach (var snapshot in changedSnapshots)
             {
                 DisplaySnapshot(snapshot, currentSnapshots);
             }
