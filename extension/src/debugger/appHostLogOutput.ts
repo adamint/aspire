@@ -744,11 +744,11 @@ const multilineConsoleLoggerHeaderRegex = new RegExp(
     String.raw`^${consoleLoggerTimestampPrefix}${consoleLoggerLevelPattern}: (.*)\[(-?\d+)\](?:\r\n|\r|\n)$`);
 const singleLineConsoleLoggerRecordRegex = new RegExp(
     String.raw`^${consoleLoggerTimestampPrefix}${consoleLoggerLevelPattern}: (.*?)\[(-?\d+)\] (.*?)(?:\r\n|\r|\n)?$`);
-const debugLoggerCategoryPattern = String.raw`[A-Za-z_]\w*(?:\.\w+)+(?:\[-?\d+\])?`;
+const debugLoggerCategoryPattern = String.raw`[A-Za-z_]\w*(?:\.\w+)*(?:\[-?\d+\])?`;
 const debugLoggerRecordRegex = new RegExp(
     String.raw`^(${debugLoggerCategoryPattern}): (Trace|Debug|Information|Warning|Error|Critical): ([\s\S]*)$`);
 const debugLoggerHeaderRegex = new RegExp(
-    String.raw`^${debugLoggerCategoryPattern}: (Trace|Debug|Information|Warning|Error|Critical): .*(?:\r\n|\r|\n)?$`);
+    String.raw`^(${debugLoggerCategoryPattern}): (Trace|Debug|Information|Warning|Error|Critical): .*(?:\r\n|\r|\n)?$`);
 
 function getFirstLine(value: string): string {
     return value.match(/^[^\r\n]*(?:\r\n|\r|\n)?/)?.[0] ?? '';
@@ -842,7 +842,7 @@ function parseDebugLoggerRecord(output: string): LogRecord | undefined {
     // while still requiring category, level, and the complete normalized body to match.
     const normalized = normalizeRecordText(output.replace(/(?:\r\n|\r|\n)$/, ''));
     const match = debugLoggerRecordRegex.exec(normalized);
-    if (!match) {
+    if (!match || !isSupportedDebugLoggerCategory(match[1], match[2] as AppHostLogLevel)) {
         return undefined;
     }
 
@@ -856,7 +856,12 @@ function parseDebugLoggerRecord(output: string): LogRecord | undefined {
 }
 
 function isDebugLoggerHeader(line: string): boolean {
-    return debugLoggerHeaderRegex.test(line);
+    const match = debugLoggerHeaderRegex.exec(line);
+    return !!match && isSupportedDebugLoggerCategory(match[1], match[2] as AppHostLogLevel);
+}
+
+function isSupportedDebugLoggerCategory(categoryName: string, logLevel: AppHostLogLevel): boolean {
+    return categoryName.includes('.') || logLevel === 'Trace' || logLevel === 'Debug';
 }
 
 function isDebugLoggerContinuation(pending: PendingDebugRecord, line: string): boolean {
@@ -896,8 +901,18 @@ function endsWithBlankLine(value: string): boolean {
 
 function splitMessageAndException(value: string): { message: string; exception?: string } {
     const lines = value.replace(/\r\n|\r/g, '\n').split('\n');
-    const exceptionIndex = lines.findIndex((line, index) =>
-        index > 0 && lines[index - 1] === '' && isDebugLoggerExceptionStart(line));
+    let exceptionIndex = -1;
+    let hasClrExceptionStructure = false;
+    for (let index = lines.length - 1; index > 0; index--) {
+        const line = lines[index];
+        if (lines[index - 1] === ''
+            && (isConventionalDebugLoggerExceptionStart(line)
+                || isNamespacedClrTypeStart(line) && hasClrExceptionStructure)) {
+            exceptionIndex = index;
+            break;
+        }
+        hasClrExceptionStructure ||= isClrExceptionStructureLine(line);
+    }
     if (exceptionIndex < 0) {
         return { message: value };
     }
@@ -909,7 +924,21 @@ function splitMessageAndException(value: string): { message: string; exception?:
 }
 
 function isDebugLoggerExceptionStart(line: string): boolean {
+    return isConventionalDebugLoggerExceptionStart(line);
+}
+
+function isConventionalDebugLoggerExceptionStart(line: string): boolean {
     return /^(?:(?:[A-Za-z_][\w`]*\.)*[\w`]*(?:Exception|Error)(?: \([^)]*\))?:|Unhandled exception\.)/.test(line);
+}
+
+function isNamespacedClrTypeStart(line: string): boolean {
+    return /^(?:[A-Za-z_][\w`]*\.)+[A-Za-z_][\w`]*(?:\+[A-Za-z_][\w`]*)*(?:\[[^\r\n]+\])?(?: \([^)]*\))?:/.test(line);
+}
+
+function isClrExceptionStructureLine(line: string): boolean {
+    return /^\s+at (?:[^\s.()]+\.)+[^\s.()]+\([^)]*\)(?: in .*:line \d+)?$/.test(line)
+        || /^\s*---> /.test(line)
+        || /^--- End of /.test(line);
 }
 
 function isConsoleLoggerContinuation(line: string): boolean {

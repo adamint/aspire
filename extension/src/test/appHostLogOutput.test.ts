@@ -897,6 +897,17 @@ suite('AppHost log output coordinator', () => {
         assert.deepStrictEqual(renderConsole(coordinator, 'step 3: Debug: cache miss\n', 'console'), []);
     });
 
+    test('renders an adapter-only Debug record with a single-component DebugLogger category', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(coordinator, 'Something: Debug: Hidden detail.\n', 'console'),
+            [{
+                output: '\x1b[2mSomething: Debug: Hidden detail.\x1b[0m\n',
+                category: 'stdout'
+            }]);
+    });
+
     test('does not append unrelated console output when the pending DebugLogger record has a twin', () => {
         const coordinator = new AppHostLogOutputCoordinator();
 
@@ -1255,6 +1266,142 @@ suite('AppHost log output coordinator', () => {
             renderConsole(
                 coordinator,
                 `Example.Category: Error: failed\n\n${exception}\n`,
+                'console'),
+            []);
+    });
+
+    test('recognizes a custom CLR exception type without an Exception suffix', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const exception = 'MyNamespace.Failure: boom\n   at Example.Run()';
+
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({
+                logLevel: 'Error',
+                message: 'failed',
+                exception
+            })),
+            {
+                output: `Example.Category: Error: failed\n${exception}\n`,
+                category: 'stderr'
+            });
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                `Example.Category: Error: failed\n\n${exception}\n`,
+                'console'),
+            []);
+    });
+
+    test('recognizes a nested custom CLR exception type', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const exception = 'MyNamespace.Outer+Failure: boom\n   at Example.Run()';
+
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({
+                logLevel: 'Error',
+                message: 'failed',
+                exception
+            })),
+            {
+                output: `Example.Category: Error: failed\n${exception}\n`,
+                category: 'stderr'
+            });
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                `Example.Category: Error: failed\n\n${exception}\n`,
+                'console'),
+            []);
+    });
+
+    test('keeps a dotted message line after a blank DebugLogger continuation', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const message = 'first\n\nBuild.Status: healthy';
+
+        assert.deepStrictEqual(coordinator.handleBackchannelEntry(createEntry({ message })), {
+            output: `Example.Category: Information: ${message}\n`,
+            category: 'stdout'
+        });
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                `Example.Category: Information: ${message}\n`,
+                'console'),
+            []);
+    });
+
+    test('keeps an ambiguous boundary before an unproven custom exception type', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(coordinator.handleBackchannelEntry(createEntry({ message: 'first' })), {
+            output: 'Example.Category: Information: first\n',
+            category: 'stdout'
+        });
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Information: first\n\nBuild.Status: healthy\n',
+                'console'),
+            []);
+    });
+
+    test('does not treat prose beginning with at as a CLR stack frame', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const message = 'first\n\nMyNamespace.Failure: healthy\n   at least one worker (healthy)';
+
+        assert.deepStrictEqual(coordinator.handleBackchannelEntry(createEntry({ message })), {
+            output: `Example.Category: Information: ${message}\n`,
+            category: 'stdout'
+        });
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                `Example.Category: Information: ${message}\n`,
+                'console'),
+            []);
+    });
+
+    test('recognizes a generic custom CLR exception with a multiline message', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const exception = 'MyNamespace.Failure`1[System.String]: first\nsecond\n   at Example.Run()';
+
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({
+                logLevel: 'Error',
+                message: 'failed',
+                exception
+            })),
+            {
+                output: `Example.Category: Error: failed\n${exception}\n`,
+                category: 'stderr'
+            });
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                `Example.Category: Error: failed\n\n${exception}\n`,
+                'console'),
+            []);
+    });
+
+    test('does not reuse later exception evidence for an earlier dotted message line', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const message = 'first\n\nBuild.Status: healthy';
+        const exception = 'MyNamespace.Failure: boom\n   at Example.Run()';
+
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({
+                logLevel: 'Error',
+                message,
+                exception
+            })),
+            {
+                output: `Example.Category: Error: ${message}\n${exception}\n`,
+                category: 'stderr'
+            });
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                `Example.Category: Error: ${message}\n\n${exception}\n`,
                 'console'),
             []);
     });
