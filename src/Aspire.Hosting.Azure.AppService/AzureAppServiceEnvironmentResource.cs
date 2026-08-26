@@ -159,8 +159,7 @@ public class AzureAppServiceEnvironmentResource :
             foreach (var computeResource in context.Model.GetBuildResources())
             {
                 context.GetSteps(computeResource, WellKnownPipelineTags.BuildCompute)
-                        .RequiredBy(WellKnownPipelineSteps.DeployFinalize)
-                        .DependsOn(WellKnownPipelineSteps.DeployPrereq);
+                        .RequiredBy(WellKnownPipelineSteps.DeployFinalize);
             }
 
             // Make print-summary step depend on provisioning of this environment

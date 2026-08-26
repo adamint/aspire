@@ -643,7 +643,9 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
     internal async Task<List<PipelineStep>> ResolveStepsAsync(PipelineContext context)
     {
         var annotationSteps = await CollectStepsFromAnnotationsAsync(context).ConfigureAwait(false);
-        var allSteps = _steps.Concat(annotationSteps).ToList();
+        // Configuration callbacks and graph normalization both mutate PipelineStep lists.
+        // Resolve against fresh instances so command-specific edges cannot leak into later resolutions.
+        var allSteps = _steps.Concat(annotationSteps).Select(step => step.Clone()).ToList();
 
         // Execute configuration callbacks even if there are no steps
         // This allows callbacks to run validation or other logic
@@ -661,7 +663,7 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
         NormalizeRequiredByToDependsOn(allSteps, allStepsByName);
 
         var pipelineOptions = context.Services.GetService<IOptions<PipelineOptions>>();
-        NormalizeFinalizationPrerequisites(allSteps, pipelineOptions?.Value.Step);
+        NormalizeFinalizationPrerequisites(allSteps, allStepsByName, pipelineOptions?.Value.Step);
 
         // Capture resolved pipeline data for diagnostics (before filtering)
         _lastResolvedSteps = allSteps;
@@ -697,18 +699,51 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
         }
     }
 
-    private static void NormalizeFinalizationPrerequisites(List<PipelineStep> steps, string? selectedStepName)
+    private static void NormalizeFinalizationPrerequisites(
+        List<PipelineStep> steps,
+        Dictionary<string, PipelineStep> stepsByName,
+        string? selectedStepName)
     {
-        var (finalizeStep, prerequisiteStep) = selectedStepName switch
-        {
-            WellKnownPipelineSteps.Publish or WellKnownPipelineSteps.PublishFinalize =>
-                (WellKnownPipelineSteps.PublishFinalize, WellKnownPipelineSteps.PublishPrereq),
-            WellKnownPipelineSteps.Deploy or WellKnownPipelineSteps.DeployFinalize =>
-                (WellKnownPipelineSteps.DeployFinalize, WellKnownPipelineSteps.DeployPrereq),
-            _ => (null, null),
-        };
+        var activeFinalizers = new HashSet<string>(StringComparer.Ordinal);
 
-        if (finalizeStep is null || prerequisiteStep is null)
+        if (string.IsNullOrWhiteSpace(selectedStepName))
+        {
+            // Without a selected target, FilterStepsForExecution runs the entire graph.
+            activeFinalizers.Add(WellKnownPipelineSteps.PublishFinalize);
+            activeFinalizers.Add(WellKnownPipelineSteps.DeployFinalize);
+        }
+        else if (stepsByName.TryGetValue(selectedStepName, out var selectedStep))
+        {
+            // A deploy provider can depend on a nested publish aggregate. Gate every finalizer
+            // in the normalized target closure rather than inferring one from the target's name.
+            foreach (var reachableStep in ComputeTransitiveDependencies(selectedStep, stepsByName))
+            {
+                if (reachableStep.Name is WellKnownPipelineSteps.PublishFinalize or WellKnownPipelineSteps.DeployFinalize)
+                {
+                    activeFinalizers.Add(reachableStep.Name);
+                }
+            }
+        }
+
+        AddFinalizationPrerequisite(
+            steps,
+            activeFinalizers,
+            WellKnownPipelineSteps.PublishFinalize,
+            WellKnownPipelineSteps.PublishPrereq);
+        AddFinalizationPrerequisite(
+            steps,
+            activeFinalizers,
+            WellKnownPipelineSteps.DeployFinalize,
+            WellKnownPipelineSteps.DeployPrereq);
+    }
+
+    private static void AddFinalizationPrerequisite(
+        List<PipelineStep> steps,
+        HashSet<string> activeFinalizers,
+        string finalizeStep,
+        string prerequisiteStep)
+    {
+        if (!activeFinalizers.Contains(finalizeStep))
         {
             return;
         }

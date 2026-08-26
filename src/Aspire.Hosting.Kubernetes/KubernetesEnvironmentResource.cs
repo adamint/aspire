@@ -378,8 +378,7 @@ public sealed class KubernetesEnvironmentResource : Resource, IComputeEnvironmen
 
                 // Build steps must complete before the deploy step
                 var buildSteps = context.GetSteps(computeResource, WellKnownPipelineTags.BuildCompute);
-                buildSteps.RequiredBy(WellKnownPipelineSteps.DeployFinalize)
-                          .DependsOn(WellKnownPipelineSteps.DeployPrereq);
+                buildSteps.RequiredBy(WellKnownPipelineSteps.DeployFinalize);
 
                 // Push steps must complete before the helm deploy step
                 var pushSteps = context.GetSteps(computeResource, WellKnownPipelineTags.PushContainerImage);
