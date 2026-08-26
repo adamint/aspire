@@ -226,7 +226,7 @@ public class DistributedApplicationPipelineTests(ITestOutputHelper testOutputHel
             normalWorkOneStarted.SetResult();
             await normalWorkOneRelease.Task;
             normalWorkOneCompleted.SetResult();
-        }, dependsOn: prerequisiteStep, requiredBy: finalizeStep);
+        }, requiredBy: finalizeStep);
 
         pipeline.AddStep("normal-work-two", async _ =>
         {
@@ -234,7 +234,7 @@ public class DistributedApplicationPipelineTests(ITestOutputHelper testOutputHel
             normalWorkTwoStarted.SetResult();
             await normalWorkTwoRelease.Task;
             normalWorkTwoCompleted.SetResult();
-        }, dependsOn: prerequisiteStep, requiredBy: finalizeStep);
+        }, requiredBy: finalizeStep);
 
         pipeline.AddStep("post-finalize-hook", async _ =>
         {
@@ -251,6 +251,8 @@ public class DistributedApplicationPipelineTests(ITestOutputHelper testOutputHel
             var resolvedSteps = await pipeline.Clone().ResolveStepsAsync(context).DefaultTimeout();
             var resolvedFinalizeStep = resolvedSteps.Single(step => step.Name == finalizeStep);
             Assert.Contains(prerequisiteStep, resolvedFinalizeStep.DependsOnSteps);
+            Assert.Contains(prerequisiteStep, resolvedSteps.Single(step => step.Name == "normal-work-one").DependsOnSteps);
+            Assert.Contains(prerequisiteStep, resolvedSteps.Single(step => step.Name == "normal-work-two").DependsOnSteps);
 
             var executeTask = pipeline.ExecuteAsync(context);
 
@@ -2359,6 +2361,50 @@ public class DistributedApplicationPipelineTests(ITestOutputHelper testOutputHel
         // "deploy" should now depend on "my-step" due to RequiredBy normalization
         var deployStep = steps.Single(s => s.Name == "deploy");
         Assert.Contains("my-step", deployStep.DependsOnSteps);
+    }
+
+    [Theory]
+    [InlineData(WellKnownPipelineSteps.Publish, WellKnownPipelineSteps.PublishPrereq)]
+    [InlineData(WellKnownPipelineSteps.PublishFinalize, WellKnownPipelineSteps.PublishPrereq)]
+    [InlineData(WellKnownPipelineSteps.Deploy, WellKnownPipelineSteps.DeployPrereq)]
+    [InlineData(WellKnownPipelineSteps.DeployFinalize, WellKnownPipelineSteps.DeployPrereq)]
+    [InlineData(WellKnownPipelineSteps.Build, null)]
+    public async Task ResolveStepsAsync_FinalizationPrerequisitesAreCommandSpecific(
+        string selectedStep,
+        string? expectedPrerequisite)
+    {
+        using var builder = CreatePipelineTestBuilder(step: selectedStep);
+
+        var pipeline = new DistributedApplicationPipeline();
+        pipeline.AddStep(new PipelineStep
+        {
+            Name = "multi-root-work",
+            Action = _ => Task.CompletedTask,
+            RequiredBySteps =
+            [
+                WellKnownPipelineSteps.Build,
+                WellKnownPipelineSteps.PublishFinalize,
+                WellKnownPipelineSteps.DeployFinalize,
+            ],
+        });
+
+        var context = CreateDeployingContext(builder.Build());
+        var steps = await pipeline.ResolveStepsAsync(context).DefaultTimeout();
+        var multiRootStep = steps.Single(s => s.Name == "multi-root-work");
+
+        if (expectedPrerequisite is null)
+        {
+            Assert.DoesNotContain(WellKnownPipelineSteps.PublishPrereq, multiRootStep.DependsOnSteps);
+            Assert.DoesNotContain(WellKnownPipelineSteps.DeployPrereq, multiRootStep.DependsOnSteps);
+        }
+        else
+        {
+            Assert.Contains(expectedPrerequisite, multiRootStep.DependsOnSteps);
+            var otherPrerequisite = expectedPrerequisite == WellKnownPipelineSteps.PublishPrereq
+                ? WellKnownPipelineSteps.DeployPrereq
+                : WellKnownPipelineSteps.PublishPrereq;
+            Assert.DoesNotContain(otherPrerequisite, multiRootStep.DependsOnSteps);
+        }
     }
 
     [Fact]

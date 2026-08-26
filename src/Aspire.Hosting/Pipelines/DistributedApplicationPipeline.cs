@@ -660,6 +660,9 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
         var allStepsByName = allSteps.ToDictionary(s => s.Name, StringComparer.Ordinal);
         NormalizeRequiredByToDependsOn(allSteps, allStepsByName);
 
+        var pipelineOptions = context.Services.GetService<IOptions<PipelineOptions>>();
+        NormalizeFinalizationPrerequisites(allSteps, pipelineOptions?.Value.Step);
+
         // Capture resolved pipeline data for diagnostics (before filtering)
         _lastResolvedSteps = allSteps;
 
@@ -690,6 +693,35 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
                 {
                     requiredByStepObj.DependsOnSteps.Add(step.Name);
                 }
+            }
+        }
+    }
+
+    private static void NormalizeFinalizationPrerequisites(List<PipelineStep> steps, string? selectedStepName)
+    {
+        var (finalizeStep, prerequisiteStep) = selectedStepName switch
+        {
+            WellKnownPipelineSteps.Publish or WellKnownPipelineSteps.PublishFinalize =>
+                (WellKnownPipelineSteps.PublishFinalize, WellKnownPipelineSteps.PublishPrereq),
+            WellKnownPipelineSteps.Deploy or WellKnownPipelineSteps.DeployFinalize =>
+                (WellKnownPipelineSteps.DeployFinalize, WellKnownPipelineSteps.DeployPrereq),
+            _ => (null, null),
+        };
+
+        if (finalizeStep is null || prerequisiteStep is null)
+        {
+            return;
+        }
+
+        // A step can participate in Build and both command finalizers. Only add the selected
+        // command's gate so Publish cannot pull in DeployPrereq and Build-only execution
+        // cannot pull in either command-specific prerequisite.
+        foreach (var step in steps)
+        {
+            if (step.RequiredBySteps.Contains(finalizeStep, StringComparer.Ordinal)
+                && !step.DependsOnSteps.Contains(prerequisiteStep, StringComparer.Ordinal))
+            {
+                step.DependsOnSteps.Add(prerequisiteStep);
             }
         }
     }
