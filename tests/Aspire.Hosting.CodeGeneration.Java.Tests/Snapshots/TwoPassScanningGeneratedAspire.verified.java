@@ -28666,6 +28666,9 @@ public final class WellKnownPipelineSteps {
     /** Aggregation step for all deploy operations. All deploy steps should be required by this step. */
     public static final String Deploy = "deploy";
 
+    /** The synchronization step that runs after all normal deploy operations. */
+    public static final String DeployFinalize = "deploy-finalize";
+
     /** The prerequisite step that runs before any deploy operations. */
     public static final String DeployPrereq = "deploy-prereq";
 
@@ -28683,6 +28686,9 @@ public final class WellKnownPipelineSteps {
 
     /** Aggregation step for all publish operations. All publish steps should be required by this step. */
     public static final String Publish = "publish";
+
+    /** The synchronization step that runs after all normal publish operations. */
+    public static final String PublishFinalize = "publish-finalize";
 
     /** The prerequisite step that runs before any publish operations. */
     public static final String PublishPrereq = "publish-prereq";

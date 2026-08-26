@@ -2064,6 +2064,8 @@ WellKnownPipelineSteps.BuildPrereq = "build-prereq"
 WellKnownPipelineSteps.CheckContainerRuntime = "check-container-runtime"
 # Aggregation step for all deploy operations. All deploy steps should be required by this step.
 WellKnownPipelineSteps.Deploy = "deploy"
+# The synchronization step that runs after all normal deploy operations.
+WellKnownPipelineSteps.DeployFinalize = "deploy-finalize"
 # The prerequisite step that runs before any deploy operations.
 WellKnownPipelineSteps.DeployPrereq = "deploy-prereq"
 # Aggregation step for all destroy operations. All destroy steps should be required by this step.
@@ -2076,6 +2078,8 @@ WellKnownPipelineSteps.Diagnostics = "diagnostics"
 WellKnownPipelineSteps.ProcessParameters = "process-parameters"
 # Aggregation step for all publish operations. All publish steps should be required by this step.
 WellKnownPipelineSteps.Publish = "publish"
+# The synchronization step that runs after all normal publish operations.
+WellKnownPipelineSteps.PublishFinalize = "publish-finalize"
 # The prerequisite step that runs before any publish operations.
 WellKnownPipelineSteps.PublishPrereq = "publish-prereq"
 # The meta-step that coordinates all push operations. All push steps should be required by this step.

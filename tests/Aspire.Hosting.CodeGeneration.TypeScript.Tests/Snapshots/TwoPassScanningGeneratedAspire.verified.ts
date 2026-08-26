@@ -1408,6 +1408,9 @@ export namespace WellKnownPipelineSteps {
     /** Aggregation step for all deploy operations. All deploy steps should be required by this step. */
     export const Deploy = "deploy";
 
+    /** The synchronization step that runs after all normal deploy operations. */
+    export const DeployFinalize = "deploy-finalize";
+
     /** The prerequisite step that runs before any deploy operations. */
     export const DeployPrereq = "deploy-prereq";
 
@@ -1425,6 +1428,9 @@ export namespace WellKnownPipelineSteps {
 
     /** Aggregation step for all publish operations. All publish steps should be required by this step. */
     export const Publish = "publish";
+
+    /** The synchronization step that runs after all normal publish operations. */
+    export const PublishFinalize = "publish-finalize";
 
     /** The prerequisite step that runs before any publish operations. */
     export const PublishPrereq = "publish-prereq";
