@@ -255,7 +255,7 @@ public sealed class KubernetesEnvironmentResource : Resource, IComputeEnvironmen
             // resolve Helm chart annotations (chart name/version/description) that may
             // be backed by ParameterResource values.
             publishStep.DependsOn(WellKnownPipelineSteps.PublishPrereq);
-            publishStep.RequiredBy(WellKnownPipelineSteps.Publish);
+            publishStep.RequiredBy(WellKnownPipelineSteps.PublishFinalize);
             steps.Add(publishStep);
 
             // Deployment engine steps (e.g., Helm prepare, deploy, uninstall)
@@ -277,7 +277,7 @@ public sealed class KubernetesEnvironmentResource : Resource, IComputeEnvironmen
                     Action = ctx => BootstrapTlsSecretsAsync(ctx, environment, tlsSecrets)
                 };
                 tlsBootstrapStep.DependsOn($"helm-deploy-{environment.Name}");
-                tlsBootstrapStep.RequiredBy(WellKnownPipelineSteps.Deploy);
+                tlsBootstrapStep.RequiredBy(WellKnownPipelineSteps.DeployFinalize);
                 steps.Add(tlsBootstrapStep);
             }
 
@@ -298,7 +298,7 @@ public sealed class KubernetesEnvironmentResource : Resource, IComputeEnvironmen
                     // Run after normal TLS bootstrap (which handles hostnames that are already known)
                     fqdnDiscoveryStep.DependsOn($"tls-bootstrap-{environment.Name}");
                 }
-                fqdnDiscoveryStep.RequiredBy(WellKnownPipelineSteps.Deploy);
+                fqdnDiscoveryStep.RequiredBy(WellKnownPipelineSteps.DeployFinalize);
                 steps.Add(fqdnDiscoveryStep);
             }
 
@@ -378,7 +378,7 @@ public sealed class KubernetesEnvironmentResource : Resource, IComputeEnvironmen
 
                 // Build steps must complete before the deploy step
                 var buildSteps = context.GetSteps(computeResource, WellKnownPipelineTags.BuildCompute);
-                buildSteps.RequiredBy(WellKnownPipelineSteps.Deploy)
+                buildSteps.RequiredBy(WellKnownPipelineSteps.DeployFinalize)
                           .DependsOn(WellKnownPipelineSteps.DeployPrereq);
 
                 // Push steps must complete before the helm deploy step
