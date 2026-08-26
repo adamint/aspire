@@ -188,6 +188,98 @@ public class DistributedApplicationPipelineTests(ITestOutputHelper testOutputHel
         Assert.True(step2Index < step3Index, "step2 should execute before step3");
     }
 
+    [Theory]
+    [InlineData(WellKnownPipelineSteps.PublishPrereq, WellKnownPipelineSteps.PublishFinalize, WellKnownPipelineSteps.Publish)]
+    [InlineData(WellKnownPipelineSteps.DeployPrereq, WellKnownPipelineSteps.DeployFinalize, WellKnownPipelineSteps.Deploy)]
+    public async Task ExecuteAsync_FinalizationBoundaryOrdersNormalWorkAndPostFinalizeHooks(
+        string prerequisiteStep,
+        string finalizeStep,
+        string finalAggregateStep)
+    {
+        using var builder = CreatePipelineTestBuilder(step: finalAggregateStep);
+        var pipeline = new DistributedApplicationPipeline();
+
+        var prerequisiteObserverCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var normalWorkOneStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var normalWorkOneRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var normalWorkOneCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var normalWorkTwoStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var normalWorkTwoRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var normalWorkTwoCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var postFinalizeHookStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var postFinalizeHookRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var normalWorkOneObservedPrerequisite = false;
+        var normalWorkTwoObservedPrerequisite = false;
+        var postFinalizeHookObservedNormalWorkOne = false;
+        var postFinalizeHookObservedNormalWorkTwo = false;
+
+        pipeline.AddStep("prerequisite-observer", _ =>
+        {
+            prerequisiteObserverCompleted.SetResult();
+            return Task.CompletedTask;
+        }, requiredBy: prerequisiteStep);
+
+        pipeline.AddStep("normal-work-one", async _ =>
+        {
+            normalWorkOneObservedPrerequisite = prerequisiteObserverCompleted.Task.IsCompletedSuccessfully;
+            normalWorkOneStarted.SetResult();
+            await normalWorkOneRelease.Task;
+            normalWorkOneCompleted.SetResult();
+        }, dependsOn: prerequisiteStep, requiredBy: finalizeStep);
+
+        pipeline.AddStep("normal-work-two", async _ =>
+        {
+            normalWorkTwoObservedPrerequisite = prerequisiteObserverCompleted.Task.IsCompletedSuccessfully;
+            normalWorkTwoStarted.SetResult();
+            await normalWorkTwoRelease.Task;
+            normalWorkTwoCompleted.SetResult();
+        }, dependsOn: prerequisiteStep, requiredBy: finalizeStep);
+
+        pipeline.AddStep("post-finalize-hook", async _ =>
+        {
+            postFinalizeHookObservedNormalWorkOne = normalWorkOneCompleted.Task.IsCompletedSuccessfully;
+            postFinalizeHookObservedNormalWorkTwo = normalWorkTwoCompleted.Task.IsCompletedSuccessfully;
+            postFinalizeHookStarted.SetResult();
+            await postFinalizeHookRelease.Task;
+        }, dependsOn: finalizeStep, requiredBy: finalAggregateStep);
+
+        var context = CreateDeployingContext(builder.Build());
+
+        try
+        {
+            var resolvedSteps = await pipeline.Clone().ResolveStepsAsync(context).DefaultTimeout();
+            var resolvedFinalizeStep = resolvedSteps.Single(step => step.Name == finalizeStep);
+            Assert.Contains(prerequisiteStep, resolvedFinalizeStep.DependsOnSteps);
+
+            var executeTask = pipeline.ExecuteAsync(context);
+
+            await Task.WhenAll(normalWorkOneStarted.Task, normalWorkTwoStarted.Task).DefaultTimeout();
+            Assert.True(normalWorkOneObservedPrerequisite);
+            Assert.True(normalWorkTwoObservedPrerequisite);
+
+            normalWorkOneRelease.SetResult();
+            await normalWorkOneCompleted.Task.DefaultTimeout();
+            Assert.False(normalWorkTwoCompleted.Task.IsCompleted);
+            Assert.False(postFinalizeHookStarted.Task.IsCompleted);
+
+            normalWorkTwoRelease.SetResult();
+            await postFinalizeHookStarted.Task.DefaultTimeout();
+            Assert.True(postFinalizeHookObservedNormalWorkOne);
+            Assert.True(postFinalizeHookObservedNormalWorkTwo);
+            Assert.False(executeTask.IsCompleted);
+
+            postFinalizeHookRelease.SetResult();
+            await executeTask.DefaultTimeout();
+        }
+        finally
+        {
+            normalWorkOneRelease.TrySetResult();
+            normalWorkTwoRelease.TrySetResult();
+            postFinalizeHookRelease.TrySetResult();
+        }
+    }
+
     [Fact]
     public async Task ExecuteAsync_WithMultipleLevels_ExecutesLevelsInOrder()
     {

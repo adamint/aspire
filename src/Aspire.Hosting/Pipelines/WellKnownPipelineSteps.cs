@@ -25,6 +25,12 @@ public static class WellKnownPipelineSteps
     public const string PublishPrereq = "publish-prereq";
 
     /// <summary>
+    /// The synchronization step that runs after all normal publish operations.
+    /// </summary>
+    [AspireValue("WellKnownPipelineSteps")]
+    public const string PublishFinalize = "publish-finalize";
+
+    /// <summary>
     /// Aggregation step for all deploy operations.
     /// All deploy steps should be required by this step.
     /// </summary>
@@ -36,6 +42,12 @@ public static class WellKnownPipelineSteps
     /// </summary>
     [AspireValue("WellKnownPipelineSteps")]
     public const string DeployPrereq = "deploy-prereq";
+
+    /// <summary>
+    /// The synchronization step that runs after all normal deploy operations.
+    /// </summary>
+    [AspireValue("WellKnownPipelineSteps")]
+    public const string DeployFinalize = "deploy-finalize";
 
     /// <summary>
     /// The step that prompts for parameter values before build, publish, or deployment operations.

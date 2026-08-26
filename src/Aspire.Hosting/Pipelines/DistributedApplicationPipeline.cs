@@ -42,6 +42,7 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
             Name = WellKnownPipelineSteps.Deploy,
             Description = "Aggregation step for all deploy operations. All deploy steps should be required by this step.",
             Action = _ => Task.CompletedTask,
+            DependsOnSteps = [WellKnownPipelineSteps.DeployFinalize],
         });
 
         var parameterPromptingStep = new PipelineStep
@@ -137,6 +138,14 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
                     }));
                 }
             }
+        });
+
+        _steps.Add(new PipelineStep
+        {
+            Name = WellKnownPipelineSteps.DeployFinalize,
+            Description = "Synchronization step that runs after all normal deploy operations.",
+            Action = _ => Task.CompletedTask,
+            DependsOnSteps = [WellKnownPipelineSteps.DeployPrereq],
         });
 
         // Add a default "build" step
@@ -301,7 +310,8 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
         {
             Name = WellKnownPipelineSteps.Publish,
             Description = "Aggregation step for all publish operations. All publish steps should be required by this step.",
-            Action = _ => Task.CompletedTask
+            Action = _ => Task.CompletedTask,
+            DependsOnSteps = [WellKnownPipelineSteps.PublishFinalize],
         });
 
         _steps.Add(new PipelineStep
@@ -309,6 +319,14 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
             Name = WellKnownPipelineSteps.PublishPrereq,
             Description = "Prerequisite step that runs before any publish operations.",
             Action = _ => Task.CompletedTask,
+        });
+
+        _steps.Add(new PipelineStep
+        {
+            Name = WellKnownPipelineSteps.PublishFinalize,
+            Description = "Synchronization step that runs after all normal publish operations.",
+            Action = _ => Task.CompletedTask,
+            DependsOnSteps = [WellKnownPipelineSteps.PublishPrereq],
         });
 
         _steps.Add(new PipelineStep
