@@ -315,14 +315,6 @@ export class AppHostLogOutputCoordinator {
                 return false;
             }
 
-            const pendingRecord = parseDebugLoggerRecord(pending.raw);
-            if (isDebugLoggerHeader(line) && pendingRecord && isLowLevel(pendingRecord)) {
-                this.flushPendingDebugRecord(category, outputs);
-                this._pendingDebugRecords.set(category, createPendingDebugRecord(line, category));
-                this.resetFallbackFilter(category);
-                return true;
-            }
-
             if (isDebugLoggerHeader(line)) {
                 if (!this.mergedDebugRecordHasTwin(pending, line)) {
                     // DebugLogger does not mark multiline message boundaries. A continuation can itself

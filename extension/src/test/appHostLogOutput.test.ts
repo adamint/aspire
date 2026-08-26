@@ -522,6 +522,34 @@ suite('AppHost log output coordinator', () => {
         assert.deepStrictEqual(coordinator.flush(), []);
     });
 
+    test('deduplicates a DebugLogger-first low-level message whose continuation looks like a header', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(
+                'Example.Category: Debug: first\n',
+                'console'),
+            []);
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(
+                'Other.Category: Warning: second\n',
+                'console'),
+            []);
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'dbug: Example.Category[7]\n'
+                + '      first\n'
+                + '      Other.Category: Warning: second\n',
+                'stdout'),
+            [{
+                output: '\x1b[2mExample.Category: Debug: first\n'
+                    + 'Other.Category: Warning: second\x1b[0m\n',
+                category: 'stdout'
+            }]);
+        assert.deepStrictEqual(coordinator.flush(), []);
+    });
+
     test('deduplicates bracketed DebugLogger categories in both source orders', () => {
         const entry = createEntry({
             categoryName: 'Example.Category[7]',
