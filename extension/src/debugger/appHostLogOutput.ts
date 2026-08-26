@@ -79,7 +79,8 @@ export class AppHostLogOutputCoordinator {
     private static readonly _maxPendingDebugRecordCharacters = 64 * 1024;
     private static readonly _allSources: readonly LogSource[] = ['backchannel', 'consoleLogger', 'debugLogger'];
     private static readonly _lowLevelSources: readonly LogSource[] = ['consoleLogger', 'debugLogger'];
-    private static readonly _maxRememberedBackchannelSequences = 1024;
+    // Match BackchannelLoggerProvider's 1,000-entry replay buffer.
+    private static readonly _maxRememberedBackchannelSequences = 1000;
     private static readonly _idleFlushDelayMs = 250;
 
     private readonly _correlatedRecords: CorrelatedRecord[] = [];
@@ -182,12 +183,14 @@ export class AppHostLogOutputCoordinator {
 
         const pending = this._pendingRecords.get(category);
         if (pending) {
-            const hasConsoleIndentation = isConsoleLoggerContinuation(line);
-            if (pending.allowsContinuation && (hasConsoleIndentation || isWindowsBareLfContinuation(pending))) {
+            const hasConsoleIndentation =
+                pending.record.singleLine !== true && isConsoleLoggerContinuation(line);
+            if (pending.allowsContinuation && (hasConsoleIndentation || isWindowsBareLfContinuation(pending, line))) {
                 pending.raw += line;
                 const bodyLine = hasConsoleIndentation
                     ? removeConsoleIndentation(line)
-                    : normalizeConsoleLine(line);
+                    : `${pending.record.singleLine && !pending.body.endsWith('\n') ? '\n' : ''}`
+                        + normalizeConsoleLine(line);
                 // IncludeScopes writes leading lines such as:
                 //   => RequestPath:/health => ConnectionId:0HN...
                 // Keep them until correlation can distinguish scope metadata from a real message
@@ -242,7 +245,7 @@ export class AppHostLogOutputCoordinator {
                     AppHostLogOutputCoordinator.getSingleLineScopeBodyOffsets(singleLineRecord.body),
                 raw: line,
                 category,
-                allowsContinuation: false,
+                allowsContinuation: true,
                 hasBodyLine: true,
                 hasNonScopeBodyLine: true
             });
@@ -261,7 +264,33 @@ export class AppHostLogOutputCoordinator {
         this.clearIdleFlushTimer(category);
         this._pendingRecords.delete(category);
 
-        const output = this.correlate(createPendingRecordIdentity(pending), 'consoleLogger');
+        const identity = createPendingRecordIdentity(pending);
+        if (hasUnconfirmedSingleLineContinuations(pending)
+            && !this.hasCorrelatedTwin(identity.record, 'consoleLogger')) {
+            const firstLine = getFirstLine(pending.raw);
+            const firstRecord = parseSingleLineConsoleLoggerRecord(firstLine)!;
+            const firstPending: PendingConsoleRecord = {
+                ...pending,
+                record: {
+                    categoryName: firstRecord.categoryName,
+                    logLevel: firstRecord.logLevel,
+                    eventId: firstRecord.eventId,
+                    singleLine: true
+                },
+                body: firstRecord.body,
+                leadingScopeBodyOffsets:
+                    AppHostLogOutputCoordinator.getSingleLineScopeBodyOffsets(firstRecord.body),
+                raw: firstLine
+            };
+            const firstOutput = this.correlate(createPendingRecordIdentity(firstPending), 'consoleLogger');
+            if (firstOutput) {
+                outputs.push(firstOutput);
+            }
+            this.emitFallback(pending.raw.slice(firstLine.length), category, outputs);
+            return;
+        }
+
+        const output = this.correlate(identity, 'consoleLogger');
         if (output) {
             outputs.push(output);
         }
@@ -715,11 +744,11 @@ const multilineConsoleLoggerHeaderRegex = new RegExp(
     String.raw`^${consoleLoggerTimestampPrefix}${consoleLoggerLevelPattern}: (.*)\[(-?\d+)\](?:\r\n|\r|\n)$`);
 const singleLineConsoleLoggerRecordRegex = new RegExp(
     String.raw`^${consoleLoggerTimestampPrefix}${consoleLoggerLevelPattern}: (.*?)\[(-?\d+)\] (.*?)(?:\r\n|\r|\n)?$`);
-const debugLoggerCategoryPattern = String.raw`[A-Za-z_]\w*(?:\.\w+)+`;
+const debugLoggerCategoryPattern = String.raw`[A-Za-z_]\w*(?:\.\w+)+(?:\[-?\d+\])?`;
 const debugLoggerRecordRegex = new RegExp(
-    String.raw`^(${debugLoggerCategoryPattern})(?:\[(-?\d+)\])?: (Trace|Debug|Information|Warning|Error|Critical): ([\s\S]*)$`);
+    String.raw`^(${debugLoggerCategoryPattern}): (Trace|Debug|Information|Warning|Error|Critical): ([\s\S]*)$`);
 const debugLoggerHeaderRegex = new RegExp(
-    String.raw`^${debugLoggerCategoryPattern}(?:\[-?\d+\])?: (Trace|Debug|Information|Warning|Error|Critical): .*(?:\r\n|\r|\n)?$`);
+    String.raw`^${debugLoggerCategoryPattern}: (Trace|Debug|Information|Warning|Error|Critical): .*(?:\r\n|\r|\n)?$`);
 
 function getFirstLine(value: string): string {
     return value.match(/^[^\r\n]*(?:\r\n|\r|\n)?/)?.[0] ?? '';
@@ -817,11 +846,11 @@ function parseDebugLoggerRecord(output: string): LogRecord | undefined {
         return undefined;
     }
 
-    const { message, exception } = splitMessageAndException(match[4]);
+    const { message, exception } = splitMessageAndException(match[3]);
     return {
         categoryName: escapeCategoryControlCharacters(match[1]),
-        logLevel: match[3] as AppHostLogLevel,
-        eventId: match[2] === undefined ? undefined : Number(match[2]),
+        logLevel: match[2] as AppHostLogLevel,
+        eventId: undefined,
         body: normalizeRecordText(joinRecordBody(message, exception))
     };
 }
@@ -888,12 +917,21 @@ function isConsoleLoggerContinuation(line: string): boolean {
     return content.startsWith('      ');
 }
 
-function isWindowsBareLfContinuation(pending: PendingConsoleRecord): boolean {
+function isWindowsBareLfContinuation(pending: PendingConsoleRecord, line: string): boolean {
     // On Windows SimpleConsoleFormatter only indents Environment.NewLine (`\r\n`).
     // A bare LF embedded in the message therefore leaves the following line unindented.
-    return pending.raw.includes('\r\n')
-        && pending.raw.endsWith('\n')
-        && !pending.raw.endsWith('\r\n');
+    return pending.raw.endsWith('\n')
+        && !pending.raw.endsWith('\r\n')
+        && (pending.record.singleLine === true
+            ? !parseSingleLineConsoleLoggerRecord(line)
+                && !parseMultilineConsoleLoggerHeader(line)
+            : pending.raw.includes('\r\n'));
+}
+
+function hasUnconfirmedSingleLineContinuations(pending: PendingConsoleRecord): boolean {
+    return pending.record.singleLine === true
+        && !pending.raw.includes('\r\n')
+        && getFirstLine(pending.raw).length < pending.raw.length;
 }
 
 function removeConsoleIndentation(line: string): string {

@@ -76,7 +76,8 @@ internal sealed class RunCommand : BaseCommand
     private readonly TimeProvider _timeProvider;
     private bool _isDetachMode;
     private const int MaxDisplayedAppHostStartupOutputLines = 80;
-    private const int MaxRememberedAppHostLogSequenceNumbers = 1024;
+    // Match BackchannelLoggerProvider's 1,000-entry replay buffer.
+    private const int MaxRememberedAppHostLogSequenceNumbers = 1000;
 
     private static readonly TimeSpan s_appHostStartupCancellationTimeout = TimeSpan.FromSeconds(5);
 

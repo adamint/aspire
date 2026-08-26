@@ -3934,6 +3934,50 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task CaptureAppHostLogsAsync_SuppressesAFullReplayBuffer()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var logFilePath = Path.Combine(workspace.WorkspaceRoot.FullName, "test.log");
+        var extensionBackchannel = new TestExtensionBackchannel
+        {
+            HasCapabilityAsyncCallback = (_, _) => Task.FromResult(true)
+        };
+        using var services = new ServiceCollection()
+            .AddSingleton<IExtensionBackchannel>(extensionBackchannel)
+            .BuildServiceProvider();
+        var forwardedSequences = new List<long>();
+        var interactionService = new TestExtensionInteractionService(services)
+        {
+            WriteAppHostLogEntryCallback = entry => forwardedSequences.Add(entry.SequenceNumber)
+        };
+        var backchannel = new TestAppHostBackchannel
+        {
+            GetAppHostLogEntriesAsyncCallback = YieldEntries
+        };
+
+        using (var fileLoggerProvider = new FileLoggerProvider(logFilePath, new TestStartupErrorWriter()))
+        {
+            await RunCommand.CaptureAppHostLogsAsync(fileLoggerProvider, backchannel, interactionService, CancellationToken.None);
+        }
+
+        Assert.Equal(Enumerable.Range(1, 1000).Select(value => (long)value), forwardedSequences);
+        Assert.Equal(1000, (await File.ReadAllLinesAsync(logFilePath)).Count(line => !string.IsNullOrWhiteSpace(line)));
+
+        static async IAsyncEnumerable<BackchannelLogEntry> YieldEntries([EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            for (var replay = 0; replay < 2; replay++)
+            {
+                for (var sequenceNumber = 1L; sequenceNumber <= 1000; sequenceNumber++)
+                {
+                    yield return CreateEntry(sequenceNumber, LogLevel.Information, $"Entry {sequenceNumber}");
+                }
+            }
+
+            await Task.CompletedTask;
+        }
+    }
+
+    [Fact]
     public async Task CaptureAppHostLogsAsync_EvictsTheOldestRememberedSequence()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
@@ -3960,14 +4004,14 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
             await RunCommand.CaptureAppHostLogsAsync(fileLoggerProvider, backchannel, interactionService, CancellationToken.None);
         }
 
-        Assert.Equal(1026, forwardedSequences.Count);
+        Assert.Equal(1002, forwardedSequences.Count);
         Assert.Equal(1, forwardedSequences[0]);
         Assert.Equal(1, forwardedSequences[^1]);
-        Assert.Equal(1026, (await File.ReadAllLinesAsync(logFilePath)).Count(line => !string.IsNullOrWhiteSpace(line)));
+        Assert.Equal(1002, (await File.ReadAllLinesAsync(logFilePath)).Count(line => !string.IsNullOrWhiteSpace(line)));
 
         static async IAsyncEnumerable<BackchannelLogEntry> YieldEntries([EnumeratorCancellation] CancellationToken cancellationToken)
         {
-            for (var sequenceNumber = 1L; sequenceNumber <= 1025; sequenceNumber++)
+            for (var sequenceNumber = 1L; sequenceNumber <= 1001; sequenceNumber++)
             {
                 yield return CreateEntry(sequenceNumber, LogLevel.Information, $"Entry {sequenceNumber}");
             }

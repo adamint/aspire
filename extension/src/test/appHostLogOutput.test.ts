@@ -389,6 +389,82 @@ suite('AppHost log output coordinator', () => {
             []);
     });
 
+    test('matches Windows single-line output containing a bare LF', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const entry = createEntry({ message: 'first\nsecond' });
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(
+                'info: Example.Category[7] first\nsecond\r\n',
+                'stdout'),
+            []);
+        assert.deepStrictEqual(coordinator.handleBackchannelEntry(entry), {
+            output: 'Example.Category: Information: first\nsecond\n',
+            category: 'stdout'
+        });
+        assert.deepStrictEqual(coordinator.flush(), []);
+    });
+
+    test('matches chunked Windows single-line output containing multiple bare LFs', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const entry = createEntry({ message: 'first\nsecond\nthird' });
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(
+                'info: Example.Category[7] first\n',
+                'stdout'),
+            []);
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('second\n', 'stdout'),
+            []);
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('third\r\n', 'stdout'),
+            []);
+        assert.deepStrictEqual(coordinator.handleBackchannelEntry(entry), {
+            output: 'Example.Category: Information: first\nsecond\nthird\n',
+            category: 'stdout'
+        });
+        assert.deepStrictEqual(coordinator.flush(), []);
+    });
+
+    test('splits an unconfirmed Linux line after a single-line record', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(
+                'info: Example.Category[7] first\n      unrelated\n',
+                'stdout'),
+            []);
+        assert.deepStrictEqual(coordinator.flush(), [
+            {
+                output: 'Example.Category: Information: first\n',
+                category: 'stdout'
+            },
+            {
+                output: '      unrelated\n',
+                category: 'stdout'
+            }
+        ]);
+    });
+
+    test('keeps consecutive Linux single-line records separate', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(
+                'info: First.Category[1] first\n'
+                    + 'warn: Second.Category[2] second\n',
+                'stdout'),
+            [{
+                output: 'First.Category: Information: first\n',
+                category: 'stdout'
+            }]);
+        assert.deepStrictEqual(coordinator.flush(), [{
+            output: '\x1b[33mSecond.Category: Warning: second\x1b[0m\n',
+            category: 'stdout'
+        }]);
+    });
+
     test('deduplicates unindented multiline DebugLogger messages', () => {
         const coordinator = new AppHostLogOutputCoordinator();
 
@@ -444,6 +520,27 @@ suite('AppHost log output coordinator', () => {
                 category: 'stdout'
             });
         assert.deepStrictEqual(coordinator.flush(), []);
+    });
+
+    test('deduplicates bracketed DebugLogger categories in both source orders', () => {
+        const entry = createEntry({
+            categoryName: 'Example.Category[7]',
+            message: 'bracketed'
+        });
+        const raw = 'Example.Category[7]: Information: bracketed\n';
+        const expected = {
+            output: 'Example.Category[7]: Information: bracketed\n',
+            category: 'stdout'
+        };
+
+        const backchannelFirst = new AppHostLogOutputCoordinator();
+        assert.deepStrictEqual(backchannelFirst.handleBackchannelEntry(entry), expected);
+        assert.deepStrictEqual(renderConsole(backchannelFirst, raw, 'console'), []);
+
+        const debugLoggerFirst = new AppHostLogOutputCoordinator();
+        assert.deepStrictEqual(debugLoggerFirst.handleDebugAdapterOutput(raw, 'console'), []);
+        assert.deepStrictEqual(debugLoggerFirst.handleBackchannelEntry(entry), expected);
+        assert.deepStrictEqual(debugLoggerFirst.flush(), []);
     });
 
     test('separates an unconfirmed DebugLogger gap from a confirmed header tail', () => {
@@ -786,10 +883,10 @@ suite('AppHost log output coordinator', () => {
         const coordinator = new AppHostLogOutputCoordinator();
 
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput('Example.Category[7]: Debug: Hidden detail.\n', 'stdout'),
+            coordinator.handleDebugAdapterOutput('Example.Category: Debug: Hidden detail.\n', 'stdout'),
             []);
         assert.deepStrictEqual(
-            renderConsole(coordinator, 'Example.Category[7]: Error: Failed.\n', 'console'),
+            renderConsole(coordinator, 'Example.Category: Error: Failed.\n', 'console'),
             [{ output: 'Example.Category: Error: Failed.\n', category: 'stderr' }]);
     });
 
@@ -1406,6 +1503,26 @@ suite('AppHost log output coordinator', () => {
         coordinator.reset();
 
         assert.ok(coordinator.handleBackchannelEntry(laterEntry));
+    });
+
+    test('matches the full backchannel replay buffer window', () => {
+        const replayCoordinator = new AppHostLogOutputCoordinator();
+        for (let sequenceNumber = 1; sequenceNumber <= 1000; sequenceNumber++) {
+            const entry = createEntry({ sequenceNumber, message: `Entry ${sequenceNumber}` });
+            assert.ok(replayCoordinator.handleBackchannelEntry(entry));
+        }
+        for (let sequenceNumber = 1; sequenceNumber <= 1000; sequenceNumber++) {
+            const entry = createEntry({ sequenceNumber, message: `Entry ${sequenceNumber}` });
+            assert.strictEqual(replayCoordinator.handleBackchannelEntry(entry), undefined);
+        }
+
+        const evictionCoordinator = new AppHostLogOutputCoordinator();
+        for (let sequenceNumber = 1; sequenceNumber <= 1001; sequenceNumber++) {
+            const entry = createEntry({ sequenceNumber, message: `Entry ${sequenceNumber}` });
+            assert.ok(evictionCoordinator.handleBackchannelEntry(entry));
+        }
+        assert.ok(evictionCoordinator.handleBackchannelEntry(
+            createEntry({ sequenceNumber: 1, message: 'Evicted entry' })));
     });
 
     test('idle flush releases final adapter-only and partial output', async () => {
