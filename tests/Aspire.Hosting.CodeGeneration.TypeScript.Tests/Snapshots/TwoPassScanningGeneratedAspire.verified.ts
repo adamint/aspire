@@ -1405,10 +1405,23 @@ export namespace WellKnownPipelineSteps {
     /** The step that checks whether the container runtime (e.g., Docker or Podman) is running. Build steps that need a container runtime should depend on this step. */
     export const CheckContainerRuntime = "check-container-runtime";
 
-    /** Aggregation step for all deploy operations. All deploy steps should be required by this step. */
+    /**
+     * The final aggregate step for the deploy command.
+     *
+     * Normal deploy work should be required by `DeployFinalize`.
+     * Post-finalize hooks should depend on `DeployFinalize` and be required by this step.
+     * Existing integrations may continue to attach work directly to this step; those legacy attachments
+     * remain direct aggregate dependencies. This step completes after the finalizer, post-finalize hooks,
+     * and legacy direct attachments.
+     */
     export const Deploy = "deploy";
 
-    /** The synchronization step that runs after all normal deploy operations. */
+    /**
+     * The synchronization step that runs after the deploy prerequisite and all normal deploy operations.
+     *
+     * Normal deploy work should be required by this step. The `Deploy` aggregate depends on
+     * this step so post-finalize hooks can run after normal work and before final command completion.
+     */
     export const DeployFinalize = "deploy-finalize";
 
     /** The prerequisite step that runs before any deploy operations. */
@@ -1426,10 +1439,23 @@ export namespace WellKnownPipelineSteps {
     /** The step that prompts for parameter values before build, publish, or deployment operations. */
     export const ProcessParameters = "process-parameters";
 
-    /** Aggregation step for all publish operations. All publish steps should be required by this step. */
+    /**
+     * The final aggregate step for the publish command.
+     *
+     * Normal publish work should be required by `PublishFinalize`.
+     * Post-finalize hooks should depend on `PublishFinalize` and be required by this step.
+     * Existing integrations may continue to attach work directly to this step; those legacy attachments
+     * remain direct aggregate dependencies. This step completes after the finalizer, post-finalize hooks,
+     * and legacy direct attachments.
+     */
     export const Publish = "publish";
 
-    /** The synchronization step that runs after all normal publish operations. */
+    /**
+     * The synchronization step that runs after the publish prerequisite and all normal publish operations.
+     *
+     * Normal publish work should be required by this step. The `Publish` aggregate depends on
+     * this step so post-finalize hooks can run after normal work and before final command completion.
+     */
     export const PublishFinalize = "publish-finalize";
 
     /** The prerequisite step that runs before any publish operations. */

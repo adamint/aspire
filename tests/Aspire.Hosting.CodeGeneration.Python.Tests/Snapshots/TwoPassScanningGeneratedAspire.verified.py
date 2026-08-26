@@ -2062,9 +2062,9 @@ WellKnownPipelineSteps.Build = "build"
 WellKnownPipelineSteps.BuildPrereq = "build-prereq"
 # The step that checks whether the container runtime (e.g., Docker or Podman) is running. Build steps that need a container runtime should depend on this step.
 WellKnownPipelineSteps.CheckContainerRuntime = "check-container-runtime"
-# Aggregation step for all deploy operations. All deploy steps should be required by this step.
+# The final aggregate step for the deploy command.
 WellKnownPipelineSteps.Deploy = "deploy"
-# The synchronization step that runs after all normal deploy operations.
+# The synchronization step that runs after the deploy prerequisite and all normal deploy operations.
 WellKnownPipelineSteps.DeployFinalize = "deploy-finalize"
 # The prerequisite step that runs before any deploy operations.
 WellKnownPipelineSteps.DeployPrereq = "deploy-prereq"
@@ -2076,9 +2076,9 @@ WellKnownPipelineSteps.DestroyPrereq = "destroy-prereq"
 WellKnownPipelineSteps.Diagnostics = "diagnostics"
 # The step that prompts for parameter values before build, publish, or deployment operations.
 WellKnownPipelineSteps.ProcessParameters = "process-parameters"
-# Aggregation step for all publish operations. All publish steps should be required by this step.
+# The final aggregate step for the publish command.
 WellKnownPipelineSteps.Publish = "publish"
-# The synchronization step that runs after all normal publish operations.
+# The synchronization step that runs after the publish prerequisite and all normal publish operations.
 WellKnownPipelineSteps.PublishFinalize = "publish-finalize"
 # The prerequisite step that runs before any publish operations.
 WellKnownPipelineSteps.PublishPrereq = "publish-prereq"
