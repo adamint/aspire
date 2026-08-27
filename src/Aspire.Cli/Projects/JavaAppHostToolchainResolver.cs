@@ -574,9 +574,9 @@ internal static class JavaAppHostToolchainResolver
         return
         [
             "-f", Path.Combine(reactorPath, MavenPomFileName),
-            // Maven first expands -am from the included module, then applies the exclusion. The
-            // resulting reactor contains exactly the selected module's upstream projects.
-            "-pl", upstreamOnly ? $"{modulePath},!{modulePath}" : modulePath,
+            // Maven expands -am, removes the selected module, and retains the aggregator so an
+            // independent module performs a successful POM-only install instead of leaving an empty reactor.
+            "-pl", upstreamOnly ? $"{modulePath},!{modulePath},." : modulePath,
             .. (upstreamOnly ? (string[])["-am"] : [])
         ];
     }

@@ -388,7 +388,7 @@ public class JavaAppHostToolchainResolverTests(ITestOutputHelper outputHelper)
             [
                 "-B", "-q",
                 "-f", Path.Combine("..", "..", "..", "..", "pom.xml"),
-                "-pl", "apphost,!apphost",
+                "-pl", "apphost,!apphost,.",
                 "-am",
                 "install",
                 "-Dmaven.test.skip=true"
@@ -431,6 +431,45 @@ public class JavaAppHostToolchainResolverTests(ITestOutputHelper outputHelper)
         Assert.True(
             File.Exists(Path.Combine(resolution.ProjectDirectory.FullName, "target", "aspire-deps", "library-1.0-SNAPSHOT.jar")),
             copyResult.Output);
+    }
+
+    [Fact]
+    [OuterloopTest("Downloads Maven plugins and dependencies into an empty local repository")]
+    public async Task ApplyToRuntimeSpec_ForIndependentMavenReactorModule_AnchorsTheUpstreamInstallAtTheAggregator()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var appHostDirectory = CreateIndependentMavenReactor(workspace.Path);
+        var localRepository = Directory.CreateDirectory(Path.Combine(workspace.Path, "empty-maven-repository"));
+
+        var resolution = JavaAppHostToolchainResolver.Resolve(appHostDirectory);
+        JavaAppHostToolchainResolver.ApplyToRuntimeSpec(
+            CreateJavacRuntimeSpec(),
+            resolution,
+            appHostDirectory,
+            out var installDependencies);
+
+        AssertWrapperInvocation(
+            Path.Combine(workspace.Path, OperatingSystem.IsWindows() ? "mvnw.cmd" : "mvnw"),
+            appHostDirectory.FullName,
+            [
+                "-B", "-q",
+                "-f", Path.Combine("..", "..", "..", "..", "pom.xml"),
+                "-pl", "apphost,!apphost,.",
+                "-am",
+                "install",
+                "-Dmaven.test.skip=true"
+            ],
+            installDependencies![0]);
+
+        var installResult = await RunCommandAsync(
+            installDependencies[0],
+            appHostDirectory.FullName,
+            new Dictionary<string, string>
+            {
+                ["MAVEN_OPTS"] = $"-Dmaven.repo.local={localRepository.FullName}"
+            });
+
+        Assert.True(installResult.ExitCode == 0, installResult.Output);
     }
 
     [Fact]
@@ -515,6 +554,52 @@ public class JavaAppHostToolchainResolverTests(ITestOutputHelper outputHelper)
                   <version>${project.version}</version>
                 </dependency>
               </dependencies>
+            </project>
+            """);
+        var appHostDirectory = Directory.CreateDirectory(
+            Path.Combine(appHostProjectDirectory.FullName, "src", "main", "java"));
+        File.WriteAllText(
+            Path.Combine(appHostDirectory.FullName, "AppHost.java"),
+            "import aspire.*; public final class AppHost { }");
+
+        var wrapperSource = Path.Combine(
+            GetRepoRoot(),
+            "playground",
+            "JavaAppHost",
+            "forecast");
+        File.Copy(
+            Path.Combine(wrapperSource, OperatingSystem.IsWindows() ? "mvnw.cmd" : "mvnw"),
+            Path.Combine(root, OperatingSystem.IsWindows() ? "mvnw.cmd" : "mvnw"));
+        var wrapperDirectory = Directory.CreateDirectory(Path.Combine(root, ".mvn", "wrapper"));
+        File.Copy(
+            Path.Combine(wrapperSource, ".mvn", "wrapper", "maven-wrapper.properties"),
+            Path.Combine(wrapperDirectory.FullName, "maven-wrapper.properties"));
+
+        return appHostDirectory;
+    }
+
+    private static DirectoryInfo CreateIndependentMavenReactor(string root)
+    {
+        File.WriteAllText(Path.Combine(root, "pom.xml"), """
+            <project xmlns="http://maven.apache.org/POM/4.0.0">
+              <modelVersion>4.0.0</modelVersion>
+              <groupId>com.example.aggregator</groupId>
+              <artifactId>reactor</artifactId>
+              <version>1.0-SNAPSHOT</version>
+              <packaging>pom</packaging>
+              <modules>
+                <module>apphost</module>
+              </modules>
+            </project>
+            """);
+
+        var appHostProjectDirectory = Directory.CreateDirectory(Path.Combine(root, "apphost"));
+        File.WriteAllText(Path.Combine(appHostProjectDirectory.FullName, "pom.xml"), """
+            <project xmlns="http://maven.apache.org/POM/4.0.0">
+              <modelVersion>4.0.0</modelVersion>
+              <groupId>com.example.apphost</groupId>
+              <artifactId>apphost</artifactId>
+              <version>1.0-SNAPSHOT</version>
             </project>
             """);
         var appHostDirectory = Directory.CreateDirectory(

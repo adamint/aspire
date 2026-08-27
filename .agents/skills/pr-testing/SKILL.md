@@ -446,7 +446,7 @@ aspire run 2>&1 | Tee-Object -FilePath "$scenarioDir\run-output.txt"
 
 ### 10. Generate Detailed Report
 
-Write the comprehensive report to a markdown file and keep its path in `reportPath` so the same file can be posted in Step 12:
+Write the comprehensive report to a markdown file and keep its path in `reportPath` so the same file can be posted in Step 11:
 
 ```bash
 reportPath="$testDir/pr-$prNumber-testing-report.md"
@@ -621,22 +621,7 @@ For a VS Code extension PR, the report should look more like this example than a
 **✅ PR VERIFIED**
 ```
 
-### 11. Converge CI and Copilot review after pushes
-
-If testing or review feedback leads to a commit and push, do not stop after the local validation passes:
-
-1. Capture the latest pushed head commit SHA.
-2. Wait for the complete CI check set for that SHA to reach a terminal state with no failures or cancellations. Diagnose failures; fix branch regressions and push again, or report an unrecoverable infrastructure failure as blocked.
-3. Re-read the PR head SHA. If it changed during the CI wait, immediately repeat from step 1 instead of classifying cancelled old-head checks.
-4. Request or re-request Copilot review and wait for a review submitted against that SHA.
-5. Re-read the PR head SHA. If it changed during the review wait, immediately repeat from step 1.
-6. Refresh unresolved review threads, review bodies, and PR comments. Suppressed comments shown only in a Copilot review body are not actionable threads and do not require a code change or reply.
-7. Evaluate actionable feedback against the codebase. Address valid feedback, run focused validation, commit, push, reply in the existing thread, and resolve the thread.
-8. Re-read the PR head SHA. If it changed, repeat from step 1 for the new head.
-
-After any push, reacquire or rebuild the PR artifact, repeat the artifact-version check against the new head SHA, rerun the affected scenarios, update the report's evidence, and regenerate the report before posting it. Testing is complete only when CI is green for the latest head commit, Copilot review for that head has completed, the report covers that head, and no actionable review threads remain.
-
-### 12. Ask Whether to Post the Report
+### 11. Ask Whether to Post the Report
 
 After the test run finishes and the detailed report is generated, ask the user whether to post the report as a PR comment when the run is associated with a GitHub PR (`prNumber` is known). Default the prompt to **Yes**, but do not post anything without explicit user confirmation.
 
@@ -744,7 +729,7 @@ Document failures with full context:
 [How this affects users of the PR changes]
 ```
 
-### 13. Offer Container Inspection
+### 12. Offer Container Inspection
 
 If testing ran in the repo container runner, ask the user before cleanup whether they want to keep the mounted workspace around for inspection. Use whatever interactive prompt mechanism is available in the current agent framework.
 
@@ -847,7 +832,6 @@ Dashboard correctly displays the new Redis resource type.
 - **Test actual changes** - Focus scenarios on what the PR modified
 - **Include unhappy-path cases** - Add targeted negative/boundary scenarios for changed user-facing behavior, and verify expected safe failures or recovery states
 - **Ask before posting** - If there is a GitHub PR, ask before posting the report as a PR comment; default to yes, but require explicit confirmation
-- **After every push, converge CI and review** - Wait for CI, re-request and wait for Copilot review, ignore suppressed comments that are not review threads, address valid actionable threads, and repeat until CI is green and no actionable threads remain
 - **Fresh projects** - Always use `aspire new` for each scenario, don't reuse projects
 - **Container mode** - Prefer the repo-local `./eng/scripts/aspire-pr-container` scripts and a fresh temp workspace when Docker is available
 - **Ask before container cleanup** - At the end of a container-mode run, ask whether to keep the mounted workspace around for inspection
