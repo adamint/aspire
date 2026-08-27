@@ -938,7 +938,11 @@ public class AspireClient {
         }
 
         for (CancellationToken remoteToken : tokensToNotify) {
-            remoteToken.notifyCancellationListeners();
+            try {
+                remoteToken.notifyCancellationListeners();
+            } catch (RuntimeException exception) {
+                debug("Cancellation listener failed during disconnect.", exception);
+            }
         }
 
         if (handler != null) {

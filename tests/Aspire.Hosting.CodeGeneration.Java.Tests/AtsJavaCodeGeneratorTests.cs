@@ -1077,6 +1077,81 @@ public class AtsJavaCodeGeneratorTests
     }
 
     [Fact]
+    public async Task GeneratedTransport_DisconnectContinuesAfterCancellationListenerFailure()
+    {
+        using var workspace = await CreateJavaProbeWorkspaceAsync();
+        workspace.WriteSource(
+            "aspire/TransportDisconnectCancellationFailureProbe.java",
+            """
+            package aspire;
+
+            import java.lang.reflect.Field;
+            import java.lang.reflect.Method;
+            import java.util.Map;
+            import java.util.concurrent.atomic.AtomicInteger;
+
+            public class TransportDisconnectCancellationFailureProbe {
+                @SuppressWarnings("unchecked")
+                public static void main(String[] args) throws Exception {
+                    var client = new AspireClient("ignored");
+                    var cancellationCalls = new AtomicInteger();
+                    var disconnectCalls = new AtomicInteger();
+                    client.onDisconnect(disconnectCalls::incrementAndGet);
+
+                    var firstToken = createThrowingToken(client, "first", cancellationCalls);
+                    var secondToken = createThrowingToken(client, "second", cancellationCalls);
+
+                    Field tokensField = AspireClient.class.getDeclaredField("remoteCancellationTokens");
+                    tokensField.setAccessible(true);
+                    Map<String, CancellationToken> tokens =
+                        (Map<String, CancellationToken>) tokensField.get(client);
+                    tokens.put("first", firstToken);
+                    tokens.put("second", secondToken);
+
+                    Method disconnect = AspireClient.class.getDeclaredMethod("handleDisconnect");
+                    disconnect.setAccessible(true);
+                    disconnect.invoke(client);
+
+                    if (cancellationCalls.get() != 2
+                        || disconnectCalls.get() != 1
+                        || !firstToken.isCancelled()
+                        || !secondToken.isCancelled()) {
+                        throw new IllegalStateException(
+                            "disconnect propagation was interrupted: cancellationCalls="
+                                + cancellationCalls.get()
+                                + ", disconnectCalls=" + disconnectCalls.get()
+                                + ", firstCancelled=" + firstToken.isCancelled()
+                                + ", secondCancelled=" + secondToken.isCancelled());
+                    }
+
+                    System.out.println("OK");
+                }
+
+                private static CancellationToken createThrowingToken(
+                    AspireClient client,
+                    String id,
+                    AtomicInteger calls) {
+                    var token = new CancellationToken(id, client);
+                    token.onCancel(() -> {
+                        calls.incrementAndGet();
+                        throw new IllegalStateException("expected listener failure for " + id);
+                    });
+                    return token;
+                }
+            }
+            """);
+
+        await workspace.CompileAsync();
+        var run = await workspace.RunClassAsync("aspire.TransportDisconnectCancellationFailureProbe", TimeSpan.FromSeconds(6));
+
+        Assert.True(run.TimedOut is false, $"Probe timed out. stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.True(
+            run.ExitCode == 0,
+            $"Probe failed with exit code {run.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.Contains("OK", run.StdOut, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task GeneratedTransport_CancellationTokenApi_IsAccessibleFromExternalPackage()
     {
         using var workspace = await CreateJavaProbeWorkspaceAsync();
