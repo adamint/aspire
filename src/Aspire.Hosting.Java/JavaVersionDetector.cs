@@ -97,11 +97,10 @@ internal static partial class JavaVersionDetector
         // Every project element with a matching name is considered, not just the first: a POM
         // often declares <release>${java.version}</release> on the compiler plugin and a literal elsewhere,
         // and stopping at the unresolvable property reference would fall back to the default version instead.
-        // Project declarations are checked before profiles because profile activation can change with Maven's
-        // effective model, environment, and invocation. When the project declares no version, profiles with
-        // <activeByDefault>true</activeByDefault> are still better evidence than the generic fallback. Other
-        // profile activation rules are not evaluated because they can depend on the JDK, operating system,
-        // system properties, files, settings, or command-line profile selection.
+        // Within each declaration kind, active-by-default profile values are checked before the project's
+        // base values because Maven applies them as overrides in its effective model. Other profile activation
+        // rules are not evaluated because they can depend on the JDK, operating system, system properties,
+        // files, settings, or command-line profile selection.
         // Ordered by how directly each one decides the bytecode version, most direct first, because the
         // runtime image has to be at least what the compiler actually emitted.
         //
@@ -111,32 +110,32 @@ internal static partial class JavaVersionDetector
         // java.version and maven.compiler.release overrides that mapping, so Maven compiles to the
         // latter and reading java.version would pick a runtime too old to load the classes.
         // https://docs.spring.io/spring-boot/maven-plugin/using.html
-        IEnumerable<XElement>[] candidateGroups =
+        foreach (var (name, mustBePluginConfiguration) in ((string, bool)[])
         [
-            document.Descendants().Where(element => !IsInProfile(element)),
-            // Maven merges active profiles in declaration order, with later profile values taking precedence.
-            document.Descendants().Where(IsInActiveByDefaultProfile).Reverse(),
-        ];
-
-        foreach (var candidateElements in candidateGroups)
+            // Explicit plugin configuration beats the property that merely supplies the parameter's
+            // default, and release beats target within the plugin.
+            // https://maven.apache.org/plugins/maven-compiler-plugin/compile-mojo.html
+            //
+            // <release> and <target> are only meaningful inside the compiler plugin's <configuration>.
+            // Matched merely by having a <configuration> parent they would also pick up unrelated
+            // plugins: maven-antrun-plugin's canonical configuration is literally
+            // <configuration><target>...</target></configuration>, holding Ant XML rather than a Java
+            // release, and any plugin is free to name a <release> of its own.
+            ("release", true),
+            ("maven.compiler.release", false),
+            ("target", true),
+            ("maven.compiler.target", false),
+            ("java.version", false),
+        ])
         {
-            foreach (var (name, mustBePluginConfiguration) in ((string, bool)[])
+            IEnumerable<XElement>[] candidateGroups =
             [
-                // Explicit plugin configuration beats the property that merely supplies the parameter's
-                // default, and release beats target within the plugin.
-                // https://maven.apache.org/plugins/maven-compiler-plugin/compile-mojo.html
-                //
-                // <release> and <target> are only meaningful inside the compiler plugin's <configuration>.
-                // Matched merely by having a <configuration> parent they would also pick up unrelated
-                // plugins: maven-antrun-plugin's canonical configuration is literally
-                // <configuration><target>...</target></configuration>, holding Ant XML rather than a Java
-                // release, and any plugin is free to name a <release> of its own.
-                ("release", true),
-                ("maven.compiler.release", false),
-                ("target", true),
-                ("maven.compiler.target", false),
-                ("java.version", false),
-            ])
+                // Maven merges active profiles in declaration order, with later profile values taking precedence.
+                document.Descendants().Where(IsInActiveByDefaultProfile).Reverse(),
+                document.Descendants().Where(element => !IsInProfile(element)),
+            ];
+
+            foreach (var candidateElements in candidateGroups)
             {
                 foreach (var element in candidateElements.Where(e => string.Equals(e.Name.LocalName, name, StringComparison.Ordinal)))
                 {

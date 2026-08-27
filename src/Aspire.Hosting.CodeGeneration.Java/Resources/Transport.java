@@ -641,14 +641,6 @@ class AspireClient {
             }
         }
 
-        if (id instanceof String idString) {
-            try {
-                return Integer.parseInt(idString);
-            } catch (NumberFormatException ignored) {
-                return null;
-            }
-        }
-
         return null;
     }
 

@@ -832,6 +832,7 @@ public class AtsJavaCodeGeneratorTests
                 public static void main(String[] args) throws Exception {
                     assertPayloadFails("{not-json}");
                     assertPayloadFails("{\"jsonrpc\":\"2.0\",\"result\":42}");
+                    assertPayloadFails("{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":42}");
                     assertPayloadFails("{\"jsonrpc\":\"2.0\",\"id\":1.5,\"result\":42}");
                     assertPayloadFails("{\"jsonrpc\":\"2.0\",\"id\":1.0000000000000001,\"result\":42}");
                     assertPayloadFails("{\"jsonrpc\":\"2.0\",\"id\":4294967297,\"result\":42}");

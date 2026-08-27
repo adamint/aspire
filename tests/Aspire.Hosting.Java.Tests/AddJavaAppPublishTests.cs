@@ -576,7 +576,7 @@ public class AddJavaAppPublishTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public void JavaVersionDetector_PrefersProjectPropertiesToActiveByDefaultProfileProperties()
+    public void JavaVersionDetector_PrefersActiveByDefaultProfilePropertiesToProjectProperties()
     {
         using var appDirectory = new TempJavaAppDirectory();
 
@@ -596,7 +596,7 @@ public class AddJavaAppPublishTests(ITestOutputHelper outputHelper)
             </project>
             """);
 
-        Assert.Equal("21", JavaVersionDetector.Detect(appDirectory.Path));
+        Assert.Equal("25", JavaVersionDetector.Detect(appDirectory.Path));
     }
 
     [Fact]
