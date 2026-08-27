@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as childProcess from 'child_process';
-import { aspireTerminalName, dcpServerNotInitialized, rpcServerNotInitialized, terminalCommandUnsafeLiteral } from '../loc/strings';
+import { aspireTerminalClosedBeforeProcessStarted, aspireTerminalName, aspireTerminalProcessFailedToStart, dcpServerNotInitialized, rpcServerNotInitialized, terminalCommandUnsafeLiteral } from '../loc/strings';
 import { extensionLogOutputChannel } from './logging';
 import { RpcServerConnectionInfo } from '../server/AspireRpcServer';
 import { DcpServerConnectionInfo } from '../dcp/types';
@@ -312,14 +312,14 @@ export class AspireTerminalProvider implements vscode.Disposable {
                 new Promise<never>((_, reject) => {
                     closeListener = vscode.window.onDidCloseTerminal(closedTerminal => {
                         if (closedTerminal === terminal) {
-                            reject(new Error('Aspire terminal closed before its process started.'));
+                            reject(new Error(aspireTerminalClosedBeforeProcessStarted));
                         }
                     });
                 }),
             ]);
 
             if (processId === undefined) {
-                throw new Error('Aspire terminal process failed to start.');
+                throw new Error(aspireTerminalProcessFailedToStart);
             }
         }
         finally {
