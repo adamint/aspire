@@ -711,6 +711,47 @@ suite('AppHost log output coordinator', () => {
             undefined);
     });
 
+    test('deduplicates a DebugLogger message containing a level-shaped token', () => {
+        const raw = 'Example.Category: Information: Result: Error: failed\n';
+        const entry = createEntry({ message: 'Result: Error: failed' });
+        const backchannelFirst = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(backchannelFirst.handleBackchannelEntry(entry), {
+            output: raw,
+            category: 'stdout'
+        });
+        assert.deepStrictEqual(renderConsole(backchannelFirst, raw, 'console'), []);
+
+        const debugLoggerFirst = new AppHostLogOutputCoordinator();
+        assert.deepStrictEqual(renderConsole(debugLoggerFirst, raw, 'console'), [{
+            output: raw,
+            category: 'stdout'
+        }]);
+        assert.strictEqual(debugLoggerFirst.handleBackchannelEntry(entry), undefined);
+
+        const adapterOnly = new AppHostLogOutputCoordinator();
+        assert.deepStrictEqual(renderConsole(adapterOnly, raw, 'console'), [{
+            output: raw,
+            category: 'stdout'
+        }]);
+    });
+
+    test('deduplicates a level-shaped token trailing alias after adapter flush', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const raw = 'Example.Category: Information: Result: Error: first\nsecond\n';
+
+        assert.deepStrictEqual(coordinator.handleDebugAdapterOutput(raw, 'console'), []);
+        assert.deepStrictEqual(coordinator.flush(), [{
+            output: raw,
+            category: 'stdout'
+        }]);
+        assert.strictEqual(coordinator.handleBackchannelEntry(createEntry({
+            logLevel: 'Error',
+            message: 'first',
+            categoryName: 'Example.Category: Information: Result'
+        })), undefined);
+    });
+
     test('deduplicates a DebugLogger-first multiline message whose continuation looks like a header', () => {
         const coordinator = new AppHostLogOutputCoordinator();
         const message = 'first\nOther.Category: Warning: second';
