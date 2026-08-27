@@ -5,7 +5,7 @@ PIPELINE DEPENDENCY GRAPH DIAGNOSTICS
 This diagnostic output shows the complete pipeline dependency graph structure.
 Use this to understand step relationships and troubleshoot execution issues.
 
-Total steps defined: 50
+Total steps defined: 52
 
 Analysis for full pipeline execution (showing all steps and their relationships)
 
@@ -22,10 +22,10 @@ Steps with no dependencies run first, followed by steps that depend on them.
   6. process-parameters
   7. build-prereq
   8. check-container-runtime
-  9. validate-build-only-container-references
- 10. deploy-prereq
- 11. build-api
- 12. build
+  9. build-api
+ 10. build
+ 11. validate-build-only-container-references
+ 12. deploy-prereq
  13. validate-azure-login
  14. create-provisioning-context
  15. provision-api-identity
@@ -53,17 +53,19 @@ Steps with no dependencies run first, followed by steps that depend on them.
  37. provision-sql-admin-identity-roles-sql-store
  38. provision-azure-bicep-resources
  39. print-dashboard-url-env
- 40. deploy
- 41. deploy-api
- 42. destroy-prereq
- 43. destroy-azure-azure-environment
- 44. destroy
- 45. diagnostics
- 46. publish-prereq
- 47. publish-azure-environment
- 48. publish
- 49. publish-manifest
- 50. push
+ 40. deploy-finalize
+ 41. deploy
+ 42. deploy-api
+ 43. destroy-prereq
+ 44. destroy-azure-azure-environment
+ 45. destroy
+ 46. diagnostics
+ 47. publish-prereq
+ 48. publish-azure-environment
+ 49. publish-finalize
+ 50. publish
+ 51. publish-manifest
+ 52. push
 
 DETAILED STEP ANALYSIS
 ======================
@@ -85,7 +87,7 @@ Step: build
 
 Step: build-api
     Description: Builds the container image for the api project.
-    Dependencies: ✓ build-prereq, ✓ check-container-runtime, ✓ deploy-prereq
+    Dependencies: ✓ build-prereq, ✓ check-container-runtime
     Resource: api (ProjectResource)
     Tags: build-compute
 
@@ -103,14 +105,18 @@ Step: create-provisioning-context
     Resource: azure-environment (AzureEnvironmentResource)
 
 Step: deploy
-    Description: Aggregation step for all deploy operations. All deploy steps should be required by this step.
-    Dependencies: ✓ build-api, ✓ create-provisioning-context, ✓ print-api-summary, ✓ print-dashboard-url-env, ✓ provision-azure-bicep-resources, ✓ validate-azure-login
+    Description: Final aggregation step for deploy command completion. Post-finalize hooks should depend on deploy-finalize and be required by this step.
+    Dependencies: ✓ deploy-finalize
 
 Step: deploy-api
     Description: Aggregation step for deploying api to Azure Container Apps.
     Dependencies: ✓ print-api-summary
     Resource: api-containerapp (AzureContainerAppResource)
     Tags: deploy-compute
+
+Step: deploy-finalize
+    Description: Synchronization step that runs after all normal deploy operations.
+    Dependencies: ✓ build-api, ✓ create-provisioning-context, ✓ deploy-prereq, ✓ print-api-summary, ✓ print-dashboard-url-env, ✓ provision-azure-bicep-resources, ✓ validate-azure-login
 
 Step: deploy-prereq
     Description: Prerequisite step that runs before any deploy operations. Initializes deployment environment and manages deployment state.
@@ -280,13 +286,17 @@ Step: provision-vnet
     Tags: provision-infra
 
 Step: publish
-    Description: Aggregation step for all publish operations. All publish steps should be required by this step.
-    Dependencies: ✓ publish-azure-environment
+    Description: Final aggregation step for publish command completion. Post-finalize hooks should depend on publish-finalize and be required by this step.
+    Dependencies: ✓ publish-finalize
 
 Step: publish-azure-environment
     Description: Publishes the Azure environment configuration for azure-environment.
     Dependencies: ✓ publish-prereq
     Resource: azure-environment (AzureEnvironmentResource)
+
+Step: publish-finalize
+    Description: Synchronization step that runs after all normal publish operations.
+    Dependencies: ✓ publish-azure-environment, ✓ publish-prereq
 
 Step: publish-manifest
     Description: Publishes the Aspire application model as a JSON manifest file.
@@ -353,19 +363,19 @@ If targeting 'before-start':
 
 If targeting 'build':
   Direct dependencies: build-api
-  Total steps: 7
+  Total steps: 5
   Execution order:
-    [0] check-container-runtime | process-parameters | validate-build-only-container-references (parallel)
-    [1] build-prereq | deploy-prereq (parallel)
+    [0] check-container-runtime | process-parameters (parallel)
+    [1] build-prereq
     [2] build-api
     [3] build
 
 If targeting 'build-api':
-  Direct dependencies: build-prereq, check-container-runtime, deploy-prereq
-  Total steps: 6
+  Direct dependencies: build-prereq, check-container-runtime
+  Total steps: 4
   Execution order:
-    [0] check-container-runtime | process-parameters | validate-build-only-container-references (parallel)
-    [1] build-prereq | deploy-prereq (parallel)
+    [0] check-container-runtime | process-parameters (parallel)
+    [1] build-prereq
     [2] build-api
 
 If targeting 'build-prereq':
@@ -391,8 +401,8 @@ If targeting 'create-provisioning-context':
     [3] create-provisioning-context
 
 If targeting 'deploy':
-  Direct dependencies: build-api, create-provisioning-context, print-api-summary, print-dashboard-url-env, provision-azure-bicep-resources, validate-azure-login
-  Total steps: 34
+  Direct dependencies: deploy-finalize
+  Total steps: 35
   Execution order:
     [0] check-container-runtime | process-parameters | validate-build-only-container-references (parallel)
     [1] build-prereq | deploy-prereq (parallel)
@@ -406,7 +416,8 @@ If targeting 'deploy':
     [9] provision-api-containerapp
     [10] print-api-summary | provision-azure-bicep-resources (parallel)
     [11] print-dashboard-url-env
-    [12] deploy
+    [12] deploy-finalize
+    [13] deploy
 
 If targeting 'deploy-api':
   Direct dependencies: print-api-summary
@@ -424,6 +435,24 @@ If targeting 'deploy-api':
     [9] provision-api-containerapp
     [10] print-api-summary
     [11] deploy-api
+
+If targeting 'deploy-finalize':
+  Direct dependencies: build-api, create-provisioning-context, deploy-prereq, print-api-summary, print-dashboard-url-env, provision-azure-bicep-resources, validate-azure-login
+  Total steps: 34
+  Execution order:
+    [0] check-container-runtime | process-parameters | validate-build-only-container-references (parallel)
+    [1] build-prereq | deploy-prereq (parallel)
+    [2] build-api | validate-azure-login (parallel)
+    [3] create-provisioning-context
+    [4] provision-api-identity | provision-cosmos | provision-env-acr | provision-sql | provision-sql-nsg | provision-sql-store (parallel)
+    [5] login-to-acr-env-acr | provision-api-roles-cosmos | provision-env | provision-sql-admin-identity | provision-vnet (parallel)
+    [6] provision-privatelink-database-windows-net | provision-privatelink-documents-azure-com | provision-privatelink-file-core-windows-net | provision-sql-admin-identity-roles-sql-store | push-prereq (parallel)
+    [7] provision-pe-subnet-cosmos-pe | provision-pe-subnet-files-pe | provision-pe-subnet-sql-pe | push-api (parallel)
+    [8] provision-api-roles-sql
+    [9] provision-api-containerapp
+    [10] print-api-summary | provision-azure-bicep-resources (parallel)
+    [11] print-dashboard-url-env
+    [12] deploy-finalize
 
 If targeting 'deploy-prereq':
   Direct dependencies: process-parameters, validate-build-only-container-references
@@ -754,13 +783,14 @@ If targeting 'provision-vnet':
     [5] provision-vnet
 
 If targeting 'publish':
-  Direct dependencies: publish-azure-environment
-  Total steps: 5
+  Direct dependencies: publish-finalize
+  Total steps: 6
   Execution order:
     [0] process-parameters | validate-build-only-container-references (parallel)
     [1] publish-prereq
     [2] publish-azure-environment
-    [3] publish
+    [3] publish-finalize
+    [4] publish
 
 If targeting 'publish-azure-environment':
   Direct dependencies: publish-prereq
@@ -769,6 +799,15 @@ If targeting 'publish-azure-environment':
     [0] process-parameters | validate-build-only-container-references (parallel)
     [1] publish-prereq
     [2] publish-azure-environment
+
+If targeting 'publish-finalize':
+  Direct dependencies: publish-azure-environment, publish-prereq
+  Total steps: 5
+  Execution order:
+    [0] process-parameters | validate-build-only-container-references (parallel)
+    [1] publish-prereq
+    [2] publish-azure-environment
+    [3] publish-finalize
 
 If targeting 'publish-manifest':
   Direct dependencies: none

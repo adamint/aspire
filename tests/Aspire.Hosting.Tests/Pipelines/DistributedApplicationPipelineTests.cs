@@ -2488,6 +2488,79 @@ public class DistributedApplicationPipelineTests(ITestOutputHelper testOutputHel
         }
     }
 
+    [Fact]
+    public async Task ExecuteStepSequentiallyAsync_UsesSequentialTargetForFinalizationGating()
+    {
+        using var builder = CreatePipelineTestBuilder();
+
+        var deployPrerequisiteExecuted = false;
+        var sharedStepExecuted = false;
+        var pipeline = new DistributedApplicationPipeline();
+        pipeline.AddStep(new PipelineStep
+        {
+            Name = "deploy-prerequisite-observer",
+            Action = _ =>
+            {
+                deployPrerequisiteExecuted = true;
+                return Task.CompletedTask;
+            },
+            RequiredBySteps = [WellKnownPipelineSteps.DeployPrereq],
+        });
+        pipeline.AddStep(new PipelineStep
+        {
+            Name = "shared-before-start-and-deploy-work",
+            Action = _ =>
+            {
+                sharedStepExecuted = true;
+                return Task.CompletedTask;
+            },
+            RequiredBySteps =
+            [
+                WellKnownPipelineSteps.BeforeStart,
+                WellKnownPipelineSteps.DeployFinalize,
+            ],
+        });
+
+        var context = CreateDeployingContext(builder.Build());
+
+        await pipeline.ExecuteStepSequentiallyAsync(WellKnownPipelineSteps.BeforeStart, context).DefaultTimeout();
+
+        Assert.True(sharedStepExecuted);
+        Assert.False(deployPrerequisiteExecuted);
+    }
+
+    [Fact]
+    public async Task ResolveStepsAsync_UsesStepSelectedByConfigurationCallbackForFinalizationGating()
+    {
+        using var builder = CreatePipelineTestBuilder();
+
+        var pipeline = new DistributedApplicationPipeline();
+        pipeline.AddStep(new PipelineStep
+        {
+            Name = "shared-build-and-deploy-work",
+            Action = _ => Task.CompletedTask,
+            RequiredBySteps =
+            [
+                WellKnownPipelineSteps.Build,
+                WellKnownPipelineSteps.DeployFinalize,
+            ],
+        });
+        pipeline.AddPipelineConfiguration(context =>
+        {
+            var options = context.Services
+                .GetRequiredService<Microsoft.Extensions.Options.IOptions<PipelineOptions>>()
+                .Value;
+            options.Step = WellKnownPipelineSteps.Build;
+            return Task.CompletedTask;
+        });
+
+        var context = CreateDeployingContext(builder.Build());
+        var resolvedSteps = await pipeline.ResolveStepsAsync(context).DefaultTimeout();
+        var sharedWork = resolvedSteps.Single(step => step.Name == "shared-build-and-deploy-work");
+
+        Assert.DoesNotContain(WellKnownPipelineSteps.DeployPrereq, sharedWork.DependsOnSteps);
+    }
+
     [Theory]
     [InlineData(WellKnownPipelineSteps.Deploy)]
     [InlineData(WellKnownPipelineSteps.DeployFinalize)]

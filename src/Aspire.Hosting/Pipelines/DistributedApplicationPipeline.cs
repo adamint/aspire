@@ -40,7 +40,7 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
         _steps.Add(new PipelineStep
         {
             Name = WellKnownPipelineSteps.Deploy,
-            Description = "Aggregation step for all deploy operations. All deploy steps should be required by this step.",
+            Description = "Final aggregation step for deploy command completion. Post-finalize hooks should depend on deploy-finalize and be required by this step.",
             Action = _ => Task.CompletedTask,
             DependsOnSteps = [WellKnownPipelineSteps.DeployFinalize],
         });
@@ -309,7 +309,7 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
         _steps.Add(new PipelineStep
         {
             Name = WellKnownPipelineSteps.Publish,
-            Description = "Aggregation step for all publish operations. All publish steps should be required by this step.",
+            Description = "Final aggregation step for publish command completion. Post-finalize hooks should depend on publish-finalize and be required by this step.",
             Action = _ => Task.CompletedTask,
             DependsOnSteps = [WellKnownPipelineSteps.PublishFinalize],
         });
@@ -613,7 +613,7 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
         string stepName,
         PipelineContext context)
     {
-        var allSteps = await ResolveStepsAsync(context).ConfigureAwait(false);
+        var allSteps = await ResolveStepsForTargetAsync(context, stepName).ConfigureAwait(false);
 
         if (allSteps.Count == 0)
         {
@@ -640,7 +640,12 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
     /// without executing them. The returned list is in collection order; use
     /// <see cref="GetTopologicalOrder"/> to obtain execution order.
     /// </summary>
-    internal async Task<List<PipelineStep>> ResolveStepsAsync(PipelineContext context)
+    internal Task<List<PipelineStep>> ResolveStepsAsync(PipelineContext context)
+        => ResolveStepsForTargetAsync(context, selectedStepNameOverride: null);
+
+    private async Task<List<PipelineStep>> ResolveStepsForTargetAsync(
+        PipelineContext context,
+        string? selectedStepNameOverride)
     {
         var annotationSteps = await CollectStepsFromAnnotationsAsync(context).ConfigureAwait(false);
         // Configuration callbacks and graph normalization both mutate PipelineStep lists.
@@ -662,8 +667,14 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
         var allStepsByName = allSteps.ToDictionary(s => s.Name, StringComparer.Ordinal);
         NormalizeRequiredByToDependsOn(allSteps, allStepsByName);
 
-        var pipelineOptions = context.Services.GetService<IOptions<PipelineOptions>>();
-        NormalizeFinalizationPrerequisites(allSteps, allStepsByName, pipelineOptions?.Value.Step);
+        var selectedStepName = selectedStepNameOverride;
+        if (selectedStepName is null)
+        {
+            var pipelineOptions = context.Services.GetService<IOptions<PipelineOptions>>();
+            selectedStepName = pipelineOptions?.Value.Step;
+        }
+
+        NormalizeFinalizationPrerequisites(allSteps, allStepsByName, selectedStepName);
 
         // Capture resolved pipeline data for diagnostics (before filtering)
         _lastResolvedSteps = allSteps;
