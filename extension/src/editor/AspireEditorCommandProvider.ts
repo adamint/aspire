@@ -88,6 +88,10 @@ export class AspireEditorCommandProvider implements vscode.Disposable {
             if (candidate) {
                 return getDebugTargetForCandidate(candidate);
             }
+
+            if (resource) {
+                return null;
+            }
         }
 
         const workspaceFolder = appHostUri

@@ -718,6 +718,22 @@ public class AddJavaAppPublishTests(ITestOutputHelper outputHelper)
         tasks.register("noop") { doLast { println("/*") } }
         java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
         """, "21")]
+    [InlineData("""
+        def openingBrace = /{/
+        java { toolchain { languageVersion = JavaLanguageVersion.of(25) } }
+        """, "25")]
+    [InlineData("""
+        def openingBrace = $/{/$
+        java { toolchain { languageVersion = JavaLanguageVersion.of(25) } }
+        """, "25")]
+    [InlineData("""
+        def expression = { return /{/ }
+        java { toolchain { languageVersion = JavaLanguageVersion.of(25) } }
+        """, "25")]
+    [InlineData("""
+        java { toolchain { languageVersion = JavaLanguageVersion.of(25) } }
+        def ignored = $/ $/$$ java { toolchain { languageVersion = JavaLanguageVersion.of(17) } } /$
+        """, "25")]
     // A setting that only exists inside a comment leaves nothing to detect.
     [InlineData("// languageVersion = JavaLanguageVersion.of(17)", JavaVersionDetector.DefaultJavaVersion)]
     // A version-shaped fragment quoted inside a string is not a declaration, and appears first, so
@@ -784,6 +800,46 @@ public class AddJavaAppPublishTests(ITestOutputHelper outputHelper)
             javaLauncher.set(legacyLauncher)
         }
         """")]
+    [InlineData("build.gradle.kts", """
+        extensions.configure<JavaPluginExtension> {
+            toolchain {
+                languageVersion.set(JavaLanguageVersion.of(25))
+            }
+        }
+        val launcher = javaToolchains.launcherFor {
+            languageVersion.set(JavaLanguageVersion.of(17))
+        }
+        """)]
+    [InlineData("build.gradle.kts", """
+        java {
+            toolchain.languageVersion.set(JavaLanguageVersion.of(25))
+        }
+        val launcher = javaToolchains.launcherFor {
+            languageVersion.set(JavaLanguageVersion.of(17))
+        }
+        """)]
+    [InlineData("build.gradle.kts", """
+        configure<JavaPluginExtension> {
+            toolchain {
+                languageVersion.set(JavaLanguageVersion.of(25))
+            }
+        }
+        val launcher = javaToolchains.launcherFor {
+            languageVersion.set(JavaLanguageVersion.of(17))
+        }
+        """)]
+    [InlineData("build.gradle.kts", """
+        pluginManager.withPlugin("java") {
+            extensions.configure<JavaPluginExtension> {
+                toolchain {
+                    languageVersion.set(JavaLanguageVersion.of(25))
+                }
+            }
+        }
+        val launcher = javaToolchains.launcherFor {
+            languageVersion.set(JavaLanguageVersion.of(17))
+        }
+        """)]
     public void JavaVersionDetector_IgnoresToolchainsOutsideTheJavaApplicationToolchain(string fileName, string script)
     {
         using var appDirectory = new TempJavaAppDirectory();

@@ -279,10 +279,23 @@ internal static partial class JavaVersionDetector
     private static Match? LastActiveToolchainMatch(GradleScript script)
     {
         var lastMatch = LastActiveMatch(DirectToolchainRegex(), script);
+        var applicationBlocks = FindNamedBlocks(script, "java", 0, script.Text.Length, directOnly: false)
+            .Concat(FindConfiguredJavaBlocks(script, 0, script.Text.Length))
+            .OrderBy(block => block.ContentStart);
 
-        foreach (var javaBlock in FindTopLevelBlocks(script, "java", 0, script.Text.Length))
+        foreach (var javaBlock in applicationBlocks)
         {
-            foreach (var toolchainBlock in FindTopLevelBlocks(script, "toolchain", javaBlock.ContentStart, javaBlock.ContentEnd))
+            var scopedMatch = LastActiveMatch(
+                ScopedToolchainRegex(),
+                script,
+                javaBlock.ContentStart,
+                javaBlock.ContentEnd);
+            if (scopedMatch is not null && (lastMatch is null || scopedMatch.Index > lastMatch.Index))
+            {
+                lastMatch = scopedMatch;
+            }
+
+            foreach (var toolchainBlock in FindNamedBlocks(script, "toolchain", javaBlock.ContentStart, javaBlock.ContentEnd))
             {
                 var match = LastActiveMatch(
                     LanguageVersionRegex(),
@@ -342,11 +355,12 @@ internal static partial class JavaVersionDetector
     /// <summary>
     /// Finds named Gradle blocks at the top level of the specified script range.
     /// </summary>
-    private static ImmutableArray<GradleBlock> FindTopLevelBlocks(
+    private static ImmutableArray<GradleBlock> FindNamedBlocks(
         GradleScript script,
         string name,
         int start,
-        int end)
+        int end,
+        bool directOnly = true)
     {
         var blocks = ImmutableArray.CreateBuilder<GradleBlock>();
         var depth = 0;
@@ -370,7 +384,7 @@ internal static partial class JavaVersionDetector
                 continue;
             }
 
-            if (depth != 0 || !IsIdentifierAt(script.Text, name, index))
+            if ((directOnly ? depth != 0 : depth < 0) || !IsIdentifierAt(script.Text, name, index))
             {
                 continue;
             }
@@ -394,6 +408,43 @@ internal static partial class JavaVersionDetector
 
             blocks.Add(new GradleBlock(openingBrace + 1, closingBrace));
             index = closingBrace;
+        }
+
+        return blocks.ToImmutable();
+    }
+
+    private static ImmutableArray<GradleBlock> FindConfiguredJavaBlocks(
+        GradleScript script,
+        int start,
+        int end)
+    {
+        var blocks = ImmutableArray.CreateBuilder<GradleBlock>();
+
+        foreach (Match match in ConfiguredJavaPluginExtensionRegex().Matches(script.Text))
+        {
+            if (match.Index < start
+                || match.Index + match.Length >= end
+                || script.IsInsideStringLiteral(match.Index))
+            {
+                continue;
+            }
+
+            var openingBrace = match.Index + match.Length;
+            while (openingBrace < end && char.IsWhiteSpace(script.Text[openingBrace]))
+            {
+                openingBrace++;
+            }
+
+            if (openingBrace >= end || script.Text[openingBrace] is not '{')
+            {
+                continue;
+            }
+
+            var closingBrace = FindClosingBrace(script, openingBrace, end);
+            if (closingBrace >= 0)
+            {
+                blocks.Add(new GradleBlock(openingBrace + 1, closingBrace));
+            }
         }
 
         return blocks.ToImmutable();
@@ -504,8 +555,8 @@ internal static partial class JavaVersionDetector
     /// String literals are tracked so that the <c>//</c> inside a repository URL, and any <c>/*</c> inside
     /// a string, are not treated as comment starts — the latter would otherwise swallow the rest of the
     /// file. Single, double, and triple-quoted forms are recognized, covering both the Groovy and the
-    /// Kotlin DSL. Groovy's slashy strings (<c>/pattern/</c>) are not recognized; they do not appear in the
-    /// toolchain or compatibility declarations this reads.
+    /// Kotlin DSL. Groovy slashy and dollar-slashy strings are also tracked because braces in their regular
+    /// expressions must not change the application-block depth.
     /// </remarks>
     private static GradleScript StripComments(string contents)
     {
@@ -516,6 +567,47 @@ internal static partial class JavaVersionDetector
         while (index < contents.Length)
         {
             var current = contents[index];
+
+            if (current is '$'
+                && index + 1 < contents.Length
+                && contents[index + 1] is '/')
+            {
+                builder.Append("$/");
+                index += 2;
+                var interiorStart = builder.Length;
+                var terminated = false;
+
+                while (index < contents.Length)
+                {
+                    if (contents[index] is '$'
+                        && index + 1 < contents.Length
+                        && contents[index + 1] is '$' or '/')
+                    {
+                        builder.Append(contents, index, 2);
+                        index += 2;
+                        continue;
+                    }
+
+                    if (contents.AsSpan(index).StartsWith("/$", StringComparison.Ordinal))
+                    {
+                        spans.Add(new Range(interiorStart, builder.Length));
+                        builder.Append("/$");
+                        index += 2;
+                        terminated = true;
+                        break;
+                    }
+
+                    builder.Append(contents[index]);
+                    index++;
+                }
+
+                if (!terminated)
+                {
+                    spans.Add(new Range(interiorStart, builder.Length));
+                }
+
+                continue;
+            }
 
             if (current is '/' && index + 1 < contents.Length)
             {
@@ -536,6 +628,43 @@ internal static partial class JavaVersionDetector
                     // A newline stands in for the comment so that the text on either side of a block
                     // comment cannot be joined into a single line and match as one declaration.
                     builder.Append('\n');
+                    continue;
+                }
+
+                if (IsSlashyStringStart(contents, index))
+                {
+                    builder.Append('/');
+                    index++;
+                    var interiorStart = builder.Length;
+                    var terminated = false;
+
+                    while (index < contents.Length)
+                    {
+                        if (contents[index] is '\\' && index + 1 < contents.Length)
+                        {
+                            builder.Append(contents, index, 2);
+                            index += 2;
+                            continue;
+                        }
+
+                        if (contents[index] is '/')
+                        {
+                            spans.Add(new Range(interiorStart, builder.Length));
+                            builder.Append('/');
+                            index++;
+                            terminated = true;
+                            break;
+                        }
+
+                        builder.Append(contents[index]);
+                        index++;
+                    }
+
+                    if (!terminated)
+                    {
+                        spans.Add(new Range(interiorStart, builder.Length));
+                    }
+
                     continue;
                 }
             }
@@ -592,6 +721,40 @@ internal static partial class JavaVersionDetector
         return new GradleScript(builder.ToString(), spans.ToImmutable());
     }
 
+    private static bool IsSlashyStringStart(string contents, int slashIndex)
+    {
+        var index = slashIndex - 1;
+        while (index >= 0 && char.IsWhiteSpace(contents[index]))
+        {
+            index--;
+        }
+
+        if (index < 0)
+        {
+            return true;
+        }
+
+        if (contents[index] is '=' or '(' or '[' or '{' or ',' or ':' or ';'
+            or '!' or '&' or '|' or '?' or '+' or '-' or '*' or '%' or '^' or '~' or '<' or '>')
+        {
+            return true;
+        }
+
+        if (!IsGradleIdentifierCharacter(contents[index]))
+        {
+            return false;
+        }
+
+        var wordEnd = index + 1;
+        while (index >= 0 && IsGradleIdentifierCharacter(contents[index]))
+        {
+            index--;
+        }
+
+        var word = contents.AsSpan(index + 1, wordEnd - index - 1);
+        return word is "assert" or "case" or "in" or "return" or "throw" or "yield";
+    }
+
     /// <summary>
     /// Maps a declared release to the numeric form used in container image tags.
     /// </summary>
@@ -622,6 +785,12 @@ internal static partial class JavaVersionDetector
     // java.toolchain.languageVersion.set(JavaLanguageVersion.of(21))
     [GeneratedRegex(@"(?<![\w$.])java\s*\.\s*toolchain\s*\.\s*languageVersion\s*(?:=|\.set\()\s*JavaLanguageVersion\.of\(\s*(?<version>\d+)\s*\)")]
     private static partial Regex DirectToolchainRegex();
+
+    [GeneratedRegex(@"(?<![\w$.])toolchain\s*\.\s*languageVersion\s*(?:=|\.set\()\s*JavaLanguageVersion\.of\(\s*(?<version>\d+)\s*\)")]
+    private static partial Regex ScopedToolchainRegex();
+
+    [GeneratedRegex(@"(?<![\w$.])(?:extensions\s*\.\s*)?configure\s*<\s*(?:org\.gradle\.api\.plugins\.)?JavaPluginExtension\s*>")]
+    private static partial Regex ConfiguredJavaPluginExtensionRegex();
 
     // Applied only inside a balanced java { toolchain { ... } } scope.
     [GeneratedRegex(@"\blanguageVersion\s*(?:=|\.set\()\s*JavaLanguageVersion\.of\(\s*(?<version>\d+)\s*\)")]

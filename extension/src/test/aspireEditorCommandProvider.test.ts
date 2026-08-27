@@ -234,6 +234,42 @@ suite('AspireEditorCommandProvider', () => {
         }
     });
 
+    test('explicit non-AppHost URI does not fall back to another workspace AppHost', async () => {
+        const activeAppHostPath = path.join(tempDir, 'AppHost.java');
+        const unrelatedPath = path.join(tempDir, 'Service.java');
+        fs.writeFileSync(activeAppHostPath, 'public class AppHost {}');
+        fs.writeFileSync(unrelatedPath, 'public class Service {}');
+        activeEditor = createEditor(activeAppHostPath);
+
+        const discoveryService = {
+            onDidChangeCandidates: () => ({ dispose: () => { } }),
+            tryFindCandidateForEditorFile: async (filePath: string) =>
+                filePath === unrelatedPath
+                    ? undefined
+                    : {
+                        path: activeAppHostPath,
+                        language: 'java',
+                        status: 'buildable',
+                    },
+            discover: async () => [{
+                path: activeAppHostPath,
+                language: 'java',
+                status: 'buildable',
+            }],
+        } as unknown as AppHostDiscoveryService;
+        const provider = new AspireEditorCommandProvider(discoveryService, createLaunchService());
+
+        try {
+            await provider.tryExecuteRunAppHost(true, vscode.Uri.file(unrelatedPath));
+
+            assert.strictEqual(startDebuggingStub.called, false);
+            assert.ok(showErrorMessageStub.calledOnce);
+        }
+        finally {
+            provider.dispose();
+        }
+    });
+
 });
 
 function createAppHostDiscoveryService(resolvedPath: string, language = 'csharp'): AppHostDiscoveryService {
