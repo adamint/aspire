@@ -26,6 +26,7 @@ public class ResourceSnapshotWatcherTests
         var watchStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var connection = new TestAppHostAuxiliaryBackchannel
         {
+            SupportsV4 = true,
             GetResourceSnapshotsHandler = async cancellationToken =>
             {
                 using var registration = cancellationToken.Register(() => getCancellationRequested.TrySetResult());
@@ -58,6 +59,7 @@ public class ResourceSnapshotWatcherTests
         var watchStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var connection = new TestAppHostAuxiliaryBackchannel
         {
+            SupportsV4 = true,
             GetResourceSnapshotsHandler = async cancellationToken =>
             {
                 await watchStarted.Task.WaitAsync(cancellationToken);
@@ -82,6 +84,7 @@ public class ResourceSnapshotWatcherTests
         unrelatedCts.Cancel();
         var connection = new TestAppHostAuxiliaryBackchannel
         {
+            SupportsV4 = true,
             GetResourceSnapshotsHandler = async cancellationToken =>
             {
                 await watchStarted.Task.WaitAsync(cancellationToken);
@@ -104,6 +107,7 @@ public class ResourceSnapshotWatcherTests
         var expectedWatchException = new OperationCanceledException();
         var connection = new TestAppHostAuxiliaryBackchannel
         {
+            SupportsV4 = true,
             GetResourceSnapshotsHandler = _ => Task.FromException<List<ResourceSnapshot>>(
                 new InvalidOperationException("Initial load failed.")),
             WatchResourceSnapshotsHandler = (_, cancellationToken) =>
@@ -125,6 +129,7 @@ public class ResourceSnapshotWatcherTests
         var watchStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var connection = new TestAppHostAuxiliaryBackchannel
         {
+            SupportsV4 = true,
             GetResourceSnapshotsHandler = async cancellationToken =>
             {
                 await watchStarted.Task.WaitAsync(cancellationToken);
@@ -147,6 +152,7 @@ public class ResourceSnapshotWatcherTests
         var watchStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var connection = new TestAppHostAuxiliaryBackchannel
         {
+            SupportsV4 = true,
             GetResourceSnapshotsHandler = async cancellationToken =>
             {
                 await watchStarted.Task.WaitAsync(cancellationToken);
@@ -170,6 +176,7 @@ public class ResourceSnapshotWatcherTests
         var watchStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var connection = new TestAppHostAuxiliaryBackchannel
         {
+            SupportsV4 = true,
             GetResourceSnapshotsHandler = async cancellationToken =>
             {
                 await watchStarted.Task.WaitAsync(cancellationToken);
@@ -188,11 +195,59 @@ public class ResourceSnapshotWatcherTests
     }
 
     [Fact]
+    public async Task ResourceSnapshotWatcher_PreservesGetFirstOrderingForLegacyAppHosts()
+    {
+        var getCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var watchGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var watchObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var connection = new TestAppHostAuxiliaryBackchannel
+        {
+            GetResourceSnapshotsHandler = _ =>
+            {
+                getCompleted.TrySetResult();
+                return Task.FromResult(
+                    new List<ResourceSnapshot>
+                    {
+                        new()
+                        {
+                            Name = "api",
+                            DisplayName = "api",
+                            ResourceType = "Project",
+                            State = "Running",
+                            Version = 0
+                        }
+                    });
+            },
+            WatchResourceSnapshotsHandler = (_, cancellationToken) =>
+                YieldLegacySnapshot(
+                    getCompleted,
+                    watchGate.Task,
+                    watchObserved,
+                    cancellationToken)
+        };
+        using var watcher = new ResourceSnapshotWatcher(connection, NullLogger<ResourceSnapshotWatcher>.Instance);
+
+        await watcher.WaitForInitialLoadAsync().DefaultTimeout();
+
+        var initial = Assert.Single(watcher.CaptureAllResources().Resources);
+        Assert.Equal(0, initial.Version);
+        Assert.Equal("Running", initial.State);
+
+        watchGate.TrySetResult();
+        await watchObserved.Task.DefaultTimeout();
+
+        var updated = Assert.Single(watcher.CaptureAllResources().Resources);
+        Assert.Equal(0, updated.Version);
+        Assert.Equal("Starting", updated.State);
+    }
+
+    [Fact]
     public async Task ResourceSnapshotWatcher_PrefersNewerGetSnapshotOverReplayedWatchSnapshot()
     {
         var replayObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var connection = new TestAppHostAuxiliaryBackchannel
         {
+            SupportsV4 = true,
             GetResourceSnapshotsHandler = async cancellationToken =>
             {
                 await replayObserved.Task.WaitAsync(cancellationToken);
@@ -238,6 +293,7 @@ public class ResourceSnapshotWatcherTests
         var watchObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var connection = new TestAppHostAuxiliaryBackchannel
         {
+            SupportsV4 = true,
             GetResourceSnapshotsHandler = async cancellationToken =>
             {
                 getCaptured.TrySetResult();
@@ -287,6 +343,7 @@ public class ResourceSnapshotWatcherTests
         var logger = new FakeLogger<ResourceSnapshotWatcher>();
         var connection = new TestAppHostAuxiliaryBackchannel
         {
+            SupportsV4 = true,
             GetResourceSnapshotsHandler = _ => Task.FromResult(
                 new List<ResourceSnapshot>
                 {
@@ -630,6 +687,28 @@ public class ResourceSnapshotWatcherTests
         // the yielded snapshot has already been applied to the watcher's resource dictionary.
         snapshotObserved.TrySetResult();
         await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+    }
+
+    private static async IAsyncEnumerable<ResourceSnapshot> YieldLegacySnapshot(
+        TaskCompletionSource getCompleted,
+        Task watchGate,
+        TaskCompletionSource watchObserved,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        if (getCompleted.Task.IsCompleted)
+        {
+            await watchGate.WaitAsync(cancellationToken);
+        }
+
+        yield return new ResourceSnapshot
+        {
+            Name = "api",
+            DisplayName = "api",
+            ResourceType = "Project",
+            State = "Starting",
+            Version = 0
+        };
+        watchObserved.TrySetResult();
     }
 
     private static async IAsyncEnumerable<ResourceSnapshot> YieldSnapshotsInSequence(

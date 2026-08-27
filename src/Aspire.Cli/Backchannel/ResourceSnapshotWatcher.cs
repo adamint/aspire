@@ -69,6 +69,25 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
     {
         try
         {
+            if (!_connection.SupportsV4)
+            {
+                // Older AppHosts do not report snapshot versions, so preserve their GET-first
+                // ordering and treat subsequent watch snapshots as normal updates.
+                var legacySnapshots = await _connection.GetResourceSnapshotsAsync(includeHidden: true, cancellationToken).ConfigureAwait(false);
+                lock (_resourcesLock)
+                {
+                    foreach (var snapshot in legacySnapshots)
+                    {
+                        _resources[snapshot.Name] = snapshot;
+                    }
+                }
+
+                _initialLoadTcs.TrySetResult();
+                await WatchChangesAsync(cancellationToken).ConfigureAwait(false);
+                _updateSignal?.Writer.TryComplete();
+                return;
+            }
+
             // Start the watch before fetching the initial snapshot. The AppHost subscribes before replaying
             // its current snapshots, so the watch establishes a replay point even though the two JSON-RPC
             // calls are not ordered. Version-aware reconciliation then retains the newest observed snapshot.
@@ -194,7 +213,8 @@ internal sealed class ResourceSnapshotWatcher : IDisposable
             long? retainedVersion = null;
             lock (_resourcesLock)
             {
-                if (_resources.TryGetValue(snapshot.Name, out var currentSnapshot) &&
+                if (_connection.SupportsV4 &&
+                    _resources.TryGetValue(snapshot.Name, out var currentSnapshot) &&
                     snapshot.Version > 0 &&
                     currentSnapshot.Version > 0 &&
                     snapshot.Version < currentSnapshot.Version)
