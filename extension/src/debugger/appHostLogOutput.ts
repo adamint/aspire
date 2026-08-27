@@ -16,6 +16,7 @@ const enum AnsiColors {
 export type AppHostLogLevel = 'Trace' | 'Debug' | 'Information' | 'Warning' | 'Error' | 'Critical';
 
 export interface AppHostLogEntry {
+    generationId?: string;
     sequenceNumber: number;
     logLevel: AppHostLogLevel;
     message: string;
@@ -94,8 +95,8 @@ export class AppHostLogOutputCoordinator {
 
     private readonly _correlatedRecords: CorrelatedRecord[] = [];
     private readonly _lowLevelCorrelatedRecords: CorrelatedRecord[] = [];
-    private readonly _backchannelSequences = new Set<number>();
-    private readonly _backchannelSequenceOrder: number[] = [];
+    private readonly _backchannelSequences = new Set<string>();
+    private readonly _backchannelSequenceOrder: string[] = [];
     private readonly _partialLines = new Map<string, string>();
     private readonly _pendingConsoleHeaderFragments = new Map<string, string>();
     private readonly _pendingRecords = new Map<string, PendingConsoleRecord>();
@@ -111,14 +112,15 @@ export class AppHostLogOutputCoordinator {
 
     handleBackchannelEntry(entry: AppHostLogEntry): AppHostParentOutput | undefined {
         if (entry.sequenceNumber > 0) {
-            // A reconnect replays the AppHost's 1,000-entry buffer. Remember exact sequences
-            // instead of a high-water mark so delayed delivery cannot discard an unseen record.
-            if (this._backchannelSequences.has(entry.sequenceNumber)) {
+            // A reconnect replays the AppHost's 1,000-entry buffer. Remember exact generation/sequence
+            // pairs so delayed delivery is safe and a replacement AppHost can reuse its counter.
+            const sequenceIdentity = `${entry.generationId ?? ''}\0${entry.sequenceNumber}`;
+            if (this._backchannelSequences.has(sequenceIdentity)) {
                 return undefined;
             }
 
-            this._backchannelSequences.add(entry.sequenceNumber);
-            this._backchannelSequenceOrder.push(entry.sequenceNumber);
+            this._backchannelSequences.add(sequenceIdentity);
+            this._backchannelSequenceOrder.push(sequenceIdentity);
             if (this._backchannelSequenceOrder.length > AppHostLogOutputCoordinator._maxRememberedBackchannelSequences) {
                 this._backchannelSequences.delete(this._backchannelSequenceOrder.shift()!);
             }

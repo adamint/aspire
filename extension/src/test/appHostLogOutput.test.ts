@@ -2309,14 +2309,28 @@ suite('AppHost log output coordinator', () => {
             undefined);
     });
 
-    test('suppresses replayed sequences and accepts the same sequence after reset', () => {
+    test('suppresses replayed sequences within a generation and accepts a new generation or reset', () => {
         const coordinator = new AppHostLogOutputCoordinator();
-        const laterEntry = createEntry({ sequenceNumber: 42, message: 'Later entry.' });
-        const earlierEntry = createEntry({ sequenceNumber: 41, message: 'Earlier entry.' });
+        const laterEntry = createEntry({
+            generationId: '11111111-1111-1111-1111-111111111111',
+            sequenceNumber: 42,
+            message: 'Later entry.'
+        });
+        const earlierEntry = createEntry({
+            generationId: '11111111-1111-1111-1111-111111111111',
+            sequenceNumber: 41,
+            message: 'Earlier entry.'
+        });
+        const nextGenerationEntry = createEntry({
+            generationId: '22222222-2222-2222-2222-222222222222',
+            sequenceNumber: 42,
+            message: 'Next generation entry.'
+        });
 
         assert.ok(coordinator.handleBackchannelEntry(laterEntry));
         assert.ok(coordinator.handleBackchannelEntry(earlierEntry));
         assert.strictEqual(coordinator.handleBackchannelEntry(laterEntry), undefined);
+        assert.ok(coordinator.handleBackchannelEntry(nextGenerationEntry));
 
         coordinator.reset();
 

@@ -101,6 +101,9 @@ internal sealed class DebugSessionOptions
 /// </summary>
 internal sealed class ExtensionAppHostLogEntry
 {
+    [JsonPropertyName("generationId")]
+    public required Guid GenerationId { get; set; }
+
     [JsonPropertyName("sequenceNumber")]
     public required long SequenceNumber { get; set; }
 

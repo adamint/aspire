@@ -3827,10 +3827,12 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task CaptureAppHostLogsAsync_SuppressesRepeatedPositiveSequencesOnly()
+    public async Task CaptureAppHostLogsAsync_SuppressesRepeatedPositiveSequencesWithinEachGenerationOnly()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var logFilePath = Path.Combine(workspace.WorkspaceRoot.FullName, "test.log");
+        var firstGeneration = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var secondGeneration = Guid.Parse("22222222-2222-2222-2222-222222222222");
         var extensionBackchannel = new TestExtensionBackchannel
         {
             HasCapabilityAsyncCallback = (_, _) => Task.FromResult(true)
@@ -3847,7 +3849,7 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
         };
         var backchannel = new TestAppHostBackchannel
         {
-            GetAppHostLogEntriesAsyncCallback = YieldEntries
+            GetAppHostLogEntriesAsyncCallback = cancellationToken => YieldEntries(firstGeneration, secondGeneration, cancellationToken)
         };
 
         using (var fileLoggerProvider = new FileLoggerProvider(logFilePath, new TestStartupErrorWriter()))
@@ -3855,20 +3857,27 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
             await RunCommand.CaptureAppHostLogsAsync(fileLoggerProvider, backchannel, interactionService, CancellationToken.None);
         }
 
-        Assert.Equal(["Numbered entry"], forwarded.Select(entry => entry.Message));
+        Assert.Collection(forwarded,
+            entry => Assert.Equal((firstGeneration, 42L, "Numbered entry"), (entry.GenerationId, entry.SequenceNumber, entry.Message)),
+            entry => Assert.Equal((secondGeneration, 42L, "Next generation entry"), (entry.GenerationId, entry.SequenceNumber, entry.Message)));
         Assert.Equal(["Legacy entry", "Legacy entry"], legacyMessages);
         var lines = (await File.ReadAllLinesAsync(logFilePath))
             .Where(line => !string.IsNullOrWhiteSpace(line))
             .ToArray();
         Assert.Collection(lines,
             line => Assert.Equal("[2026-03-16 12:00:00.000] [WARN] [AppHost/Category] Numbered entry", line),
+            line => Assert.Equal("[2026-03-16 12:00:00.000] [WARN] [AppHost/Category] Next generation entry", line),
             line => Assert.Equal("[2026-03-16 12:00:00.000] [INFO] [AppHost/Category] Legacy entry", line),
             line => Assert.Equal("[2026-03-16 12:00:00.000] [INFO] [AppHost/Category] Legacy entry", line));
 
-        static async IAsyncEnumerable<BackchannelLogEntry> YieldEntries([EnumeratorCancellation] CancellationToken cancellationToken)
+        static async IAsyncEnumerable<BackchannelLogEntry> YieldEntries(
+            Guid firstGeneration,
+            Guid secondGeneration,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
         {
-            yield return CreateEntry(42, LogLevel.Warning, "Numbered entry");
-            yield return CreateEntry(42, LogLevel.Warning, "Numbered replay");
+            yield return CreateEntry(42, LogLevel.Warning, "Numbered entry", generationId: firstGeneration);
+            yield return CreateEntry(42, LogLevel.Warning, "Numbered replay", generationId: firstGeneration);
+            yield return CreateEntry(42, LogLevel.Warning, "Next generation entry", generationId: secondGeneration);
             yield return CreateEntry(0, LogLevel.Information, "Legacy entry");
             yield return CreateEntry(0, LogLevel.Information, "Legacy entry");
             await Task.CompletedTask;
@@ -4229,10 +4238,11 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
         }
     }
 
-    private static BackchannelLogEntry CreateEntry(long sequenceNumber, LogLevel level, string message, string? exception = null)
+    private static BackchannelLogEntry CreateEntry(long sequenceNumber, LogLevel level, string message, string? exception = null, Guid? generationId = null)
     {
         return new BackchannelLogEntry
         {
+            GenerationId = generationId ?? Guid.Empty,
             SequenceNumber = sequenceNumber,
             Timestamp = new DateTimeOffset(2026, 3, 16, 12, 0, 0, TimeSpan.Zero),
             LogLevel = level,

@@ -29,6 +29,26 @@ public class BackchannelLoggerProviderTests
         Assert.Equal(LogLevel.Warning, snapshot[1].LogLevel);
         Assert.Equal(LogLevel.Error, snapshot[2].LogLevel);
         Assert.Equal([1, 2, 3], snapshot.Select(entry => entry.SequenceNumber));
+        var generationId = snapshot[0].GenerationId;
+        Assert.NotEqual(Guid.Empty, generationId);
+        Assert.All(snapshot, entry => Assert.Equal(generationId, entry.GenerationId));
+    }
+
+    [Fact]
+    public void Log_UsesDistinctGenerationForEachProvider()
+    {
+        using var provider1 = new BackchannelLoggerProvider();
+        using var provider2 = new BackchannelLoggerProvider();
+
+        provider1.CreateLogger("TestCategory").LogInformation("Provider 1");
+        provider2.CreateLogger("TestCategory").LogInformation("Provider 2");
+
+        var (snapshot1, subscriberId1, _) = provider1.Subscribe();
+        var (snapshot2, subscriberId2, _) = provider2.Subscribe();
+        provider1.Unsubscribe(subscriberId1);
+        provider2.Unsubscribe(subscriberId2);
+
+        Assert.NotEqual(Assert.Single(snapshot1).GenerationId, Assert.Single(snapshot2).GenerationId);
     }
 
     [Fact]

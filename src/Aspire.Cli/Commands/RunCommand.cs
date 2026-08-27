@@ -1121,8 +1121,8 @@ internal sealed class RunCommand : BaseCommand
             var logEntries = backchannel.GetAppHostLogEntriesAsync(cancellationToken);
             bool? extensionSupportsStructuredLogs = null;
             var pendingExtensionEntries = new List<BackchannelLogEntry>();
-            var recentSequenceNumbers = new HashSet<long>(MaxRememberedAppHostLogSequenceNumbers);
-            var sequenceNumberOrder = new Queue<long>(MaxRememberedAppHostLogSequenceNumbers);
+            var recentSequenceIdentities = new HashSet<(Guid GenerationId, long SequenceNumber)>(MaxRememberedAppHostLogSequenceNumbers);
+            var sequenceIdentityOrder = new Queue<(Guid GenerationId, long SequenceNumber)>(MaxRememberedAppHostLogSequenceNumbers);
 
             try
             {
@@ -1164,19 +1164,21 @@ internal sealed class RunCommand : BaseCommand
                         var entry = enumerator.Current;
 
                         // A reconnect replays the AppHost's 1,000-entry buffer. Remember exact
-                        // sequences instead of a high-water mark so delayed delivery remains valid.
-                        // Sequence zero comes from older AppHosts and has no stable identity.
+                        // generation/sequence pairs to preserve delayed delivery and distinguish a
+                        // replacement AppHost. Sequence zero comes from older AppHosts and has no
+                        // stable identity.
                         if (entry.SequenceNumber > 0)
                         {
-                            if (!recentSequenceNumbers.Add(entry.SequenceNumber))
+                            var sequenceIdentity = (entry.GenerationId, entry.SequenceNumber);
+                            if (!recentSequenceIdentities.Add(sequenceIdentity))
                             {
                                 continue;
                             }
 
-                            sequenceNumberOrder.Enqueue(entry.SequenceNumber);
-                            if (sequenceNumberOrder.Count > MaxRememberedAppHostLogSequenceNumbers)
+                            sequenceIdentityOrder.Enqueue(sequenceIdentity);
+                            if (sequenceIdentityOrder.Count > MaxRememberedAppHostLogSequenceNumbers)
                             {
-                                recentSequenceNumbers.Remove(sequenceNumberOrder.Dequeue());
+                                recentSequenceIdentities.Remove(sequenceIdentityOrder.Dequeue());
                             }
                         }
 
@@ -1273,6 +1275,7 @@ internal sealed class RunCommand : BaseCommand
         {
             extensionInteractionService.WriteAppHostLogEntry(new ExtensionAppHostLogEntry
             {
+                GenerationId = entry.GenerationId,
                 SequenceNumber = entry.SequenceNumber,
                 LogLevel = entry.LogLevel.ToString(),
                 Message = entry.Message,
