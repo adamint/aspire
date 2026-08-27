@@ -327,6 +327,17 @@ public class AtsPythonCodeGeneratorTests
         Assert.DoesNotContain("Version=", aspirePy);
     }
 
+    [Fact]
+    public void GeneratedCode_DoesNotRepeatTopLevelNoneForUnionParameters()
+    {
+        var files = _generator.GenerateDistributedApplication(CreateContextWithNullableUnionParameters());
+        var aspirePy = files["aspire_app.py"];
+
+        Assert.Contains(
+            "def with_nullable_unions(client: AspireClient, optional_union: int | None | str = None, nullable_union: int | None | str = 1, nullable_items: typing.Iterable[int | None] | None = None)",
+            aspirePy);
+    }
+
     private static List<AtsCapabilityInfo> ScanCapabilitiesFromTestAssembly()
     {
         var testAssembly = LoadTestAssembly();
@@ -573,6 +584,91 @@ public class AtsPythonCodeGeneratorTests
                     IsInterface = true
                 }
             ],
+            DtoTypes = [],
+            EnumTypes = []
+        };
+    }
+
+    private static AtsContext CreateContextWithNullableUnionParameters()
+    {
+        var unionType = new AtsTypeRef
+        {
+            TypeId = "Tests/NullableUnion",
+            Category = AtsTypeCategory.Union,
+            UnionTypes =
+            [
+                new AtsTypeRef
+                {
+                    TypeId = "Tests/NestedNullableUnion",
+                    Category = AtsTypeCategory.Union,
+                    UnionTypes =
+                    [
+                        new AtsTypeRef
+                        {
+                            TypeId = AtsConstants.Number,
+                            Category = AtsTypeCategory.Primitive,
+                            IsNullable = true
+                        }
+                    ]
+                },
+                new AtsTypeRef
+                {
+                    TypeId = AtsConstants.String,
+                    Category = AtsTypeCategory.Primitive
+                }
+            ]
+        };
+
+        return new AtsContext
+        {
+            Capabilities =
+            [
+                new AtsCapabilityInfo
+                {
+                    CapabilityId = "Tests/withNullableUnions",
+                    MethodName = "withNullableUnions",
+                    Parameters =
+                    [
+                        new AtsParameterInfo
+                        {
+                            Name = "optionalUnion",
+                            Type = unionType,
+                            IsOptional = true
+                        },
+                        new AtsParameterInfo
+                        {
+                            Name = "nullableUnion",
+                            Type = unionType,
+                            IsOptional = true,
+                            IsNullable = true,
+                            DefaultValue = 1
+                        },
+                        new AtsParameterInfo
+                        {
+                            Name = "nullableItems",
+                            Type = new AtsTypeRef
+                            {
+                                TypeId = "Tests/NullableItems",
+                                Category = AtsTypeCategory.Array,
+                                ElementType = new AtsTypeRef
+                                {
+                                    TypeId = AtsConstants.Number,
+                                    Category = AtsTypeCategory.Primitive,
+                                    IsNullable = true
+                                }
+                            },
+                            IsOptional = true
+                        }
+                    ],
+                    ReturnType = new AtsTypeRef
+                    {
+                        TypeId = AtsConstants.Void,
+                        Category = AtsTypeCategory.Primitive
+                    },
+                    CapabilityKind = AtsCapabilityKind.Method
+                }
+            ],
+            HandleTypes = [],
             DtoTypes = [],
             EnumTypes = []
         };

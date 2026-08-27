@@ -1529,7 +1529,7 @@ class MergeLoggingParameters(typing.TypedDict, total=False):
     log_level: typing.Required[str]
     log_path: str
     enable_console: bool
-    max_files: int
+    max_files: int | None
 
 
 class MergeRouteParameters(typing.TypedDict, total=False):

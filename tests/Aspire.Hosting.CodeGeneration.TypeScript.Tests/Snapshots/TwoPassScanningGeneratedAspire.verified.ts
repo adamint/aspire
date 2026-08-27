@@ -1538,7 +1538,7 @@ export interface AddTestChildDatabaseOptions {
 }
 
 export interface AddTestRedisOptions {
-    port?: number;
+    port?: number | null;
 }
 
 export interface AppendFormattedOptions {
@@ -1597,13 +1597,13 @@ export interface CreateCertificateFileOptions {
     /** An absolute path to a PEM file on the host to copy. Mutually exclusive with `contents`. */
     sourcePath?: string;
     /** The owner UID, or `null` to inherit. */
-    owner?: number;
+    owner?: number | null;
     /** The group GID, or `null` to inherit. */
-    group?: number;
+    group?: number | null;
     /** The Unix file mode as an integer (for example `0o644`), or `null` to inherit. */
-    mode?: number;
+    mode?: number | null;
     /** Whether to ignore errors creating this file. */
-    continueOnError?: boolean;
+    continueOnError?: boolean | null;
 }
 
 export interface CreateChoiceInputOptions {
@@ -1615,11 +1615,11 @@ export interface CreateChoiceInputOptions {
 
 export interface CreateDirectoryOptions {
     /** The owner UID, or `null` to inherit. */
-    owner?: number;
+    owner?: number | null;
     /** The group GID, or `null` to inherit. */
-    group?: number;
+    group?: number | null;
     /** The Unix file mode as an integer (for example `0o755`), or `null` to inherit. */
-    mode?: number;
+    mode?: number | null;
 }
 
 export interface CreateFileOptions {
@@ -1628,13 +1628,13 @@ export interface CreateFileOptions {
     /** An absolute path to a file on the host to copy. Mutually exclusive with `contents`. */
     sourcePath?: string;
     /** The owner UID, or `null` to inherit. */
-    owner?: number;
+    owner?: number | null;
     /** The group GID, or `null` to inherit. */
-    group?: number;
+    group?: number | null;
     /** The Unix file mode as an integer (for example `0o644`), or `null` to inherit. */
-    mode?: number;
+    mode?: number | null;
     /** Whether to ignore errors creating this file. */
-    continueOnError?: boolean;
+    continueOnError?: boolean | null;
 }
 
 export interface CreateMarkdownTaskOptions {
@@ -1699,7 +1699,7 @@ export interface WaitForCompletionOptions {
 }
 
 export interface WaitForOptions {
-    waitBehavior?: WaitBehavior;
+    waitBehavior?: WaitBehavior | null;
 }
 
 export interface WaitForReadyAsyncOptions {
@@ -1711,7 +1711,7 @@ export interface WaitForResourceStateOptions {
 }
 
 export interface WaitForStartOptions {
-    waitBehavior?: WaitBehavior;
+    waitBehavior?: WaitBehavior | null;
 }
 
 export interface WithBindMountOptions {
@@ -1773,9 +1773,9 @@ export interface WithEndpointCallbackOptions {
 
 export interface WithEndpointOptions {
     /** An optional port. This is the port that will be given to other resource to communicate with this resource. */
-    port?: number;
+    port?: number | null;
     /** This is the port the resource is listening on. If the endpoint is used for the container, it is the container port. */
-    targetPort?: number;
+    targetPort?: number | null;
     /** An optional scheme e.g. (http/https). Defaults to the `protocol` argument if it is defined or "tcp" otherwise. */
     scheme?: string;
     /** An optional name of the endpoint. Defaults to the scheme name if not specified. */
@@ -1783,16 +1783,16 @@ export interface WithEndpointOptions {
     /** An optional name of the environment variable that will be used to inject the `targetPort`. If the target port is null one will be dynamically generated and assigned to the environment variable. */
     env?: string;
     /** Specifies if the endpoint will be proxied by DCP. Defaults to `null`. */
-    isProxied?: boolean;
+    isProxied?: boolean | null;
     /** Indicates that this endpoint should be exposed externally at publish time. */
-    isExternal?: boolean;
+    isExternal?: boolean | null;
     /** Network protocol: TCP or UDP are supported today, others possibly in future. */
-    protocol?: ProtocolType;
+    protocol?: ProtocolType | null;
 }
 
 export interface WithHiddenOnCompletionOptions {
     /** The completion exit code to treat as successful. Defaults to `0`. */
-    exitCode?: number;
+    exitCode?: number | null;
     /** Completion exit codes to treat as successful. If no values are provided, `0` is used. */
     exitCodes?: number[];
 }
@@ -1804,33 +1804,33 @@ export interface WithHttpEndpointCallbackOptions {
 
 export interface WithHttpEndpointOptions {
     /** An optional port. This is the port that will be given to other resource to communicate with this resource. */
-    port?: number;
+    port?: number | null;
     /** This is the port the resource is listening on. If the endpoint is used for the container, it is the container port. */
-    targetPort?: number;
+    targetPort?: number | null;
     /** An optional name of the endpoint. Defaults to "http" if not specified. */
     name?: string;
     /** An optional name of the environment variable to inject. */
     env?: string;
     /** Specifies if the endpoint will be proxied by DCP. Defaults to `null`. */
-    isProxied?: boolean;
+    isProxied?: boolean | null;
 }
 
 export interface WithHttpHealthCheckOptions {
     /** The relative path to test. */
     path?: string;
     /** The result code to interpret as healthy. */
-    statusCode?: number;
+    statusCode?: number | null;
     /** The name of the endpoint to derive the base address from. */
     endpointName?: string;
 }
 
 export interface WithHttpProbeOptions {
     path?: string;
-    initialDelaySeconds?: number;
-    periodSeconds?: number;
-    timeoutSeconds?: number;
-    failureThreshold?: number;
-    successThreshold?: number;
+    initialDelaySeconds?: number | null;
+    periodSeconds?: number | null;
+    timeoutSeconds?: number | null;
+    failureThreshold?: number | null;
+    successThreshold?: number | null;
     endpointName?: string;
 }
 
@@ -1846,15 +1846,15 @@ export interface WithHttpsEndpointCallbackOptions {
 
 export interface WithHttpsEndpointOptions {
     /** An optional host port. */
-    port?: number;
+    port?: number | null;
     /** This is the port the resource is listening on. If the endpoint is used for the container, it is the container port. */
-    targetPort?: number;
+    targetPort?: number | null;
     /** An optional name of the endpoint. Defaults to "https" if not specified. */
     name?: string;
     /** An optional name of the environment variable to inject. */
     env?: string;
     /** Specifies if the endpoint will be proxied by DCP. Defaults to `null`. */
-    isProxied?: boolean;
+    isProxied?: boolean | null;
 }
 
 export interface WithIconNameOptions {
@@ -1876,12 +1876,12 @@ export interface WithMcpServerOptions {
 
 export interface WithMergeLoggingOptions {
     enableConsole?: boolean;
-    maxFiles?: number;
+    maxFiles?: number | null;
 }
 
 export interface WithMergeLoggingPathOptions {
     enableConsole?: boolean;
-    maxFiles?: number;
+    maxFiles?: number | null;
 }
 
 export interface WithOptionalCallbackOptions {
@@ -1894,7 +1894,7 @@ export interface WithOptionalStringOptions {
 }
 
 export interface WithOtlpExporterOptions {
-    protocol?: OtlpProtocol;
+    protocol?: OtlpProtocol | null;
 }
 
 export interface WithPersistenceOptions {
@@ -11844,7 +11844,7 @@ class DistributedApplicationBuilderImpl implements DistributedApplicationBuilder
     }
 
     /** @internal */
-    async _addTestRedisInternal(name: string, port?: number): Promise<TestRedisResource> {
+    async _addTestRedisInternal(name: string, port?: number | null): Promise<TestRedisResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, name };
         if (port !== undefined) rpcArgs.port = port;
         const result = await this._client.invokeCapability<TestRedisResourceHandle>(
@@ -15788,7 +15788,7 @@ class ContainerRegistryResourceImpl extends ResourceBuilderBase<ContainerRegistr
     }
 
     /** @internal */
-    private async _withHiddenOnCompletionInternal(exitCode?: number, exitCodes?: number[]): Promise<ContainerRegistryResource> {
+    private async _withHiddenOnCompletionInternal(exitCode?: number | null, exitCodes?: number[]): Promise<ContainerRegistryResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (exitCode !== undefined) rpcArgs.exitCode = exitCode;
         if (exitCodes !== undefined) rpcArgs.exitCodes = exitCodes;
@@ -16339,7 +16339,7 @@ class ContainerRegistryResourceImpl extends ResourceBuilderBase<ContainerRegistr
     }
 
     /** @internal */
-    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number): Promise<ContainerRegistryResource> {
+    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number | null): Promise<ContainerRegistryResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -16361,7 +16361,7 @@ class ContainerRegistryResourceImpl extends ResourceBuilderBase<ContainerRegistr
     }
 
     /** @internal */
-    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number): Promise<ContainerRegistryResource> {
+    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number | null): Promise<ContainerRegistryResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel, logPath };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -18874,7 +18874,7 @@ class ContainerResourceImpl extends ResourceBuilderBase<ContainerResourceHandle>
     }
 
     /** @internal */
-    private async _withOtlpExporterInternal(protocol?: OtlpProtocol): Promise<ContainerResource> {
+    private async _withOtlpExporterInternal(protocol?: OtlpProtocol | null): Promise<ContainerResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (protocol !== undefined) rpcArgs.protocol = protocol;
         const result = await this._client.invokeCapability<ContainerResourceHandle>(
@@ -19259,7 +19259,7 @@ class ContainerResourceImpl extends ResourceBuilderBase<ContainerResourceHandle>
     }
 
     /** @internal */
-    private async _withEndpointInternal(port?: number, targetPort?: number, scheme?: string, name?: string, env?: string, isProxied?: boolean, isExternal?: boolean, protocol?: ProtocolType): Promise<ContainerResource> {
+    private async _withEndpointInternal(port?: number | null, targetPort?: number | null, scheme?: string, name?: string, env?: string, isProxied?: boolean | null, isExternal?: boolean | null, protocol?: ProtocolType | null): Promise<ContainerResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -19318,7 +19318,7 @@ class ContainerResourceImpl extends ResourceBuilderBase<ContainerResourceHandle>
     }
 
     /** @internal */
-    private async _withHttpEndpointInternal(port?: number, targetPort?: number, name?: string, env?: string, isProxied?: boolean): Promise<ContainerResource> {
+    private async _withHttpEndpointInternal(port?: number | null, targetPort?: number | null, name?: string, env?: string, isProxied?: boolean | null): Promise<ContainerResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -19350,7 +19350,7 @@ class ContainerResourceImpl extends ResourceBuilderBase<ContainerResourceHandle>
     }
 
     /** @internal */
-    private async _withHttpsEndpointInternal(port?: number, targetPort?: number, name?: string, env?: string, isProxied?: boolean): Promise<ContainerResource> {
+    private async _withHttpsEndpointInternal(port?: number | null, targetPort?: number | null, name?: string, env?: string, isProxied?: boolean | null): Promise<ContainerResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -19521,7 +19521,7 @@ class ContainerResourceImpl extends ResourceBuilderBase<ContainerResourceHandle>
     }
 
     /** @internal */
-    private async _waitForInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior): Promise<ContainerResource> {
+    private async _waitForInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior | null): Promise<ContainerResource> {
         dependency = isPromiseLike(dependency) ? await dependency : dependency;
         const rpcArgs: Record<string, unknown> = { builder: this._handle, dependency };
         if (waitBehavior !== undefined) rpcArgs.waitBehavior = waitBehavior;
@@ -19542,7 +19542,7 @@ class ContainerResourceImpl extends ResourceBuilderBase<ContainerResourceHandle>
     }
 
     /** @internal */
-    private async _waitForStartInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior): Promise<ContainerResource> {
+    private async _waitForStartInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior | null): Promise<ContainerResource> {
         dependency = isPromiseLike(dependency) ? await dependency : dependency;
         const rpcArgs: Record<string, unknown> = { builder: this._handle, dependency };
         if (waitBehavior !== undefined) rpcArgs.waitBehavior = waitBehavior;
@@ -19623,7 +19623,7 @@ class ContainerResourceImpl extends ResourceBuilderBase<ContainerResourceHandle>
     }
 
     /** @internal */
-    private async _withHttpHealthCheckInternal(path?: string, statusCode?: number, endpointName?: string): Promise<ContainerResource> {
+    private async _withHttpHealthCheckInternal(path?: string, statusCode?: number | null, endpointName?: string): Promise<ContainerResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (path !== undefined) rpcArgs.path = path;
         if (statusCode !== undefined) rpcArgs.statusCode = statusCode;
@@ -20161,7 +20161,7 @@ class ContainerResourceImpl extends ResourceBuilderBase<ContainerResourceHandle>
     }
 
     /** @internal */
-    private async _withHttpProbeInternal(probeType: ProbeType, path?: string, initialDelaySeconds?: number, periodSeconds?: number, timeoutSeconds?: number, failureThreshold?: number, successThreshold?: number, endpointName?: string): Promise<ContainerResource> {
+    private async _withHttpProbeInternal(probeType: ProbeType, path?: string, initialDelaySeconds?: number | null, periodSeconds?: number | null, timeoutSeconds?: number | null, failureThreshold?: number | null, successThreshold?: number | null, endpointName?: string): Promise<ContainerResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, probeType };
         if (path !== undefined) rpcArgs.path = path;
         if (initialDelaySeconds !== undefined) rpcArgs.initialDelaySeconds = initialDelaySeconds;
@@ -20232,7 +20232,7 @@ class ContainerResourceImpl extends ResourceBuilderBase<ContainerResourceHandle>
     }
 
     /** @internal */
-    private async _withHiddenOnCompletionInternal(exitCode?: number, exitCodes?: number[]): Promise<ContainerResource> {
+    private async _withHiddenOnCompletionInternal(exitCode?: number | null, exitCodes?: number[]): Promise<ContainerResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (exitCode !== undefined) rpcArgs.exitCode = exitCode;
         if (exitCodes !== undefined) rpcArgs.exitCodes = exitCodes;
@@ -20945,7 +20945,7 @@ class ContainerResourceImpl extends ResourceBuilderBase<ContainerResourceHandle>
     }
 
     /** @internal */
-    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number): Promise<ContainerResource> {
+    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number | null): Promise<ContainerResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -20967,7 +20967,7 @@ class ContainerResourceImpl extends ResourceBuilderBase<ContainerResourceHandle>
     }
 
     /** @internal */
-    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number): Promise<ContainerResource> {
+    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number | null): Promise<ContainerResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel, logPath };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -22846,7 +22846,7 @@ class CSharpAppResourceImpl extends ResourceBuilderBase<CSharpAppResourceHandle>
     }
 
     /** @internal */
-    private async _withOtlpExporterInternal(protocol?: OtlpProtocol): Promise<CSharpAppResource> {
+    private async _withOtlpExporterInternal(protocol?: OtlpProtocol | null): Promise<CSharpAppResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (protocol !== undefined) rpcArgs.protocol = protocol;
         const result = await this._client.invokeCapability<CSharpAppResourceHandle>(
@@ -23277,7 +23277,7 @@ class CSharpAppResourceImpl extends ResourceBuilderBase<CSharpAppResourceHandle>
     }
 
     /** @internal */
-    private async _withEndpointInternal(port?: number, targetPort?: number, scheme?: string, name?: string, env?: string, isProxied?: boolean, isExternal?: boolean, protocol?: ProtocolType): Promise<CSharpAppResource> {
+    private async _withEndpointInternal(port?: number | null, targetPort?: number | null, scheme?: string, name?: string, env?: string, isProxied?: boolean | null, isExternal?: boolean | null, protocol?: ProtocolType | null): Promise<CSharpAppResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -23336,7 +23336,7 @@ class CSharpAppResourceImpl extends ResourceBuilderBase<CSharpAppResourceHandle>
     }
 
     /** @internal */
-    private async _withHttpEndpointInternal(port?: number, targetPort?: number, name?: string, env?: string, isProxied?: boolean): Promise<CSharpAppResource> {
+    private async _withHttpEndpointInternal(port?: number | null, targetPort?: number | null, name?: string, env?: string, isProxied?: boolean | null): Promise<CSharpAppResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -23368,7 +23368,7 @@ class CSharpAppResourceImpl extends ResourceBuilderBase<CSharpAppResourceHandle>
     }
 
     /** @internal */
-    private async _withHttpsEndpointInternal(port?: number, targetPort?: number, name?: string, env?: string, isProxied?: boolean): Promise<CSharpAppResource> {
+    private async _withHttpsEndpointInternal(port?: number | null, targetPort?: number | null, name?: string, env?: string, isProxied?: boolean | null): Promise<CSharpAppResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -23559,7 +23559,7 @@ class CSharpAppResourceImpl extends ResourceBuilderBase<CSharpAppResourceHandle>
     }
 
     /** @internal */
-    private async _waitForInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior): Promise<CSharpAppResource> {
+    private async _waitForInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior | null): Promise<CSharpAppResource> {
         dependency = isPromiseLike(dependency) ? await dependency : dependency;
         const rpcArgs: Record<string, unknown> = { builder: this._handle, dependency };
         if (waitBehavior !== undefined) rpcArgs.waitBehavior = waitBehavior;
@@ -23580,7 +23580,7 @@ class CSharpAppResourceImpl extends ResourceBuilderBase<CSharpAppResourceHandle>
     }
 
     /** @internal */
-    private async _waitForStartInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior): Promise<CSharpAppResource> {
+    private async _waitForStartInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior | null): Promise<CSharpAppResource> {
         dependency = isPromiseLike(dependency) ? await dependency : dependency;
         const rpcArgs: Record<string, unknown> = { builder: this._handle, dependency };
         if (waitBehavior !== undefined) rpcArgs.waitBehavior = waitBehavior;
@@ -23661,7 +23661,7 @@ class CSharpAppResourceImpl extends ResourceBuilderBase<CSharpAppResourceHandle>
     }
 
     /** @internal */
-    private async _withHttpHealthCheckInternal(path?: string, statusCode?: number, endpointName?: string): Promise<CSharpAppResource> {
+    private async _withHttpHealthCheckInternal(path?: string, statusCode?: number | null, endpointName?: string): Promise<CSharpAppResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (path !== undefined) rpcArgs.path = path;
         if (statusCode !== undefined) rpcArgs.statusCode = statusCode;
@@ -24199,7 +24199,7 @@ class CSharpAppResourceImpl extends ResourceBuilderBase<CSharpAppResourceHandle>
     }
 
     /** @internal */
-    private async _withHttpProbeInternal(probeType: ProbeType, path?: string, initialDelaySeconds?: number, periodSeconds?: number, timeoutSeconds?: number, failureThreshold?: number, successThreshold?: number, endpointName?: string): Promise<CSharpAppResource> {
+    private async _withHttpProbeInternal(probeType: ProbeType, path?: string, initialDelaySeconds?: number | null, periodSeconds?: number | null, timeoutSeconds?: number | null, failureThreshold?: number | null, successThreshold?: number | null, endpointName?: string): Promise<CSharpAppResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, probeType };
         if (path !== undefined) rpcArgs.path = path;
         if (initialDelaySeconds !== undefined) rpcArgs.initialDelaySeconds = initialDelaySeconds;
@@ -24270,7 +24270,7 @@ class CSharpAppResourceImpl extends ResourceBuilderBase<CSharpAppResourceHandle>
     }
 
     /** @internal */
-    private async _withHiddenOnCompletionInternal(exitCode?: number, exitCodes?: number[]): Promise<CSharpAppResource> {
+    private async _withHiddenOnCompletionInternal(exitCode?: number | null, exitCodes?: number[]): Promise<CSharpAppResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (exitCode !== undefined) rpcArgs.exitCode = exitCode;
         if (exitCodes !== undefined) rpcArgs.exitCodes = exitCodes;
@@ -24971,7 +24971,7 @@ class CSharpAppResourceImpl extends ResourceBuilderBase<CSharpAppResourceHandle>
     }
 
     /** @internal */
-    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number): Promise<CSharpAppResource> {
+    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number | null): Promise<CSharpAppResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -24993,7 +24993,7 @@ class CSharpAppResourceImpl extends ResourceBuilderBase<CSharpAppResourceHandle>
     }
 
     /** @internal */
-    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number): Promise<CSharpAppResource> {
+    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number | null): Promise<CSharpAppResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel, logPath };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -27025,7 +27025,7 @@ class DotnetToolResourceImpl extends ResourceBuilderBase<DotnetToolResourceHandl
     }
 
     /** @internal */
-    private async _withOtlpExporterInternal(protocol?: OtlpProtocol): Promise<DotnetToolResource> {
+    private async _withOtlpExporterInternal(protocol?: OtlpProtocol | null): Promise<DotnetToolResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (protocol !== undefined) rpcArgs.protocol = protocol;
         const result = await this._client.invokeCapability<DotnetToolResourceHandle>(
@@ -27389,7 +27389,7 @@ class DotnetToolResourceImpl extends ResourceBuilderBase<DotnetToolResourceHandl
     }
 
     /** @internal */
-    private async _withEndpointInternal(port?: number, targetPort?: number, scheme?: string, name?: string, env?: string, isProxied?: boolean, isExternal?: boolean, protocol?: ProtocolType): Promise<DotnetToolResource> {
+    private async _withEndpointInternal(port?: number | null, targetPort?: number | null, scheme?: string, name?: string, env?: string, isProxied?: boolean | null, isExternal?: boolean | null, protocol?: ProtocolType | null): Promise<DotnetToolResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -27448,7 +27448,7 @@ class DotnetToolResourceImpl extends ResourceBuilderBase<DotnetToolResourceHandl
     }
 
     /** @internal */
-    private async _withHttpEndpointInternal(port?: number, targetPort?: number, name?: string, env?: string, isProxied?: boolean): Promise<DotnetToolResource> {
+    private async _withHttpEndpointInternal(port?: number | null, targetPort?: number | null, name?: string, env?: string, isProxied?: boolean | null): Promise<DotnetToolResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -27480,7 +27480,7 @@ class DotnetToolResourceImpl extends ResourceBuilderBase<DotnetToolResourceHandl
     }
 
     /** @internal */
-    private async _withHttpsEndpointInternal(port?: number, targetPort?: number, name?: string, env?: string, isProxied?: boolean): Promise<DotnetToolResource> {
+    private async _withHttpsEndpointInternal(port?: number | null, targetPort?: number | null, name?: string, env?: string, isProxied?: boolean | null): Promise<DotnetToolResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -27651,7 +27651,7 @@ class DotnetToolResourceImpl extends ResourceBuilderBase<DotnetToolResourceHandl
     }
 
     /** @internal */
-    private async _waitForInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior): Promise<DotnetToolResource> {
+    private async _waitForInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior | null): Promise<DotnetToolResource> {
         dependency = isPromiseLike(dependency) ? await dependency : dependency;
         const rpcArgs: Record<string, unknown> = { builder: this._handle, dependency };
         if (waitBehavior !== undefined) rpcArgs.waitBehavior = waitBehavior;
@@ -27672,7 +27672,7 @@ class DotnetToolResourceImpl extends ResourceBuilderBase<DotnetToolResourceHandl
     }
 
     /** @internal */
-    private async _waitForStartInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior): Promise<DotnetToolResource> {
+    private async _waitForStartInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior | null): Promise<DotnetToolResource> {
         dependency = isPromiseLike(dependency) ? await dependency : dependency;
         const rpcArgs: Record<string, unknown> = { builder: this._handle, dependency };
         if (waitBehavior !== undefined) rpcArgs.waitBehavior = waitBehavior;
@@ -27753,7 +27753,7 @@ class DotnetToolResourceImpl extends ResourceBuilderBase<DotnetToolResourceHandl
     }
 
     /** @internal */
-    private async _withHttpHealthCheckInternal(path?: string, statusCode?: number, endpointName?: string): Promise<DotnetToolResource> {
+    private async _withHttpHealthCheckInternal(path?: string, statusCode?: number | null, endpointName?: string): Promise<DotnetToolResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (path !== undefined) rpcArgs.path = path;
         if (statusCode !== undefined) rpcArgs.statusCode = statusCode;
@@ -28291,7 +28291,7 @@ class DotnetToolResourceImpl extends ResourceBuilderBase<DotnetToolResourceHandl
     }
 
     /** @internal */
-    private async _withHttpProbeInternal(probeType: ProbeType, path?: string, initialDelaySeconds?: number, periodSeconds?: number, timeoutSeconds?: number, failureThreshold?: number, successThreshold?: number, endpointName?: string): Promise<DotnetToolResource> {
+    private async _withHttpProbeInternal(probeType: ProbeType, path?: string, initialDelaySeconds?: number | null, periodSeconds?: number | null, timeoutSeconds?: number | null, failureThreshold?: number | null, successThreshold?: number | null, endpointName?: string): Promise<DotnetToolResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, probeType };
         if (path !== undefined) rpcArgs.path = path;
         if (initialDelaySeconds !== undefined) rpcArgs.initialDelaySeconds = initialDelaySeconds;
@@ -28362,7 +28362,7 @@ class DotnetToolResourceImpl extends ResourceBuilderBase<DotnetToolResourceHandl
     }
 
     /** @internal */
-    private async _withHiddenOnCompletionInternal(exitCode?: number, exitCodes?: number[]): Promise<DotnetToolResource> {
+    private async _withHiddenOnCompletionInternal(exitCode?: number | null, exitCodes?: number[]): Promise<DotnetToolResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (exitCode !== undefined) rpcArgs.exitCode = exitCode;
         if (exitCodes !== undefined) rpcArgs.exitCodes = exitCodes;
@@ -29044,7 +29044,7 @@ class DotnetToolResourceImpl extends ResourceBuilderBase<DotnetToolResourceHandl
     }
 
     /** @internal */
-    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number): Promise<DotnetToolResource> {
+    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number | null): Promise<DotnetToolResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -29066,7 +29066,7 @@ class DotnetToolResourceImpl extends ResourceBuilderBase<DotnetToolResourceHandl
     }
 
     /** @internal */
-    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number): Promise<DotnetToolResource> {
+    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number | null): Promise<DotnetToolResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel, logPath };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -30951,7 +30951,7 @@ class ExecutableResourceImpl extends ResourceBuilderBase<ExecutableResourceHandl
     }
 
     /** @internal */
-    private async _withOtlpExporterInternal(protocol?: OtlpProtocol): Promise<ExecutableResource> {
+    private async _withOtlpExporterInternal(protocol?: OtlpProtocol | null): Promise<ExecutableResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (protocol !== undefined) rpcArgs.protocol = protocol;
         const result = await this._client.invokeCapability<ExecutableResourceHandle>(
@@ -31315,7 +31315,7 @@ class ExecutableResourceImpl extends ResourceBuilderBase<ExecutableResourceHandl
     }
 
     /** @internal */
-    private async _withEndpointInternal(port?: number, targetPort?: number, scheme?: string, name?: string, env?: string, isProxied?: boolean, isExternal?: boolean, protocol?: ProtocolType): Promise<ExecutableResource> {
+    private async _withEndpointInternal(port?: number | null, targetPort?: number | null, scheme?: string, name?: string, env?: string, isProxied?: boolean | null, isExternal?: boolean | null, protocol?: ProtocolType | null): Promise<ExecutableResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -31374,7 +31374,7 @@ class ExecutableResourceImpl extends ResourceBuilderBase<ExecutableResourceHandl
     }
 
     /** @internal */
-    private async _withHttpEndpointInternal(port?: number, targetPort?: number, name?: string, env?: string, isProxied?: boolean): Promise<ExecutableResource> {
+    private async _withHttpEndpointInternal(port?: number | null, targetPort?: number | null, name?: string, env?: string, isProxied?: boolean | null): Promise<ExecutableResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -31406,7 +31406,7 @@ class ExecutableResourceImpl extends ResourceBuilderBase<ExecutableResourceHandl
     }
 
     /** @internal */
-    private async _withHttpsEndpointInternal(port?: number, targetPort?: number, name?: string, env?: string, isProxied?: boolean): Promise<ExecutableResource> {
+    private async _withHttpsEndpointInternal(port?: number | null, targetPort?: number | null, name?: string, env?: string, isProxied?: boolean | null): Promise<ExecutableResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -31577,7 +31577,7 @@ class ExecutableResourceImpl extends ResourceBuilderBase<ExecutableResourceHandl
     }
 
     /** @internal */
-    private async _waitForInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior): Promise<ExecutableResource> {
+    private async _waitForInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior | null): Promise<ExecutableResource> {
         dependency = isPromiseLike(dependency) ? await dependency : dependency;
         const rpcArgs: Record<string, unknown> = { builder: this._handle, dependency };
         if (waitBehavior !== undefined) rpcArgs.waitBehavior = waitBehavior;
@@ -31598,7 +31598,7 @@ class ExecutableResourceImpl extends ResourceBuilderBase<ExecutableResourceHandl
     }
 
     /** @internal */
-    private async _waitForStartInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior): Promise<ExecutableResource> {
+    private async _waitForStartInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior | null): Promise<ExecutableResource> {
         dependency = isPromiseLike(dependency) ? await dependency : dependency;
         const rpcArgs: Record<string, unknown> = { builder: this._handle, dependency };
         if (waitBehavior !== undefined) rpcArgs.waitBehavior = waitBehavior;
@@ -31679,7 +31679,7 @@ class ExecutableResourceImpl extends ResourceBuilderBase<ExecutableResourceHandl
     }
 
     /** @internal */
-    private async _withHttpHealthCheckInternal(path?: string, statusCode?: number, endpointName?: string): Promise<ExecutableResource> {
+    private async _withHttpHealthCheckInternal(path?: string, statusCode?: number | null, endpointName?: string): Promise<ExecutableResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (path !== undefined) rpcArgs.path = path;
         if (statusCode !== undefined) rpcArgs.statusCode = statusCode;
@@ -32217,7 +32217,7 @@ class ExecutableResourceImpl extends ResourceBuilderBase<ExecutableResourceHandl
     }
 
     /** @internal */
-    private async _withHttpProbeInternal(probeType: ProbeType, path?: string, initialDelaySeconds?: number, periodSeconds?: number, timeoutSeconds?: number, failureThreshold?: number, successThreshold?: number, endpointName?: string): Promise<ExecutableResource> {
+    private async _withHttpProbeInternal(probeType: ProbeType, path?: string, initialDelaySeconds?: number | null, periodSeconds?: number | null, timeoutSeconds?: number | null, failureThreshold?: number | null, successThreshold?: number | null, endpointName?: string): Promise<ExecutableResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, probeType };
         if (path !== undefined) rpcArgs.path = path;
         if (initialDelaySeconds !== undefined) rpcArgs.initialDelaySeconds = initialDelaySeconds;
@@ -32288,7 +32288,7 @@ class ExecutableResourceImpl extends ResourceBuilderBase<ExecutableResourceHandl
     }
 
     /** @internal */
-    private async _withHiddenOnCompletionInternal(exitCode?: number, exitCodes?: number[]): Promise<ExecutableResource> {
+    private async _withHiddenOnCompletionInternal(exitCode?: number | null, exitCodes?: number[]): Promise<ExecutableResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (exitCode !== undefined) rpcArgs.exitCode = exitCode;
         if (exitCodes !== undefined) rpcArgs.exitCodes = exitCodes;
@@ -32970,7 +32970,7 @@ class ExecutableResourceImpl extends ResourceBuilderBase<ExecutableResourceHandl
     }
 
     /** @internal */
-    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number): Promise<ExecutableResource> {
+    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number | null): Promise<ExecutableResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -32992,7 +32992,7 @@ class ExecutableResourceImpl extends ResourceBuilderBase<ExecutableResourceHandl
     }
 
     /** @internal */
-    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number): Promise<ExecutableResource> {
+    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number | null): Promise<ExecutableResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel, logPath };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -34165,7 +34165,7 @@ class ExternalServiceResourceImpl extends ResourceBuilderBase<ExternalServiceRes
     }
 
     /** @internal */
-    private async _withHttpHealthCheckInternal(path?: string, statusCode?: number, endpointName?: string): Promise<ExternalServiceResource> {
+    private async _withHttpHealthCheckInternal(path?: string, statusCode?: number | null, endpointName?: string): Promise<ExternalServiceResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (path !== undefined) rpcArgs.path = path;
         if (statusCode !== undefined) rpcArgs.statusCode = statusCode;
@@ -34767,7 +34767,7 @@ class ExternalServiceResourceImpl extends ResourceBuilderBase<ExternalServiceRes
     }
 
     /** @internal */
-    private async _withHiddenOnCompletionInternal(exitCode?: number, exitCodes?: number[]): Promise<ExternalServiceResource> {
+    private async _withHiddenOnCompletionInternal(exitCode?: number | null, exitCodes?: number[]): Promise<ExternalServiceResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (exitCode !== undefined) rpcArgs.exitCode = exitCode;
         if (exitCodes !== undefined) rpcArgs.exitCodes = exitCodes;
@@ -35318,7 +35318,7 @@ class ExternalServiceResourceImpl extends ResourceBuilderBase<ExternalServiceRes
     }
 
     /** @internal */
-    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number): Promise<ExternalServiceResource> {
+    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number | null): Promise<ExternalServiceResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -35340,7 +35340,7 @@ class ExternalServiceResourceImpl extends ResourceBuilderBase<ExternalServiceRes
     }
 
     /** @internal */
-    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number): Promise<ExternalServiceResource> {
+    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number | null): Promise<ExternalServiceResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel, logPath };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -36998,7 +36998,7 @@ class ParameterResourceImpl extends ResourceBuilderBase<ParameterResourceHandle>
     }
 
     /** @internal */
-    private async _withHiddenOnCompletionInternal(exitCode?: number, exitCodes?: number[]): Promise<ParameterResource> {
+    private async _withHiddenOnCompletionInternal(exitCode?: number | null, exitCodes?: number[]): Promise<ParameterResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (exitCode !== undefined) rpcArgs.exitCode = exitCode;
         if (exitCodes !== undefined) rpcArgs.exitCodes = exitCodes;
@@ -37549,7 +37549,7 @@ class ParameterResourceImpl extends ResourceBuilderBase<ParameterResourceHandle>
     }
 
     /** @internal */
-    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number): Promise<ParameterResource> {
+    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number | null): Promise<ParameterResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -37571,7 +37571,7 @@ class ParameterResourceImpl extends ResourceBuilderBase<ParameterResourceHandle>
     }
 
     /** @internal */
-    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number): Promise<ParameterResource> {
+    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number | null): Promise<ParameterResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel, logPath };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -39228,7 +39228,7 @@ class ProjectResourceImpl extends ResourceBuilderBase<ProjectResourceHandle> imp
     }
 
     /** @internal */
-    private async _withOtlpExporterInternal(protocol?: OtlpProtocol): Promise<ProjectResource> {
+    private async _withOtlpExporterInternal(protocol?: OtlpProtocol | null): Promise<ProjectResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (protocol !== undefined) rpcArgs.protocol = protocol;
         const result = await this._client.invokeCapability<ProjectResourceHandle>(
@@ -39659,7 +39659,7 @@ class ProjectResourceImpl extends ResourceBuilderBase<ProjectResourceHandle> imp
     }
 
     /** @internal */
-    private async _withEndpointInternal(port?: number, targetPort?: number, scheme?: string, name?: string, env?: string, isProxied?: boolean, isExternal?: boolean, protocol?: ProtocolType): Promise<ProjectResource> {
+    private async _withEndpointInternal(port?: number | null, targetPort?: number | null, scheme?: string, name?: string, env?: string, isProxied?: boolean | null, isExternal?: boolean | null, protocol?: ProtocolType | null): Promise<ProjectResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -39718,7 +39718,7 @@ class ProjectResourceImpl extends ResourceBuilderBase<ProjectResourceHandle> imp
     }
 
     /** @internal */
-    private async _withHttpEndpointInternal(port?: number, targetPort?: number, name?: string, env?: string, isProxied?: boolean): Promise<ProjectResource> {
+    private async _withHttpEndpointInternal(port?: number | null, targetPort?: number | null, name?: string, env?: string, isProxied?: boolean | null): Promise<ProjectResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -39750,7 +39750,7 @@ class ProjectResourceImpl extends ResourceBuilderBase<ProjectResourceHandle> imp
     }
 
     /** @internal */
-    private async _withHttpsEndpointInternal(port?: number, targetPort?: number, name?: string, env?: string, isProxied?: boolean): Promise<ProjectResource> {
+    private async _withHttpsEndpointInternal(port?: number | null, targetPort?: number | null, name?: string, env?: string, isProxied?: boolean | null): Promise<ProjectResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -39941,7 +39941,7 @@ class ProjectResourceImpl extends ResourceBuilderBase<ProjectResourceHandle> imp
     }
 
     /** @internal */
-    private async _waitForInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior): Promise<ProjectResource> {
+    private async _waitForInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior | null): Promise<ProjectResource> {
         dependency = isPromiseLike(dependency) ? await dependency : dependency;
         const rpcArgs: Record<string, unknown> = { builder: this._handle, dependency };
         if (waitBehavior !== undefined) rpcArgs.waitBehavior = waitBehavior;
@@ -39962,7 +39962,7 @@ class ProjectResourceImpl extends ResourceBuilderBase<ProjectResourceHandle> imp
     }
 
     /** @internal */
-    private async _waitForStartInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior): Promise<ProjectResource> {
+    private async _waitForStartInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior | null): Promise<ProjectResource> {
         dependency = isPromiseLike(dependency) ? await dependency : dependency;
         const rpcArgs: Record<string, unknown> = { builder: this._handle, dependency };
         if (waitBehavior !== undefined) rpcArgs.waitBehavior = waitBehavior;
@@ -40043,7 +40043,7 @@ class ProjectResourceImpl extends ResourceBuilderBase<ProjectResourceHandle> imp
     }
 
     /** @internal */
-    private async _withHttpHealthCheckInternal(path?: string, statusCode?: number, endpointName?: string): Promise<ProjectResource> {
+    private async _withHttpHealthCheckInternal(path?: string, statusCode?: number | null, endpointName?: string): Promise<ProjectResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (path !== undefined) rpcArgs.path = path;
         if (statusCode !== undefined) rpcArgs.statusCode = statusCode;
@@ -40581,7 +40581,7 @@ class ProjectResourceImpl extends ResourceBuilderBase<ProjectResourceHandle> imp
     }
 
     /** @internal */
-    private async _withHttpProbeInternal(probeType: ProbeType, path?: string, initialDelaySeconds?: number, periodSeconds?: number, timeoutSeconds?: number, failureThreshold?: number, successThreshold?: number, endpointName?: string): Promise<ProjectResource> {
+    private async _withHttpProbeInternal(probeType: ProbeType, path?: string, initialDelaySeconds?: number | null, periodSeconds?: number | null, timeoutSeconds?: number | null, failureThreshold?: number | null, successThreshold?: number | null, endpointName?: string): Promise<ProjectResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, probeType };
         if (path !== undefined) rpcArgs.path = path;
         if (initialDelaySeconds !== undefined) rpcArgs.initialDelaySeconds = initialDelaySeconds;
@@ -40652,7 +40652,7 @@ class ProjectResourceImpl extends ResourceBuilderBase<ProjectResourceHandle> imp
     }
 
     /** @internal */
-    private async _withHiddenOnCompletionInternal(exitCode?: number, exitCodes?: number[]): Promise<ProjectResource> {
+    private async _withHiddenOnCompletionInternal(exitCode?: number | null, exitCodes?: number[]): Promise<ProjectResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (exitCode !== undefined) rpcArgs.exitCode = exitCode;
         if (exitCodes !== undefined) rpcArgs.exitCodes = exitCodes;
@@ -41353,7 +41353,7 @@ class ProjectResourceImpl extends ResourceBuilderBase<ProjectResourceHandle> imp
     }
 
     /** @internal */
-    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number): Promise<ProjectResource> {
+    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number | null): Promise<ProjectResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -41375,7 +41375,7 @@ class ProjectResourceImpl extends ResourceBuilderBase<ProjectResourceHandle> imp
     }
 
     /** @internal */
-    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number): Promise<ProjectResource> {
+    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number | null): Promise<ProjectResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel, logPath };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -44050,7 +44050,7 @@ class TestDatabaseResourceImpl extends ResourceBuilderBase<TestDatabaseResourceH
     }
 
     /** @internal */
-    private async _withOtlpExporterInternal(protocol?: OtlpProtocol): Promise<TestDatabaseResource> {
+    private async _withOtlpExporterInternal(protocol?: OtlpProtocol | null): Promise<TestDatabaseResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (protocol !== undefined) rpcArgs.protocol = protocol;
         const result = await this._client.invokeCapability<TestDatabaseResourceHandle>(
@@ -44435,7 +44435,7 @@ class TestDatabaseResourceImpl extends ResourceBuilderBase<TestDatabaseResourceH
     }
 
     /** @internal */
-    private async _withEndpointInternal(port?: number, targetPort?: number, scheme?: string, name?: string, env?: string, isProxied?: boolean, isExternal?: boolean, protocol?: ProtocolType): Promise<TestDatabaseResource> {
+    private async _withEndpointInternal(port?: number | null, targetPort?: number | null, scheme?: string, name?: string, env?: string, isProxied?: boolean | null, isExternal?: boolean | null, protocol?: ProtocolType | null): Promise<TestDatabaseResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -44494,7 +44494,7 @@ class TestDatabaseResourceImpl extends ResourceBuilderBase<TestDatabaseResourceH
     }
 
     /** @internal */
-    private async _withHttpEndpointInternal(port?: number, targetPort?: number, name?: string, env?: string, isProxied?: boolean): Promise<TestDatabaseResource> {
+    private async _withHttpEndpointInternal(port?: number | null, targetPort?: number | null, name?: string, env?: string, isProxied?: boolean | null): Promise<TestDatabaseResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -44526,7 +44526,7 @@ class TestDatabaseResourceImpl extends ResourceBuilderBase<TestDatabaseResourceH
     }
 
     /** @internal */
-    private async _withHttpsEndpointInternal(port?: number, targetPort?: number, name?: string, env?: string, isProxied?: boolean): Promise<TestDatabaseResource> {
+    private async _withHttpsEndpointInternal(port?: number | null, targetPort?: number | null, name?: string, env?: string, isProxied?: boolean | null): Promise<TestDatabaseResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -44697,7 +44697,7 @@ class TestDatabaseResourceImpl extends ResourceBuilderBase<TestDatabaseResourceH
     }
 
     /** @internal */
-    private async _waitForInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior): Promise<TestDatabaseResource> {
+    private async _waitForInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior | null): Promise<TestDatabaseResource> {
         dependency = isPromiseLike(dependency) ? await dependency : dependency;
         const rpcArgs: Record<string, unknown> = { builder: this._handle, dependency };
         if (waitBehavior !== undefined) rpcArgs.waitBehavior = waitBehavior;
@@ -44718,7 +44718,7 @@ class TestDatabaseResourceImpl extends ResourceBuilderBase<TestDatabaseResourceH
     }
 
     /** @internal */
-    private async _waitForStartInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior): Promise<TestDatabaseResource> {
+    private async _waitForStartInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior | null): Promise<TestDatabaseResource> {
         dependency = isPromiseLike(dependency) ? await dependency : dependency;
         const rpcArgs: Record<string, unknown> = { builder: this._handle, dependency };
         if (waitBehavior !== undefined) rpcArgs.waitBehavior = waitBehavior;
@@ -44799,7 +44799,7 @@ class TestDatabaseResourceImpl extends ResourceBuilderBase<TestDatabaseResourceH
     }
 
     /** @internal */
-    private async _withHttpHealthCheckInternal(path?: string, statusCode?: number, endpointName?: string): Promise<TestDatabaseResource> {
+    private async _withHttpHealthCheckInternal(path?: string, statusCode?: number | null, endpointName?: string): Promise<TestDatabaseResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (path !== undefined) rpcArgs.path = path;
         if (statusCode !== undefined) rpcArgs.statusCode = statusCode;
@@ -45337,7 +45337,7 @@ class TestDatabaseResourceImpl extends ResourceBuilderBase<TestDatabaseResourceH
     }
 
     /** @internal */
-    private async _withHttpProbeInternal(probeType: ProbeType, path?: string, initialDelaySeconds?: number, periodSeconds?: number, timeoutSeconds?: number, failureThreshold?: number, successThreshold?: number, endpointName?: string): Promise<TestDatabaseResource> {
+    private async _withHttpProbeInternal(probeType: ProbeType, path?: string, initialDelaySeconds?: number | null, periodSeconds?: number | null, timeoutSeconds?: number | null, failureThreshold?: number | null, successThreshold?: number | null, endpointName?: string): Promise<TestDatabaseResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, probeType };
         if (path !== undefined) rpcArgs.path = path;
         if (initialDelaySeconds !== undefined) rpcArgs.initialDelaySeconds = initialDelaySeconds;
@@ -45408,7 +45408,7 @@ class TestDatabaseResourceImpl extends ResourceBuilderBase<TestDatabaseResourceH
     }
 
     /** @internal */
-    private async _withHiddenOnCompletionInternal(exitCode?: number, exitCodes?: number[]): Promise<TestDatabaseResource> {
+    private async _withHiddenOnCompletionInternal(exitCode?: number | null, exitCodes?: number[]): Promise<TestDatabaseResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (exitCode !== undefined) rpcArgs.exitCode = exitCode;
         if (exitCodes !== undefined) rpcArgs.exitCodes = exitCodes;
@@ -46121,7 +46121,7 @@ class TestDatabaseResourceImpl extends ResourceBuilderBase<TestDatabaseResourceH
     }
 
     /** @internal */
-    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number): Promise<TestDatabaseResource> {
+    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number | null): Promise<TestDatabaseResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -46143,7 +46143,7 @@ class TestDatabaseResourceImpl extends ResourceBuilderBase<TestDatabaseResourceH
     }
 
     /** @internal */
-    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number): Promise<TestDatabaseResource> {
+    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number | null): Promise<TestDatabaseResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel, logPath };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -49054,7 +49054,7 @@ class TestRedisResourceImpl extends ResourceBuilderBase<TestRedisResourceHandle>
     }
 
     /** @internal */
-    private async _withOtlpExporterInternal(protocol?: OtlpProtocol): Promise<TestRedisResource> {
+    private async _withOtlpExporterInternal(protocol?: OtlpProtocol | null): Promise<TestRedisResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (protocol !== undefined) rpcArgs.protocol = protocol;
         const result = await this._client.invokeCapability<TestRedisResourceHandle>(
@@ -49475,7 +49475,7 @@ class TestRedisResourceImpl extends ResourceBuilderBase<TestRedisResourceHandle>
     }
 
     /** @internal */
-    private async _withEndpointInternal(port?: number, targetPort?: number, scheme?: string, name?: string, env?: string, isProxied?: boolean, isExternal?: boolean, protocol?: ProtocolType): Promise<TestRedisResource> {
+    private async _withEndpointInternal(port?: number | null, targetPort?: number | null, scheme?: string, name?: string, env?: string, isProxied?: boolean | null, isExternal?: boolean | null, protocol?: ProtocolType | null): Promise<TestRedisResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -49534,7 +49534,7 @@ class TestRedisResourceImpl extends ResourceBuilderBase<TestRedisResourceHandle>
     }
 
     /** @internal */
-    private async _withHttpEndpointInternal(port?: number, targetPort?: number, name?: string, env?: string, isProxied?: boolean): Promise<TestRedisResource> {
+    private async _withHttpEndpointInternal(port?: number | null, targetPort?: number | null, name?: string, env?: string, isProxied?: boolean | null): Promise<TestRedisResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -49566,7 +49566,7 @@ class TestRedisResourceImpl extends ResourceBuilderBase<TestRedisResourceHandle>
     }
 
     /** @internal */
-    private async _withHttpsEndpointInternal(port?: number, targetPort?: number, name?: string, env?: string, isProxied?: boolean): Promise<TestRedisResource> {
+    private async _withHttpsEndpointInternal(port?: number | null, targetPort?: number | null, name?: string, env?: string, isProxied?: boolean | null): Promise<TestRedisResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -49737,7 +49737,7 @@ class TestRedisResourceImpl extends ResourceBuilderBase<TestRedisResourceHandle>
     }
 
     /** @internal */
-    private async _waitForInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior): Promise<TestRedisResource> {
+    private async _waitForInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior | null): Promise<TestRedisResource> {
         dependency = isPromiseLike(dependency) ? await dependency : dependency;
         const rpcArgs: Record<string, unknown> = { builder: this._handle, dependency };
         if (waitBehavior !== undefined) rpcArgs.waitBehavior = waitBehavior;
@@ -49758,7 +49758,7 @@ class TestRedisResourceImpl extends ResourceBuilderBase<TestRedisResourceHandle>
     }
 
     /** @internal */
-    private async _waitForStartInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior): Promise<TestRedisResource> {
+    private async _waitForStartInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior | null): Promise<TestRedisResource> {
         dependency = isPromiseLike(dependency) ? await dependency : dependency;
         const rpcArgs: Record<string, unknown> = { builder: this._handle, dependency };
         if (waitBehavior !== undefined) rpcArgs.waitBehavior = waitBehavior;
@@ -49839,7 +49839,7 @@ class TestRedisResourceImpl extends ResourceBuilderBase<TestRedisResourceHandle>
     }
 
     /** @internal */
-    private async _withHttpHealthCheckInternal(path?: string, statusCode?: number, endpointName?: string): Promise<TestRedisResource> {
+    private async _withHttpHealthCheckInternal(path?: string, statusCode?: number | null, endpointName?: string): Promise<TestRedisResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (path !== undefined) rpcArgs.path = path;
         if (statusCode !== undefined) rpcArgs.statusCode = statusCode;
@@ -50377,7 +50377,7 @@ class TestRedisResourceImpl extends ResourceBuilderBase<TestRedisResourceHandle>
     }
 
     /** @internal */
-    private async _withHttpProbeInternal(probeType: ProbeType, path?: string, initialDelaySeconds?: number, periodSeconds?: number, timeoutSeconds?: number, failureThreshold?: number, successThreshold?: number, endpointName?: string): Promise<TestRedisResource> {
+    private async _withHttpProbeInternal(probeType: ProbeType, path?: string, initialDelaySeconds?: number | null, periodSeconds?: number | null, timeoutSeconds?: number | null, failureThreshold?: number | null, successThreshold?: number | null, endpointName?: string): Promise<TestRedisResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, probeType };
         if (path !== undefined) rpcArgs.path = path;
         if (initialDelaySeconds !== undefined) rpcArgs.initialDelaySeconds = initialDelaySeconds;
@@ -50448,7 +50448,7 @@ class TestRedisResourceImpl extends ResourceBuilderBase<TestRedisResourceHandle>
     }
 
     /** @internal */
-    private async _withHiddenOnCompletionInternal(exitCode?: number, exitCodes?: number[]): Promise<TestRedisResource> {
+    private async _withHiddenOnCompletionInternal(exitCode?: number | null, exitCodes?: number[]): Promise<TestRedisResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (exitCode !== undefined) rpcArgs.exitCode = exitCode;
         if (exitCodes !== undefined) rpcArgs.exitCodes = exitCodes;
@@ -51436,7 +51436,7 @@ class TestRedisResourceImpl extends ResourceBuilderBase<TestRedisResourceHandle>
     }
 
     /** @internal */
-    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number): Promise<TestRedisResource> {
+    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number | null): Promise<TestRedisResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -51458,7 +51458,7 @@ class TestRedisResourceImpl extends ResourceBuilderBase<TestRedisResourceHandle>
     }
 
     /** @internal */
-    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number): Promise<TestRedisResource> {
+    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number | null): Promise<TestRedisResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel, logPath };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -54277,7 +54277,7 @@ class TestVaultResourceImpl extends ResourceBuilderBase<TestVaultResourceHandle>
     }
 
     /** @internal */
-    private async _withOtlpExporterInternal(protocol?: OtlpProtocol): Promise<TestVaultResource> {
+    private async _withOtlpExporterInternal(protocol?: OtlpProtocol | null): Promise<TestVaultResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (protocol !== undefined) rpcArgs.protocol = protocol;
         const result = await this._client.invokeCapability<TestVaultResourceHandle>(
@@ -54662,7 +54662,7 @@ class TestVaultResourceImpl extends ResourceBuilderBase<TestVaultResourceHandle>
     }
 
     /** @internal */
-    private async _withEndpointInternal(port?: number, targetPort?: number, scheme?: string, name?: string, env?: string, isProxied?: boolean, isExternal?: boolean, protocol?: ProtocolType): Promise<TestVaultResource> {
+    private async _withEndpointInternal(port?: number | null, targetPort?: number | null, scheme?: string, name?: string, env?: string, isProxied?: boolean | null, isExternal?: boolean | null, protocol?: ProtocolType | null): Promise<TestVaultResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -54721,7 +54721,7 @@ class TestVaultResourceImpl extends ResourceBuilderBase<TestVaultResourceHandle>
     }
 
     /** @internal */
-    private async _withHttpEndpointInternal(port?: number, targetPort?: number, name?: string, env?: string, isProxied?: boolean): Promise<TestVaultResource> {
+    private async _withHttpEndpointInternal(port?: number | null, targetPort?: number | null, name?: string, env?: string, isProxied?: boolean | null): Promise<TestVaultResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -54753,7 +54753,7 @@ class TestVaultResourceImpl extends ResourceBuilderBase<TestVaultResourceHandle>
     }
 
     /** @internal */
-    private async _withHttpsEndpointInternal(port?: number, targetPort?: number, name?: string, env?: string, isProxied?: boolean): Promise<TestVaultResource> {
+    private async _withHttpsEndpointInternal(port?: number | null, targetPort?: number | null, name?: string, env?: string, isProxied?: boolean | null): Promise<TestVaultResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -54924,7 +54924,7 @@ class TestVaultResourceImpl extends ResourceBuilderBase<TestVaultResourceHandle>
     }
 
     /** @internal */
-    private async _waitForInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior): Promise<TestVaultResource> {
+    private async _waitForInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior | null): Promise<TestVaultResource> {
         dependency = isPromiseLike(dependency) ? await dependency : dependency;
         const rpcArgs: Record<string, unknown> = { builder: this._handle, dependency };
         if (waitBehavior !== undefined) rpcArgs.waitBehavior = waitBehavior;
@@ -54945,7 +54945,7 @@ class TestVaultResourceImpl extends ResourceBuilderBase<TestVaultResourceHandle>
     }
 
     /** @internal */
-    private async _waitForStartInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior): Promise<TestVaultResource> {
+    private async _waitForStartInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior | null): Promise<TestVaultResource> {
         dependency = isPromiseLike(dependency) ? await dependency : dependency;
         const rpcArgs: Record<string, unknown> = { builder: this._handle, dependency };
         if (waitBehavior !== undefined) rpcArgs.waitBehavior = waitBehavior;
@@ -55026,7 +55026,7 @@ class TestVaultResourceImpl extends ResourceBuilderBase<TestVaultResourceHandle>
     }
 
     /** @internal */
-    private async _withHttpHealthCheckInternal(path?: string, statusCode?: number, endpointName?: string): Promise<TestVaultResource> {
+    private async _withHttpHealthCheckInternal(path?: string, statusCode?: number | null, endpointName?: string): Promise<TestVaultResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (path !== undefined) rpcArgs.path = path;
         if (statusCode !== undefined) rpcArgs.statusCode = statusCode;
@@ -55564,7 +55564,7 @@ class TestVaultResourceImpl extends ResourceBuilderBase<TestVaultResourceHandle>
     }
 
     /** @internal */
-    private async _withHttpProbeInternal(probeType: ProbeType, path?: string, initialDelaySeconds?: number, periodSeconds?: number, timeoutSeconds?: number, failureThreshold?: number, successThreshold?: number, endpointName?: string): Promise<TestVaultResource> {
+    private async _withHttpProbeInternal(probeType: ProbeType, path?: string, initialDelaySeconds?: number | null, periodSeconds?: number | null, timeoutSeconds?: number | null, failureThreshold?: number | null, successThreshold?: number | null, endpointName?: string): Promise<TestVaultResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, probeType };
         if (path !== undefined) rpcArgs.path = path;
         if (initialDelaySeconds !== undefined) rpcArgs.initialDelaySeconds = initialDelaySeconds;
@@ -55635,7 +55635,7 @@ class TestVaultResourceImpl extends ResourceBuilderBase<TestVaultResourceHandle>
     }
 
     /** @internal */
-    private async _withHiddenOnCompletionInternal(exitCode?: number, exitCodes?: number[]): Promise<TestVaultResource> {
+    private async _withHiddenOnCompletionInternal(exitCode?: number | null, exitCodes?: number[]): Promise<TestVaultResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (exitCode !== undefined) rpcArgs.exitCode = exitCode;
         if (exitCodes !== undefined) rpcArgs.exitCodes = exitCodes;
@@ -56363,7 +56363,7 @@ class TestVaultResourceImpl extends ResourceBuilderBase<TestVaultResourceHandle>
     }
 
     /** @internal */
-    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number): Promise<TestVaultResource> {
+    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number | null): Promise<TestVaultResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -56385,7 +56385,7 @@ class TestVaultResourceImpl extends ResourceBuilderBase<TestVaultResourceHandle>
     }
 
     /** @internal */
-    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number): Promise<TestVaultResource> {
+    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number | null): Promise<TestVaultResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel, logPath };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -58527,7 +58527,7 @@ class ResourceImpl extends ResourceBuilderBase<IResourceHandle> implements Resou
     }
 
     /** @internal */
-    private async _withHiddenOnCompletionInternal(exitCode?: number, exitCodes?: number[]): Promise<Resource> {
+    private async _withHiddenOnCompletionInternal(exitCode?: number | null, exitCodes?: number[]): Promise<Resource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (exitCode !== undefined) rpcArgs.exitCode = exitCode;
         if (exitCodes !== undefined) rpcArgs.exitCodes = exitCodes;
@@ -59078,7 +59078,7 @@ class ResourceImpl extends ResourceBuilderBase<IResourceHandle> implements Resou
     }
 
     /** @internal */
-    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number): Promise<Resource> {
+    private async _withMergeLoggingInternal(logLevel: string, enableConsole?: boolean, maxFiles?: number | null): Promise<Resource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -59100,7 +59100,7 @@ class ResourceImpl extends ResourceBuilderBase<IResourceHandle> implements Resou
     }
 
     /** @internal */
-    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number): Promise<Resource> {
+    private async _withMergeLoggingPathInternal(logLevel: string, logPath: string, enableConsole?: boolean, maxFiles?: number | null): Promise<Resource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, logLevel, logPath };
         if (enableConsole !== undefined) rpcArgs.enableConsole = enableConsole;
         if (maxFiles !== undefined) rpcArgs.maxFiles = maxFiles;
@@ -60153,7 +60153,7 @@ class ResourceWithEndpointsImpl extends ResourceBuilderBase<IResourceWithEndpoin
     }
 
     /** @internal */
-    private async _withEndpointInternal(port?: number, targetPort?: number, scheme?: string, name?: string, env?: string, isProxied?: boolean, isExternal?: boolean, protocol?: ProtocolType): Promise<ResourceWithEndpoints> {
+    private async _withEndpointInternal(port?: number | null, targetPort?: number | null, scheme?: string, name?: string, env?: string, isProxied?: boolean | null, isExternal?: boolean | null, protocol?: ProtocolType | null): Promise<ResourceWithEndpoints> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -60212,7 +60212,7 @@ class ResourceWithEndpointsImpl extends ResourceBuilderBase<IResourceWithEndpoin
     }
 
     /** @internal */
-    private async _withHttpEndpointInternal(port?: number, targetPort?: number, name?: string, env?: string, isProxied?: boolean): Promise<ResourceWithEndpoints> {
+    private async _withHttpEndpointInternal(port?: number | null, targetPort?: number | null, name?: string, env?: string, isProxied?: boolean | null): Promise<ResourceWithEndpoints> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -60244,7 +60244,7 @@ class ResourceWithEndpointsImpl extends ResourceBuilderBase<IResourceWithEndpoin
     }
 
     /** @internal */
-    private async _withHttpsEndpointInternal(port?: number, targetPort?: number, name?: string, env?: string, isProxied?: boolean): Promise<ResourceWithEndpoints> {
+    private async _withHttpsEndpointInternal(port?: number | null, targetPort?: number | null, name?: string, env?: string, isProxied?: boolean | null): Promise<ResourceWithEndpoints> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (port !== undefined) rpcArgs.port = port;
         if (targetPort !== undefined) rpcArgs.targetPort = targetPort;
@@ -60329,7 +60329,7 @@ class ResourceWithEndpointsImpl extends ResourceBuilderBase<IResourceWithEndpoin
     }
 
     /** @internal */
-    private async _withHttpHealthCheckInternal(path?: string, statusCode?: number, endpointName?: string): Promise<ResourceWithEndpoints> {
+    private async _withHttpHealthCheckInternal(path?: string, statusCode?: number | null, endpointName?: string): Promise<ResourceWithEndpoints> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (path !== undefined) rpcArgs.path = path;
         if (statusCode !== undefined) rpcArgs.statusCode = statusCode;
@@ -60410,7 +60410,7 @@ class ResourceWithEndpointsImpl extends ResourceBuilderBase<IResourceWithEndpoin
     }
 
     /** @internal */
-    private async _withHttpProbeInternal(probeType: ProbeType, path?: string, initialDelaySeconds?: number, periodSeconds?: number, timeoutSeconds?: number, failureThreshold?: number, successThreshold?: number, endpointName?: string): Promise<ResourceWithEndpoints> {
+    private async _withHttpProbeInternal(probeType: ProbeType, path?: string, initialDelaySeconds?: number | null, periodSeconds?: number | null, timeoutSeconds?: number | null, failureThreshold?: number | null, successThreshold?: number | null, endpointName?: string): Promise<ResourceWithEndpoints> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, probeType };
         if (path !== undefined) rpcArgs.path = path;
         if (initialDelaySeconds !== undefined) rpcArgs.initialDelaySeconds = initialDelaySeconds;
@@ -60793,7 +60793,7 @@ class ResourceWithEnvironmentImpl extends ResourceBuilderBase<IResourceWithEnvir
     }
 
     /** @internal */
-    private async _withOtlpExporterInternal(protocol?: OtlpProtocol): Promise<ResourceWithEnvironment> {
+    private async _withOtlpExporterInternal(protocol?: OtlpProtocol | null): Promise<ResourceWithEnvironment> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (protocol !== undefined) rpcArgs.protocol = protocol;
         const result = await this._client.invokeCapability<IResourceWithEnvironmentHandle>(
@@ -61214,7 +61214,7 @@ class ResourceWithWaitSupportImpl extends ResourceBuilderBase<IResourceWithWaitS
     }
 
     /** @internal */
-    private async _waitForInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior): Promise<ResourceWithWaitSupport> {
+    private async _waitForInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior | null): Promise<ResourceWithWaitSupport> {
         dependency = isPromiseLike(dependency) ? await dependency : dependency;
         const rpcArgs: Record<string, unknown> = { builder: this._handle, dependency };
         if (waitBehavior !== undefined) rpcArgs.waitBehavior = waitBehavior;
@@ -61235,7 +61235,7 @@ class ResourceWithWaitSupportImpl extends ResourceBuilderBase<IResourceWithWaitS
     }
 
     /** @internal */
-    private async _waitForStartInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior): Promise<ResourceWithWaitSupport> {
+    private async _waitForStartInternal(dependency: Awaitable<CSharpAppResource | ComputeEnvironmentResource | ComputeResource | ContainerFilesDestinationResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithContainerFiles | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestMarkerResource | TestMutablePromiseCollisionResource | TestMutablePromiseCollisionResourcePromise | TestPromiseCollisionResource | TestPromiseCollisionResourcePromise | TestRedisResource | TestVaultResource>, waitBehavior?: WaitBehavior | null): Promise<ResourceWithWaitSupport> {
         dependency = isPromiseLike(dependency) ? await dependency : dependency;
         const rpcArgs: Record<string, unknown> = { builder: this._handle, dependency };
         if (waitBehavior !== undefined) rpcArgs.waitBehavior = waitBehavior;

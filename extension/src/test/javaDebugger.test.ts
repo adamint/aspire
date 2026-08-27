@@ -483,7 +483,7 @@ suite('Java Debugger Extension Tests', () => {
 
     test('maps an absolute Java AppHost launcher to the Java launch configuration', async () => {
         stubInstalledExtensions(['redhat.java', 'vscjava.vscode-java-debug']);
-        const javaExec = path.join('/opt', 'jdk-25', 'bin', 'java');
+        const javaExec = '/opt/jdk-25/bin/java';
         const createDebugSessionConfiguration = sinon.stub(debuggerExtensionsModule, 'createDebugSessionConfiguration').resolves(createDebugConfig());
         const parentDebugSession = {
             id: 'aspire-session',
@@ -694,7 +694,7 @@ suite('Java AppHost Command Parsing Tests', () => {
     });
 
     test('accepts a launcher referenced by an absolute path', () => {
-        const javaExec = path.join('/opt', 'jdk-25', 'bin', 'java');
+        const javaExec = '/opt/jdk-25/bin/java';
         const parsed = parseJavaAppHostCommand([javaExec, '-cp', 'out', 'AppHost']);
 
         assert.strictEqual(parsed?.mainClass, 'AppHost');

@@ -234,15 +234,13 @@ internal sealed class AtsPythonCodeGenerator : ICodeGenerator
 
     private static string ApplyNullableType(AtsTypeRef typeRef, string mappedType)
     {
-        if (typeRef.IsNullable != true || typeRef.Category is not (AtsTypeCategory.Primitive or AtsTypeCategory.Enum))
-        {
-            return mappedType;
-        }
-
-        return typeRef.TypeId is AtsConstants.Void or AtsConstants.Any or AtsConstants.CancellationToken
-            ? mappedType
-            : $"{mappedType} | None";
+        return ShouldApplyNullableType(typeRef) ? $"{mappedType} | None" : mappedType;
     }
+
+    private static bool ShouldApplyNullableType(AtsTypeRef typeRef) =>
+        typeRef.IsNullable == true
+        && typeRef.Category is AtsTypeCategory.Primitive or AtsTypeCategory.Enum
+        && typeRef.TypeId is not (AtsConstants.Void or AtsConstants.Any or AtsConstants.CancellationToken);
 
     /// <summary>
     /// Maps primitive type IDs to Python types.
@@ -478,6 +476,33 @@ internal sealed class AtsPythonCodeGenerator : ICodeGenerator
         };
     }
 
+    private static string MakeNullable(AtsParameterInfo param, string type)
+    {
+        return AllowsNoneAtTopLevel(param.Type) ? type : $"{type} | None";
+    }
+
+    private static bool AllowsNoneAtTopLevel(AtsTypeRef? typeRef)
+    {
+        if (typeRef is null)
+        {
+            return false;
+        }
+
+        if (typeRef.Category == AtsTypeCategory.Union)
+        {
+            // Union members remain at the rendered top level, including members of nested unions.
+            // Collection element, key, and value types do not, so intentionally do not traverse them.
+            return typeRef.UnionTypes?.Any(AllowsNoneAtTopLevel) == true;
+        }
+
+        if (typeRef.Category == AtsTypeCategory.Primitive && typeRef.TypeId == AtsConstants.Void)
+        {
+            return true;
+        }
+
+        return ShouldApplyNullableType(typeRef);
+    }
+
     /// <summary>
     /// Gets the Python type annotation suffix and default value for an optional parameter.
     /// Uses the actual default value when available instead of always defaulting to None.
@@ -488,14 +513,14 @@ internal sealed class AtsPythonCodeGenerator : ICodeGenerator
         if (pythonDefault == "None")
         {
             var paramType = MapParameterToPython(param);
-            return $"{paramType} | None = None";
+            return $"{MakeNullable(param, paramType)} = None";
         }
 
         var type = MapParameterToPython(param);
         // When we have a real default, the type doesn't need "| None" unless the param is also nullable
         if (param.IsNullable)
         {
-            return $"{type} | None = {pythonDefault}";
+            return $"{MakeNullable(param, type)} = {pythonDefault}";
         }
         return $"{type} = {pythonDefault}";
     }
