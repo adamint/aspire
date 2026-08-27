@@ -214,6 +214,13 @@ export class AppHostLogOutputCoordinator {
 
         const headerFragment = this._pendingConsoleHeaderFragments.get(category);
         if (headerFragment) {
+            if (this.tryStartConsoleLoggerRecord(line, category)) {
+                this._pendingConsoleHeaderFragments.delete(category);
+                this.emitFallback(headerFragment, category, outputs);
+                this.resetFallbackFilter(category);
+                return;
+            }
+
             const combined = `${headerFragment}${line}`;
             if (combined.length <= AppHostLogOutputCoordinator._maxPendingDebugRecordCharacters) {
                 if (this.tryStartConsoleLoggerRecord(combined, category)) {

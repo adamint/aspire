@@ -149,6 +149,38 @@ suite('AppHost log output coordinator', () => {
         }]);
     });
 
+    test('does not merge an unmatched ConsoleLogger prefix with the next record', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        assert.ok(coordinator.handleBackchannelEntry(createEntry({ message: 'Real message.' })));
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(
+                'info: ordinary output\n'
+                    + 'info: Example.Category[7] Real message.\n',
+                'stdout'),
+            [{
+                output: 'info: ordinary output\n',
+                category: 'stdout'
+            }]);
+        assert.deepStrictEqual(coordinator.flush(), []);
+
+        const lowLevel = new AppHostLogOutputCoordinator();
+        assert.ok(lowLevel.handleBackchannelEntry(createEntry({ message: 'Real message.' })));
+        assert.deepStrictEqual(
+            lowLevel.handleDebugAdapterOutput(
+                'dbug: ordinary output\n'
+                    + 'info: Example.Category[7] Real message.\n',
+                'stdout'),
+            []);
+        assert.deepStrictEqual(lowLevel.flush(), []);
+        assert.deepStrictEqual(
+            lowLevel.handleDebugAdapterOutput('      later stdout\n', 'stdout'),
+            [{
+                output: '      later stdout\n',
+                category: 'stdout'
+            }]);
+    });
+
     test('idle flush releases incomplete ConsoleLogger header fragments', async () => {
         const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
         const emitted: AppHostParentOutput[] = [];
