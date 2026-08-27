@@ -1306,6 +1306,240 @@ public class AtsJavaCodeGeneratorTests
     }
 
     [Fact]
+    public async Task GeneratedTransport_CancelListenerCanReenterClient()
+    {
+        using var workspace = await CreateJavaProbeWorkspaceAsync();
+        workspace.WriteSource(
+            "aspire/CancelListenerReentrancyProbe.java",
+            """
+            package aspire;
+
+            import java.io.ByteArrayOutputStream;
+            import java.io.InputStream;
+            import java.io.PipedInputStream;
+            import java.io.PipedOutputStream;
+            import java.lang.reflect.Field;
+            import java.lang.reflect.Method;
+            import java.nio.charset.StandardCharsets;
+            import java.util.Map;
+            import java.util.concurrent.CompletableFuture;
+            import java.util.concurrent.TimeUnit;
+            import java.util.concurrent.atomic.AtomicBoolean;
+            import java.util.concurrent.atomic.AtomicInteger;
+
+            public class CancelListenerReentrancyProbe {
+                public static void main(String[] args) throws Exception {
+                    var clientInput = new PipedInputStream(32768);
+                    var serverOutput = new PipedOutputStream(clientInput);
+                    var serverInput = new PipedInputStream(32768);
+                    var clientOutput = new PipedOutputStream(serverInput);
+                    var client = new AspireClient("ignored");
+                    setField(client, "inputStream", clientInput);
+                    setField(client, "outputStream", clientOutput);
+
+                    var disconnected = new AtomicBoolean();
+                    client.onDisconnect(() -> disconnected.set(true));
+                    startReader(client);
+
+                    var callbackToken = new CompletableFuture<CancellationToken>();
+                    var callbackCompletion = new CompletableFuture<Void>();
+                    var throwingListenerCalls = new AtomicInteger();
+                    var workingListenerCalls = new AtomicInteger();
+                    String callbackId = client.registerCallback(callbackArgs -> {
+                        CancellationToken token = CancellationToken.fromValue(callbackArgs[0]);
+                        token.onCancel(() -> {
+                            throwingListenerCalls.incrementAndGet();
+                            throw new IllegalStateException("expected listener failure");
+                        });
+                        token.onCancel(() -> {
+                            Object nestedResult = client.invokeCapability("cap.cancel-listener", Map.of());
+                            if (!"nested-result".equals(nestedResult)) {
+                                throw new IllegalStateException("unexpected nested result: " + nestedResult);
+                            }
+                            workingListenerCalls.incrementAndGet();
+                            callbackCompletion.complete(null);
+                        });
+                        callbackToken.complete(token);
+                        return callbackCompletion;
+                    });
+
+                    writeMessage(
+                        serverOutput,
+                        "{\"jsonrpc\":\"2.0\",\"id\":\"reentrant-callback\",\"method\":\"invokeCallback\","
+                            + "\"params\":{\"callbackId\":\"" + callbackId + "\","
+                            + "\"args\":{\"p0\":\"callback-ct\",\"$cancellationToken\":\"callback-ct\"}}}");
+                    CancellationToken token = callbackToken.get(1, TimeUnit.SECONDS);
+
+                    writeMessage(
+                        serverOutput,
+                        "{\"jsonrpc\":\"2.0\",\"method\":\"$/cancelRequest\","
+                            + "\"params\":{\"id\":\"reentrant-callback\"}}");
+
+                    String nestedRequest = requireMessage(serverInput, "nested capability request");
+                    if (!nestedRequest.contains("\"method\":\"invokeCapability\"")
+                        || !nestedRequest.contains("\"capabilityId\":\"cap.cancel-listener\"")) {
+                        throw new IllegalStateException("unexpected nested request: " + nestedRequest);
+                    }
+                    writeMessage(
+                        serverOutput,
+                        "{\"jsonrpc\":\"2.0\",\"id\":" + extractNumericId(nestedRequest)
+                            + ",\"result\":\"nested-result\"}");
+
+                    String callbackResponse = requireMessage(serverInput, "callback response");
+                    if (!token.isCancelled()
+                        || !callbackCompletion.isDone()
+                        || throwingListenerCalls.get() != 1
+                        || workingListenerCalls.get() != 1
+                        || disconnected.get()) {
+                        throw new IllegalStateException(
+                            "cancellation did not complete cleanly: cancelled=" + token.isCancelled()
+                                + ", callbackComplete=" + callbackCompletion.isDone()
+                                + ", throwingListenerCalls=" + throwingListenerCalls.get()
+                                + ", workingListenerCalls=" + workingListenerCalls.get()
+                                + ", disconnected=" + disconnected.get());
+                    }
+                    if (!callbackResponse.contains("\"id\":\"reentrant-callback\"")
+                        || !callbackResponse.contains("\"result\":null")
+                        || callbackResponse.contains("\"error\"")) {
+                        throw new IllegalStateException("unexpected callback response: " + callbackResponse);
+                    }
+
+                    awaitNoActiveCallbackRequests(client);
+                    String notificationResponse = waitForMessage(serverInput, 250);
+                    if (notificationResponse != null) {
+                        throw new IllegalStateException(
+                            "$/cancelRequest notification received a response: " + notificationResponse);
+                    }
+
+                    var followUp = CompletableFuture.supplyAsync(() ->
+                        client.invokeCapability("cap.after-cancel", Map.of()));
+                    String followUpRequest = requireMessage(serverInput, "follow-up capability request");
+                    if (!followUpRequest.contains("\"capabilityId\":\"cap.after-cancel\"")) {
+                        throw new IllegalStateException("unexpected follow-up request: " + followUpRequest);
+                    }
+                    writeMessage(
+                        serverOutput,
+                        "{\"jsonrpc\":\"2.0\",\"id\":" + extractNumericId(followUpRequest)
+                            + ",\"result\":\"still-connected\"}");
+                    if (!"still-connected".equals(followUp.get(1, TimeUnit.SECONDS))
+                        || disconnected.get()) {
+                        throw new IllegalStateException("transport disconnected after listener failure");
+                    }
+
+                    System.out.println("OK");
+                }
+
+                private static void awaitNoActiveCallbackRequests(AspireClient client) throws Exception {
+                    Field activeRequestsField = AspireClient.class.getDeclaredField("activeCallbackRequests");
+                    activeRequestsField.setAccessible(true);
+                    Map<?, ?> activeRequests = (Map<?, ?>) activeRequestsField.get(client);
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+                    while (!activeRequests.isEmpty() && System.nanoTime() < deadline) {
+                        TimeUnit.MILLISECONDS.sleep(5);
+                    }
+                    if (!activeRequests.isEmpty()) {
+                        throw new IllegalStateException("completed callback retained request ids: " + activeRequests);
+                    }
+                }
+
+                private static void setField(AspireClient client, String name, Object value) throws Exception {
+                    Field field = AspireClient.class.getDeclaredField(name);
+                    field.setAccessible(true);
+                    field.set(client, value);
+                }
+
+                private static void startReader(AspireClient client) throws Exception {
+                    Method method = AspireClient.class.getDeclaredMethod("ensureReaderLoopStarted");
+                    method.setAccessible(true);
+                    method.invoke(client);
+                }
+
+                // Capability requests have a JSON-RPC shape such as:
+                //   {"jsonrpc":"2.0","id":1,"method":"invokeCapability","params":{...}}
+                private static int extractNumericId(String json) {
+                    int start = json.indexOf("\"id\":") + 5;
+                    int end = start;
+                    while (end < json.length() && Character.isDigit(json.charAt(end))) {
+                        end++;
+                    }
+                    return Integer.parseInt(json.substring(start, end));
+                }
+
+                private static void writeMessage(PipedOutputStream output, String payload) throws Exception {
+                    byte[] body = payload.getBytes(StandardCharsets.UTF_8);
+                    output.write(("Content-Length: " + body.length + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+                    output.write(body);
+                    output.flush();
+                }
+
+                private static String waitForMessage(InputStream input, long timeoutMs) throws Exception {
+                    long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+                    while (System.nanoTime() < deadline) {
+                        if (input.available() > 0) {
+                            return readMessage(input);
+                        }
+                        TimeUnit.MILLISECONDS.sleep(5);
+                    }
+                    return null;
+                }
+
+                private static String requireMessage(InputStream input, String description) throws Exception {
+                    String message = waitForMessage(input, 1000);
+                    if (message == null) {
+                        throw new IllegalStateException("Timed out waiting for " + description);
+                    }
+                    return message;
+                }
+
+                // Messages are framed as:
+                //   Content-Length: <UTF-8 byte count>\r\n\r\n<JSON payload>
+                private static String readMessage(InputStream input) throws Exception {
+                    int contentLength = -1;
+                    while (true) {
+                        String line = readLine(input);
+                        if (line.isEmpty()) {
+                            break;
+                        }
+                        if (line.startsWith("Content-Length:")) {
+                            contentLength = Integer.parseInt(line.substring(15).trim());
+                        }
+                    }
+                    if (contentLength < 0) {
+                        throw new IllegalStateException("Missing Content-Length header");
+                    }
+                    return new String(input.readNBytes(contentLength), StandardCharsets.UTF_8);
+                }
+
+                private static String readLine(InputStream input) throws Exception {
+                    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                    while (true) {
+                        int ch = input.read();
+                        if (ch == '\r') {
+                            if (input.read() == '\n') {
+                                break;
+                            }
+                        } else if (ch == '\n' || ch == -1) {
+                            break;
+                        } else {
+                            buffer.write(ch);
+                        }
+                    }
+                    return buffer.toString(StandardCharsets.UTF_8);
+                }
+            }
+            """);
+
+        await workspace.CompileAsync();
+        var run = await workspace.RunClassAsync("aspire.CancelListenerReentrancyProbe", TimeSpan.FromSeconds(6));
+
+        Assert.True(run.TimedOut is false, $"Probe timed out. stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.True(
+            run.ExitCode == 0,
+            $"Probe failed with exit code {run.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.Equal("OK", run.StdOut.Trim());
+    }
+
+    [Fact]
     public async Task GeneratedReferenceExpression_CancellationIsRequestScoped()
     {
         using var workspace = await CreateJavaProbeWorkspaceAsync();

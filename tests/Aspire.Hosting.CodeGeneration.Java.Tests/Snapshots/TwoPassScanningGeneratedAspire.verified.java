@@ -712,7 +712,7 @@ public class AspireClient {
     private void routeMessage(Map<String, Object> message) throws IOException {
         if (message.containsKey("method")) {
             if ("$/cancelRequest".equals(message.get("method"))) {
-                handleServerRequest(message);
+                routeCancellationNotification(message.get("params"));
                 return;
             }
 
@@ -861,6 +861,28 @@ public class AspireClient {
         return sb.toString();
     }
 
+    private void routeCancellationNotification(Object params) {
+        Object callbackRequestId = getCancelledRequestId(params);
+        if (callbackRequestId == null) {
+            return;
+        }
+
+        // Resolve the callback request id on the reader before callback completion removes
+        // its correlation entry. Only listener execution moves to the virtual thread.
+        String cancellationId = activeCallbackRequests.get(callbackRequestId);
+        if (cancellationId == null) {
+            return;
+        }
+
+        Thread.startVirtualThread(() -> {
+            try {
+                cancelRemoteCancellationToken(cancellationId);
+            } catch (RuntimeException exception) {
+                debug("Cancellation listener failed.", exception);
+            }
+        });
+    }
+
     @SuppressWarnings("unchecked")
     private void handleServerRequest(Map<String, Object> request) throws IOException {
         String method = (String) request.get("method");
@@ -868,17 +890,6 @@ public class AspireClient {
         Object params = request.get("params");
 
         debug("Received server request: " + method);
-
-        if ("$/cancelRequest".equals(method)) {
-            Object callbackRequestId = getCancelledRequestId(params);
-            if (callbackRequestId != null) {
-                String cancellationId = activeCallbackRequests.get(callbackRequestId);
-                if (cancellationId != null) {
-                    cancelRemoteCancellationToken(cancellationId);
-                }
-            }
-            return;
-        }
 
         Object result = null;
         Map<String, Object> error = null;
@@ -1554,6 +1565,13 @@ public class AspireClient {
     private void debug(String message) {
         if (DEBUG) {
             System.err.println("[Java ATS] " + message);
+        }
+    }
+
+    private void debug(String message, Throwable error) {
+        if (DEBUG) {
+            System.err.println("[Java ATS] " + message);
+            error.printStackTrace(System.err);
         }
     }
 }
@@ -4031,8 +4049,20 @@ public class CancellationToken {
             listenersToNotify = new ArrayList<>(listeners);
             listeners.clear();
         }
+        RuntimeException listenerFailure = null;
         for (Runnable listener : listenersToNotify) {
-            listener.run();
+            try {
+                listener.run();
+            } catch (RuntimeException exception) {
+                if (listenerFailure == null) {
+                    listenerFailure = exception;
+                } else if (listenerFailure != exception) {
+                    listenerFailure.addSuppressed(exception);
+                }
+            }
+        }
+        if (listenerFailure != null) {
+            throw listenerFailure;
         }
     }
 
