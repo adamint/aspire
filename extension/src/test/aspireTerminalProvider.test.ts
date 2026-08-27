@@ -643,6 +643,41 @@ suite('AspireTerminalProvider tests', () => {
             }
         });
 
+        test('waits for the terminal process before sending a fallback command', async () => {
+            resolveCliPathStub.resolves({ cliPath: 'aspire', available: true, source: 'path' });
+            const sentTexts: string[] = [];
+            let resolveProcessId!: (value: number | undefined) => void;
+            const processId = new Promise<number | undefined>(resolve => {
+                resolveProcessId = resolve;
+            });
+            const terminal = {
+                processId,
+                sendText: (text: string) => {
+                    sentTexts.push(text);
+                },
+                show: () => { }
+            } as unknown as vscode.Terminal;
+            const getAspireTerminalStub = sinon.stub(terminalProvider, 'getAspireTerminal').returns({
+                terminal,
+                dispose: () => { }
+            });
+
+            try {
+                const sendCommand = terminalProvider.sendAspireCommandToAspireTerminal('logs');
+                await new Promise(resolve => setImmediate(resolve));
+
+                assert.deepStrictEqual(sentTexts, []);
+
+                resolveProcessId(123);
+                await sendCommand;
+
+                assert.deepStrictEqual(sentTexts, ['\x03', expectedCommand]);
+            }
+            finally {
+                getAspireTerminalStub.restore();
+            }
+        });
+
         test('records suppressed execution mode without creating a terminal when E2E suppression is enabled', async () => {
             resolveCliPathStub.resolves({ cliPath: 'aspire', available: true, source: 'path' });
             const originalEnableBridge = process.env.ASPIRE_EXTENSION_E2E_ENABLE_BRIDGE;

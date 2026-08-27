@@ -1081,6 +1081,7 @@ suite('E2E launch profile', () => {
         assert.ok(workspaceRouting.includes("const workspaceFolderLabels = ['folder-a', 'folder-b', 'folder-c'] as const;"));
         assert.ok(workspaceRouting.includes("await invokeNewForFolder('folder-c', folderC);"));
         assert.ok(!workspaceRouting.includes("await invokeNewForFolder('folder-b', folderB);"));
+        assert.ok(workspaceRouting.includes('assert.ok(!updateCommand.commandLine.includes(folderC.wrapperPath), updateCommand.commandLine);'));
 
         const edgeCases = getTestBlock(edgeCasesSource, 'shows debugger install guidance while the Aspire panel and AppHost source are closed');
         assert.ok(edgeCases.includes("waitForNotificationMessage("));

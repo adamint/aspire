@@ -89,6 +89,7 @@ suite('Workspace target proof E2E', function () {
         assert.ok(!updateCommand.commandLine.includes(workspaceRoot), updateCommand.commandLine);
         assert.ok(!updateCommand.commandLine.includes(folderA.wrapperPath), updateCommand.commandLine);
         assert.ok(!updateCommand.commandLine.includes(folderB.wrapperPath), updateCommand.commandLine);
+        assert.ok(!updateCommand.commandLine.includes(folderC.wrapperPath), updateCommand.commandLine);
 
         await VSBrowser.instance.takeScreenshot('workspace-target-proof.png');
     });
