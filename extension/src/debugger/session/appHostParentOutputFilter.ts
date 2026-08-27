@@ -89,13 +89,18 @@ export class AppHostParentOutputFilter {
       return 'stderr';
     }
 
-    if (this._awaitingPythonTracebackChainMarker && isPythonTracebackChainMarker(trimmedLine)) {
-      this._awaitingPythonTracebackChainMarker = false;
-      return 'stderr';
-    }
-    this._awaitingPythonTracebackChainMarker = false;
-
     const isSevereOutput = isSevereRuntimeOutputLine(trimmedLine);
+    if (this._awaitingPythonTracebackChainMarker) {
+      if (isPythonTracebackChainMarker(trimmedLine)) {
+        this._awaitingPythonTracebackChainMarker = false;
+        return 'stderr';
+      }
+      if (!isSevereOutput) {
+        return 'stderr';
+      }
+      this._awaitingPythonTracebackChainMarker = false;
+    }
+
     this._continuingDroppedLog = false;
     this._continuingErrorBlock = isSevereOutput;
     this._continuingPythonTraceback = isPythonTracebackStart(trimmedLine);

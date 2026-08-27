@@ -126,6 +126,67 @@ suite('AppHost log output coordinator', () => {
             });
     });
 
+    test('deduplicates a control-bearing category split across DAP callbacks', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const category = '\x1b[31mForged\r\nNext';
+
+        assert.ok(coordinator.handleBackchannelEntry(createEntry({ categoryName: category })));
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('info: \x1b[31mForged\r\n', 'stdout'),
+            []);
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('Next[7]\n      Repeated message.\n', 'stdout'),
+            []);
+        assert.deepStrictEqual(coordinator.flush(), []);
+
+        const incomplete = new AppHostLogOutputCoordinator();
+        assert.deepStrictEqual(
+            incomplete.handleDebugAdapterOutput('info: ordinary output\n', 'stdout'),
+            []);
+        assert.deepStrictEqual(incomplete.flush(), [{
+            output: 'info: ordinary output\n',
+            category: 'stdout'
+        }]);
+    });
+
+    test('idle flush releases incomplete ConsoleLogger header fragments', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const emitted: AppHostParentOutput[] = [];
+        const coordinator = new AppHostLogOutputCoordinator(output => emitted.push(output));
+
+        try {
+            assert.deepStrictEqual(
+                coordinator.handleDebugAdapterOutput('info: ordinary output\n', 'stdout'),
+                []);
+            await clock.tickAsync(250);
+            assert.deepStrictEqual(emitted, [{
+                output: 'info: ordinary output\n',
+                category: 'stdout'
+            }]);
+        } finally {
+            coordinator.reset();
+            clock.restore();
+        }
+    });
+
+    test('bounds and resets incomplete ConsoleLogger header fragments', () => {
+        const overflow = `${'x'.repeat(64 * 1024)}\n`;
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('info: ordinary output\n', 'stdout'),
+            []);
+        const outputs = coordinator.handleDebugAdapterOutput(overflow, 'stdout');
+        assert.strictEqual(outputs.map(output => output.output).join(''), `info: ordinary output\n${overflow}`);
+        assert.ok(outputs.every(output => output.category === 'stdout'));
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('info: discarded by reset\n', 'stdout'),
+            []);
+        coordinator.reset();
+        assert.deepStrictEqual(coordinator.flush(), []);
+    });
+
     test('keeps low-level adapter traffic from evicting pending Information records', () => {
         const coordinator = new AppHostLogOutputCoordinator();
         assert.ok(coordinator.handleBackchannelEntry(createEntry({ message: 'Still pending.' })));
@@ -208,6 +269,25 @@ suite('AppHost log output coordinator', () => {
         assert.deepStrictEqual(coordinator.handleDebugAdapterOutput('\n      Request fai', 'stdout'), []);
         assert.deepStrictEqual(coordinator.handleDebugAdapterOutput('led.\r\n      System.InvalidOperation', 'stdout'), []);
         assert.deepStrictEqual(coordinator.handleDebugAdapterOutput('Exception: boom\r\n', 'stdout'), []);
+        assert.deepStrictEqual(coordinator.flush(), []);
+    });
+
+    test('retains an interleaved partial ConsoleLogger body', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        assert.ok(coordinator.handleBackchannelEntry(createEntry({ message: 'first partial' })));
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('info: Example.Category[7]\n      first par', 'stdout'),
+            []);
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('native error\n', 'stderr'),
+            [{
+                output: 'native error\n',
+                category: 'stderr'
+            }]);
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('tial\n', 'stdout'),
+            []);
         assert.deepStrictEqual(coordinator.flush(), []);
     });
 
@@ -1223,6 +1303,17 @@ suite('AppHost log output coordinator', () => {
             }]);
     });
 
+    test('renders an adapter-only Debug record with a whitespace DebugLogger category', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(coordinator, 'Worker job: Debug: detail\n', 'console'),
+            [{
+                output: '\x1b[2mWorker job: Debug: detail\x1b[0m\n',
+                category: 'stdout'
+            }]);
+    });
+
     test('does not append unrelated console output when the pending DebugLogger record has a twin', () => {
         const coordinator = new AppHostLogOutputCoordinator();
 
@@ -1948,6 +2039,61 @@ suite('AppHost log output coordinator', () => {
                 output: traceback,
                 category: 'stderr'
             });
+    });
+
+    test('keeps multiline Python exception messages on stderr until a logger boundary', () => {
+        const filter = new AppHostParentOutputFilter();
+        const traceback = 'Traceback (most recent call last):\n'
+            + '  File "app.py", line 1, in <module>\n'
+            + 'ValueError: first\n'
+            + 'second line\n';
+
+        assert.deepStrictEqual(filter.filter(traceback, 'console'), {
+            output: traceback,
+            category: 'stderr'
+        });
+        assert.deepStrictEqual(filter.filter('info: Example.Category[7]\n', 'console'), {
+            output: 'info: Example.Category[7]\n',
+            category: 'stdout'
+        });
+
+        const coordinator = new AppHostLogOutputCoordinator();
+        const outputs = coordinator.handleDebugAdapterOutput(traceback, 'console');
+        assert.strictEqual(outputs.map(output => output.output).join(''), traceback);
+        assert.ok(outputs.every(output => output.category === 'stderr'));
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('ordinary stdout\n', 'stdout'),
+            [{
+                output: 'ordinary stdout\n',
+                category: 'stdout'
+            }]);
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('ordinary console\n', 'console'),
+            []);
+    });
+
+    test('flushes a partial Python exception continuation before a DAP category switch', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const tracebackPrefix = 'Traceback (most recent call last):\n'
+            + '  File "app.py", line 1, in <module>\n'
+            + 'ValueError: first\n';
+
+        const outputs = coordinator.handleDebugAdapterOutput(`${tracebackPrefix}second line`, 'console');
+        assert.strictEqual(outputs.map(output => output.output).join(''), tracebackPrefix);
+        assert.ok(outputs.every(output => output.category === 'stderr'));
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('ordinary stdout\n', 'stdout'),
+            [
+                {
+                    output: 'second line',
+                    category: 'stderr'
+                },
+                {
+                    output: 'ordinary stdout\n',
+                    category: 'stdout'
+                }
+            ]);
+        assert.deepStrictEqual(coordinator.flush(), []);
     });
 
     test('keeps custom Python exception terminators on stderr', () => {

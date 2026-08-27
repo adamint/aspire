@@ -92,10 +92,12 @@ export class AppHostLogOutputCoordinator {
     private readonly _backchannelSequences = new Set<number>();
     private readonly _backchannelSequenceOrder: number[] = [];
     private readonly _partialLines = new Map<string, string>();
+    private readonly _pendingConsoleHeaderFragments = new Map<string, string>();
     private readonly _pendingRecords = new Map<string, PendingConsoleRecord>();
     private readonly _pendingDebugRecords = new Map<string, PendingDebugRecord>();
     private readonly _fallbackFilters = new Map<string, AppHostParentOutputFilter>();
     private readonly _idleFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    private _lastDebugAdapterCategory: string | undefined;
 
     constructor(
         private readonly _onIdleFlush?: (output: AppHostParentOutput) => void,
@@ -125,6 +127,22 @@ export class AppHostLogOutputCoordinator {
     handleDebugAdapterOutput(output: string, category: string | undefined): AppHostParentOutput[] {
         const normalizedCategory = category ?? 'console';
         const outputs: AppHostParentOutput[] = [];
+
+        if (normalizedCategory !== this._lastDebugAdapterCategory) {
+            const previousCategory = this._lastDebugAdapterCategory;
+            if (previousCategory) {
+                const partial = this._partialLines.get(previousCategory);
+                const parserOwnsPartial = this._pendingConsoleHeaderFragments.has(previousCategory)
+                    || this._pendingRecords.has(previousCategory)
+                    || this._pendingDebugRecords.has(previousCategory);
+                if (partial && !parserOwnsPartial) {
+                    this._partialLines.delete(previousCategory);
+                    this.consumeLine(partial, previousCategory, outputs);
+                }
+                this.resetFallbackFilter(previousCategory);
+            }
+            this._lastDebugAdapterCategory = normalizedCategory;
+        }
 
         const buffered = `${this._partialLines.get(normalizedCategory) ?? ''}${output}`;
         const lastBreak = findLastCompletedLineBreak(buffered);
@@ -157,6 +175,10 @@ export class AppHostLogOutputCoordinator {
             this.consumeLine(partial, category, outputs);
         }
 
+        for (const category of [...this._pendingConsoleHeaderFragments.keys()]) {
+            this.flushPendingConsoleHeaderFragment(category, outputs);
+        }
+
         for (const category of [...this._pendingRecords.keys()]) {
             this.flushPendingRecord(category, outputs);
         }
@@ -175,14 +197,33 @@ export class AppHostLogOutputCoordinator {
         this._backchannelSequences.clear();
         this._backchannelSequenceOrder.length = 0;
         this._partialLines.clear();
+        this._pendingConsoleHeaderFragments.clear();
         this._pendingRecords.clear();
         this._pendingDebugRecords.clear();
         this._fallbackFilters.clear();
+        this._lastDebugAdapterCategory = undefined;
     }
 
     private consumeLine(line: string, category: string, outputs: AppHostParentOutput[]): void {
         if (category === 'console' && this.consumeDebugLoggerLine(line, category, outputs)) {
             return;
+        }
+
+        const headerFragment = this._pendingConsoleHeaderFragments.get(category);
+        if (headerFragment) {
+            const combined = `${headerFragment}${line}`;
+            if (combined.length <= AppHostLogOutputCoordinator._maxPendingDebugRecordCharacters) {
+                if (this.tryStartConsoleLoggerRecord(combined, category)) {
+                    this._pendingConsoleHeaderFragments.delete(category);
+                    return;
+                }
+
+                this._pendingConsoleHeaderFragments.set(category, combined);
+                return;
+            }
+
+            this._pendingConsoleHeaderFragments.delete(category);
+            this.emitFallback(headerFragment, category, outputs);
         }
 
         const pending = this._pendingRecords.get(category);
@@ -221,8 +262,27 @@ export class AppHostLogOutputCoordinator {
             this.flushPendingRecord(category, outputs);
         }
 
+        if (this.tryStartConsoleLoggerRecord(line, category)) {
+            return;
+        }
+
+        if (category !== 'console'
+            && line.length <= AppHostLogOutputCoordinator._maxPendingDebugRecordCharacters
+            && singleLineConsoleLoggerPrefixRegex.test(line)) {
+            this._pendingConsoleHeaderFragments.set(category, line);
+            return;
+        }
+
+        this.emitFallback(line, category, outputs);
+    }
+
+    private tryStartConsoleLoggerRecord(line: string, category: string): boolean {
+        if (category === 'console') {
+            return false;
+        }
+
         const multilineHeader = parseMultilineConsoleLoggerHeader(line);
-        if (multilineHeader && category !== 'console') {
+        if (multilineHeader) {
             this.resetFallbackFilter(category);
             this._pendingRecords.set(category, {
                 record: multilineHeader,
@@ -235,17 +295,29 @@ export class AppHostLogOutputCoordinator {
                 hasBodyLine: false,
                 hasNonScopeBodyLine: false
             });
-            return;
+            return true;
         }
 
         const singleLinePending = AppHostLogOutputCoordinator.createPendingSingleLineRecord(line, category);
-        if (singleLinePending && category !== 'console') {
-            this.resetFallbackFilter(category);
-            this._pendingRecords.set(category, singleLinePending);
+        if (!singleLinePending) {
+            return false;
+        }
+
+        this.resetFallbackFilter(category);
+        this._pendingRecords.set(category, singleLinePending);
+        return true;
+    }
+
+    private flushPendingConsoleHeaderFragment(
+        category: string,
+        outputs: AppHostParentOutput[]): void {
+        const fragment = this._pendingConsoleHeaderFragments.get(category);
+        if (!fragment) {
             return;
         }
 
-        this.emitFallback(line, category, outputs);
+        this._pendingConsoleHeaderFragments.delete(category);
+        this.emitFallback(fragment, category, outputs);
     }
 
     private flushPendingRecord(category: string, outputs: AppHostParentOutput[]): void {
@@ -782,7 +854,9 @@ export class AppHostLogOutputCoordinator {
     private scheduleIdleFlush(category: string): void {
         const pending = this._pendingRecords.get(category);
         const hasPendingDebugRecord = this._pendingDebugRecords.has(category);
-        if (!this._onIdleFlush || (!pending && !hasPendingDebugRecord && !this._partialLines.has(category))) {
+        const hasPendingHeaderFragment = this._pendingConsoleHeaderFragments.has(category);
+        if (!this._onIdleFlush
+            || (!pending && !hasPendingDebugRecord && !hasPendingHeaderFragment && !this._partialLines.has(category))) {
             this.clearIdleFlushTimer(category);
             return;
         }
@@ -803,6 +877,7 @@ export class AppHostLogOutputCoordinator {
                 this.consumeLine(partial, category, outputs);
             }
 
+            this.flushPendingConsoleHeaderFragment(category, outputs);
             this.flushPendingRecord(category, outputs);
             this.flushPendingDebugRecord(category, outputs);
             outputs.forEach(output => this._onIdleFlush?.(output));
@@ -865,10 +940,10 @@ const consoleLoggerAnsiSgrSequence = String.raw`\x1b\[[0-9;]*m`;
 const consoleLoggerLevelPattern =
     String.raw`(?:${consoleLoggerAnsiSgrSequence})*(trce|dbug|info|warn|fail|crit)(?:${consoleLoggerAnsiSgrSequence})*`;
 const multilineConsoleLoggerHeaderRegex = new RegExp(
-    String.raw`^${consoleLoggerTimestampPrefix}${consoleLoggerLevelPattern}: (.*)\[(-?\d+)\](?:\r\n|\r|\n)$`);
+    String.raw`^${consoleLoggerTimestampPrefix}${consoleLoggerLevelPattern}: ([\s\S]*)\[(-?\d+)\](?:\r\n|\r|\n)$`);
 const singleLineConsoleLoggerPrefixRegex = new RegExp(
-    String.raw`^${consoleLoggerTimestampPrefix}${consoleLoggerLevelPattern}: (.*?)(?:\r\n|\r|\n)?$`);
-const debugLoggerCategoryPattern = String.raw`\S+`;
+    String.raw`^${consoleLoggerTimestampPrefix}${consoleLoggerLevelPattern}: ([\s\S]*?)(?:\r\n|\r|\n)?$`);
+const debugLoggerCategoryPattern = String.raw`[^\r\n]+`;
 const debugLoggerRecordRegex = new RegExp(
     String.raw`^(${debugLoggerCategoryPattern}): (Trace|Debug|Information|Warning|Error|Critical): ([\s\S]*)$`);
 const debugLoggerHeaderRegex = new RegExp(
@@ -1014,7 +1089,9 @@ function isDebugLoggerHeader(line: string): boolean {
 }
 
 function isSupportedDebugLoggerCategory(categoryName: string, logLevel: AppHostLogLevel): boolean {
-    return categoryName.includes('.') || logLevel === 'Trace' || logLevel === 'Debug';
+    return categoryName.includes('.')
+        || (logLevel === 'Trace' || logLevel === 'Debug')
+            && (!/\s/.test(categoryName) || /^[A-Z_]/.test(categoryName));
 }
 
 function isDebugLoggerContinuation(pending: PendingDebugRecord, line: string): boolean {
