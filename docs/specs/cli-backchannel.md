@@ -95,6 +95,7 @@ internal static class AuxiliaryBackchannelCapabilities
     public const string V1 = "aux.v1";  // 13.1 baseline
     public const string V2 = "aux.v2";  // 13.2+ with request objects
     public const string V3 = "aux.v3";  // 13.4+ with batched console log streaming
+    public const string V4 = "aux.v4";  // 13.6+ with versioned resource snapshots
 }
 ```
 
@@ -105,10 +106,17 @@ internal static class AuxiliaryBackchannelCapabilities
 | 13.1 | `aux.v1` | `GetAppHostInformationAsync()`, `GetDashboardMcpConnectionInfoAsync()`, `StopAppHostAsync()` |
 | 13.2 | `aux.v2` | All v1 methods + new request-object-based methods |
 | 13.4 | `aux.v3` | All v2 methods + `GetConsoleLogBatchesAsync(GetConsoleLogsRequest)` |
+| 13.6 | `aux.v4` | All v3 methods + monotonic `ResourceSnapshot.Version` values |
 
 ### Console Log Request Compatibility
 
 `GetConsoleLogsRequest.ResourceName` was required when the v2 console log methods shipped. In v3 it is optional: a `null` resource name requests logs for all resources. V2 callers that need all-resource logs should continue to use the legacy `GetResourceLogsAsync` method rather than sending a null `ResourceName` to v2 console log methods.
+
+### Resource Snapshot Version Compatibility
+
+V4 AppHosts populate `ResourceSnapshot.Version` with a monotonic value. A v4-aware CLI can start the watch before the initial GET and use that value to retain the newest snapshot across the two calls.
+
+V3 and earlier AppHosts do not serialize `ResourceSnapshot.Version`, so new CLIs deserialize it as `0`. Without `aux.v4`, the CLI treats snapshot ordering as unknown and preserves the legacy GET-first behavior. This avoids replacing the initial GET state with an older watch replay.
 
 ### Compatibility Matrix
 
@@ -181,7 +189,7 @@ internal sealed class GetResourcesRequest
 }
 ```
 
-No version bump needed. No new capability needed. It just works.
+No version bump or new capability is needed when the property is purely additive. Add a capability when the property's presence or meaning changes client behavior; `ResourceSnapshot.Version` uses `aux.v4` because it controls GET/watch reconciliation.
 
 ## Transport Details
 
