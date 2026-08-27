@@ -118,6 +118,7 @@ export function shellArg(value: string): ShellArg {
 export class AspireTerminalProvider implements vscode.Disposable {
     private _terminalByDebugSessionId = new Map<string, AspireTerminal>();
     private _invalidatedSharedTerminals = new Set<vscode.Terminal>();
+    private readonly _terminalsWithAspireCommands = new WeakSet<vscode.Terminal>();
     private _rpcServerConnectionInfo?: RpcServerConnectionInfo;
     private _dcpServerConnectionInfo?: DcpServerConnectionInfo;
     private _windowsPowerShellPath?: string;
@@ -246,17 +247,23 @@ export class AspireTerminalProvider implements vscode.Disposable {
 
         if (executionMode === 'shellIntegration' && aspireTerminal.terminal.shellIntegration) {
             aspireTerminal.terminal.shellIntegration.executeCommand(command);
+            this._terminalsWithAspireCommands.add(aspireTerminal.terminal);
         }
         else {
+            const hasReceivedAspireCommand = this._terminalsWithAspireCommands.has(aspireTerminal.terminal);
+
             // createTerminal can return before the shell process accepts input. Waiting for processId
             // prevents the first fallback command from being dropped. Observe terminal closure too,
             // because processId can remain pending when the shell process fails to start.
             await this.waitForTerminalProcess(aspireTerminal.terminal);
 
-            // Without shell integration, VS Code can't tell whether the terminal is idle or
-            // a foreground process is running, so keep the previous safe interruption behavior.
-            aspireTerminal.terminal.sendText('\x03', false);
+            if (hasReceivedAspireCommand) {
+                // Without shell integration, VS Code can't tell whether the terminal is idle or
+                // a foreground process is running, so interrupt commands previously sent by Aspire.
+                aspireTerminal.terminal.sendText('\x03', false);
+            }
             aspireTerminal.terminal.sendText(command);
+            this._terminalsWithAspireCommands.add(aspireTerminal.terminal);
         }
 
     }
