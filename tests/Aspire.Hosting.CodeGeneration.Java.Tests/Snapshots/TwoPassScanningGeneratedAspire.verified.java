@@ -379,6 +379,7 @@ public class AspireClient {
     private final Map<String, Consumer<Void>> cancellations = new ConcurrentHashMap<>();
     private final Map<Integer, CompletableFuture<Object>> pendingRequests = new ConcurrentHashMap<>();
     private final Map<String, CancellationRegistration> cancellationRegistrations = new ConcurrentHashMap<>();
+    private final Map<Object, String> activeCallbackRequests = new ConcurrentHashMap<>();
     private final Map<String, CancellationToken> remoteCancellationTokens = new ConcurrentHashMap<>();
     private final Map<String, CancellationToken> pendingRemoteCancellations = new LinkedHashMap<>();
     private final Object readerLock = new Object();
@@ -535,12 +536,12 @@ public class AspireClient {
     public Object invokeCapability(String capabilityId, Map<String, Object> args) {
         List<String> cancellationIds = new ArrayList<>();
 
-        Map<String, Object> params = new HashMap<>();
-        params.put("capabilityId", capabilityId);
-        params.put("args", marshalTransportValue(args, cancellationIds));
-        var uniqueCancellationIds = new HashSet<>(cancellationIds);
-
         try {
+            Map<String, Object> params = new HashMap<>();
+            params.put("capabilityId", capabilityId);
+            params.put("args", marshalTransportValue(args, cancellationIds));
+            var uniqueCancellationIds = new HashSet<>(cancellationIds);
+
             return sendRequest("invokeCapability", params, () -> {
                 for (String cancellationId : uniqueCancellationIds) {
                     CancellationRegistration registration = cancellationRegistrations.get(cancellationId);
@@ -550,7 +551,7 @@ public class AspireClient {
                 }
             });
         } finally {
-            for (String cancellationId : uniqueCancellationIds) {
+            for (String cancellationId : new HashSet<>(cancellationIds)) {
                 unregisterCancellation(cancellationId);
             }
         }
@@ -710,10 +711,20 @@ public class AspireClient {
     @SuppressWarnings("unchecked")
     private void routeMessage(Map<String, Object> message) throws IOException {
         if (message.containsKey("method")) {
+            if ("$/cancelRequest".equals(message.get("method"))) {
+                handleServerRequest(message);
+                return;
+            }
+
             boolean isCallback = "invokeCallback".equals(message.get("method"));
+            Object callbackRequestId = isCallback ? message.get("id") : null;
+            String callbackCancellationId = isCallback ? getCallbackCancellationId(message.get("params")) : null;
             if (isCallback) {
                 synchronized (connectionStateLock) {
                     activeServerCallbacks++;
+                }
+                if (callbackRequestId != null && callbackCancellationId != null) {
+                    activeCallbackRequests.put(callbackRequestId, callbackCancellationId);
                 }
             }
             try {
@@ -725,13 +736,13 @@ public class AspireClient {
                         handleDisconnect();
                     } finally {
                         if (isCallback) {
-                            completeServerCallback();
+                            completeServerCallback(callbackRequestId, callbackCancellationId);
                         }
                     }
                 });
             } catch (RuntimeException e) {
                 if (isCallback) {
-                    completeServerCallback();
+                    completeServerCallback(callbackRequestId, callbackCancellationId);
                 }
                 throw e;
             }
@@ -762,7 +773,10 @@ public class AspireClient {
         pendingRequests.remove(responseId, pendingResponse);
     }
 
-    private void completeServerCallback() {
+    private void completeServerCallback(Object callbackRequestId, String callbackCancellationId) {
+        if (callbackRequestId != null && callbackCancellationId != null) {
+            activeCallbackRequests.remove(callbackRequestId, callbackCancellationId);
+        }
         synchronized (connectionStateLock) {
             activeServerCallbacks--;
             if (activeServerCallbacks == 0) {
@@ -855,6 +869,17 @@ public class AspireClient {
 
         debug("Received server request: " + method);
 
+        if ("$/cancelRequest".equals(method)) {
+            Object callbackRequestId = getCancelledRequestId(params);
+            if (callbackRequestId != null) {
+                String cancellationId = activeCallbackRequests.get(callbackRequestId);
+                if (cancellationId != null) {
+                    cancelRemoteCancellationToken(cancellationId);
+                }
+            }
+            return;
+        }
+
         Object result = null;
         Map<String, Object> error = null;
 
@@ -917,6 +942,10 @@ public class AspireClient {
             error = createError(-32603, e.getMessage());
         }
 
+        if (!request.containsKey("id")) {
+            return;
+        }
+
         // Send response
         Map<String, Object> response = new HashMap<>();
         response.put("jsonrpc", "2.0");
@@ -938,6 +967,38 @@ public class AspireClient {
 
         if (params instanceof Map<?, ?> map) {
             return asString(map.get("callbackId"));
+        }
+
+        return null;
+    }
+
+    private String getCallbackCancellationId(Object params) {
+        Object args = null;
+        if (params instanceof List<?> list && list.size() > 1) {
+            args = list.get(1);
+        } else if (params instanceof Map<?, ?> map) {
+            args = map.get("args");
+        }
+
+        // Generated cancellable callbacks include the token id in both its positional slot and:
+        //   "args": { "p0": "<token-id>", "$cancellationToken": "<token-id>" }
+        // The named entry lets transport cancellation find the token without knowing its position.
+        if (args instanceof Map<?, ?> map) {
+            return asString(map.get("$cancellationToken"));
+        }
+
+        return null;
+    }
+
+    private Object getCancelledRequestId(Object params) {
+        // StreamJsonRpc cancels an invocation with:
+        //   { "jsonrpc": "2.0", "method": "$/cancelRequest", "params": { "id": <request-id> } }
+        // Preserve the parsed id type so a string id such as "41" never matches numeric id 41.
+        if (params instanceof Map<?, ?> map) {
+            Object id = map.get("id");
+            if (id instanceof String || id instanceof Number) {
+                return id;
+            }
         }
 
         return null;
@@ -1071,6 +1132,7 @@ public class AspireClient {
             }
             remoteCancellationTokens.clear();
             pendingRemoteCancellations.clear();
+            activeCallbackRequests.clear();
             handler = disconnectHandler;
         }
 
@@ -21834,7 +21896,7 @@ public class ReferenceExpression {
         Map<String, Object> reqArgs = new HashMap<>();
         reqArgs.put("context", AspireClient.serializeValue(handle));
         if (cancellationToken != null) {
-            reqArgs.put("cancellationToken", client.registerCancellation(cancellationToken));
+            reqArgs.put("cancellationToken", cancellationToken);
         }
 
         return (String) client.invokeCapability("Aspire.Hosting.ApplicationModel/getValue", reqArgs);
