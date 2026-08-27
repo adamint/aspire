@@ -688,10 +688,10 @@ internal sealed class AtsGoCodeGenerator : ICodeGenerator
             return "nil";
         }
 
-        return typeRef.Category switch
+        var renderedValue = typeRef.Category switch
         {
             AtsTypeCategory.Primitive => value.ToRelaxedJsonString(),
-            AtsTypeCategory.Enum => $"{MapTypeRefToGo(typeRef, isOptional: false)}({value.ToRelaxedJsonString()})",
+            AtsTypeCategory.Enum => $"{MapEnumType(typeRef.TypeId)}({value.ToRelaxedJsonString()})",
             AtsTypeCategory.Dto when value is JsonObject obj && dtoTypesById.TryGetValue(typeRef.TypeId, out var dtoInfo)
                 => RenderGoDtoValue(obj, dtoInfo, dtoTypesById),
             AtsTypeCategory.Array or AtsTypeCategory.List when value is JsonArray arr
@@ -700,6 +700,16 @@ internal sealed class AtsGoCodeGenerator : ICodeGenerator
                 => $"map[{MapTypeRefToGo(typeRef.KeyType, isOptional: false)}]{MapTypeRefToGo(typeRef.ValueType, isOptional: false)}{{{string.Join(", ", obj.Select(pair => $"{AtsJsonCodeWriter.ToRelaxedJsonString(pair.Key)}: {RenderGoExportedValue(pair.Value, typeRef.ValueType!, dtoTypesById)}"))}}}",
             _ => value.ToRelaxedJsonString()
         };
+
+        if (!ShouldApplyNullableType(typeRef))
+        {
+            return renderedValue;
+        }
+
+        var valueType = typeRef.Category == AtsTypeCategory.Primitive
+            ? MapPrimitiveType(typeRef.TypeId)
+            : MapEnumType(typeRef.TypeId);
+        return $"func(value {valueType}) *{valueType} {{ return &value }}({renderedValue})";
     }
 
     private string RenderGoDtoValue(
@@ -1429,15 +1439,7 @@ internal sealed class AtsGoCodeGenerator : ICodeGenerator
                 WriteLine($"{indent}}}");
                 continue;
             }
-            var typeStr = MapTypeRefToGo(p.Type, p.IsOptional);
-            if (IsNilableGoType(typeStr))
-            {
-                WriteLine($"{indent}if {paramName} != nil {{ reqArgs[\"{p.Name}\"] = serializeValue({paramName}) }}");
-            }
-            else
-            {
-                WriteLine($"{indent}reqArgs[\"{p.Name}\"] = serializeValue({paramName})");
-            }
+            WriteLine($"{indent}reqArgs[\"{p.Name}\"] = serializeValue({paramName})");
         }
 
         if (optionalParams.Count > 0)
@@ -2103,7 +2105,7 @@ internal sealed class AtsGoCodeGenerator : ICodeGenerator
             _ => "any"
         };
 
-        if (isOptional && !IsNilableGoType(baseType))
+        if ((isOptional || ShouldApplyNullableType(typeRef)) && !IsNilableGoType(baseType))
         {
             return $"*{baseType}";
         }
@@ -2143,6 +2145,11 @@ internal sealed class AtsGoCodeGenerator : ICodeGenerator
         typeName.StartsWith("map[", StringComparison.Ordinal) ||
         typeName == "any" ||
         typeName.StartsWith("func(", StringComparison.Ordinal);
+
+    private static bool ShouldApplyNullableType(AtsTypeRef typeRef) =>
+        typeRef.IsNullable == true
+        && typeRef.Category is AtsTypeCategory.Primitive or AtsTypeCategory.Enum
+        && typeRef.TypeId is not (AtsConstants.Void or AtsConstants.Any or AtsConstants.CancellationToken);
 
     /// <summary>
     /// Handle types map to their Go interface name. Interfaces in Go are

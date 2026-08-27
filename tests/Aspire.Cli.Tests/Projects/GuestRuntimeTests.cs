@@ -545,6 +545,29 @@ public class GuestRuntimeTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task RunAsync_CallerEnvironmentVariables_WithCasingAliasUseLaterValue()
+    {
+        var runtime = CreateRuntime(CreateTestSpec(execute: new CommandSpec
+        {
+            Command = "test-cmd",
+            Args = ["{appHostFile}"]
+        }));
+        var launcher = new RecordingLauncher();
+        var appHostFile = new FileInfo("/tmp/apphost.ts");
+        var directory = new DirectoryInfo("/tmp");
+        var envVars = new Dictionary<string, string>
+        {
+            ["PATH"] = "from_ambient",
+            ["Path"] = "from_profile"
+        };
+
+        await runtime.RunAsync(appHostFile, directory, envVars, watchMode: false, launcher, CancellationToken.None);
+
+        Assert.Single(launcher.LastEnvironmentVariables);
+        Assert.Equal("from_profile", launcher.LastEnvironmentVariables["PATH"]);
+    }
+
+    [Fact]
     public async Task RunAsync_ResolvesPreExecuteAndExecuteCommandsFromEffectiveEnvironment()
     {
         var root = Directory.CreateTempSubdirectory("aspire-runtime-java-path-");

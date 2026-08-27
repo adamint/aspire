@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Reflection;
+using System.Text.Json.Nodes;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.RemoteHost;
 using Aspire.TypeSystem;
@@ -39,6 +40,68 @@ public class AtsGoCodeGeneratorTests
 
         await Verify(files["aspire.go"], extension: "go")
             .UseFileName("AtsGeneratedAspire");
+    }
+
+    [Fact]
+    public void GenerateDistributedApplication_NullablePrimitiveArrayElementsUsePointers()
+    {
+        var nullableNumbers = Assert.IsType<AtsTypeRef>(AtsCapabilityScanner.CreateTypeRef(typeof(double?[])));
+        var atsContext = new AtsContext
+        {
+            Capabilities = [],
+            HandleTypes = [],
+            EnumTypes = [],
+            DtoTypes =
+            [
+                new AtsDtoTypeInfo
+                {
+                    TypeId = "Tests/NullableArrayDto",
+                    Name = "NullableArrayDto",
+                    Properties =
+                    [
+                        new AtsDtoPropertyInfo
+                        {
+                            Name = "Values",
+                            Type = nullableNumbers
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var generated = _generator.GenerateDistributedApplication(atsContext)["aspire.go"];
+
+        Assert.Contains("Values []*float64", generated, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExportedNullablePrimitiveArraysUsePointerInitializers()
+    {
+        var nullableNumbers = Assert.IsType<AtsTypeRef>(AtsCapabilityScanner.CreateTypeRef(typeof(double?[])));
+        var atsContext = new AtsContext
+        {
+            Capabilities = [],
+            HandleTypes = [],
+            EnumTypes = [],
+            DtoTypes = [],
+            ExportedValues =
+            [
+                new AtsExportedValueInfo
+                {
+                    OwningAssemblyName = TestTypesAssemblyName,
+                    PathSegments = ["NullableArrays", "Numbers"],
+                    Value = JsonNode.Parse("[1,null,2.5]"),
+                    Type = nullableNumbers
+                }
+            ]
+        };
+
+        var generated = _generator.GenerateDistributedApplication(atsContext)["aspire.go"];
+
+        Assert.Contains(
+            "[]*float64{func(value float64) *float64 { return &value }(1), nil, func(value float64) *float64 { return &value }(2.5)}",
+            generated,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -302,6 +365,22 @@ public class AtsGoCodeGeneratorTests
         Assert.Contains("arg0 := callbackArg[*ResourceUrlAnnotation](args, 0)", aspireGo);
         Assert.Contains("cb(arg0)", aspireGo);
         Assert.Contains("\"p0\": serializeValue(arg0)", aspireGo);
+    }
+
+    [Fact]
+    public void GeneratedCode_RequiredNullableSetterSendsNullValue()
+    {
+        var atsContext = CreateContextFromBothAssemblies();
+        var aspireGo = _generator.GenerateDistributedApplication(atsContext)["aspire.go"];
+        const string signature = "func (s *endpointUpdateContext) SetPort(value *float64)";
+        var methodStart = aspireGo.IndexOf(signature, StringComparison.Ordinal);
+        Assert.True(methodStart >= 0);
+        var methodEnd = aspireGo.IndexOf("\n}\n", methodStart, StringComparison.Ordinal);
+        Assert.True(methodEnd >= 0);
+        var method = aspireGo[methodStart..methodEnd];
+
+        Assert.Contains("reqArgs[\"value\"] = serializeValue(value)", method, StringComparison.Ordinal);
+        Assert.DoesNotContain("if value != nil", method, StringComparison.Ordinal);
     }
 
     [Fact]

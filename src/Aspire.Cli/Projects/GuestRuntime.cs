@@ -601,7 +601,12 @@ internal sealed class GuestRuntime
         IDictionary<string, string> environmentVariables,
         CommandSpec commandSpec)
     {
-        var mergedEnvironment = new Dictionary<string, string>(environmentVariables, ProcessEnvironment.Comparer);
+        var mergedEnvironment = new Dictionary<string, string>(environmentVariables.Count, ProcessEnvironment.Comparer);
+        foreach (var (key, value) in environmentVariables)
+        {
+            mergedEnvironment[key] = value;
+        }
+
         if (commandSpec.EnvironmentVariables is not null)
         {
             foreach (var (key, value) in commandSpec.EnvironmentVariables)
