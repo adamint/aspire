@@ -316,13 +316,10 @@ export class AppHostLogOutputCoordinator {
             }
 
             if (isDebugLoggerHeader(line)) {
-                if (!this.mergedDebugRecordHasTwin(pending, line)) {
-                    // DebugLogger does not mark multiline message boundaries. A continuation can itself
-                    // have the shape of another record, so retain both interpretations until another
-                    // provider confirms whether this is a continuation or a separate record.
-                    this.recordAmbiguousDebugLineBoundary(pending);
-                }
-
+                // DebugLogger does not mark multiline message boundaries. A continuation can itself
+                // have the shape of another record, so retain both interpretations until another
+                // provider confirms whether this is a continuation or a separate record.
+                this.recordAmbiguousDebugLineBoundary(pending);
                 appendPendingDebugLine(pending, line);
                 return true;
             }
@@ -370,6 +367,16 @@ export class AppHostLogOutputCoordinator {
     }
 
     private mergedDebugRecordHasTwin(pending: PendingDebugRecord, line: string): boolean {
+        const headerRecord = parseDebugLoggerRecord(getFirstLine(pending.raw));
+        const hasPotentialTwin = !!headerRecord
+            && this.correlatedRecordsFor(headerRecord).some(candidate =>
+                !candidate.sources.has('debugLogger')
+                && candidate.identity.record.categoryName === headerRecord.categoryName
+                && candidate.identity.record.logLevel === headerRecord.logLevel);
+        if (!hasPotentialTwin) {
+            return false;
+        }
+
         const merged = parseDebugLoggerRecord(`${pending.raw}${line}`);
         return !!merged && this.hasCorrelatedTwin(merged, 'debugLogger');
     }
@@ -446,10 +453,10 @@ export class AppHostLogOutputCoordinator {
             return;
         }
 
-        const trailingBodyEndOffsets = [...new Set(
-            pending.ambiguousLineBoundaries
-                .map(boundary => parseDebugLoggerRecord(pending.raw.slice(0, boundary.rawOffset))?.body.length)
-                .filter((offset): offset is number => offset !== undefined && offset >= 0 && offset < record.body.length))];
+        const trailingBodyEndOffsets = getTrailingBodyEndOffsets(
+            pending.raw,
+            pending.ambiguousLineBoundaries,
+            record.body.length);
         const identity = trailingBodyEndOffsets.length > 0
             ? { record, trailingBodyEndOffsets }
             : { record };
@@ -474,34 +481,71 @@ export class AppHostLogOutputCoordinator {
         return undefined;
     }
 
-    private findConfirmedDebugHeaderSegmentEnd(
+    private findConfirmedDebugHeaderSegmentEndIndex(
         raw: string,
         startOffset: number,
-        endOffsets: readonly number[]): number | undefined {
+        endOffsets: readonly number[],
+        firstEndIndex: number): number | undefined {
         const headerRecord = parseDebugLoggerRecord(getFirstLine(raw.slice(startOffset)));
         const matchingRecords = headerRecord
             ? this.correlatedRecordsFor(headerRecord).filter(candidate =>
                 !candidate.sources.has('debugLogger')
                 && candidate.identity.record.categoryName === headerRecord.categoryName
-                && candidate.identity.record.logLevel === headerRecord.logLevel)
+                && candidate.identity.record.logLevel === headerRecord.logLevel
+                && identityCanMatchBodyPrefix(candidate.identity, headerRecord.body))
             : [];
         if (!headerRecord || matchingRecords.length === 0) {
             return undefined;
         }
 
-        const maxBodyLength = Math.max(...matchingRecords.map(candidate => candidate.identity.record.body.length));
-        let confirmedEnd: number | undefined;
-        for (const endOffset of endOffsets) {
-            const candidate = parseDebugLoggerRecord(raw.slice(startOffset, endOffset));
-            if (candidate && candidate.body.length > maxBodyLength) {
-                break;
-            }
-            if (candidate && this.hasCorrelatedTwin(candidate, 'debugLogger')) {
-                confirmedEnd = endOffset;
+        const candidateBodyLengths = new Set<number>();
+        for (const candidate of matchingRecords) {
+            candidateBodyLengths.add(candidate.identity.record.body.length);
+            for (const range of getAlternativeBodyRanges(candidate.identity)) {
+                candidateBodyLengths.add(range.end - range.start);
             }
         }
 
-        return confirmedEnd;
+        const recordsByEndIndex = new Map<number, LogRecord | undefined>();
+        const recordAt = (index: number): LogRecord | undefined => {
+            if (!recordsByEndIndex.has(index)) {
+                recordsByEndIndex.set(
+                    index,
+                    parseDebugLoggerRecord(raw.slice(startOffset, endOffsets[index])));
+            }
+
+            return recordsByEndIndex.get(index);
+        };
+        let confirmedEndIndex: number | undefined;
+        for (const bodyLength of candidateBodyLengths) {
+            if (bodyLength > raw.length - startOffset) {
+                continue;
+            }
+
+            let low = firstEndIndex;
+            let high = endOffsets.length - 1;
+
+            while (low <= high) {
+                const index = Math.floor((low + high) / 2);
+                const candidate = recordAt(index);
+                if (!candidate) {
+                    break;
+                }
+
+                if (candidate.body.length < bodyLength) {
+                    low = index + 1;
+                } else if (candidate.body.length > bodyLength) {
+                    high = index - 1;
+                } else {
+                    if (this.hasCorrelatedTwin(candidate, 'debugLogger')) {
+                        confirmedEndIndex = Math.max(confirmedEndIndex ?? index, index);
+                    }
+                    break;
+                }
+            }
+        }
+
+        return confirmedEndIndex;
     }
 
     private flushDebugHeaderSegments(
@@ -509,44 +553,77 @@ export class AppHostLogOutputCoordinator {
         boundaries: readonly { rawOffset: number }[],
         headerBoundaries: readonly { rawOffset: number }[],
         outputs: AppHostParentOutput[]): void {
+        const fullRecord = parseDebugLoggerRecord(pending.raw);
+        const fullTrailingBodyEndOffsets = fullRecord
+            ? getTrailingBodyEndOffsets(
+                pending.raw,
+                pending.ambiguousLineBoundaries,
+                fullRecord.body.length)
+            : [];
         const segmentOffsets = [0, ...headerBoundaries.map(boundary => boundary.rawOffset), pending.raw.length];
         let segmentIndex = 0;
+        let boundaryIndex = 0;
         while (segmentIndex < segmentOffsets.length - 1) {
             const startOffset = segmentOffsets[segmentIndex];
-            const remainingEndOffsets = segmentOffsets.slice(segmentIndex + 1);
-            const endOffset = this.findConfirmedDebugHeaderSegmentEnd(
+            const endIndex = this.findConfirmedDebugHeaderSegmentEndIndex(
                 pending.raw,
                 startOffset,
-                remainingEndOffsets) ?? remainingEndOffsets[0];
+                segmentOffsets,
+                segmentIndex + 1) ?? segmentIndex + 1;
+            const endOffset = segmentOffsets[endIndex];
             const segment = pending.raw.slice(startOffset, endOffset);
             const record = parseDebugLoggerRecord(segment);
+
+            while (boundaryIndex < boundaries.length
+                && boundaries[boundaryIndex].rawOffset <= startOffset) {
+                boundaryIndex++;
+            }
+
+            const trailingBodyEndOffsetSet = new Set<number>();
+            while (boundaryIndex < boundaries.length
+                && boundaries[boundaryIndex].rawOffset < endOffset) {
+                if (record) {
+                    const bodyLength = parseDebugLoggerRecord(
+                        pending.raw.slice(startOffset, boundaries[boundaryIndex].rawOffset))?.body.length;
+                    if (bodyLength !== undefined
+                        && bodyLength >= 0
+                        && bodyLength < record.body.length) {
+                        trailingBodyEndOffsetSet.add(bodyLength);
+                    }
+                }
+                boundaryIndex++;
+            }
+
             if (!record) {
                 this.emitFallback(segment, pending.category, outputs);
             } else {
-                const trailingBodyEndOffsets = [...new Set(
-                    boundaries
-                        .filter(boundary =>
-                            boundary.rawOffset > startOffset && boundary.rawOffset < endOffset)
-                        .map(boundary => parseDebugLoggerRecord(
-                            pending.raw.slice(startOffset, boundary.rawOffset))?.body.length)
-                        .filter((offset): offset is number =>
-                            offset !== undefined && offset >= 0 && offset < record.body.length))];
-                const output = this.correlate(
-                    trailingBodyEndOffsets.length > 0 ? { record, trailingBodyEndOffsets } : { record },
-                    'debugLogger');
+                const trailingBodyEndOffsets = [...trailingBodyEndOffsetSet];
+                const identity: LogRecordIdentity = segmentIndex === 0 && fullRecord
+                    ? {
+                        record: fullRecord,
+                        trailingBodyEndOffsets: [...new Set([
+                            ...fullTrailingBodyEndOffsets,
+                            record.body.length
+                        ])]
+                    }
+                    : trailingBodyEndOffsets.length > 0
+                        ? { record, trailingBodyEndOffsets }
+                        : { record };
+                const output = this.correlate(identity, 'debugLogger', true, record);
                 if (output) {
                     outputs.push(output);
                 }
             }
 
-            segmentIndex = segmentOffsets.indexOf(endOffset, segmentIndex + 1);
+            segmentIndex = endIndex;
         }
     }
 
     private correlate(
         identity: LogRecordIdentity,
         source: LogSource,
-        renderUnmatched = true): AppHostParentOutput | undefined {
+        renderUnmatched = true,
+        unmatchedRecord = identity.record): AppHostParentOutput | undefined {
         const records = this.correlatedRecordsFor(identity.record);
         let selectedMatch: { index: number; match: LogRecordIdentityMatch } | undefined;
         for (let index = 0; index < records.length; index++) {
@@ -573,7 +650,7 @@ export class AppHostLogOutputCoordinator {
                 records.shift();
             }
 
-            return renderUnmatched ? formatLogRecord(identity.record) : undefined;
+            return renderUnmatched ? formatLogRecord(unmatchedRecord) : undefined;
         }
 
         const existing = records[selectedMatch.index];
@@ -781,6 +858,17 @@ function createPendingDebugRecord(line: string, category: string): PendingDebugR
         hasException: false,
         ambiguousLineBoundaries: []
     };
+}
+
+function getTrailingBodyEndOffsets(
+    raw: string,
+    boundaries: readonly { rawOffset: number }[],
+    recordBodyLength: number): number[] {
+    return [...new Set(
+        boundaries
+            .map(boundary => parseDebugLoggerRecord(raw.slice(0, boundary.rawOffset))?.body.length)
+            .filter((offset): offset is number =>
+                offset !== undefined && offset >= 0 && offset < recordBodyLength))];
 }
 
 function appendPendingDebugLine(pending: PendingDebugRecord, line: string): void {
@@ -1079,6 +1167,13 @@ function getAlternativeBodyRanges(identity: LogRecordIdentity): BodyRange[] {
         && range.end <= identity.record.body.length
         && range.start <= range.end
         && (range.start > 0 || range.end < identity.record.body.length));
+}
+
+function identityCanMatchBodyPrefix(identity: LogRecordIdentity, prefix: string): boolean {
+    return [{ start: 0, end: identity.record.body.length }, ...getAlternativeBodyRanges(identity)]
+        .some(range =>
+            range.end - range.start >= prefix.length
+            && identity.record.body.startsWith(prefix, range.start));
 }
 
 function createBodyRangeRecord(record: LogRecord, range: BodyRange): LogRecord {

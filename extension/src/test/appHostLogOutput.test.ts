@@ -522,6 +522,121 @@ suite('AppHost log output coordinator', () => {
         assert.deepStrictEqual(coordinator.flush(), []);
     });
 
+    test('deduplicates a full provider twin after an ambiguous DebugLogger idle flush', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const emitted: AppHostParentOutput[] = [];
+        const coordinator = new AppHostLogOutputCoordinator(output => emitted.push(output));
+        const message = 'first\nOther.Category: Warning: second';
+
+        try {
+            assert.deepStrictEqual(
+                coordinator.handleDebugAdapterOutput(
+                    `Example.Category: Information: ${message}\n`,
+                    'console'),
+                []);
+
+            await clock.tickAsync(250);
+
+            assert.deepStrictEqual(emitted, [
+                {
+                    output: 'Example.Category: Information: first\n',
+                    category: 'stdout'
+                },
+                {
+                    output: '\x1b[33mOther.Category: Warning: second\x1b[0m\n',
+                    category: 'stdout'
+                }
+            ]);
+            assert.strictEqual(
+                coordinator.handleBackchannelEntry(createEntry({ message })),
+                undefined);
+        } finally {
+            coordinator.reset();
+            clock.restore();
+        }
+    });
+
+    test('deduplicates a grouped provider prefix after an ambiguous DebugLogger idle flush', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const emitted: AppHostParentOutput[] = [];
+        const coordinator = new AppHostLogOutputCoordinator(output => emitted.push(output));
+        const groupedMessage = 'first\nSecond.Category: Warning: second';
+
+        try {
+            assert.deepStrictEqual(
+                coordinator.handleDebugAdapterOutput(
+                    `Example.Category: Information: ${groupedMessage}\nThird.Category: Error: third\n`,
+                    'console'),
+                []);
+
+            await clock.tickAsync(250);
+
+            assert.deepStrictEqual(emitted, [
+                {
+                    output: 'Example.Category: Information: first\n',
+                    category: 'stdout'
+                },
+                {
+                    output: '\x1b[33mSecond.Category: Warning: second\x1b[0m\n',
+                    category: 'stdout'
+                },
+                {
+                    output: 'Third.Category: Error: third\n',
+                    category: 'stderr'
+                }
+            ]);
+            assert.strictEqual(
+                coordinator.handleBackchannelEntry(createEntry({ message: groupedMessage })),
+                undefined);
+        } finally {
+            coordinator.reset();
+            clock.restore();
+        }
+    });
+
+    test('retires the merged DebugLogger identity after split provider confirmation', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const coordinator = new AppHostLogOutputCoordinator(() => { });
+        const message = 'first\nOther.Category: Warning: second';
+
+        try {
+            assert.deepStrictEqual(
+                coordinator.handleDebugAdapterOutput(
+                    `Example.Category: Information: ${message}\n`,
+                    'console'),
+                []);
+
+            await clock.tickAsync(250);
+
+            assert.strictEqual(
+                coordinator.handleBackchannelEntry(createEntry({
+                    sequenceNumber: 1,
+                    message: 'first'
+                })),
+                undefined);
+            assert.strictEqual(
+                coordinator.handleBackchannelEntry(createEntry({
+                    sequenceNumber: 2,
+                    categoryName: 'Other.Category',
+                    logLevel: 'Warning',
+                    message: 'second'
+                })),
+                undefined);
+            assert.deepStrictEqual(
+                coordinator.handleBackchannelEntry(createEntry({
+                    sequenceNumber: 3,
+                    message
+                })),
+                {
+                    output: 'Example.Category: Information: first\nOther.Category: Warning: second\n',
+                    category: 'stdout'
+                });
+        } finally {
+            coordinator.reset();
+            clock.restore();
+        }
+    });
+
     test('deduplicates a DebugLogger-first low-level message whose continuation looks like a header', () => {
         const coordinator = new AppHostLogOutputCoordinator();
 
