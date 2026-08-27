@@ -240,11 +240,12 @@ suite('AspireEditorCommandProvider', () => {
         fs.writeFileSync(activeAppHostPath, 'public class AppHost {}');
         fs.writeFileSync(unrelatedPath, 'public class Service {}');
         activeEditor = createEditor(activeAppHostPath);
+        const unrelatedUri = vscode.Uri.file(unrelatedPath);
 
         const discoveryService = {
             onDidChangeCandidates: () => ({ dispose: () => { } }),
             tryFindCandidateForEditorFile: async (filePath: string) =>
-                filePath === unrelatedPath
+                filePath === unrelatedUri.fsPath
                     ? undefined
                     : {
                         path: activeAppHostPath,
@@ -260,7 +261,7 @@ suite('AspireEditorCommandProvider', () => {
         const provider = new AspireEditorCommandProvider(discoveryService, createLaunchService());
 
         try {
-            await provider.tryExecuteRunAppHost(true, vscode.Uri.file(unrelatedPath));
+            await provider.tryExecuteRunAppHost(true, unrelatedUri);
 
             assert.strictEqual(startDebuggingStub.called, false);
             assert.ok(showErrorMessageStub.calledOnce);
