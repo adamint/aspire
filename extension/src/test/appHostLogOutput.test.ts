@@ -659,8 +659,7 @@ suite('AppHost log output coordinator', () => {
         }
     });
 
-    test('bounds DebugLogger flush work with many same-header provider candidates', function () {
-        this.timeout(5000);
+    test('bounds DebugLogger flush work with many same-header provider candidates', () => {
         const coordinator = new AppHostLogOutputCoordinator();
         const candidateCount = 1024;
         for (let index = 1; index <= candidateCount; index++) {
@@ -669,14 +668,24 @@ suite('AppHost log output coordinator', () => {
                 message: `x${'z'.repeat(index)}`
             }));
         }
+        let providerCategoryReads = 0;
+        for (const candidate of (coordinator as any)._correlatedRecords) {
+            const categoryName = candidate.identity.record.categoryName;
+            Object.defineProperty(candidate.identity.record, 'categoryName', {
+                configurable: true,
+                enumerable: true,
+                get: () => {
+                    providerCategoryReads++;
+                    return categoryName;
+                }
+            });
+        }
         const raw = Array.from(
             { length: candidateCount + 1 },
             () => 'Example.Category: Information: x\n').join('');
 
         assert.deepStrictEqual(coordinator.handleDebugAdapterOutput(raw, 'console'), []);
-        const start = Date.now();
         const outputs = coordinator.flush();
-        const elapsed = Date.now() - start;
 
         assert.strictEqual(outputs.length, candidateCount + 1);
         assert.deepStrictEqual(outputs[0], {
@@ -684,7 +693,9 @@ suite('AppHost log output coordinator', () => {
             category: 'stdout'
         });
         assert.deepStrictEqual(outputs.at(-1), outputs[0]);
-        assert.ok(elapsed < 500, `Expected flush under 500ms, got ${elapsed}ms.`);
+        assert.ok(
+            providerCategoryReads <= candidateCount * 8,
+            `Expected at most ${candidateCount * 8} provider-category reads, got ${providerCategoryReads}.`);
     });
 
     test('does not reuse one grouped provider record for multiple DebugLogger groups', () => {

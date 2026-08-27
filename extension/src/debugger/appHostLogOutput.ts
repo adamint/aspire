@@ -538,12 +538,13 @@ export class AppHostLogOutputCoordinator {
         let boundaryIndex = 0;
         while (segmentIndex < segmentOffsets.length - 1) {
             const startOffset = segmentOffsets[segmentIndex];
-            const endIndex = this.findConfirmedDebugHeaderSegmentEndIndex(
+            const confirmedEndIndex = this.findConfirmedDebugHeaderSegmentEndIndex(
                 pending.raw,
                 startOffset,
                 segmentOffsets,
                 segmentIndex + 1,
-                providerBodiesByHeader) ?? segmentIndex + 1;
+                providerBodiesByHeader);
+            const endIndex = confirmedEndIndex ?? segmentIndex + 1;
             const endOffset = segmentOffsets[endIndex];
             const segment = pending.raw.slice(startOffset, endOffset);
             const record = parseDebugLoggerRecord(segment);
@@ -583,7 +584,11 @@ export class AppHostLogOutputCoordinator {
                     : trailingBodyEndOffsets.length > 0
                         ? { record, trailingBodyEndOffsets }
                         : { record };
-                const output = this.correlate(identity, 'debugLogger', true, record);
+                const hasAlternativeBody = getAlternativeBodyRanges(identity).length > 0
+                    || (identity.alternativeRecords?.length ?? 0) > 0;
+                const output = confirmedEndIndex === undefined && !hasAlternativeBody
+                    ? this.rememberUnmatched(identity, 'debugLogger', record)
+                    : this.correlate(identity, 'debugLogger', true, record);
                 if (output) {
                     outputs.push(output);
                 } else {
@@ -595,6 +600,22 @@ export class AppHostLogOutputCoordinator {
 
             segmentIndex = endIndex;
         }
+    }
+
+    private rememberUnmatched(
+        identity: LogRecordIdentity,
+        source: LogSource,
+        record = identity.record): AppHostParentOutput {
+        const records = this.correlatedRecordsFor(identity.record);
+        records.push({ identity, sources: new Set([source]) });
+        const limit = isLowLevel(identity.record)
+            ? AppHostLogOutputCoordinator._maxLowLevelCorrelatedRecords
+            : AppHostLogOutputCoordinator._maxCorrelatedRecords;
+        if (records.length > limit) {
+            records.shift();
+        }
+
+        return formatLogRecord(record);
     }
 
     private correlate(
@@ -620,15 +641,8 @@ export class AppHostLogOutputCoordinator {
         }
 
         if (!selectedMatch) {
-            records.push({ identity, sources: new Set([source]) });
-            const limit = isLowLevel(identity.record)
-                ? AppHostLogOutputCoordinator._maxLowLevelCorrelatedRecords
-                : AppHostLogOutputCoordinator._maxCorrelatedRecords;
-            if (records.length > limit) {
-                records.shift();
-            }
-
-            return renderUnmatched ? formatLogRecord(unmatchedRecord) : undefined;
+            const output = this.rememberUnmatched(identity, source, unmatchedRecord);
+            return renderUnmatched ? output : undefined;
         }
 
         const existing = records[selectedMatch.index];
