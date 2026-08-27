@@ -25,6 +25,7 @@ export interface AppHostLogEntry {
 }
 
 type LogSource = 'backchannel' | 'consoleLogger' | 'debugLogger';
+const maxSingleLineRecordAlternatives = 128;
 
 interface LogRecord {
     categoryName: string;
@@ -37,6 +38,7 @@ interface LogRecord {
 
 interface LogRecordIdentity {
     record: LogRecord;
+    alternativeRecords?: readonly LogRecord[];
     leadingScopeBodyOffsets?: readonly number[];
     trailingBodyEndOffsets?: readonly number[];
 }
@@ -54,6 +56,7 @@ interface CorrelatedRecord {
 interface PendingConsoleRecord {
     record: Omit<LogRecord, 'body'>;
     body: string;
+    alternativeRecords: LogRecord[];
     leadingScopeBodyOffsets: number[];
     raw: string;
     category: string;
@@ -196,6 +199,9 @@ export class AppHostLogOutputCoordinator {
                 // Keep them until correlation can distinguish scope metadata from a real message
                 // such as `logger.LogInformation("=> started")`.
                 pending.body += bodyLine;
+                for (const alternativeRecord of pending.alternativeRecords) {
+                    alternativeRecord.body += bodyLine;
+                }
                 if (!pending.hasNonScopeBodyLine && bodyLine.startsWith('=> ')) {
                     // Each leading marker can be either scope metadata or the first message line.
                     // Store compact offsets instead of each suffix so deeply nested scopes retain
@@ -220,6 +226,7 @@ export class AppHostLogOutputCoordinator {
             this._pendingRecords.set(category, {
                 record: multilineHeader,
                 body: '',
+                alternativeRecords: [],
                 leadingScopeBodyOffsets: [],
                 raw: line,
                 category,
@@ -230,25 +237,10 @@ export class AppHostLogOutputCoordinator {
             return;
         }
 
-        const singleLineRecord = parseSingleLineConsoleLoggerRecord(line);
-        if (singleLineRecord && category !== 'console') {
+        const singleLinePending = AppHostLogOutputCoordinator.createPendingSingleLineRecord(line, category);
+        if (singleLinePending && category !== 'console') {
             this.resetFallbackFilter(category);
-            this._pendingRecords.set(category, {
-                record: {
-                    categoryName: singleLineRecord.categoryName,
-                    logLevel: singleLineRecord.logLevel,
-                    eventId: singleLineRecord.eventId,
-                    singleLine: true
-                },
-                body: singleLineRecord.body,
-                leadingScopeBodyOffsets:
-                    AppHostLogOutputCoordinator.getSingleLineScopeBodyOffsets(singleLineRecord.body),
-                raw: line,
-                category,
-                allowsContinuation: true,
-                hasBodyLine: true,
-                hasNonScopeBodyLine: true
-            });
+            this._pendingRecords.set(category, singleLinePending);
             return;
         }
 
@@ -266,22 +258,9 @@ export class AppHostLogOutputCoordinator {
 
         const identity = createPendingRecordIdentity(pending);
         if (hasUnconfirmedSingleLineContinuations(pending)
-            && !this.hasCorrelatedTwin(identity.record, 'consoleLogger')) {
+            && !this.hasCorrelatedIdentityTwin(identity, 'consoleLogger')) {
             const firstLine = getFirstLine(pending.raw);
-            const firstRecord = parseSingleLineConsoleLoggerRecord(firstLine)!;
-            const firstPending: PendingConsoleRecord = {
-                ...pending,
-                record: {
-                    categoryName: firstRecord.categoryName,
-                    logLevel: firstRecord.logLevel,
-                    eventId: firstRecord.eventId,
-                    singleLine: true
-                },
-                body: firstRecord.body,
-                leadingScopeBodyOffsets:
-                    AppHostLogOutputCoordinator.getSingleLineScopeBodyOffsets(firstRecord.body),
-                raw: firstLine
-            };
+            const firstPending = AppHostLogOutputCoordinator.createPendingSingleLineRecord(firstLine, category)!;
             const firstOutput = this.correlate(createPendingRecordIdentity(firstPending), 'consoleLogger');
             if (firstOutput) {
                 outputs.push(firstOutput);
@@ -371,8 +350,9 @@ export class AppHostLogOutputCoordinator {
         const hasPotentialTwin = !!headerRecord
             && this.correlatedRecordsFor(headerRecord).some(candidate =>
                 !candidate.sources.has('debugLogger')
-                && candidate.identity.record.categoryName === headerRecord.categoryName
-                && candidate.identity.record.logLevel === headerRecord.logLevel);
+                && getIdentityRecords(candidate.identity).some(record =>
+                    record.categoryName === headerRecord.categoryName
+                    && record.logLevel === headerRecord.logLevel));
         if (!hasPotentialTwin) {
             return false;
         }
@@ -485,63 +465,54 @@ export class AppHostLogOutputCoordinator {
         raw: string,
         startOffset: number,
         endOffsets: readonly number[],
-        firstEndIndex: number): number | undefined {
+        firstEndIndex: number,
+        providerBodiesByHeader: Map<string, { bodies: ReadonlySet<string>; maxBodyLength: number }>): number | undefined {
         const headerRecord = parseDebugLoggerRecord(getFirstLine(raw.slice(startOffset)));
-        const matchingRecords = headerRecord
-            ? this.correlatedRecordsFor(headerRecord).filter(candidate =>
-                !candidate.sources.has('debugLogger')
-                && candidate.identity.record.categoryName === headerRecord.categoryName
-                && candidate.identity.record.logLevel === headerRecord.logLevel
-                && identityCanMatchBodyPrefix(candidate.identity, headerRecord.body))
-            : [];
-        if (!headerRecord || matchingRecords.length === 0) {
+        if (!headerRecord) {
             return undefined;
         }
 
-        const candidateBodyLengths = new Set<number>();
-        for (const candidate of matchingRecords) {
-            candidateBodyLengths.add(candidate.identity.record.body.length);
-            for (const range of getAlternativeBodyRanges(candidate.identity)) {
-                candidateBodyLengths.add(range.end - range.start);
+        const cacheKey = `${headerRecord.categoryName}\0${headerRecord.logLevel}`;
+        let providerBodies = providerBodiesByHeader.get(cacheKey);
+        if (!providerBodies) {
+            const bodies = new Set<string>();
+            for (const candidate of this.correlatedRecordsFor(headerRecord)) {
+                if (candidate.sources.has('debugLogger')) {
+                    continue;
+                }
+                for (const candidateRecord of getIdentityRecords(candidate.identity)) {
+                    if (recordHeadersMatch(candidateRecord, headerRecord)) {
+                        bodies.add(candidateRecord.body);
+                    }
+                }
+                if (recordHeadersMatch(candidate.identity.record, headerRecord)) {
+                    for (const range of getAlternativeBodyRanges(candidate.identity)) {
+                        bodies.add(candidate.identity.record.body.slice(range.start, range.end));
+                    }
+                }
             }
+            let maxBodyLength = 0;
+            for (const body of bodies) {
+                maxBodyLength = Math.max(maxBodyLength, body.length);
+            }
+            providerBodies = {
+                bodies,
+                maxBodyLength
+            };
+            providerBodiesByHeader.set(cacheKey, providerBodies);
+        }
+        if (providerBodies.bodies.size === 0) {
+            return undefined;
         }
 
-        const recordsByEndIndex = new Map<number, LogRecord | undefined>();
-        const recordAt = (index: number): LogRecord | undefined => {
-            if (!recordsByEndIndex.has(index)) {
-                recordsByEndIndex.set(
-                    index,
-                    parseDebugLoggerRecord(raw.slice(startOffset, endOffsets[index])));
-            }
-
-            return recordsByEndIndex.get(index);
-        };
         let confirmedEndIndex: number | undefined;
-        for (const bodyLength of candidateBodyLengths) {
-            if (bodyLength > raw.length - startOffset) {
-                continue;
+        for (let endIndex = firstEndIndex; endIndex < endOffsets.length; endIndex++) {
+            const candidate = parseDebugLoggerRecord(raw.slice(startOffset, endOffsets[endIndex]));
+            if (!candidate || candidate.body.length > providerBodies.maxBodyLength) {
+                break;
             }
-
-            let low = firstEndIndex;
-            let high = endOffsets.length - 1;
-
-            while (low <= high) {
-                const index = Math.floor((low + high) / 2);
-                const candidate = recordAt(index);
-                if (!candidate) {
-                    break;
-                }
-
-                if (candidate.body.length < bodyLength) {
-                    low = index + 1;
-                } else if (candidate.body.length > bodyLength) {
-                    high = index - 1;
-                } else {
-                    if (this.hasCorrelatedTwin(candidate, 'debugLogger')) {
-                        confirmedEndIndex = Math.max(confirmedEndIndex ?? index, index);
-                    }
-                    break;
-                }
+            if (providerBodies.bodies.has(candidate.body)) {
+                confirmedEndIndex = endIndex;
             }
         }
 
@@ -561,6 +532,8 @@ export class AppHostLogOutputCoordinator {
                 fullRecord.body.length)
             : [];
         const segmentOffsets = [0, ...headerBoundaries.map(boundary => boundary.rawOffset), pending.raw.length];
+        const providerBodiesByHeader =
+            new Map<string, { bodies: ReadonlySet<string>; maxBodyLength: number }>();
         let segmentIndex = 0;
         let boundaryIndex = 0;
         while (segmentIndex < segmentOffsets.length - 1) {
@@ -569,7 +542,8 @@ export class AppHostLogOutputCoordinator {
                 pending.raw,
                 startOffset,
                 segmentOffsets,
-                segmentIndex + 1) ?? segmentIndex + 1;
+                segmentIndex + 1,
+                providerBodiesByHeader) ?? segmentIndex + 1;
             const endOffset = segmentOffsets[endIndex];
             const segment = pending.raw.slice(startOffset, endOffset);
             const record = parseDebugLoggerRecord(segment);
@@ -612,6 +586,10 @@ export class AppHostLogOutputCoordinator {
                 const output = this.correlate(identity, 'debugLogger', true, record);
                 if (output) {
                     outputs.push(output);
+                } else {
+                    // Correlation consumes this source occurrence. Rebuild the lookup before
+                    // selecting another group so one provider copy cannot confirm two records.
+                    providerBodiesByHeader.clear();
                 }
             }
 
@@ -670,9 +648,13 @@ export class AppHostLogOutputCoordinator {
     }
 
     private hasCorrelatedTwin(record: LogRecord, source: LogSource): boolean {
-        return this.correlatedRecordsFor(record).some(candidate =>
+        return this.hasCorrelatedIdentityTwin({ record }, source);
+    }
+
+    private hasCorrelatedIdentityTwin(identity: LogRecordIdentity, source: LogSource): boolean {
+        return this.correlatedRecordsFor(identity.record).some(candidate =>
             !candidate.sources.has(source)
-            && matchRecordIdentities(candidate.identity, { record }) !== undefined);
+            && matchRecordIdentities(candidate.identity, identity) !== undefined);
     }
 
     private correlatedRecordsFor(record: LogRecord): CorrelatedRecord[] {
@@ -697,6 +679,50 @@ export class AppHostLogOutputCoordinator {
         }
 
         return filter;
+    }
+
+    private static createPendingSingleLineRecord(
+        line: string,
+        category: string): PendingConsoleRecord | undefined {
+        const records = parseSingleLineConsoleLoggerRecords(line);
+        const record = records[0];
+        if (!record) {
+            return undefined;
+        }
+
+        const alternativeRecords: LogRecord[] = [];
+        const addAlternative = (alternative: LogRecord): void => {
+            if (alternativeRecords.length === maxSingleLineRecordAlternatives) {
+                alternativeRecords.splice(1, 1);
+            }
+            alternativeRecords.push(alternative);
+        };
+        for (const alternative of records.slice(1)) {
+            for (const offset of AppHostLogOutputCoordinator.getSingleLineScopeBodyOffsets(alternative.body)) {
+                addAlternative({ ...alternative, body: alternative.body.slice(offset) });
+            }
+            // Keep the exact recent interpretation after its scope aliases. It is the only
+            // lossless choice when a literal message itself begins with scope-shaped text.
+            addAlternative(alternative);
+        }
+
+        return {
+            record: {
+                categoryName: record.categoryName,
+                logLevel: record.logLevel,
+                eventId: record.eventId,
+                singleLine: true
+            },
+            body: record.body,
+            alternativeRecords,
+            leadingScopeBodyOffsets:
+                AppHostLogOutputCoordinator.getSingleLineScopeBodyOffsets(record.body),
+            raw: line,
+            category,
+            allowsContinuation: true,
+            hasBodyLine: true,
+            hasNonScopeBodyLine: true
+        };
     }
 
     private static getSingleLineScopeBodyOffsets(body: string): number[] {
@@ -796,10 +822,16 @@ function createPendingRecordIdentity(pending: PendingConsoleRecord): LogRecordId
         pending.leadingScopeBodyOffsets
             .map(offset => Math.min(offset, record.body.length))
             .filter(offset => offset > 0))];
+    const alternativeRecords = pending.alternativeRecords.map(alternative => ({
+        ...alternative,
+        body: normalizeRecordText(alternative.body)
+    }));
 
-    return leadingScopeBodyOffsets.length > 0
-        ? { record, leadingScopeBodyOffsets }
-        : { record };
+    return {
+        record,
+        ...(alternativeRecords.length > 0 ? { alternativeRecords } : {}),
+        ...(leadingScopeBodyOffsets.length > 0 ? { leadingScopeBodyOffsets } : {})
+    };
 }
 
 const consoleLoggerTimestampPrefix =
@@ -809,8 +841,8 @@ const consoleLoggerLevelPattern =
     String.raw`(?:${consoleLoggerAnsiSgrSequence})*(trce|dbug|info|warn|fail|crit)(?:${consoleLoggerAnsiSgrSequence})*`;
 const multilineConsoleLoggerHeaderRegex = new RegExp(
     String.raw`^${consoleLoggerTimestampPrefix}${consoleLoggerLevelPattern}: (.*)\[(-?\d+)\](?:\r\n|\r|\n)$`);
-const singleLineConsoleLoggerRecordRegex = new RegExp(
-    String.raw`^${consoleLoggerTimestampPrefix}${consoleLoggerLevelPattern}: (.*?)\[(-?\d+)\] (.*?)(?:\r\n|\r|\n)?$`);
+const singleLineConsoleLoggerPrefixRegex = new RegExp(
+    String.raw`^${consoleLoggerTimestampPrefix}${consoleLoggerLevelPattern}: (.*?)(?:\r\n|\r|\n)?$`);
 const debugLoggerCategoryPattern = String.raw`[A-Za-z_]\w*(?:\.\w+)*(?:\[-?\d+\])?`;
 const debugLoggerRecordRegex = new RegExp(
     String.raw`^(${debugLoggerCategoryPattern}): (Trace|Debug|Information|Warning|Error|Critical): ([\s\S]*)$`);
@@ -895,20 +927,35 @@ function parseMultilineConsoleLoggerHeader(line: string): Omit<LogRecord, 'body'
 }
 
 function parseSingleLineConsoleLoggerRecord(line: string): LogRecord | undefined {
+    return parseSingleLineConsoleLoggerRecords(line)[0];
+}
+
+function parseSingleLineConsoleLoggerRecords(line: string): LogRecord[] {
     // With SimpleConsoleFormatterOptions.SingleLine, the same record is:
     //   warn: Example.Category[7] First message line.
-    const match = singleLineConsoleLoggerRecordRegex.exec(line);
+    // Category text and message text are both arbitrary, so retain every possible event-ID
+    // split and let another provider identify the actual record.
+    const match = singleLineConsoleLoggerPrefixRegex.exec(line);
     if (!match) {
-        return undefined;
+        return [];
     }
 
-    return {
-        categoryName: escapeCategoryControlCharacters(match[2]),
-        logLevel: getFullLoggerLevel(match[1]),
-        eventId: Number(match[3]),
-        body: normalizeRecordText(match[4]),
-        singleLine: true
-    };
+    const records: LogRecord[] = [];
+    for (const eventIdMatch of match[2].matchAll(/\[(-?\d+)\] /g)) {
+        const record = {
+            categoryName: escapeCategoryControlCharacters(match[2].slice(0, eventIdMatch.index)),
+            logLevel: getFullLoggerLevel(match[1]),
+            eventId: Number(eventIdMatch[1]),
+            body: normalizeRecordText(match[2].slice(eventIdMatch.index + eventIdMatch[0].length)),
+            singleLine: true
+        };
+        if (records.length === maxSingleLineRecordAlternatives + 1) {
+            records.splice(2, 1);
+        }
+        records.push(record);
+    }
+
+    return records;
 }
 
 function parseDebugLoggerRecord(output: string): LogRecord | undefined {
@@ -1057,15 +1104,20 @@ function findLastCompletedLineBreak(text: string): number {
 }
 
 function matchRecordIdentities(left: LogRecordIdentity, right: LogRecordIdentity): LogRecordIdentityMatch | undefined {
-    if (!recordHeadersMatch(left.record, right.record)) {
-        return undefined;
+    for (const leftRecord of getIdentityRecords(left)) {
+        for (const rightRecord of getIdentityRecords(right)) {
+            if (recordHeadersMatch(leftRecord, rightRecord)
+                && recordBodiesMatchAt(leftRecord, 0, rightRecord)) {
+                return {
+                    record: createCanonicalRecord(leftRecord, rightRecord),
+                    isExactBody: true
+                };
+            }
+        }
     }
 
-    if (recordBodiesMatchAt(left.record, 0, right.record)) {
-        return {
-            record: createCanonicalRecord(left.record, right.record),
-            isExactBody: true
-        };
+    if (!recordHeadersMatch(left.record, right.record)) {
+        return undefined;
     }
 
     const leftCandidate = findIdentityCandidateMatchingExactRecord(left, right.record);
@@ -1167,11 +1219,8 @@ function getAlternativeBodyRanges(identity: LogRecordIdentity): BodyRange[] {
         && (range.start > 0 || range.end < identity.record.body.length));
 }
 
-function identityCanMatchBodyPrefix(identity: LogRecordIdentity, prefix: string): boolean {
-    return [{ start: 0, end: identity.record.body.length }, ...getAlternativeBodyRanges(identity)]
-        .some(range =>
-            range.end - range.start >= prefix.length
-            && identity.record.body.startsWith(prefix, range.start));
+function getIdentityRecords(identity: LogRecordIdentity): readonly LogRecord[] {
+    return [identity.record, ...(identity.alternativeRecords ?? [])];
 }
 
 function createBodyRangeRecord(record: LogRecord, range: BodyRange): LogRecord {

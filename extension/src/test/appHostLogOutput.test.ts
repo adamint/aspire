@@ -83,6 +83,18 @@ suite('AppHost log output coordinator', () => {
         assert.deepStrictEqual(consoleFirst.handleDebugAdapterOutput(raw, 'stdout'), []);
         assert.deepStrictEqual(consoleFirst.handleBackchannelEntry(entry), expected);
         assert.deepStrictEqual(consoleFirst.flush(), []);
+
+        const continuation = new AppHostLogOutputCoordinator();
+        assert.deepStrictEqual(continuation.handleBackchannelEntry(createEntry({
+            categoryName: 'Worker[42] shard',
+            message: 'first\nsecond'
+        })), {
+            output: 'Worker[42] shard: Information: first\nsecond\n',
+            category: 'stdout'
+        });
+        assert.deepStrictEqual(
+            renderConsole(continuation, 'info: Worker[42] shard[7] first\nsecond\n', 'stdout'),
+            []);
     });
 
     test('escapes category control characters consistently across log sources', () => {
@@ -406,6 +418,29 @@ suite('AppHost log output coordinator', () => {
             []);
     });
 
+    test('matches a single-line category containing event-id-shaped text in both source orders', () => {
+        const entry = createEntry({
+            categoryName: 'Worker[42] shard',
+            message: 'Message'
+        });
+        const raw = 'info: Worker[42] shard[7] Message\n';
+        const expected = {
+            output: 'Worker[42] shard: Information: Message\n',
+            category: 'stdout'
+        };
+
+        const backchannelFirst = new AppHostLogOutputCoordinator();
+        assert.deepStrictEqual(backchannelFirst.handleBackchannelEntry(entry), expected);
+        assert.deepStrictEqual(
+            renderConsole(backchannelFirst, raw, 'stdout'),
+            []);
+
+        const consoleFirst = new AppHostLogOutputCoordinator();
+        assert.deepStrictEqual(consoleFirst.handleDebugAdapterOutput(raw, 'stdout'), []);
+        assert.deepStrictEqual(consoleFirst.handleBackchannelEntry(entry), expected);
+        assert.deepStrictEqual(consoleFirst.flush(), []);
+    });
+
     test('matches Windows multiline output containing a bare LF', () => {
         const coordinator = new AppHostLogOutputCoordinator();
         const entry = createEntry({ message: 'first\nsecond' });
@@ -622,6 +657,85 @@ suite('AppHost log output coordinator', () => {
             coordinator.reset();
             clock.restore();
         }
+    });
+
+    test('bounds DebugLogger flush work with many same-header provider candidates', function () {
+        this.timeout(5000);
+        const coordinator = new AppHostLogOutputCoordinator();
+        const candidateCount = 1024;
+        for (let index = 1; index <= candidateCount; index++) {
+            coordinator.handleBackchannelEntry(createEntry({
+                sequenceNumber: index,
+                message: `x${'z'.repeat(index)}`
+            }));
+        }
+        const raw = Array.from(
+            { length: candidateCount + 1 },
+            () => 'Example.Category: Information: x\n').join('');
+
+        assert.deepStrictEqual(coordinator.handleDebugAdapterOutput(raw, 'console'), []);
+        const start = Date.now();
+        const outputs = coordinator.flush();
+        const elapsed = Date.now() - start;
+
+        assert.strictEqual(outputs.length, candidateCount + 1);
+        assert.deepStrictEqual(outputs[0], {
+            output: 'Example.Category: Information: x\n',
+            category: 'stdout'
+        });
+        assert.deepStrictEqual(outputs.at(-1), outputs[0]);
+        assert.ok(elapsed < 500, `Expected flush under 500ms, got ${elapsed}ms.`);
+    });
+
+    test('does not reuse one grouped provider record for multiple DebugLogger groups', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const header = 'Example.Category: Information: x';
+        const groupedMessage = `x\n${header}`;
+
+        assert.ok(coordinator.handleBackchannelEntry(createEntry({ message: groupedMessage })));
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(`${header}\n`.repeat(4), 'console'),
+            []);
+        assert.deepStrictEqual(coordinator.flush(), [
+            {
+                output: `${header}\n`,
+                category: 'stdout'
+            },
+            {
+                output: `${header}\n`,
+                category: 'stdout'
+            }
+        ]);
+    });
+
+    test('finds a confirmed DebugLogger group ending at an evicted middle boundary', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const headers = Array.from(
+            { length: 301 },
+            (_, index) => `Example.Category: Information: ${index}`);
+        const raw = `${headers.join('\n')}\n`;
+        const confirmedRaw = `${headers.slice(0, 151).join('\n')}\n`;
+        const groupedMessage = `0\n${headers.slice(1, 151).join('\n')}`;
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(raw, 'console'),
+            []);
+        const pending = (coordinator as any)._pendingDebugRecords.get('console');
+        assert.strictEqual(pending.ambiguousLineBoundaries.length, 128);
+        assert.ok(!pending.ambiguousLineBoundaries.some(
+            (boundary: { rawOffset: number }) => boundary.rawOffset === confirmedRaw.length));
+        assert.ok(coordinator.handleBackchannelEntry(createEntry({ message: groupedMessage })));
+        const outputs = coordinator.flush();
+
+        assert.strictEqual(outputs.length, 150);
+        assert.deepStrictEqual(outputs[0], {
+            output: `${headers[151]}\n`,
+            category: 'stdout'
+        });
+        assert.deepStrictEqual(outputs.at(-1), {
+            output: `${headers[300]}\n`,
+            category: 'stdout'
+        });
     });
 
     test('retires the merged DebugLogger identity after split provider confirmation', async () => {
@@ -1717,6 +1831,20 @@ suite('AppHost log output coordinator', () => {
         assert.strictEqual(pending.leadingScopeBodyOffsets.length, 128);
         assert.strictEqual(pending.leadingScopeBodyOffsets[0], '=> scope-0:value '.length);
         assert.strictEqual(pending.leadingScopeBodyOffsets.at(-1), body.length);
+    });
+
+    test('bounds retained single-line header candidates', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const body = `Root${Array.from({ length: 300 }, (_, index) => `[${index}] part`).join('')} Message`;
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(`info: ${body}\n`, 'stdout'),
+            []);
+
+        const pending = (coordinator as any)._pendingRecords.get('stdout');
+        assert.strictEqual(pending.alternativeRecords.length, 128);
+        assert.strictEqual(pending.alternativeRecords[0].eventId, 1);
+        assert.strictEqual(pending.alternativeRecords.at(-1).eventId, 299);
     });
 
     test('bounds the pending DebugLogger raw buffer', () => {
