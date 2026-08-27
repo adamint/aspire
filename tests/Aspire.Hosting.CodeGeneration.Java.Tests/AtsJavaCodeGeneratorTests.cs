@@ -3507,6 +3507,45 @@ public class AtsJavaCodeGeneratorTests
         Assert.Contains("setDefault_(\"probe\")", generated);
     }
 
+    [Fact]
+    public async Task ExportedNullablePrimitiveArraysUseBoxedInitializers()
+    {
+        var nullableNumbers = Assert.IsType<AtsTypeRef>(AtsCapabilityScanner.CreateTypeRef(typeof(double?[])));
+        var nullableFlags = Assert.IsType<AtsTypeRef>(AtsCapabilityScanner.CreateTypeRef(typeof(bool?[])));
+        var context = new AtsContext
+        {
+            Capabilities = [],
+            HandleTypes = [],
+            EnumTypes = [],
+            DtoTypes = [],
+            ExportedValues =
+            [
+                new AtsExportedValueInfo
+                {
+                    OwningAssemblyName = TestTypesAssemblyName,
+                    PathSegments = ["NullableArrays", "Numbers"],
+                    Value = JsonNode.Parse("[1,null,2.5]"),
+                    Type = nullableNumbers
+                },
+                new AtsExportedValueInfo
+                {
+                    OwningAssemblyName = TestTypesAssemblyName,
+                    PathSegments = ["NullableArrays", "Flags"],
+                    Value = JsonNode.Parse("[true,null,false]"),
+                    Type = nullableFlags
+                }
+            ]
+        };
+
+        var generated = _generator.GenerateDistributedApplication(context)["aspire/NullableArrays.java"];
+
+        Assert.Contains("Number[] Numbers = new Number[] { 1, null, 2.5 }", generated, StringComparison.Ordinal);
+        Assert.Contains("Boolean[] Flags = new Boolean[] { true, null, false }", generated, StringComparison.Ordinal);
+
+        using var workspace = await CreateJavaProbeWorkspaceAsync(context, "aspire/NullableArrays.java");
+        await workspace.CompileAsync();
+    }
+
     private static AtsContext CreateContextWithSingleDtoProperty(string propertyName)
     {
         return CreateContextWithSingleDtoProperty(

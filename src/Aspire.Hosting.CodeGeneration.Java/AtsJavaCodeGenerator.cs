@@ -865,7 +865,7 @@ internal sealed class AtsJavaCodeGenerator : ICodeGenerator
             AtsTypeCategory.Dto when value is JsonObject obj && dtoTypesById.TryGetValue(typeRef.TypeId, out var dtoInfo)
                 => RenderJavaDtoValue(obj, dtoInfo, dtoTypesById),
             AtsTypeCategory.Array when value is JsonArray arr
-                => $"new {MapTypeRefToJava(typeRef.ElementType, false)}[] {{ {string.Join(", ", arr.Select(item => RenderJavaExportedValue(item, typeRef.ElementType!, dtoTypesById)))} }}",
+                => $"new {MapTypeRefToJava(typeRef.ElementType, false, useBoxedTypes: typeRef.ElementType?.IsNullable == true)}[] {{ {string.Join(", ", arr.Select(item => RenderJavaExportedValue(item, typeRef.ElementType!, dtoTypesById)))} }}",
             AtsTypeCategory.List when value is JsonArray arr
                 => $"({MapTypeRefToJava(typeRef, false, useBoxedTypes: true)})(Object)new ArrayList<>(List.of({string.Join(", ", arr.Select(item => RenderJavaExportedValue(item, typeRef.ElementType!, dtoTypesById)))}))",
             AtsTypeCategory.Dict when value is JsonObject obj
