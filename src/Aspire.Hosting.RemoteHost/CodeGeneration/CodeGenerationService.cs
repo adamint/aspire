@@ -138,6 +138,7 @@ internal sealed class CodeGenerationService
         TypeId = t.TypeId,
         Category = t.Category.ToString(),
         IsInterface = t.IsInterface,
+        IsNullable = t.IsNullable,
         IsReadOnly = t.IsReadOnly,
         ElementType = t.ElementType != null ? MapTypeRef(t.ElementType) : null,
         KeyType = t.KeyType != null ? MapTypeRef(t.KeyType) : null,
@@ -344,6 +345,7 @@ internal sealed class TypeRefResponse
     public string TypeId { get; set; } = "";
     public string Category { get; set; } = "";
     public bool IsInterface { get; set; }
+    public bool? IsNullable { get; set; }
     public bool IsReadOnly { get; set; }
     public TypeRefResponse? ElementType { get; set; }
     public TypeRefResponse? KeyType { get; set; }
