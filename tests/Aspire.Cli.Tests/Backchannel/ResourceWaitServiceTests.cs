@@ -57,7 +57,6 @@ public class ResourceWaitServiceTests
         Assert.Equal(ResourceWaitOutcome.Success, result.Outcome);
         Assert.Equal("api", result.ResourceName);
         Assert.Equal("Running", result.State);
-        Assert.Equal("Healthy", result.Health);
         Assert.False(result.ResourceNotFound);
         Assert.Null(result.ErrorMessage);
         Assert.Equal(TimeSpan.FromMilliseconds(1250), result.Elapsed);
@@ -122,9 +121,7 @@ public class ResourceWaitServiceTests
         Assert.Equal(Enum.Parse<ResourceWaitOutcome>(expectedOutcomeName), result.Outcome);
         Assert.Equal("api", result.ResourceName);
         Assert.Equal("Waiting", result.State);
-        Assert.Equal("Unhealthy", result.Health);
         Assert.Equal(resourceNotFound, result.ResourceNotFound);
         Assert.Equal("Wait failed.", result.ErrorMessage);
     }
-
 }

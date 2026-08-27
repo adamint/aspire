@@ -32,7 +32,6 @@ internal sealed record ResourceWaitResult(
     ResourceWaitOutcome Outcome,
     string ResourceName,
     string? State,
-    string? Health,
     bool ResourceNotFound,
     string? ErrorMessage,
     TimeSpan Elapsed);
@@ -50,23 +49,6 @@ internal sealed class ResourceWaitService(TimeProvider timeProvider)
         CancellationToken cancellationToken)
     {
         var startTimestamp = timeProvider.GetTimestamp();
-        return await WaitCoreAsync(
-            connection,
-            resourceName,
-            target,
-            timeoutSeconds,
-            startTimestamp,
-            cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task<ResourceWaitResult> WaitCoreAsync(
-        IAppHostAuxiliaryBackchannel connection,
-        string resourceName,
-        ResourceWaitTarget target,
-        int timeoutSeconds,
-        long startTimestamp,
-        CancellationToken cancellationToken)
-    {
         var response = await connection.WaitForResourceAsync(
             resourceName,
             GetProtocolValue(target),
@@ -88,7 +70,6 @@ internal sealed class ResourceWaitService(TimeProvider timeProvider)
             outcome,
             resourceName,
             response.State,
-            response.HealthStatus,
             response.ResourceNotFound,
             response.ErrorMessage,
             timeProvider.GetElapsedTime(startTimestamp));
