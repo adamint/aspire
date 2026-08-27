@@ -6,6 +6,7 @@ export interface AppHostParentOutput {
 export class AppHostParentOutputFilter {
   private _continuingDroppedLog = false;
   private _continuingErrorBlock = false;
+  private _continuingPythonTraceback = false;
   private _lastCategory: string | undefined;
 
   filter(output: string, category: string | undefined): AppHostParentOutput | undefined {
@@ -75,13 +76,20 @@ export class AppHostParentOutputFilter {
     if (logSeverity) {
       this._continuingDroppedLog = logSeverity === 'low';
       this._continuingErrorBlock = logSeverity === 'severe';
+      this._continuingPythonTraceback = false;
 
       return logSeverity === 'low' ? undefined : this.getCurrentCategory(category);
+    }
+
+    if (this._continuingPythonTraceback && isPythonTracebackExceptionLine(trimmedLine)) {
+      this._continuingPythonTraceback = false;
+      return 'stderr';
     }
 
     const isSevereOutput = isSevereRuntimeOutputLine(trimmedLine);
     this._continuingDroppedLog = false;
     this._continuingErrorBlock = isSevereOutput;
+    this._continuingPythonTraceback = isPythonTracebackStart(trimmedLine);
 
     if (category === 'console' && !isSevereOutput) {
       return undefined;
@@ -101,6 +109,7 @@ export class AppHostParentOutputFilter {
   private resetState() {
     this._continuingDroppedLog = false;
     this._continuingErrorBlock = false;
+    this._continuingPythonTraceback = false;
   }
 
   reset(): void {
@@ -140,13 +149,21 @@ function isIndentedContinuation(line: string): boolean {
   return /^\s+\S/.test(line);
 }
 
+function isPythonTracebackStart(line: string): boolean {
+  return /^Traceback \(most recent call last\):$/.test(line);
+}
+
+function isPythonTracebackExceptionLine(line: string): boolean {
+  return /^(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*(?::.*)?$/.test(line);
+}
+
 export function isSevereRuntimeOutputLine(line: string): boolean {
   // Typed exception — `Namespace.Type.NameException: message` (also matches plain `System.Exception:`).
   return /(?:^|\s)(?:[A-Za-z_][\w`]*\.)+(?:[A-Za-z_][\w`]*Exception|Exception):/.test(line)
     // JavaScript / Node.js error shapes — `Uncaught TypeError: ...`, `Error [CODE]: ...`.
     || /^(?:Uncaught\s+)?(?:[A-Za-z_$][\w$]*Error|Error)(?:\s+\[[^\]]+\])?:/.test(line)
     // Python tracebacks begin with a fixed preamble and end with an Error/Exception type.
-    || /^Traceback \(most recent call last\):$/.test(line)
+    || isPythonTracebackStart(line)
     || /^(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*(?:Error|Exception):/.test(line)
     // Anchored fatal-marker prefixes only — bare word matches like `\bfailed\b` produced
     // false positives on user stdout (`"Failed payment retry queued"`, file paths

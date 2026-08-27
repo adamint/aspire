@@ -1647,6 +1647,23 @@ suite('AppHost log output coordinator', () => {
             });
     });
 
+    test('keeps custom Python exception terminators on stderr', () => {
+        const filter = new AppHostParentOutputFilter();
+        const traceback = 'Traceback (most recent call last):\n'
+            + '  File "app.py", line 1, in <module>\n'
+            + 'MyFailure: invalid value\n';
+
+        assert.deepStrictEqual(
+            filter.filter(traceback, 'console'),
+            {
+                output: traceback,
+                category: 'stderr'
+            });
+        assert.strictEqual(
+            new AppHostParentOutputFilter().filter('MyFailure: invalid value\n', 'console'),
+            undefined);
+    });
+
     test('correlates a scoped ConsoleLogger empty message', () => {
         const coordinator = new AppHostLogOutputCoordinator();
 
