@@ -164,12 +164,16 @@ suite('registerCliCommands', () => {
 
     test('Explorer AppHost run and debug commands propagate the selected resource', async () => {
         const resource = vscode.Uri.file('/repo/b/AppHost/AppHost.csproj');
+        const runFromExplorer = callbacks.get('aspire-vscode.runAppHostFromExplorer');
+        const debugFromExplorer = callbacks.get('aspire-vscode.debugAppHostFromExplorer');
 
-        await callbacks.get('aspire-vscode.runAppHostCommand')!(resource);
-        await callbacks.get('aspire-vscode.debugAppHostCommand')!(resource);
+        assert.ok(runFromExplorer);
+        assert.ok(debugFromExplorer);
+        await runFromExplorer(resource);
+        await debugFromExplorer(resource);
 
-        assert.ok(tryExecuteRunAppHostStub.firstCall.calledWith(true, resource));
-        assert.ok(tryExecuteRunAppHostStub.secondCall.calledWith(false, resource));
+        assert.ok(tryExecuteRunAppHostStub.firstCall.calledWithExactly(true, resource, false));
+        assert.ok(tryExecuteRunAppHostStub.secondCall.calledWithExactly(false, resource, false));
     });
 
     test('workspace folder selection cancellation returns a handled outcome without running the gate or command body', async () => {

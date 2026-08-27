@@ -78,11 +78,10 @@ export class AspireEditorCommandProvider implements vscode.Disposable {
     }
 
     /**
-     * Returns the resolved AppHost path from the explicit resource, active editor, or workspace settings, or null if none is available.
+     * Returns the resolved AppHost path from the explicit resource, active editor, or optionally workspace settings, or null if none is available.
      */
-    public async getAppHostPath(resource?: vscode.Uri): Promise<string | null> {
-        const activeEditorUri = vscode.window.activeTextEditor?.document.uri;
-        const appHostUri = resource ?? activeEditorUri;
+    public async getAppHostPath(resource?: vscode.Uri, allowWorkspaceFallback = true): Promise<string | null> {
+        const appHostUri = resource ?? vscode.window.activeTextEditor?.document.uri;
 
         if (appHostUri) {
             const candidate = await this.tryFindCandidateForEditorFile(appHostUri.fsPath);
@@ -90,7 +89,7 @@ export class AspireEditorCommandProvider implements vscode.Disposable {
                 return getDebugTargetForCandidate(candidate);
             }
 
-            if (resource && resource.toString() !== activeEditorUri?.toString()) {
+            if (resource && !allowWorkspaceFallback) {
                 return null;
             }
         }
@@ -126,8 +125,8 @@ export class AspireEditorCommandProvider implements vscode.Disposable {
         }
     }
 
-    public async tryExecuteRunAppHost(noDebug: boolean, resource?: vscode.Uri): Promise<void> {
-        await this.launchAspireDebugSession('run', noDebug, undefined, await this.getAppHostPath(resource));
+    public async tryExecuteRunAppHost(noDebug: boolean, resource?: vscode.Uri, allowWorkspaceFallback = true): Promise<void> {
+        await this.launchAspireDebugSession('run', noDebug, undefined, await this.getAppHostPath(resource, allowWorkspaceFallback));
     }
 
     public async tryExecuteDeployAppHost(noDebug: boolean): Promise<void> {

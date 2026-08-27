@@ -10,6 +10,7 @@ import { AspireEditorCommandProvider } from '../editor/AspireEditorCommandProvid
 import { AppHostDiscoveryService } from '../utils/appHostDiscovery';
 import { AppHostLaunchService } from '../services/AppHostLaunchService';
 import * as cliPathModule from '../utils/cliPath';
+import { noAppHostInWorkspace } from '../loc/strings';
 
 import { removeDirectorySafely } from './testHelpers';
 function createEditor(filePath: string): vscode.TextEditor {
@@ -264,6 +265,35 @@ suite('AspireEditorCommandProvider', () => {
         }
     });
 
+    test('explicit active editor AppHost URI does not fall back to another workspace AppHost', async () => {
+        const activeAppHostPath = path.join(tempDir, 'AppHost.java');
+        const workspaceAppHostPath = path.join(tempDir, 'OtherAppHost.java');
+        fs.writeFileSync(activeAppHostPath, 'public class AppHost {}');
+        fs.writeFileSync(workspaceAppHostPath, 'public class OtherAppHost {}');
+        activeEditor = createEditor(activeAppHostPath);
+
+        const discoveryService = {
+            onDidChangeCandidates: () => ({ dispose: () => { } }),
+            tryFindCandidateForEditorFile: async () => undefined,
+            discover: async () => [{
+                path: workspaceAppHostPath,
+                language: 'java',
+                status: 'buildable',
+            }],
+        } as unknown as AppHostDiscoveryService;
+        const provider = new AspireEditorCommandProvider(discoveryService, createLaunchService());
+
+        try {
+            await provider.tryExecuteRunAppHost(true, activeEditor.document.uri, false);
+
+            assert.strictEqual(startDebuggingStub.called, false);
+            assert.ok(showErrorMessageStub.calledOnceWith(noAppHostInWorkspace));
+        }
+        finally {
+            provider.dispose();
+        }
+    });
+
     test('explicit non-AppHost URI does not fall back to another workspace AppHost', async () => {
         const activeAppHostPath = path.join(tempDir, 'AppHost.java');
         const unrelatedPath = path.join(tempDir, 'Service.java');
@@ -291,7 +321,7 @@ suite('AspireEditorCommandProvider', () => {
         const provider = new AspireEditorCommandProvider(discoveryService, createLaunchService());
 
         try {
-            await provider.tryExecuteRunAppHost(true, unrelatedUri);
+            await provider.tryExecuteRunAppHost(true, unrelatedUri, false);
 
             assert.strictEqual(startDebuggingStub.called, false);
             assert.ok(showErrorMessageStub.calledOnce);
