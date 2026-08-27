@@ -283,6 +283,51 @@ public class DistributedApplicationPipelineTests(ITestOutputHelper testOutputHel
     }
 
     [Theory]
+    [InlineData(WellKnownPipelineSteps.Publish, WellKnownPipelineSteps.PublishPrereq)]
+    [InlineData(WellKnownPipelineSteps.Deploy, WellKnownPipelineSteps.DeployPrereq)]
+    public async Task Diagnostics_FinalizationSimulationGatesNormalWorkForEachTarget(
+        string targetStep,
+        string prerequisiteStep)
+    {
+        using var builder = CreatePipelineTestBuilder(step: WellKnownPipelineSteps.Diagnostics);
+        var pipeline = new DistributedApplicationPipeline();
+        pipeline.AddStep(
+            "normal-work",
+            _ => Task.CompletedTask,
+            requiredBy: new[] { WellKnownPipelineSteps.PublishFinalize, WellKnownPipelineSteps.DeployFinalize });
+
+        var context = CreateDeployingContext(builder.Build());
+        await pipeline.ExecuteAsync(context).DefaultTimeout();
+
+        var reporter = Assert.IsType<TestPipelineActivityReporter>(
+            context.Services.GetRequiredService<IPipelineActivityReporter>());
+        var diagnostics = Assert.Single(
+            reporter.LoggedMessages,
+            log => log.StepTitle == WellKnownPipelineSteps.Diagnostics).Message;
+        var simulationStart = diagnostics.IndexOf($"If targeting '{targetStep}':", StringComparison.Ordinal);
+        Assert.NotEqual(-1, simulationStart);
+        var simulationEnd = diagnostics.IndexOf("If targeting '", simulationStart + 1, StringComparison.Ordinal);
+        Assert.NotEqual(-1, simulationEnd);
+        var simulation = diagnostics[simulationStart..simulationEnd];
+
+        var prerequisiteLevel = GetSimulationExecutionLevel(simulation, prerequisiteStep);
+        var normalWorkLevel = GetSimulationExecutionLevel(simulation, "normal-work");
+
+        Assert.True(prerequisiteLevel < normalWorkLevel);
+
+        static int GetSimulationExecutionLevel(string simulation, string stepName)
+        {
+            var line = Assert.Single(
+                simulation.Split('\n'),
+                line => line.StartsWith("    [", StringComparison.Ordinal)
+                    && line.Contains(stepName, StringComparison.Ordinal));
+            var closingBracket = line.IndexOf(']');
+
+            return int.Parse(line.AsSpan(5, closingBracket - 5));
+        }
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData(" ")]
     public async Task ExecuteAsync_WithoutSelectedStep_GatesBothFinalizerWorkloads(string? selectedStep)

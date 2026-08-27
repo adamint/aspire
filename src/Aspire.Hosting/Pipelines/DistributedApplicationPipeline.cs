@@ -30,6 +30,7 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
 
     // Store resolved pipeline data for diagnostics
     private List<PipelineStep>? _lastResolvedSteps;
+    private List<PipelineStep>? _lastDiagnosticsSimulationSteps;
 
     public DistributedApplicationPipeline()
     {
@@ -351,9 +352,11 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
                 // Use the resolved pipeline data from the last ExecuteAsync call
                 var stepsToAnalyze = _lastResolvedSteps ?? throw new InvalidOperationException(
                     "No resolved pipeline data available for diagnostics. Ensure that the pipeline has been executed before running diagnostics.");
+                var simulationSteps = _lastDiagnosticsSimulationSteps ?? throw new InvalidOperationException(
+                    "No pipeline simulation data available for diagnostics. Ensure that the pipeline has been executed before running diagnostics.");
 
                 // Generate the diagnostic output using the resolved data
-                DumpDependencyGraphDiagnostics(stepsToAnalyze, context);
+                DumpDependencyGraphDiagnostics(stepsToAnalyze, simulationSteps, context);
             }
         });
 
@@ -666,6 +669,7 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
         // Convert RequiredBy relationships to DependsOn relationships before filtering
         var allStepsByName = allSteps.ToDictionary(s => s.Name, StringComparer.Ordinal);
         NormalizeRequiredByToDependsOn(allSteps, allStepsByName);
+        _lastDiagnosticsSimulationSteps = allSteps.Select(step => step.Clone()).ToList();
 
         var selectedStepName = selectedStepNameOverride;
         if (selectedStepName is null)
@@ -1252,6 +1256,7 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
     /// </summary>
     private static void DumpDependencyGraphDiagnostics(
         List<PipelineStep> allSteps,
+        List<PipelineStep> simulationSteps,
         PipelineStepContext context)
     {
         var sb = new StringBuilder();
@@ -1394,14 +1399,21 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
         sb.AppendLine("─────────────────────────────────────────────────────────────────────────────");
 
         // Show execution simulation for each step as a potential target
-        foreach (var targetStep in allSteps.OrderBy(s => s.Name, StringComparer.Ordinal))
+        foreach (var targetStep in simulationSteps.OrderBy(s => s.Name, StringComparer.Ordinal))
         {
             sb.AppendLine(CultureInfo.InvariantCulture, $"If targeting '{targetStep.Name}':");
 
+            // Finalization gates depend on the selected target. Simulate each target against a
+            // fresh graph so one command's prerequisite edges cannot leak into another simulation.
+            var stepsForSimulation = simulationSteps.Select(step => step.Clone()).ToList();
+            var stepsForSimulationByName = stepsForSimulation.ToDictionary(s => s.Name, StringComparer.Ordinal);
+            NormalizeFinalizationPrerequisites(stepsForSimulation, stepsForSimulationByName, targetStep.Name);
+            var simulatedTargetStep = stepsForSimulationByName[targetStep.Name];
+
             // Debug: Show what dependencies this step has after normalization
-            if (targetStep.DependsOnSteps.Count > 0)
+            if (simulatedTargetStep.DependsOnSteps.Count > 0)
             {
-                var sortedDeps = targetStep.DependsOnSteps.OrderBy(dep => dep, StringComparer.Ordinal);
+                var sortedDeps = simulatedTargetStep.DependsOnSteps.OrderBy(dep => dep, StringComparer.Ordinal);
                 sb.AppendLine(CultureInfo.InvariantCulture, $"  Direct dependencies: {string.Join(", ", sortedDeps)}");
             }
             else
@@ -1410,8 +1422,8 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
             }
 
             // Compute what would execute for this target
-            var stepsForTarget = ComputeTransitiveDependencies(targetStep, allStepsByName);
-            var executionLevels = GetExecutionLevelsByStep(stepsForTarget, allStepsByName);
+            var stepsForTarget = ComputeTransitiveDependencies(simulatedTargetStep, stepsForSimulationByName);
+            var executionLevels = GetExecutionLevelsByStep(stepsForTarget, stepsForSimulationByName);
 
             if (stepsForTarget.Count == 0)
             {

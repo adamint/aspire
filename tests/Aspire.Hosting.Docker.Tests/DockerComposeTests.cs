@@ -749,6 +749,7 @@ public class DockerComposeTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    [RequiresFeature(TestFeature.ContainerRuntime)]
     public async Task Build_DoesNotRunDeployPrerequisiteForDockerComposeBuildSteps()
     {
         using var builder = TestDistributedApplicationBuilder.Create(
