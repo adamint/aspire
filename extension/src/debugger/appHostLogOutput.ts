@@ -80,6 +80,7 @@ export class AppHostLogOutputCoordinator {
     private static readonly _maxAmbiguousDebugLineBoundaries = 128;
     private static readonly _maxLeadingScopeBodyOffsets = 128;
     private static readonly _maxPendingDebugRecordCharacters = 64 * 1024;
+    private static readonly _maxDebugHeaderCandidateComparisons = 256;
     private static readonly _allSources: readonly LogSource[] = ['backchannel', 'consoleLogger', 'debugLogger'];
     private static readonly _lowLevelSources: readonly LogSource[] = ['consoleLogger', 'debugLogger'];
     // Match BackchannelLoggerProvider's 1,000-entry replay buffer.
@@ -402,7 +403,7 @@ export class AppHostLogOutputCoordinator {
 
         const boundaries = getAmbiguousDebugLineBoundaries(pending.raw);
         const headerBoundaries = boundaries.filter(boundary =>
-            isDebugLoggerHeader(getFirstLine(pending.raw.slice(boundary.rawOffset))));
+            isDebugLoggerHeader(getFirstLine(pending.raw, boundary.rawOffset)));
         if (headerBoundaries.length > 0) {
             this.flushDebugHeaderSegments(pending, boundaries, headerBoundaries, outputs);
             return;
@@ -466,8 +467,9 @@ export class AppHostLogOutputCoordinator {
         startOffset: number,
         endOffsets: readonly number[],
         firstEndIndex: number,
-        providerBodiesByHeader: Map<string, { bodies: ReadonlySet<string>; maxBodyLength: number }>): number | undefined {
-        const headerRecord = parseDebugLoggerRecord(getFirstLine(raw.slice(startOffset)));
+        providerBodiesByHeader: Map<string, { bodies: ReadonlySet<string>; maxBodyLength: number }>,
+        comparisonBudget: { remaining: number }): number | undefined {
+        const headerRecord = parseDebugLoggerRecord(getFirstLine(raw, startOffset));
         if (!headerRecord) {
             return undefined;
         }
@@ -507,6 +509,11 @@ export class AppHostLogOutputCoordinator {
 
         let confirmedEndIndex: number | undefined;
         for (let endIndex = firstEndIndex; endIndex < endOffsets.length; endIndex++) {
+            if (comparisonBudget.remaining === 0) {
+                break;
+            }
+
+            comparisonBudget.remaining--;
             const candidate = parseDebugLoggerRecord(raw.slice(startOffset, endOffsets[endIndex]));
             if (!candidate || candidate.body.length > providerBodies.maxBodyLength) {
                 break;
@@ -534,6 +541,9 @@ export class AppHostLogOutputCoordinator {
         const segmentOffsets = [0, ...headerBoundaries.map(boundary => boundary.rawOffset), pending.raw.length];
         const providerBodiesByHeader =
             new Map<string, { bodies: ReadonlySet<string>; maxBodyLength: number }>();
+        const comparisonBudget = {
+            remaining: AppHostLogOutputCoordinator._maxDebugHeaderCandidateComparisons
+        };
         let segmentIndex = 0;
         let boundaryIndex = 0;
         while (segmentIndex < segmentOffsets.length - 1) {
@@ -543,7 +553,8 @@ export class AppHostLogOutputCoordinator {
                 startOffset,
                 segmentOffsets,
                 segmentIndex + 1,
-                providerBodiesByHeader);
+                providerBodiesByHeader,
+                comparisonBudget);
             const endIndex = confirmedEndIndex ?? segmentIndex + 1;
             const endOffset = segmentOffsets[endIndex];
             const segment = pending.raw.slice(startOffset, endOffset);
@@ -857,14 +868,17 @@ const multilineConsoleLoggerHeaderRegex = new RegExp(
     String.raw`^${consoleLoggerTimestampPrefix}${consoleLoggerLevelPattern}: (.*)\[(-?\d+)\](?:\r\n|\r|\n)$`);
 const singleLineConsoleLoggerPrefixRegex = new RegExp(
     String.raw`^${consoleLoggerTimestampPrefix}${consoleLoggerLevelPattern}: (.*?)(?:\r\n|\r|\n)?$`);
-const debugLoggerCategoryPattern = String.raw`[A-Za-z_]\w*(?:\.\w+)*(?:\[-?\d+\])?`;
+const debugLoggerCategoryPattern = String.raw`\S+`;
 const debugLoggerRecordRegex = new RegExp(
     String.raw`^(${debugLoggerCategoryPattern}): (Trace|Debug|Information|Warning|Error|Critical): ([\s\S]*)$`);
 const debugLoggerHeaderRegex = new RegExp(
     String.raw`^(${debugLoggerCategoryPattern}): (Trace|Debug|Information|Warning|Error|Critical): .*(?:\r\n|\r|\n)?$`);
 
-function getFirstLine(value: string): string {
-    return value.match(/^[^\r\n]*(?:\r\n|\r|\n)?/)?.[0] ?? '';
+function getFirstLine(value: string, startOffset = 0): string {
+    const lineBreakRegex = /\r\n|\r|\n/g;
+    lineBreakRegex.lastIndex = startOffset;
+    const lineBreak = lineBreakRegex.exec(value);
+    return value.slice(startOffset, lineBreak ? lineBreak.index + lineBreak[0].length : value.length);
 }
 
 function getLineStartOffsets(value: string): number[] {

@@ -668,24 +668,30 @@ suite('AppHost log output coordinator', () => {
                 message: `x${'z'.repeat(index)}`
             }));
         }
-        let providerCategoryReads = 0;
-        for (const candidate of (coordinator as any)._correlatedRecords) {
-            const categoryName = candidate.identity.record.categoryName;
-            Object.defineProperty(candidate.identity.record, 'categoryName', {
-                configurable: true,
-                enumerable: true,
-                get: () => {
-                    providerCategoryReads++;
-                    return categoryName;
-                }
-            });
-        }
         const raw = Array.from(
             { length: candidateCount + 1 },
             () => 'Example.Category: Information: x\n').join('');
 
         assert.deepStrictEqual(coordinator.handleDebugAdapterOutput(raw, 'console'), []);
-        const outputs = coordinator.flush();
+        let slicedRawCharacters = 0;
+        const originalSlice = String.prototype.slice;
+        const sliceStub = sinon.stub(String.prototype, 'slice').callsFake(function (
+            this: string,
+            start?: number,
+            end?: number) {
+            if (this.toString() === raw) {
+                const normalizedStart = start ?? 0;
+                const normalizedEnd = end ?? raw.length;
+                slicedRawCharacters += Math.max(0, normalizedEnd - normalizedStart);
+            }
+            return originalSlice.call(this, start, end);
+        });
+        let outputs: AppHostParentOutput[];
+        try {
+            outputs = coordinator.flush();
+        } finally {
+            sliceStub.restore();
+        }
 
         assert.strictEqual(outputs.length, candidateCount + 1);
         assert.deepStrictEqual(outputs[0], {
@@ -694,8 +700,8 @@ suite('AppHost log output coordinator', () => {
         });
         assert.deepStrictEqual(outputs.at(-1), outputs[0]);
         assert.ok(
-            providerCategoryReads <= candidateCount * 8,
-            `Expected at most ${candidateCount * 8} provider-category reads, got ${providerCategoryReads}.`);
+            slicedRawCharacters <= raw.length * 160,
+            `Expected at most ${raw.length * 160} sliced characters, got ${slicedRawCharacters}.`);
     });
 
     test('does not reuse one grouped provider record for multiple DebugLogger groups', () => {
@@ -1202,6 +1208,17 @@ suite('AppHost log output coordinator', () => {
             renderConsole(coordinator, 'Something: Debug: Hidden detail.\n', 'console'),
             [{
                 output: '\x1b[2mSomething: Debug: Hidden detail.\x1b[0m\n',
+                category: 'stdout'
+            }]);
+    });
+
+    test('renders an adapter-only Debug record with a custom DebugLogger category', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(coordinator, 'worker-job: Debug: Hidden detail.\n', 'console'),
+            [{
+                output: '\x1b[2mworker-job: Debug: Hidden detail.\x1b[0m\n',
                 category: 'stdout'
             }]);
     });
