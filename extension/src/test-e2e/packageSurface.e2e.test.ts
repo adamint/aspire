@@ -123,6 +123,8 @@ suite('Aspire package contribution surface E2E', function () {
             'aspire-vscode.publishAppHost',
             'aspire-vscode.runPipelineStepAppHost',
             'aspire-vscode.debugPipelineStepAppHost',
+            'aspire-vscode.runAppHostFromEditorCommand',
+            'aspire-vscode.debugAppHostFromEditorCommand',
             'aspire-vscode.refreshAppHosts',
             'aspire-vscode.codeLensRevealResource',
             'aspire-vscode.codeLensRevealAppHost',
@@ -140,7 +142,7 @@ suite('Aspire package contribution surface E2E', function () {
         const explorerCommands = getMenuCommands(installedPackage, 'explorer/context');
         assert.deepStrictEqual(explorerCommands, ['aspire-vscode.runAppHostCommand', 'aspire-vscode.debugAppHostCommand']);
         assert.deepStrictEqual(Object.keys(installedPackage.contributes?.menus ?? {}).sort(), expectedMenuLocations);
-        assert.deepStrictEqual(getMenuCommands(installedPackage, 'editor/title/run'), ['aspire-vscode.runAppHostCommand', 'aspire-vscode.debugAppHostCommand']);
+        assert.deepStrictEqual(getMenuCommands(installedPackage, 'editor/title/run'), ['aspire-vscode.runAppHostFromEditorCommand', 'aspire-vscode.debugAppHostFromEditorCommand']);
         assert.deepStrictEqual(getMenuCommands(installedPackage, 'view/title'), ['aspire-vscode.createWithAspire', 'aspire-vscode.switchToGlobalView', 'aspire-vscode.switchToWorkspaceView', 'aspire-vscode.globalRefreshAppHosts', 'aspire-vscode.refreshAppHosts']);
         for (const commandId of expectedViewItemContextCommands) {
             assert.ok(getMenuCommands(installedPackage, 'view/item/context').includes(commandId), `view/item/context should include ${commandId}.`);
@@ -280,8 +282,8 @@ suite('Aspire package contribution surface E2E', function () {
             expectedNoDebug: boolean;
             expectedDoStep?: string;
         }> = [
-            { commandId: 'aspire-vscode.runAppHostCommand', expectedCommand: 'run', expectedNoDebug: true },
-            { commandId: 'aspire-vscode.debugAppHostCommand', expectedCommand: 'run', expectedNoDebug: false },
+            { commandId: 'aspire-vscode.runAppHostFromEditorCommand', expectedCommand: 'run', expectedNoDebug: true },
+            { commandId: 'aspire-vscode.debugAppHostFromEditorCommand', expectedCommand: 'run', expectedNoDebug: false },
             { commandId: 'aspire-vscode.deploy', expectedCommand: 'deploy', expectedNoDebug: false },
             { commandId: 'aspire-vscode.publish', expectedCommand: 'publish', expectedNoDebug: false },
             { commandId: 'aspire-vscode.codeLensDebugPipelineStep', args: ['deploy'], expectedCommand: 'do', expectedNoDebug: false, expectedDoStep: 'deploy' },
@@ -610,6 +612,7 @@ const expectedCommandIds = [
     'aspire-vscode.createWithAspire',
     'aspire-vscode.debugAppHost',
     'aspire-vscode.debugAppHostCommand',
+    'aspire-vscode.debugAppHostFromEditorCommand',
     'aspire-vscode.debugPipelineStepAppHost',
     'aspire-vscode.deploy',
     'aspire-vscode.deployAppHost',
@@ -638,6 +641,7 @@ const expectedCommandIds = [
     'aspire-vscode.restore',
     'aspire-vscode.runAppHost',
     'aspire-vscode.runAppHostCommand',
+    'aspire-vscode.runAppHostFromEditorCommand',
     'aspire-vscode.runPipelineStepAppHost',
     'aspire-vscode.settings',
     'aspire-vscode.startResource',

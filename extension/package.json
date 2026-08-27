@@ -410,6 +410,18 @@
         "icon": "$(debug-all)"
       },
       {
+        "command": "aspire-vscode.runAppHostFromEditorCommand",
+        "title": "%command.runAppHost%",
+        "category": "Aspire",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "aspire-vscode.debugAppHostFromEditorCommand",
+        "title": "%command.debugAppHost%",
+        "category": "Aspire",
+        "icon": "$(debug-all)"
+      },
+      {
         "command": "aspire-vscode.deployAppHost",
         "title": "%command.deployAppHost%",
         "category": "Aspire",
@@ -657,12 +669,12 @@
       ],
       "editor/title/run": [
         {
-          "command": "aspire-vscode.runAppHostCommand",
+          "command": "aspire-vscode.runAppHostFromEditorCommand",
           "when": "aspire.fileIsAppHost || (aspire.workspaceHasAppHost && aspire.editorSupportsRunDebug)",
           "group": "navigation@-4"
         },
         {
-          "command": "aspire-vscode.debugAppHostCommand",
+          "command": "aspire-vscode.debugAppHostFromEditorCommand",
           "when": "(aspire.fileIsAppHost || aspire.workspaceHasAppHost) && aspire.editorSupportsRunDebug",
           "group": "navigation@-3"
         }
@@ -694,6 +706,14 @@
         },
         {
           "command": "aspire-vscode.debugAppHostFromExplorer",
+          "when": "false"
+        },
+        {
+          "command": "aspire-vscode.runAppHostFromEditorCommand",
+          "when": "false"
+        },
+        {
+          "command": "aspire-vscode.debugAppHostFromEditorCommand",
           "when": "false"
         },
         {

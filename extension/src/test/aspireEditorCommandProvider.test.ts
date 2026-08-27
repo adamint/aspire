@@ -254,7 +254,7 @@ suite('AspireEditorCommandProvider', () => {
         const provider = new AspireEditorCommandProvider(discoveryService, createLaunchService());
 
         try {
-            await provider.tryExecuteRunAppHost(true, activeEditor.document.uri);
+            await provider.tryExecuteRunAppHost(true);
 
             assert.ok(startDebuggingStub.calledOnce);
             const launchConfiguration = startDebuggingStub.firstCall.args[1] as vscode.DebugConfiguration;
@@ -295,25 +295,18 @@ suite('AspireEditorCommandProvider', () => {
     });
 
     test('explicit non-AppHost URI does not fall back to another workspace AppHost', async () => {
-        const activeAppHostPath = path.join(tempDir, 'AppHost.java');
-        const unrelatedPath = path.join(tempDir, 'Service.java');
-        fs.writeFileSync(activeAppHostPath, 'public class AppHost {}');
-        fs.writeFileSync(unrelatedPath, 'public class Service {}');
-        activeEditor = createEditor(activeAppHostPath);
-        const unrelatedUri = vscode.Uri.file(unrelatedPath);
+        const workspaceAppHostPath = path.join(tempDir, 'AppHost.java');
+        const activeDocumentPath = path.join(tempDir, 'Service.java');
+        fs.writeFileSync(workspaceAppHostPath, 'public class AppHost {}');
+        fs.writeFileSync(activeDocumentPath, 'public class Service {}');
+        activeEditor = createEditor(activeDocumentPath);
+        const explicitUri = activeEditor.document.uri;
 
         const discoveryService = {
             onDidChangeCandidates: () => ({ dispose: () => { } }),
-            tryFindCandidateForEditorFile: async (filePath: string) =>
-                filePath === unrelatedUri.fsPath
-                    ? undefined
-                    : {
-                        path: activeAppHostPath,
-                        language: 'java',
-                        status: 'buildable',
-                    },
+            tryFindCandidateForEditorFile: async () => undefined,
             discover: async () => [{
-                path: activeAppHostPath,
+                path: workspaceAppHostPath,
                 language: 'java',
                 status: 'buildable',
             }],
@@ -321,7 +314,7 @@ suite('AspireEditorCommandProvider', () => {
         const provider = new AspireEditorCommandProvider(discoveryService, createLaunchService());
 
         try {
-            await provider.tryExecuteRunAppHost(true, unrelatedUri, false);
+            await provider.tryExecuteRunAppHost(true, explicitUri, false);
 
             assert.strictEqual(startDebuggingStub.called, false);
             assert.ok(showErrorMessageStub.calledOnce);

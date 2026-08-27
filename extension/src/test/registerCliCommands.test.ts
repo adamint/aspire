@@ -176,6 +176,16 @@ suite('registerCliCommands', () => {
         assert.ok(tryExecuteRunAppHostStub.secondCall.calledWithExactly(false, resource, false));
     });
 
+    test('editor-title AppHost run and debug commands ignore the supplied resource', async () => {
+        const resource = vscode.Uri.file('/repo/b/Service/Program.cs');
+
+        await callbacks.get('aspire-vscode.runAppHostFromEditorCommand')!(resource);
+        await callbacks.get('aspire-vscode.debugAppHostFromEditorCommand')!(resource);
+
+        assert.ok(tryExecuteRunAppHostStub.firstCall.calledWithExactly(true));
+        assert.ok(tryExecuteRunAppHostStub.secondCall.calledWithExactly(false));
+    });
+
     test('workspace folder selection cancellation returns a handled outcome without running the gate or command body', async () => {
         workspaceFoldersStub.value([
             createWorkspaceFolder('a', '/repo/a'),
