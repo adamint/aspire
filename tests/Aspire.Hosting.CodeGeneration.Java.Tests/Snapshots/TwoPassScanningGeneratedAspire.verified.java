@@ -4323,7 +4323,9 @@ public class CommandOptions implements JsonSerializable {
         map.put("ValidateArguments", validateArguments == null ? null : (java.util.function.Function<Object, Object>) (transportArg -> {
             var arg = (InputsDialogValidationContext) transportArg;
             validateArguments.invoke(arg);
-            return null;
+            var __aspireCallbackArguments = new HashMap<String, Object>();
+            __aspireCallbackArguments.put("p0", arg);
+            return __aspireCallbackArguments;
         }));
         map.put("Visibility", AspireClient.serializeValue(visibility));
         map.put("ConfirmationMessage", AspireClient.serializeValue(confirmationMessage));
@@ -17678,7 +17680,9 @@ public class InteractionInputsDialogOptions implements JsonSerializable {
         map.put("ValidationCallback", validationCallback == null ? null : (java.util.function.Function<Object, Object>) (transportArg -> {
             var arg = (InputsDialogValidationContext) transportArg;
             validationCallback.invoke(arg);
-            return null;
+            var __aspireCallbackArguments = new HashMap<String, Object>();
+            __aspireCallbackArguments.put("p0", arg);
+            return __aspireCallbackArguments;
         }));
         return map;
     }
@@ -17905,7 +17909,9 @@ public class InteractionProgressOptions implements JsonSerializable {
         map.put("Work", work == null ? null : (java.util.function.Function<Object, Object>) (transportArg -> {
             var arg = (ProgressContext) transportArg;
             work.invoke(arg);
-            return null;
+            var __aspireCallbackArguments = new HashMap<String, Object>();
+            __aspireCallbackArguments.put("p0", arg);
+            return __aspireCallbackArguments;
         }));
         return map;
     }

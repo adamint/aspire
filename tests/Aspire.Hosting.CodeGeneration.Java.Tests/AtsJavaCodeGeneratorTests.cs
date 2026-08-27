@@ -2606,6 +2606,353 @@ public class AtsJavaCodeGeneratorTests
     }
 
     [Fact]
+    public async Task GeneratedNullablePrimitiveArrays_UseBoxedComponents()
+    {
+        var resourceType = new AtsTypeRef { TypeId = "Tests/ProbeResource", Category = AtsTypeCategory.Handle };
+        var nullableNumber = new AtsTypeRef
+        {
+            TypeId = AtsConstants.Number,
+            Category = AtsTypeCategory.Primitive,
+            IsNullable = true
+        };
+        var nullableBoolean = new AtsTypeRef
+        {
+            TypeId = AtsConstants.Boolean,
+            Category = AtsTypeCategory.Primitive,
+            IsNullable = true
+        };
+        var numberArray = new AtsTypeRef
+        {
+            TypeId = "numberArray",
+            Category = AtsTypeCategory.Array,
+            ElementType = nullableNumber
+        };
+        var booleanArray = new AtsTypeRef
+        {
+            TypeId = "booleanArray",
+            Category = AtsTypeCategory.Array,
+            ElementType = nullableBoolean
+        };
+        var booleanMatrix = new AtsTypeRef
+        {
+            TypeId = "booleanMatrix",
+            Category = AtsTypeCategory.Array,
+            ElementType = booleanArray
+        };
+        var callback = new AtsParameterInfo
+        {
+            Name = "callback",
+            IsCallback = true,
+            Type = new AtsTypeRef { TypeId = "callback", Category = AtsTypeCategory.Callback },
+            CallbackParameters =
+            [
+                new AtsCallbackParameterInfo { Name = "numbers", Type = numberArray },
+                new AtsCallbackParameterInfo { Name = "flags", Type = booleanMatrix }
+            ],
+            CallbackReturnType = new AtsTypeRef { TypeId = AtsConstants.Void, Category = AtsTypeCategory.Primitive }
+        };
+        var callbackCapability = new AtsCapabilityInfo
+        {
+            CapabilityId = "Tests/withArrays",
+            MethodName = "withArrays",
+            Parameters = [callback],
+            ReturnType = new AtsTypeRef { TypeId = AtsConstants.Void, Category = AtsTypeCategory.Primitive },
+            TargetTypeId = resourceType.TypeId,
+            TargetType = resourceType,
+            TargetParameterName = "resource",
+            ExpandedTargetTypes = [resourceType],
+            CapabilityKind = AtsCapabilityKind.Method
+        };
+        var context = new AtsContext
+        {
+            Capabilities =
+            [
+                CreateProbeCapability(resourceType, "nullableNumbers", numberArray),
+                CreateProbeCapability(resourceType, "nullableFlagMatrix", booleanMatrix),
+                callbackCapability
+            ],
+            HandleTypes = [new AtsTypeInfo { AtsTypeId = resourceType.TypeId! }],
+            DtoTypes =
+            [
+                new AtsDtoTypeInfo
+                {
+                    Name = "ArrayDto",
+                    TypeId = "Tests/ArrayDto",
+                    Properties =
+                    [
+                        new AtsDtoPropertyInfo { Name = "Numbers", Type = numberArray },
+                        new AtsDtoPropertyInfo { Name = "Flags", Type = booleanMatrix }
+                    ]
+                }
+            ],
+            EnumTypes = []
+        };
+
+        using var workspace = await CreateJavaProbeWorkspaceAsync(
+            context,
+            "aspire/ProbeResource.java",
+            "aspire/ArrayDto.java",
+            "aspire/AspireAction2.java");
+        workspace.WriteSource(
+            "aspire/NullablePrimitiveArrayProbe.java",
+            """
+            package aspire;
+
+            import java.io.ByteArrayOutputStream;
+            import java.io.InputStream;
+            import java.io.PipedInputStream;
+            import java.io.PipedOutputStream;
+            import java.lang.reflect.Field;
+            import java.nio.charset.StandardCharsets;
+            import java.util.Arrays;
+            import java.util.HashMap;
+            import java.util.List;
+            import java.util.Map;
+            import java.util.concurrent.CompletableFuture;
+            import java.util.concurrent.TimeUnit;
+
+            public class NullablePrimitiveArrayProbe {
+                public static void main(String[] args) throws Exception {
+                    var clientInput = new PipedInputStream(32768);
+                    var serverOutput = new PipedOutputStream(clientInput);
+                    var serverInput = new PipedInputStream(32768);
+                    var clientOutput = new PipedOutputStream(serverInput);
+
+                    var client = new AspireClient("ignored");
+                    setField(client, "inputStream", clientInput);
+                    setField(client, "outputStream", clientOutput);
+                    var resource = new ProbeResource(new Handle("probe", "Tests/ProbeResource"), client);
+
+                    var numbersCall = CompletableFuture.supplyAsync(resource::nullableNumbers);
+                    writeResult(serverOutput, extractNumericId(readMessage(serverInput)), "[1,null,2.5]");
+                    assertNumbers(numbersCall.get(2, TimeUnit.SECONDS));
+
+                    var flagsCall = CompletableFuture.supplyAsync(resource::nullableFlagMatrix);
+                    writeResult(serverOutput, extractNumericId(readMessage(serverInput)), "[[true,null],[false]]");
+                    assertFlags(flagsCall.get(2, TimeUnit.SECONDS));
+
+                    var callbackCall = CompletableFuture.runAsync(() ->
+                        resource.withArrays((numbers, flags) -> {
+                            assertNumbers(numbers);
+                            assertFlags(flags);
+                        }));
+                    String callbackRequest = readMessage(serverInput);
+                    int callbackRequestId = extractNumericId(callbackRequest);
+                    String callbackId = extractStringProperty(callbackRequest, "callback");
+                    writeMessage(
+                        serverOutput,
+                        "{\"jsonrpc\":\"2.0\",\"id\":9001,\"method\":\"invokeCallback\","
+                            + "\"params\":{\"callbackId\":\"" + callbackId + "\","
+                            + "\"args\":{\"p0\":[1,null,2.5],\"p1\":[[true,null],[false]]}}}");
+                    String callbackResponse = readMessage(serverInput);
+                    if (!callbackResponse.contains("\"id\":9001")
+                        || !callbackResponse.contains("\"result\":{\"p0\":[1.0,null,2.5],\"p1\":[[true,null],[false]]}")) {
+                        throw new IllegalStateException("unexpected callback response: " + callbackResponse);
+                    }
+                    writeResult(serverOutput, callbackRequestId, "null");
+                    callbackCall.get(2, TimeUnit.SECONDS);
+
+                    Map<String, Object> dtoMap = new HashMap<>();
+                    dtoMap.put("Numbers", Arrays.asList(1.0, null, 2.5));
+                    dtoMap.put("Flags", List.of(Arrays.asList(true, null), List.of(false)));
+                    var dto = ArrayDto.fromMap(dtoMap);
+                    assertNumbers(dto.getNumbers());
+                    assertFlags(dto.getFlags());
+
+                    System.out.println("OK");
+                }
+
+                private static void assertNumbers(Number[] values) {
+                    if (values.length != 3
+                        || values[0].doubleValue() != 1.0
+                        || values[1] != null
+                        || values[2].doubleValue() != 2.5) {
+                        throw new IllegalStateException("unexpected nullable number array");
+                    }
+                }
+
+                private static void assertFlags(Boolean[][] values) {
+                    if (values.length != 2
+                        || values[0].length != 2
+                        || values[0][0] != true
+                        || values[0][1] != null
+                        || values[1][0] != false) {
+                        throw new IllegalStateException("unexpected nullable boolean matrix");
+                    }
+                }
+
+                private static void setField(AspireClient client, String name, Object value) throws Exception {
+                    Field field = AspireClient.class.getDeclaredField(name);
+                    field.setAccessible(true);
+                    field.set(client, value);
+                }
+
+                // Capability requests have a JSON-RPC shape such as:
+                //   {"jsonrpc":"2.0","id":1,"method":"invokeCapability","params":{...}}
+                // Callback registrations are nested in params as string-valued properties.
+                private static int extractNumericId(String json) {
+                    int start = json.indexOf("\"id\":") + 5;
+                    int end = start;
+                    while (end < json.length() && Character.isDigit(json.charAt(end))) {
+                        end++;
+                    }
+                    return Integer.parseInt(json.substring(start, end));
+                }
+
+                private static String extractStringProperty(String json, String property) {
+                    String marker = "\"" + property + "\":\"";
+                    int start = json.indexOf(marker) + marker.length();
+                    return json.substring(start, json.indexOf('\"', start));
+                }
+
+                private static void writeResult(PipedOutputStream output, int id, String result) throws Exception {
+                    writeMessage(output, "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":" + result + "}");
+                }
+
+                private static void writeMessage(PipedOutputStream output, String payload) throws Exception {
+                    byte[] body = payload.getBytes(StandardCharsets.UTF_8);
+                    output.write(("Content-Length: " + body.length + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+                    output.write(body);
+                    output.flush();
+                }
+
+                // Messages are framed as:
+                //   Content-Length: <UTF-8 byte count>\r\n\r\n<JSON payload>
+                private static String readMessage(InputStream input) throws Exception {
+                    int contentLength = -1;
+                    while (true) {
+                        String line = readLine(input);
+                        if (line.isEmpty()) {
+                            break;
+                        }
+                        if (line.startsWith("Content-Length:")) {
+                            contentLength = Integer.parseInt(line.substring(15).trim());
+                        }
+                    }
+                    return new String(input.readNBytes(contentLength), StandardCharsets.UTF_8);
+                }
+
+                private static String readLine(InputStream input) throws Exception {
+                    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                    while (true) {
+                        int ch = input.read();
+                        if (ch == '\r') {
+                            if (input.read() == '\n') {
+                                break;
+                            }
+                        } else if (ch == '\n' || ch == -1) {
+                            break;
+                        } else {
+                            buffer.write(ch);
+                        }
+                    }
+                    return buffer.toString(StandardCharsets.UTF_8);
+                }
+            }
+            """);
+
+        await workspace.CompileAsync();
+        var run = await workspace.RunClassAsync("aspire.NullablePrimitiveArrayProbe", TimeSpan.FromSeconds(6));
+
+        Assert.True(run.TimedOut is false, $"Probe timed out. stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.True(
+            run.ExitCode == 0,
+            $"Probe failed with exit code {run.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.Contains("OK", run.StdOut, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GeneratedDtoCallbacks_VoidCallbackReturnsMutatedPositionalArguments()
+    {
+        var contextType = new AtsTypeRef { TypeId = "Tests/MutableContext", Category = AtsTypeCategory.Dto };
+        var context = new AtsContext
+        {
+            Capabilities = [],
+            HandleTypes = [],
+            DtoTypes =
+            [
+                new AtsDtoTypeInfo
+                {
+                    Name = "MutableContext",
+                    TypeId = contextType.TypeId!,
+                    Properties =
+                    [
+                        new AtsDtoPropertyInfo
+                        {
+                            Name = "Value",
+                            Type = new AtsTypeRef { TypeId = AtsConstants.String, Category = AtsTypeCategory.Primitive }
+                        }
+                    ]
+                },
+                new AtsDtoTypeInfo
+                {
+                    Name = "CallbackOptions",
+                    TypeId = "Tests/CallbackOptions",
+                    Properties =
+                    [
+                        new AtsDtoPropertyInfo
+                        {
+                            Name = "Callback",
+                            Type = new AtsTypeRef { TypeId = "callback", Category = AtsTypeCategory.Callback },
+                            IsCallback = true,
+                            CallbackParameters =
+                            [
+                                new AtsCallbackParameterInfo { Name = "context", Type = contextType }
+                            ],
+                            CallbackReturnType = new AtsTypeRef
+                            {
+                                TypeId = AtsConstants.Void,
+                                Category = AtsTypeCategory.Primitive
+                            }
+                        }
+                    ]
+                }
+            ],
+            EnumTypes = []
+        };
+
+        using var workspace = await CreateJavaProbeWorkspaceAsync(
+            context,
+            "aspire/MutableContext.java",
+            "aspire/CallbackOptions.java");
+        workspace.WriteSource(
+            "aspire/DtoCallbackWriteBackProbe.java",
+            """
+            package aspire;
+
+            import java.util.Map;
+            import java.util.function.Function;
+
+            public class DtoCallbackWriteBackProbe {
+                @SuppressWarnings("unchecked")
+                public static void main(String[] args) {
+                    var options = new CallbackOptions();
+                    options.setCallback(context -> context.setValue("after"));
+
+                    var callback = (Function<Object, Object>) options.toMap().get("Callback");
+                    var result = (Map<String, Object>) callback.apply(Map.of("Value", "before"));
+                    var serializedResult = (Map<String, Object>) AspireClient.serializeValue(result);
+                    var context = (Map<String, Object>) serializedResult.get("p0");
+                    if (serializedResult.size() != 1 || !"after".equals(context.get("Value"))) {
+                        throw new IllegalStateException("unexpected callback result: " + serializedResult);
+                    }
+
+                    System.out.println("OK");
+                }
+            }
+            """);
+
+        await workspace.CompileAsync();
+        var run = await workspace.RunClassAsync("aspire.DtoCallbackWriteBackProbe", TimeSpan.FromSeconds(6));
+
+        Assert.True(run.TimedOut is false, $"Probe timed out. stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.True(
+            run.ExitCode == 0,
+            $"Probe failed with exit code {run.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{run.StdOut}{Environment.NewLine}stderr:{Environment.NewLine}{run.StdErr}");
+        Assert.Contains("OK", run.StdOut, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task GeneratedCallbacks_VoidCallbackReturnsMutatedPositionalArguments()
     {
         var resourceType = new AtsTypeRef { TypeId = "Tests/ProbeResource", Category = AtsTypeCategory.Handle };

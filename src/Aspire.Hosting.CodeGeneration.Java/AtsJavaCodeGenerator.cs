@@ -1943,13 +1943,18 @@ internal sealed class AtsJavaCodeGenerator : ICodeGenerator
         else
         {
             WriteLine($"            {callbackInvocation};");
-            WriteLine("            var __aspireCallbackArguments = new HashMap<String, Object>();");
-            for (var i = 0; i < callArguments.Count; i++)
-            {
-                WriteLine($"            __aspireCallbackArguments.put(\"p{i}\", {callArguments[i]});");
-            }
-            WriteLine("            return __aspireCallbackArguments;");
+            EmitJavaVoidCallbackResult(callArguments, "            ");
         }
+    }
+
+    private void EmitJavaVoidCallbackResult(IReadOnlyList<string> arguments, string indent)
+    {
+        WriteLine($"{indent}var __aspireCallbackArguments = new HashMap<String, Object>();");
+        for (var i = 0; i < arguments.Count; i++)
+        {
+            WriteLine($"{indent}__aspireCallbackArguments.put(\"p{i}\", {arguments[i]});");
+        }
+        WriteLine($"{indent}return __aspireCallbackArguments;");
     }
 
     // A DTO callback property is rendered with a strong functional-interface type only when it has
@@ -1974,17 +1979,17 @@ internal sealed class AtsJavaCodeGenerator : ICodeGenerator
         var fieldName = ToCamelCase(property.Name);
         var hasReturnType = property.CallbackReturnType != null && property.CallbackReturnType.TypeId != AtsConstants.Void;
         var callbackParameter = property.CallbackParameters is { Count: 1 } ? property.CallbackParameters[0] : null;
+        var invocationArguments = new List<string>();
 
         WriteLine($"        map.put(\"{property.Name}\", {fieldName} == null ? null : (java.util.function.Function<Object, Object>) (transportArg -> {{");
-        var invocationArgument = string.Empty;
         if (callbackParameter is not null)
         {
             var callbackParameterName = ToCamelCase(callbackParameter.Name);
             WriteLine($"            var {callbackParameterName} = {GetCallbackArgumentExpression(callbackParameter, "transportArg")};");
-            invocationArgument = callbackParameterName;
+            invocationArguments.Add(callbackParameterName);
         }
 
-        var invocation = $"{fieldName}.invoke({invocationArgument})";
+        var invocation = $"{fieldName}.invoke({string.Join(", ", invocationArguments)})";
         if (hasReturnType)
         {
             WriteLine($"            return AspireClient.awaitValue({invocation});");
@@ -1992,7 +1997,7 @@ internal sealed class AtsJavaCodeGenerator : ICodeGenerator
         else
         {
             WriteLine($"            {invocation};");
-            WriteLine("            return null;");
+            EmitJavaVoidCallbackResult(invocationArguments, "            ");
         }
         WriteLine("        }));");
     }
@@ -2553,7 +2558,7 @@ internal sealed class AtsJavaCodeGenerator : ICodeGenerator
             AtsTypeCategory.Handle => MapHandleType(typeRef.TypeId),
             AtsTypeCategory.Dto => MapDtoType(typeRef.TypeId),
             AtsTypeCategory.Callback => "Object",
-            AtsTypeCategory.Array => $"{MapTypeRefToJava(typeRef.ElementType, false)}[]",
+            AtsTypeCategory.Array => $"{MapTypeRefToJava(typeRef.ElementType, typeRef.ElementType?.IsNullable == true)}[]",
             AtsTypeCategory.List => typeRef.IsReadOnly
                 ? $"List<{MapTypeRefToJava(typeRef.ElementType, false, useBoxedTypes: true)}>"
                 : $"AspireList<{MapTypeRefToJava(typeRef.ElementType, false, useBoxedTypes: true)}>",
@@ -2580,7 +2585,7 @@ internal sealed class AtsJavaCodeGenerator : ICodeGenerator
 
         return typeRef.Category switch
         {
-            AtsTypeCategory.Array => $"{MapDtoPropertyTypeToJava(typeRef.ElementType, false)}[]",
+            AtsTypeCategory.Array => $"{MapDtoPropertyTypeToJava(typeRef.ElementType, typeRef.ElementType?.IsNullable == true)}[]",
             AtsTypeCategory.List => $"List<{MapDtoPropertyTypeToJava(typeRef.ElementType, false, useBoxedTypes: true)}>",
             AtsTypeCategory.Dict => $"Map<{MapDtoPropertyTypeToJava(typeRef.KeyType, false, useBoxedTypes: true)}, {MapDtoPropertyTypeToJava(typeRef.ValueType, false, useBoxedTypes: true)}>",
             AtsTypeCategory.Union => "AspireUnion",
