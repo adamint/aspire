@@ -347,6 +347,36 @@ suite('AppHost log output coordinator', () => {
         assert.deepStrictEqual(consoleFirst.handleBackchannelEntry(plainEntry), plainOutput);
     });
 
+    test('does not consume a structured record through an unproven single-line scope alias', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const literalMessage = '=> scope message';
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                `info: Example.Category[7] ${literalMessage}\n`,
+                'stdout'),
+            [{
+                output: `Example.Category: Information: ${literalMessage}\n`,
+                category: 'stdout'
+            }]);
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({
+                sequenceNumber: 1,
+                message: 'message'
+            })),
+            {
+                output: 'Example.Category: Information: message\n',
+                category: 'stdout'
+            });
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({
+                sequenceNumber: 2,
+                message: literalMessage
+            })),
+            undefined);
+    });
+
     test('matches an empty single-line scope and message regardless of source order', () => {
         const entry = createEntry({ logLevel: 'Warning', message: '' });
         const raw = 'warn: Example.Category[7] => \n';
@@ -1676,14 +1706,16 @@ suite('AppHost log output coordinator', () => {
 
     test('bounds retained single-line scope-boundary candidates', () => {
         const coordinator = new AppHostLogOutputCoordinator();
-        const body = `=> ${Array.from({ length: 500 }, (_, index) => `scope-${index}`).join(' ')}`;
+        const body = Array.from(
+            { length: 500 },
+            (_, index) => `=> scope-${index}:value`).join(' ');
         const raw = `info: Example.Category[7] ${body}\n`;
 
         assert.deepStrictEqual(coordinator.handleDebugAdapterOutput(raw, 'stdout'), []);
 
         const pending = (coordinator as any)._pendingRecords.get('stdout');
         assert.strictEqual(pending.leadingScopeBodyOffsets.length, 128);
-        assert.strictEqual(pending.leadingScopeBodyOffsets[0], '=> scope-0 '.length);
+        assert.strictEqual(pending.leadingScopeBodyOffsets[0], '=> scope-0:value '.length);
         assert.strictEqual(pending.leadingScopeBodyOffsets.at(-1), body.length);
     });
 
@@ -1800,6 +1832,17 @@ suite('AppHost log output coordinator', () => {
                     category: 'stderr'
                 });
         }
+    });
+
+    test('does not start an error block from a standalone Python chain marker', () => {
+        const filter = new AppHostParentOutputFilter();
+
+        assert.strictEqual(
+            filter.filter(
+                'The above exception was the direct cause of the following exception:\n',
+                'console'),
+            undefined);
+        assert.strictEqual(filter.filter('  ordinary output\n', 'console'), undefined);
     });
 
     test('correlates a scoped ConsoleLogger empty message', () => {

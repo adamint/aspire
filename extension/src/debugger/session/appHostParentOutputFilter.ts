@@ -7,6 +7,7 @@ export class AppHostParentOutputFilter {
   private _continuingDroppedLog = false;
   private _continuingErrorBlock = false;
   private _continuingPythonTraceback = false;
+  private _awaitingPythonTracebackChainMarker = false;
   private _lastCategory: string | undefined;
 
   filter(output: string, category: string | undefined): AppHostParentOutput | undefined {
@@ -77,14 +78,22 @@ export class AppHostParentOutputFilter {
       this._continuingDroppedLog = logSeverity === 'low';
       this._continuingErrorBlock = logSeverity === 'severe';
       this._continuingPythonTraceback = false;
+      this._awaitingPythonTracebackChainMarker = false;
 
       return logSeverity === 'low' ? undefined : this.getCurrentCategory(category);
     }
 
     if (this._continuingPythonTraceback && isPythonTracebackExceptionLine(trimmedLine)) {
       this._continuingPythonTraceback = false;
+      this._awaitingPythonTracebackChainMarker = true;
       return 'stderr';
     }
+
+    if (this._awaitingPythonTracebackChainMarker && isPythonTracebackChainMarker(trimmedLine)) {
+      this._awaitingPythonTracebackChainMarker = false;
+      return 'stderr';
+    }
+    this._awaitingPythonTracebackChainMarker = false;
 
     const isSevereOutput = isSevereRuntimeOutputLine(trimmedLine);
     this._continuingDroppedLog = false;
@@ -110,6 +119,7 @@ export class AppHostParentOutputFilter {
     this._continuingDroppedLog = false;
     this._continuingErrorBlock = false;
     this._continuingPythonTraceback = false;
+    this._awaitingPythonTracebackChainMarker = false;
   }
 
   reset(): void {
@@ -169,7 +179,6 @@ export function isSevereRuntimeOutputLine(line: string): boolean {
     || /^(?:Uncaught\s+)?(?:[A-Za-z_$][\w$]*Error|Error)(?:\s+\[[^\]]+\])?:/.test(line)
     // Python tracebacks begin with a fixed preamble and end with an Error/Exception type.
     || isPythonTracebackStart(line)
-    || isPythonTracebackChainMarker(line)
     || /^(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*(?:Error|Exception):/.test(line)
     // Anchored fatal-marker prefixes only — bare word matches like `\bfailed\b` produced
     // false positives on user stdout (`"Failed payment retry queued"`, file paths

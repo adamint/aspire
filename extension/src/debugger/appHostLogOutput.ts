@@ -704,23 +704,21 @@ export class AppHostLogOutputCoordinator {
             return [body.length];
         }
 
-        if (!body.startsWith('=> ')) {
-            return [];
-        }
-
-        // SingleLine+IncludeScopes emits `=> scope message` with only a space between
-        // the final scope and message, so retain each possible boundary until another
-        // source confirms the exact body.
+        // Plain `=> scope message` is indistinguishable from a literal message. Retain
+        // alternatives only while leading scope tokens have a key/value shape.
         const offsets: number[] = [];
-        for (let offset = '=> '.length + 1; offset <= body.length; offset++) {
-            if (offset < body.length && body[offset - 1] !== ' ') {
-                continue;
+        let bodyOffset = 0;
+        while (bodyOffset < body.length) {
+            const scopePrefix = /^=> \S+[:=]\S*(?: |$)/.exec(body.slice(bodyOffset))?.[0];
+            if (!scopePrefix) {
+                break;
             }
 
+            bodyOffset += scopePrefix.length;
             if (offsets.length === AppHostLogOutputCoordinator._maxLeadingScopeBodyOffsets) {
                 offsets.splice(1, 1);
             }
-            offsets.push(offset);
+            offsets.push(bodyOffset);
         }
 
         return offsets;
