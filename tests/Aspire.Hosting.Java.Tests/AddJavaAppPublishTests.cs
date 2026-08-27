@@ -677,10 +677,16 @@ public class AddJavaAppPublishTests(ITestOutputHelper outputHelper)
     [Theory]
     [InlineData("java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }", "21")]
     [InlineData("java.toolchain.languageVersion.set(JavaLanguageVersion.of(17))", "17")]
+    [InlineData("java.toolchain.languageVersion = JavaLanguageVersion.of(25)", "25")]
     [InlineData("sourceCompatibility = JavaVersion.VERSION_1_8", "8")]
     [InlineData("sourceCompatibility = JavaVersion.VERSION_21", "21")]
     [InlineData("sourceCompatibility = '17'", "17")]
     [InlineData("targetCompatibility = 1.8", "8")]
+    [InlineData("""
+        targetCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = '21'
+        sourceCompatibility = JavaVersion.VERSION_25
+        """, "21")]
     [InlineData("", JavaVersionDetector.DefaultJavaVersion)]
     [InlineData("""
         java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
@@ -743,6 +749,48 @@ public class AddJavaAppPublishTests(ITestOutputHelper outputHelper)
         File.WriteAllText(Path.Combine(appDirectory.Path, "build.gradle"), script);
 
         Assert.Equal(expected, JavaVersionDetector.Detect(appDirectory.Path));
+    }
+
+    [Theory]
+    [InlineData("build.gradle", """
+        java {
+            def ignored = "{ toolchain { languageVersion = JavaLanguageVersion.of(11) } }"
+            // This brace does not close the java block: }
+            toolchain {
+                languageVersion = JavaLanguageVersion.of(25)
+            }
+        }
+
+        def legacyLauncher = javaToolchains.launcherFor {
+            languageVersion = JavaLanguageVersion.of(17)
+        }
+        tasks.register('legacyJava', JavaExec) {
+            javaLauncher = legacyLauncher
+        }
+        """)]
+    [InlineData("build.gradle.kts", """"
+        java {
+            val ignored = """{ toolchain { languageVersion.set(JavaLanguageVersion.of(11)) } }"""
+            /* This brace does not close the java block: } */
+            toolchain {
+                languageVersion.set(JavaLanguageVersion.of(25))
+            }
+        }
+
+        val legacyLauncher = javaToolchains.launcherFor {
+            languageVersion.set(JavaLanguageVersion.of(17))
+        }
+        tasks.register<JavaExec>("legacyJava") {
+            javaLauncher.set(legacyLauncher)
+        }
+        """")]
+    public void JavaVersionDetector_IgnoresToolchainsOutsideTheJavaApplicationToolchain(string fileName, string script)
+    {
+        using var appDirectory = new TempJavaAppDirectory();
+
+        File.WriteAllText(Path.Combine(appDirectory.Path, fileName), script);
+
+        Assert.Equal("25", JavaVersionDetector.Detect(appDirectory.Path));
     }
 
     [Fact]

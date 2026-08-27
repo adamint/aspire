@@ -1382,6 +1382,59 @@ public class AddJavaAppTests
     }
 
     [Theory]
+    [InlineData("maven")]
+    [InlineData("gradle")]
+    public async Task AddJavaApp_WithBuildStepAndAbsoluteJavaCommand_DebugConfigurationSerializesJavaExecutable(string buildTool)
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
+        using var tempDir = new TempJavaAppDirectory();
+        var javaExecutable = Path.Combine(tempDir.Path, OperatingSystem.IsWindows() ? "java.exe" : "java");
+        var app = builder.AddJavaApp("api", tempDir.Path, "app.jar")
+            .WithCommand(javaExecutable);
+
+        if (buildTool is "maven")
+        {
+            app.WithMavenBuild();
+        }
+        else
+        {
+            app.WithGradleBuild();
+        }
+
+        var launchConfiguration = await GetLaunchConfigurationAsync(app);
+        var serialized = JsonSerializer.SerializeToElement(launchConfiguration);
+
+        Assert.True(serialized.TryGetProperty("java_exec", out var javaExec));
+        Assert.Equal(javaExecutable, javaExec.GetString());
+    }
+
+    [Theory]
+    [InlineData("maven")]
+    [InlineData("gradle")]
+    public async Task AddJavaApp_WithBuildToolLaunchAndAbsoluteCommand_DebugConfigurationOmitsJavaExecutable(string buildTool)
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
+        using var tempDir = new TempJavaAppDirectory();
+        var javaExecutable = Path.Combine(tempDir.Path, OperatingSystem.IsWindows() ? "java.exe" : "java");
+        var app = builder.AddJavaApp("api", tempDir.Path);
+
+        if (buildTool is "maven")
+        {
+            app.WithMavenGoal("spring-boot:run");
+        }
+        else
+        {
+            app.WithGradleTask("bootRun");
+        }
+
+        app.WithCommand(javaExecutable);
+
+        var launchConfiguration = await GetLaunchConfigurationAsync(app);
+
+        Assert.Null(launchConfiguration.JavaExec);
+    }
+
+    [Theory]
     [InlineData("pom.xml", "maven")]
     [InlineData("settings.gradle", "gradle")]
     public async Task AddSpringBootApp_DebugConfigurationUsesTheDetectedBuildTool(string marker, string expectedBuildTool)

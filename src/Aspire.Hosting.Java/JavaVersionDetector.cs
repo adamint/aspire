@@ -266,11 +266,38 @@ internal static partial class JavaVersionDetector
 
         var script = StripComments(contents);
 
-        var assignment = LastActiveMatch(ToolchainRegex(), script)
-            ?? LastActiveMatch(JavaVersionEnumRegex(), script)
-            ?? LastActiveMatch(CompatibilityRegex(), script);
+        var assignment = LastActiveToolchainMatch(script)
+            ?? LastActiveMatch(TargetCompatibilityRegex(), script)
+            ?? LastActiveMatch(SourceCompatibilityRegex(), script);
 
-        return Normalize(assignment?.Groups[1].Value.Replace('_', '.'));
+        return Normalize(assignment?.Groups["version"].Value.Replace('_', '.'));
+    }
+
+    /// <summary>
+    /// Finds the final toolchain assignment that configures the application Java extension.
+    /// </summary>
+    private static Match? LastActiveToolchainMatch(GradleScript script)
+    {
+        var lastMatch = LastActiveMatch(DirectToolchainRegex(), script);
+
+        foreach (var javaBlock in FindTopLevelBlocks(script, "java", 0, script.Text.Length))
+        {
+            foreach (var toolchainBlock in FindTopLevelBlocks(script, "toolchain", javaBlock.ContentStart, javaBlock.ContentEnd))
+            {
+                var match = LastActiveMatch(
+                    LanguageVersionRegex(),
+                    script,
+                    toolchainBlock.ContentStart,
+                    toolchainBlock.ContentEnd);
+
+                if (match is not null && (lastMatch is null || match.Index > lastMatch.Index))
+                {
+                    lastMatch = match;
+                }
+            }
+        }
+
+        return lastMatch;
     }
 
     /// <summary>
@@ -289,16 +316,21 @@ internal static partial class JavaVersionDetector
     /// Only the match's start is tested, never the whole match. A declaration always begins outside the
     /// quotes while its value may legitimately sit inside them — <c>sourceCompatibility = '17'</c> is the
     /// ordinary Groovy spelling — so rejecting matches that merely overlap a literal would stop detecting
-    /// the quoted form that <see cref="CompatibilityRegex"/> exists to read.
+    /// the quoted form that <see cref="SourceCompatibilityRegex"/> exists to read.
     /// </para>
     /// </remarks>
-    private static Match? LastActiveMatch(Regex regex, GradleScript script)
+    private static Match? LastActiveMatch(
+        Regex regex,
+        GradleScript script,
+        int start = 0,
+        int? end = null)
     {
         Match? lastActiveMatch = null;
+        var endOffset = end ?? script.Text.Length;
 
-        for (var match = regex.Match(script.Text); match.Success; match = match.NextMatch())
+        for (var match = regex.Match(script.Text, start); match.Success && match.Index < endOffset; match = match.NextMatch())
         {
-            if (!script.IsInsideStringLiteral(match.Index))
+            if (match.Index + match.Length <= endOffset && !script.IsInsideStringLiteral(match.Index))
             {
                 lastActiveMatch = match;
             }
@@ -306,6 +338,116 @@ internal static partial class JavaVersionDetector
 
         return lastActiveMatch;
     }
+
+    /// <summary>
+    /// Finds named Gradle blocks at the top level of the specified script range.
+    /// </summary>
+    private static ImmutableArray<GradleBlock> FindTopLevelBlocks(
+        GradleScript script,
+        string name,
+        int start,
+        int end)
+    {
+        var blocks = ImmutableArray.CreateBuilder<GradleBlock>();
+        var depth = 0;
+
+        for (var index = start; index < end; index++)
+        {
+            if (script.IsInsideStringLiteral(index))
+            {
+                continue;
+            }
+
+            if (script.Text[index] is '{')
+            {
+                depth++;
+                continue;
+            }
+
+            if (script.Text[index] is '}')
+            {
+                depth--;
+                continue;
+            }
+
+            if (depth != 0 || !IsIdentifierAt(script.Text, name, index))
+            {
+                continue;
+            }
+
+            var openingBrace = index + name.Length;
+            while (openingBrace < end && char.IsWhiteSpace(script.Text[openingBrace]))
+            {
+                openingBrace++;
+            }
+
+            if (openingBrace >= end || script.Text[openingBrace] is not '{')
+            {
+                continue;
+            }
+
+            var closingBrace = FindClosingBrace(script, openingBrace, end);
+            if (closingBrace < 0)
+            {
+                break;
+            }
+
+            blocks.Add(new GradleBlock(openingBrace + 1, closingBrace));
+            index = closingBrace;
+        }
+
+        return blocks.ToImmutable();
+    }
+
+    /// <summary>
+    /// Finds the brace that closes the block beginning at <paramref name="openingBrace"/>.
+    /// </summary>
+    private static int FindClosingBrace(GradleScript script, int openingBrace, int end)
+    {
+        var depth = 1;
+
+        for (var index = openingBrace + 1; index < end; index++)
+        {
+            if (script.IsInsideStringLiteral(index))
+            {
+                continue;
+            }
+
+            if (script.Text[index] is '{')
+            {
+                depth++;
+            }
+            else if (script.Text[index] is '}' && --depth == 0)
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// Determines whether <paramref name="name"/> is a complete identifier at <paramref name="offset"/>.
+    /// </summary>
+    private static bool IsIdentifierAt(string text, string name, int offset)
+    {
+        if (!text.AsSpan(offset).StartsWith(name, StringComparison.Ordinal)
+            || offset > 0 && (IsGradleIdentifierCharacter(text[offset - 1]) || text[offset - 1] is '.'))
+        {
+            return false;
+        }
+
+        var end = offset + name.Length;
+        return end >= text.Length || !IsGradleIdentifierCharacter(text[end]);
+    }
+
+    private static bool IsGradleIdentifierCharacter(char value) =>
+        char.IsLetterOrDigit(value) || value is '_' or '$';
+
+    /// <summary>
+    /// The interior bounds of a balanced Gradle configuration block.
+    /// </summary>
+    private readonly record struct GradleBlock(int ContentStart, int ContentEnd);
 
     /// <summary>
     /// A Gradle build script with its comments removed, and the string literals that survived located.
@@ -475,15 +617,20 @@ internal static partial class JavaVersionDetector
         return value.Length > 0 && value.All(char.IsAsciiDigit) ? value : null;
     }
 
-    // Matches: languageVersion = JavaLanguageVersion.of(21)  and  languageVersion.set(JavaLanguageVersion.of(21))
-    [GeneratedRegex(@"JavaLanguageVersion\.of\(\s*(\d+)\s*\)")]
-    private static partial Regex ToolchainRegex();
+    // Matches direct application assignments outside a block:
+    // java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+    // java.toolchain.languageVersion.set(JavaLanguageVersion.of(21))
+    [GeneratedRegex(@"(?<![\w$.])java\s*\.\s*toolchain\s*\.\s*languageVersion\s*(?:=|\.set\()\s*JavaLanguageVersion\.of\(\s*(?<version>\d+)\s*\)")]
+    private static partial Regex DirectToolchainRegex();
 
-    // Matches: sourceCompatibility = JavaVersion.VERSION_21  and  VERSION_1_8
-    [GeneratedRegex(@"JavaVersion\.VERSION_(\d+(?:_\d+)?)")]
-    private static partial Regex JavaVersionEnumRegex();
+    // Applied only inside a balanced java { toolchain { ... } } scope.
+    [GeneratedRegex(@"\blanguageVersion\s*(?:=|\.set\()\s*JavaLanguageVersion\.of\(\s*(?<version>\d+)\s*\)")]
+    private static partial Regex LanguageVersionRegex();
 
-    // Matches: sourceCompatibility = '17'   targetCompatibility = 17   sourceCompatibility = "1.8"
-    [GeneratedRegex(@"(?:source|target)Compatibility\s*(?:=|\.set\()\s*['""]?(\d+(?:\.\d+)?)['""]?")]
-    private static partial Regex CompatibilityRegex();
+    // Matches JavaVersion.VERSION_21, VERSION_1_8, and numeric/string compatibility forms.
+    [GeneratedRegex(@"\btargetCompatibility\s*(?:=|\.set\()\s*(?:JavaVersion\.VERSION_(?<version>\d+(?:_\d+)?)|['""]?(?<version>\d+(?:\.\d+)?)['""]?)")]
+    private static partial Regex TargetCompatibilityRegex();
+
+    [GeneratedRegex(@"\bsourceCompatibility\s*(?:=|\.set\()\s*(?:JavaVersion\.VERSION_(?<version>\d+(?:_\d+)?)|['""]?(?<version>\d+(?:\.\d+)?)['""]?)")]
+    private static partial Regex SourceCompatibilityRegex();
 }
