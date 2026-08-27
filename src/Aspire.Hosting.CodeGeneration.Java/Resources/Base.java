@@ -236,7 +236,7 @@ class ReferenceExpression {
         Map<String, Object> reqArgs = new HashMap<>();
         reqArgs.put("context", AspireClient.serializeValue(handle));
         if (cancellationToken != null) {
-            reqArgs.put("cancellationToken", client.registerCancellation(cancellationToken));
+            reqArgs.put("cancellationToken", cancellationToken);
         }
 
         return (String) client.invokeCapability("Aspire.Hosting.ApplicationModel/getValue", reqArgs);
