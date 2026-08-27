@@ -1434,6 +1434,21 @@ public class AddJavaAppTests
         Assert.Null(launchConfiguration.JavaExec);
     }
 
+    [Fact]
+    public async Task AddSpringBootApp_WithAbsoluteWrapperCommand_DebugConfigurationOmitsJavaExecutable()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
+        using var tempDir = new TempJavaAppDirectory();
+        tempDir.Write("pom.xml", "");
+        var wrapperCommand = Path.Combine(tempDir.Path, OperatingSystem.IsWindows() ? "cmd.exe" : "sh");
+        var app = builder.AddSpringBootApp("catalog", tempDir.Path)
+            .WithCommand(wrapperCommand);
+
+        var launchConfiguration = await GetLaunchConfigurationAsync(app);
+
+        Assert.Null(launchConfiguration.JavaExec);
+    }
+
     [Theory]
     [InlineData("pom.xml", "maven")]
     [InlineData("settings.gradle", "gradle")]

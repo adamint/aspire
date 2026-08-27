@@ -1791,7 +1791,8 @@ public static partial class JavaHostingExtensions
 
     private static string? TryResolveJavaExecutableForIde(JavaAppResource resource)
     {
-        if (resource.HasAnnotationOfType<JavaBuildToolAnnotation>())
+        if (resource.HasAnnotationOfType<JavaBuildToolAnnotation>()
+            || resource.HasAnnotationOfType<JavaDetectedBuildToolAnnotation>())
         {
             return null;
         }
