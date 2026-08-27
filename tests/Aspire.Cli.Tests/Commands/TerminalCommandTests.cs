@@ -675,6 +675,7 @@ public class TerminalCommandTests(ITestOutputHelper outputHelper)
         public DateTimeOffset ConnectedAt => _inner.ConnectedAt;
         public bool SupportsV2 => _inner.SupportsV2;
         public bool SupportsV3 => _inner.SupportsV3;
+        public bool SupportsV4 => _inner.SupportsV4;
         public bool SupportsTerminalsV1 => _inner.SupportsTerminalsV1;
 
         public Task<GetTerminalInfoResponse> GetTerminalInfoAsync(string resourceName, CancellationToken cancellationToken = default)

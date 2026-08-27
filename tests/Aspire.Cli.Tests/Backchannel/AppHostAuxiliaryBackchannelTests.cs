@@ -21,12 +21,15 @@ public class AppHostAuxiliaryBackchannelTests
         using var server = TestAppHostBackchannelServer.Start();
         using var backchannel = await server.ConnectAsync().DefaultTimeout();
 
+        Assert.True(backchannel.SupportsV4);
+
         var snapshots = await backchannel.GetResourceSnapshotsAsync(includeHidden: true).DefaultTimeout();
 
         var snapshot = Assert.Single(snapshots);
         Assert.Equal("api", snapshot.Name);
         Assert.NotNull(server.Target.GetResourcesRequest);
         Assert.Contains(AuxiliaryBackchannelCapabilities.V3, server.Target.GetResourcesRequest.ClientCapabilities);
+        Assert.Contains(AuxiliaryBackchannelCapabilities.V4, server.Target.GetResourcesRequest.ClientCapabilities);
     }
 
     [Fact]
@@ -45,12 +48,13 @@ public class AppHostAuxiliaryBackchannelTests
         Assert.Equal("api", resource.Name);
         Assert.NotNull(server.Target.WatchResourcesRequest);
         Assert.Contains(AuxiliaryBackchannelCapabilities.V3, server.Target.WatchResourcesRequest.ClientCapabilities);
+        Assert.Contains(AuxiliaryBackchannelCapabilities.V4, server.Target.WatchResourcesRequest.ClientCapabilities);
     }
 
     [Fact]
     public async Task GetTerminalInfoAsync_WhenTerminalsCapabilityMissing_ReturnsUnavailableWithoutCallingRpc()
     {
-        // The server below advertises only [V1, V2] — no Terminals_V1. The
+        // The server below advertises the auxiliary version capabilities but no Terminals_V1. The
         // TestAppHostRpcTarget also deliberately exposes no GetTerminalInfoAsync
         // method, so if the production capability gate is ever removed the call
         // would route to JsonRpc and fail with RemoteMethodNotFoundException —
@@ -135,7 +139,9 @@ public class AppHostAuxiliaryBackchannelTests
         private readonly string[] _capabilities =
         [
             AuxiliaryBackchannelCapabilities.V1,
-            AuxiliaryBackchannelCapabilities.V2
+            AuxiliaryBackchannelCapabilities.V2,
+            AuxiliaryBackchannelCapabilities.V3,
+            AuxiliaryBackchannelCapabilities.V4
         ];
 
         public GetResourcesRequest? GetResourcesRequest { get; private set; }

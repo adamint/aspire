@@ -24,7 +24,8 @@ internal sealed class AppHostAuxiliaryBackchannel : IAppHostAuxiliaryBackchannel
     [
         AuxiliaryBackchannelCapabilities.V1,
         AuxiliaryBackchannelCapabilities.V2,
-        AuxiliaryBackchannelCapabilities.V3
+        AuxiliaryBackchannelCapabilities.V3,
+        AuxiliaryBackchannelCapabilities.V4
     ];
 
     private readonly ILogger _logger;
@@ -98,6 +99,7 @@ internal sealed class AppHostAuxiliaryBackchannel : IAppHostAuxiliaryBackchannel
     // a single new method never requires every consumer to upgrade an opaque version field.
     public bool SupportsTerminalsV1 => _capabilities.Contains(AuxiliaryBackchannelCapabilities.Terminals_V1);
     public bool SupportsV3 => _capabilities.Contains(AuxiliaryBackchannelCapabilities.V3);
+    public bool SupportsV4 => _capabilities.Contains(AuxiliaryBackchannelCapabilities.V4);
 
     /// <summary>
     /// Gets the JSON-RPC proxy for communicating with the AppHost.
