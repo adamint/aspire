@@ -155,15 +155,20 @@ async function tryRefreshJavaProjectConfiguration(launchConfig: JavaLaunchConfig
 }
 
 // path.isAbsolute resolves against the *host* platform, but the app host can hand us a Windows path
-// while the extension runs on POSIX (remote/WSL/container scenarios), so check both flavours.
-// path.win32.isAbsolute also accepts POSIX-rooted paths, but being explicit keeps the intent clear.
+// while the extension runs on POSIX (remote/WSL/container scenarios), so check both flavours. A
+// Windows path rooted at the current drive is absolute but not fully qualified, so require a drive
+// or UNC root; POSIX-rooted paths remain valid through the explicit POSIX check.
 function isAbsolutePath(value: string): boolean {
-    return path.win32.isAbsolute(value) || path.posix.isAbsolute(value);
+    const windowsRoot = path.win32.parse(value).root;
+    const isFullyQualifiedWindowsPath = path.win32.isAbsolute(value) && windowsRoot.length > 1;
+    return isFullyQualifiedWindowsPath || path.posix.isAbsolute(value);
 }
 
-function isDirectlySpawnableJavaExecutable(value: string): boolean {
+function isJavaExecutable(value: string, allowBareJava: boolean): boolean {
     const executable = value.split(/[\\/]/).pop()?.toLowerCase() ?? value.toLowerCase();
-    return !executable.endsWith('.cmd') && !executable.endsWith('.bat');
+    const isSupportedName = executable === 'java' || executable === 'java.exe' || executable === 'java.com';
+    const isBareJava = value.toLowerCase() === 'java';
+    return isSupportedName && (isAbsolutePath(value) || (allowBareJava && isBareJava));
 }
 
 // main_class is either a fully qualified class name (com.example.Api), optionally prefixed with a
@@ -233,7 +238,7 @@ export const javaDebuggerExtension: ResourceDebuggerExtension = {
             throw new Error(invalidLaunchConfiguration(JSON.stringify(launchConfig)));
         }
 
-        if (launchConfig.java_exec && !isDirectlySpawnableJavaExecutable(launchConfig.java_exec)) {
+        if (launchConfig.java_exec && !isJavaExecutable(launchConfig.java_exec, false)) {
             throw new Error(invalidLaunchConfiguration(JSON.stringify(launchConfig)));
         }
 
@@ -334,14 +339,10 @@ export function parseJavaAppHostCommand(args: string[]): { mainClass: string; cl
     // ("./mvnw exec:java", "./gradlew run") forks its own JVM, so its arguments are the tool's rather
     // than the JVM's and the first bare token is a goal or task, not a main class. Without this check
     // "exec:java" would be handed to the debug adapter as the class to launch.
-    // The path may be absolute (a JAVA_HOME-qualified launcher), so compare only the file name.
     // Bare "java" is the legacy wire shape. Any path must be absolute because only the CLI's
     // resolved launcher is authoritative; retaining a relative path would make the adapter resolve
     // it against a different working directory.
-    const executable = args[0].split(/[\\/]/).pop() ?? args[0];
-    const normalizedExecutable = executable.toLowerCase().replace(/\.(exe|com)$/, '');
-    const isBareJava = args[0].toLowerCase() === 'java';
-    if (!isDirectlySpawnableJavaExecutable(args[0]) || normalizedExecutable !== 'java' || (!isBareJava && !isAbsolutePath(args[0]))) {
+    if (!isJavaExecutable(args[0], true)) {
         return null;
     }
 

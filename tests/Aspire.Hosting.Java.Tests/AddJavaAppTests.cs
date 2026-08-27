@@ -1365,20 +1365,47 @@ public class AddJavaAppTests
         return Assert.IsType<JavaLaunchConfiguration>(await annotation.LaunchConfigurationProducer(context));
     }
 
-    [Fact]
-    public async Task AddJavaApp_WithAbsoluteJavaCommand_DebugConfigurationSerializesJavaExecutable()
+    [Theory]
+    [InlineData("java")]
+    [InlineData("java.exe")]
+    [InlineData("java.com")]
+    public async Task AddJavaApp_WithAbsoluteJavaCommand_DebugConfigurationSerializesJavaExecutable(string fileName)
     {
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
         using var tempDir = new TempJavaAppDirectory();
-        var javaExecutable = Path.Combine(tempDir.Path, OperatingSystem.IsWindows() ? "java.exe" : "java");
+        var javaExecutable = Path.Combine(tempDir.Path, fileName);
         var app = builder.AddJavaApp("api", tempDir.Path, "app.jar")
             .WithCommand(javaExecutable);
 
-        var launchConfiguration = await GetLaunchConfigurationAsync(app);
-        var serialized = JsonSerializer.SerializeToElement(launchConfiguration);
+        Assert.Equal(javaExecutable, (await GetLaunchConfigurationAsync(app)).JavaExec);
+    }
 
-        Assert.True(serialized.TryGetProperty("java_exec", out var javaExec));
-        Assert.Equal(javaExecutable, javaExec.GetString());
+    [Theory]
+    [InlineData("env")]
+    [InlineData("custom-java")]
+    [InlineData("java.cmd")]
+    [InlineData("java.bat")]
+    public async Task AddJavaApp_WithRejectedAbsoluteCommand_DebugConfigurationOmitsJavaExecutable(string fileName)
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
+        using var tempDir = new TempJavaAppDirectory();
+        var command = Path.Combine(tempDir.Path, fileName);
+        var app = builder.AddJavaApp("api", tempDir.Path, "app.jar")
+            .WithCommand(command);
+
+        Assert.Null((await GetLaunchConfigurationAsync(app)).JavaExec);
+    }
+
+    [Fact]
+    public async Task AddJavaApp_WithRejectedRelativeCommand_DebugConfigurationOmitsJavaExecutable()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
+        using var tempDir = new TempJavaAppDirectory();
+        var command = Path.Combine("bin", OperatingSystem.IsWindows() ? "java.exe" : "java");
+        var app = builder.AddJavaApp("api", tempDir.Path, "app.jar")
+            .WithCommand(command);
+
+        Assert.Null((await GetLaunchConfigurationAsync(app)).JavaExec);
     }
 
     [Theory]

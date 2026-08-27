@@ -572,10 +572,19 @@ public class JavaAppHostToolchainResolverTests(ITestOutputHelper outputHelper)
         {
             await process.WaitForExitAsync(timeout.Token);
         }
-        catch (OperationCanceledException) when (!TestContext.Current.CancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
-            process.Kill(entireProcessTree: true);
-            await process.WaitForExitAsync();
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+
+            if (TestContext.Current.CancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+
             return (-1, $"Maven timed out after 10 minutes.{Environment.NewLine}{await standardOutput}{Environment.NewLine}{await standardError}");
         }
 

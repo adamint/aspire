@@ -71,8 +71,8 @@ suite('Java Debugger Extension Tests', () => {
         const acceptedExecutables = [
             'C:\\Program Files\\Java.cmd\\jdk-25\\bin\\java.exe',
             'C:\\Program Files\\Java\\jdk-25\\bin\\java.com',
-            path.join('/opt', 'jdk-25', 'bin', 'java'),
-            'java',
+            '\\\\server\\share\\jdk-25\\bin\\java.exe',
+            '/opt/jdk-25/bin/java',
         ];
 
         for (const javaExec of acceptedExecutables) {
@@ -87,7 +87,18 @@ suite('Java Debugger Extension Tests', () => {
             assert.strictEqual(debugConfig.javaExec, javaExec);
         }
 
-        for (const javaExec of ['C:\\Java\\bin\\java.cmd', 'C:\\Java\\bin\\java.BAT', '/opt/jdk/bin/java.CMD', '/opt/jdk/bin/java.bat']) {
+        const rejectedExecutables = [
+            'java',
+            'bin/java',
+            '.\\bin\\java.exe',
+            '\\opt\\jdk\\bin\\java.exe',
+            '/usr/bin/env',
+            'C:\\Windows\\System32\\cmd.exe',
+            'C:\\Java\\bin\\java.cmd',
+            'C:\\Java\\bin\\java.BAT',
+        ];
+
+        for (const javaExec of rejectedExecutables) {
             const launchConfig = createJavaLaunchConfig({ java_exec: javaExec });
             await assert.rejects(
                 () => javaDebuggerExtension.createDebugSessionConfigurationCallback!(

@@ -1797,7 +1797,20 @@ public static partial class JavaHostingExtensions
             return null;
         }
 
-        return Path.IsPathFullyQualified(resource.Command) ? resource.Command : null;
+        return IsFullyQualifiedJavaExecutable(resource.Command) ? resource.Command : null;
+    }
+
+    private static bool IsFullyQualifiedJavaExecutable(string command)
+    {
+        if (!Path.IsPathFullyQualified(command))
+        {
+            return false;
+        }
+
+        var fileName = Path.GetFileName(command);
+        return string.Equals(fileName, "java", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(fileName, "java.exe", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(fileName, "java.com", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
