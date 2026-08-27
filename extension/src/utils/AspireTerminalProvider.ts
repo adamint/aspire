@@ -250,13 +250,12 @@ export class AspireTerminalProvider implements vscode.Disposable {
             this._terminalsWithAspireCommands.add(aspireTerminal.terminal);
         }
         else {
-            const hasReceivedAspireCommand = this._terminalsWithAspireCommands.has(aspireTerminal.terminal);
-
             // createTerminal can return before the shell process accepts input. Waiting for processId
             // prevents the first fallback command from being dropped. Observe terminal closure too,
             // because processId can remain pending when the shell process fails to start.
             await this.waitForTerminalProcess(aspireTerminal.terminal);
 
+            const hasReceivedAspireCommand = this._terminalsWithAspireCommands.has(aspireTerminal.terminal);
             if (hasReceivedAspireCommand) {
                 // Without shell integration, VS Code can't tell whether the terminal is idle or
                 // a foreground process is running, so interrupt commands previously sent by Aspire.

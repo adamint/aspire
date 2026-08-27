@@ -793,6 +793,48 @@ suite('AspireTerminalProvider tests', () => {
             }
         });
 
+        test('serializes fallback interruption decisions for concurrent commands waiting on the terminal process', async () => {
+            resolveCliPathStub.resolves({ cliPath: 'aspire', available: true, source: 'path' });
+            const sentTexts: string[] = [];
+            let resolveProcessId!: (value: number | undefined) => void;
+            const processId = new Promise<number | undefined>(resolve => {
+                resolveProcessId = resolve;
+            });
+            const closeListenerDispose = sinon.stub();
+            const onDidCloseTerminalStub = sinon.stub(vscode.window, 'onDidCloseTerminal').callsFake(
+                () => new vscode.Disposable(closeListenerDispose));
+            const terminal = {
+                processId,
+                sendText: (text: string) => {
+                    sentTexts.push(text);
+                },
+                show: () => { }
+            } as unknown as vscode.Terminal;
+            const getAspireTerminalStub = sinon.stub(terminalProvider, 'getAspireTerminal').returns({
+                terminal,
+                dispose: () => { }
+            });
+
+            try {
+                const firstCommand = terminalProvider.sendAspireCommandToAspireTerminal('logs');
+                const secondCommand = terminalProvider.sendAspireCommandToAspireTerminal('logs');
+                await new Promise(resolve => setImmediate(resolve));
+
+                assert.deepStrictEqual(sentTexts, []);
+                assert.strictEqual(closeListenerDispose.called, false);
+
+                resolveProcessId(123);
+                await Promise.all([firstCommand, secondCommand]);
+
+                assert.deepStrictEqual(sentTexts, [expectedCommand, '\x03', expectedCommand]);
+                assert.strictEqual(closeListenerDispose.callCount, 2);
+            }
+            finally {
+                onDidCloseTerminalStub.restore();
+                getAspireTerminalStub.restore();
+            }
+        });
+
         test('records suppressed execution mode without creating a terminal when E2E suppression is enabled', async () => {
             resolveCliPathStub.resolves({ cliPath: 'aspire', available: true, source: 'path' });
             const originalEnableBridge = process.env.ASPIRE_EXTENSION_E2E_ENABLE_BRIDGE;
