@@ -1779,6 +1779,29 @@ suite('AppHost log output coordinator', () => {
             undefined);
     });
 
+    test('keeps Python traceback chain markers on stderr', () => {
+        for (const marker of [
+            'During handling of the above exception, another exception occurred:',
+            'The above exception was the direct cause of the following exception:'
+        ]) {
+            const filter = new AppHostParentOutputFilter();
+            const traceback = 'Traceback (most recent call last):\n'
+                + '  File "app.py", line 1, in <module>\n'
+                + 'FirstFailure: first\n\n'
+                + `${marker}\n\n`
+                + 'Traceback (most recent call last):\n'
+                + '  File "app.py", line 2, in <module>\n'
+                + 'SecondFailure: second\n';
+
+            assert.deepStrictEqual(
+                filter.filter(traceback, 'console'),
+                {
+                    output: traceback,
+                    category: 'stderr'
+                });
+        }
+    });
+
     test('correlates a scoped ConsoleLogger empty message', () => {
         const coordinator = new AppHostLogOutputCoordinator();
 

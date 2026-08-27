@@ -153,6 +153,11 @@ function isPythonTracebackStart(line: string): boolean {
   return /^Traceback \(most recent call last\):$/.test(line);
 }
 
+function isPythonTracebackChainMarker(line: string): boolean {
+  return line === 'During handling of the above exception, another exception occurred:'
+    || line === 'The above exception was the direct cause of the following exception:';
+}
+
 function isPythonTracebackExceptionLine(line: string): boolean {
   return /^(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*(?::.*)?$/.test(line);
 }
@@ -164,6 +169,7 @@ export function isSevereRuntimeOutputLine(line: string): boolean {
     || /^(?:Uncaught\s+)?(?:[A-Za-z_$][\w$]*Error|Error)(?:\s+\[[^\]]+\])?:/.test(line)
     // Python tracebacks begin with a fixed preamble and end with an Error/Exception type.
     || isPythonTracebackStart(line)
+    || isPythonTracebackChainMarker(line)
     || /^(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*(?:Error|Exception):/.test(line)
     // Anchored fatal-marker prefixes only — bare word matches like `\bfailed\b` produced
     // false positives on user stdout (`"Failed payment retry queued"`, file paths
