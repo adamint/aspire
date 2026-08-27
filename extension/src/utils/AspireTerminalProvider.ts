@@ -249,9 +249,9 @@ export class AspireTerminalProvider implements vscode.Disposable {
         }
         else {
             // createTerminal can return before the shell process accepts input. Waiting for processId
-            // prevents the first fallback command from being dropped; shell integration is already a
-            // readiness signal for the executeCommand path above.
-            await aspireTerminal.terminal.processId;
+            // prevents the first fallback command from being dropped. Observe terminal closure too,
+            // because processId can remain pending when the shell process fails to start.
+            await this.waitForTerminalProcess(aspireTerminal.terminal);
 
             // Without shell integration, VS Code can't tell whether the terminal is idle or
             // a foreground process is running, so keep the previous safe interruption behavior.
@@ -296,6 +296,29 @@ export class AspireTerminalProvider implements vscode.Disposable {
         this._terminalByDebugSessionId.set(terminalKey, aspireTerminal);
 
         return aspireTerminal;
+    }
+
+    private async waitForTerminalProcess(terminal: vscode.Terminal): Promise<void> {
+        let closeListener: vscode.Disposable | undefined;
+        try {
+            const processId = await Promise.race([
+                terminal.processId,
+                new Promise<never>((_, reject) => {
+                    closeListener = vscode.window.onDidCloseTerminal(closedTerminal => {
+                        if (closedTerminal === terminal) {
+                            reject(new Error('Aspire terminal closed before its process started.'));
+                        }
+                    });
+                }),
+            ]);
+
+            if (processId === undefined) {
+                throw new Error('Aspire terminal process failed to start.');
+            }
+        }
+        finally {
+            closeListener?.dispose();
+        }
     }
 
     invalidateSharedAspireTerminal(target?: CliPathResolutionTarget): void {

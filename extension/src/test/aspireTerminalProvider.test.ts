@@ -618,6 +618,7 @@ suite('AspireTerminalProvider tests', () => {
             const terminalEvents: unknown[] = [];
             const eventSubscription = terminalProvider.onDidSendAspireCommand(event => terminalEvents.push(event));
             const terminal = {
+                processId: Promise.resolve(123),
                 sendText: (text: string, shouldExecute?: boolean) => {
                     sentTexts.push({ text, shouldExecute });
                 },
@@ -643,6 +644,71 @@ suite('AspireTerminalProvider tests', () => {
             }
         });
 
+        test('rejects when the terminal process does not start', async () => {
+            resolveCliPathStub.resolves({ cliPath: 'aspire', available: true, source: 'path' });
+            const sentTexts: string[] = [];
+            const terminal = {
+                processId: Promise.resolve(undefined),
+                sendText: (text: string) => {
+                    sentTexts.push(text);
+                },
+                show: () => { }
+            } as unknown as vscode.Terminal;
+            const getAspireTerminalStub = sinon.stub(terminalProvider, 'getAspireTerminal').returns({
+                terminal,
+                dispose: () => { }
+            });
+
+            try {
+                await assert.rejects(terminalProvider.sendAspireCommandToAspireTerminal('logs'));
+
+                assert.deepStrictEqual(sentTexts, []);
+            }
+            finally {
+                getAspireTerminalStub.restore();
+            }
+        });
+
+        test('rejects when the terminal closes before its process starts', async () => {
+            resolveCliPathStub.resolves({ cliPath: 'aspire', available: true, source: 'path' });
+            const sentTexts: string[] = [];
+            const processId = new Promise<number | undefined>(() => { });
+            const terminal = {
+                processId,
+                sendText: (text: string) => {
+                    sentTexts.push(text);
+                },
+                show: () => { }
+            } as unknown as vscode.Terminal;
+            const getAspireTerminalStub = sinon.stub(terminalProvider, 'getAspireTerminal').returns({
+                terminal,
+                dispose: () => { }
+            });
+            let closeTerminal: ((terminal: vscode.Terminal) => void) | undefined;
+            const closeListenerDispose = sinon.stub();
+            const onDidCloseTerminalStub = sinon.stub(vscode.window, 'onDidCloseTerminal').callsFake(listener => {
+                closeTerminal = listener;
+                return new vscode.Disposable(closeListenerDispose);
+            });
+
+            try {
+                const sendCommand = terminalProvider.sendAspireCommandToAspireTerminal('logs');
+                await new Promise(resolve => setImmediate(resolve));
+                assert.ok(closeTerminal);
+
+                const rejection = assert.rejects(sendCommand);
+                closeTerminal(terminal);
+                await rejection;
+
+                assert.deepStrictEqual(sentTexts, []);
+                assert.strictEqual(closeListenerDispose.calledOnce, true);
+            }
+            finally {
+                onDidCloseTerminalStub.restore();
+                getAspireTerminalStub.restore();
+            }
+        });
+
         test('waits for the terminal process before sending a fallback command', async () => {
             resolveCliPathStub.resolves({ cliPath: 'aspire', available: true, source: 'path' });
             const sentTexts: string[] = [];
@@ -650,9 +716,12 @@ suite('AspireTerminalProvider tests', () => {
             const processId = new Promise<number | undefined>(resolve => {
                 resolveProcessId = resolve;
             });
+            const closeListenerDispose = sinon.stub();
+            const onDidCloseTerminalStub = sinon.stub(vscode.window, 'onDidCloseTerminal').returns(new vscode.Disposable(closeListenerDispose));
             const terminal = {
                 processId,
                 sendText: (text: string) => {
+                    assert.strictEqual(closeListenerDispose.calledOnce, true);
                     sentTexts.push(text);
                 },
                 show: () => { }
@@ -667,13 +736,16 @@ suite('AspireTerminalProvider tests', () => {
                 await new Promise(resolve => setImmediate(resolve));
 
                 assert.deepStrictEqual(sentTexts, []);
+                assert.strictEqual(closeListenerDispose.called, false);
 
                 resolveProcessId(123);
                 await sendCommand;
 
                 assert.deepStrictEqual(sentTexts, ['\x03', expectedCommand]);
+                assert.strictEqual(closeListenerDispose.calledOnce, true);
             }
             finally {
+                onDidCloseTerminalStub.restore();
                 getAspireTerminalStub.restore();
             }
         });
