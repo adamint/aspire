@@ -234,6 +234,36 @@ suite('AspireEditorCommandProvider', () => {
         }
     });
 
+    test('active editor URI falls back to the workspace AppHost', async () => {
+        const activeDocumentPath = path.join(tempDir, 'Service.java');
+        const workspaceAppHostPath = path.join(tempDir, 'AppHost.java');
+        fs.writeFileSync(activeDocumentPath, 'public class Service {}');
+        fs.writeFileSync(workspaceAppHostPath, 'public class AppHost {}');
+        activeEditor = createEditor(activeDocumentPath);
+
+        const discoveryService = {
+            onDidChangeCandidates: () => ({ dispose: () => { } }),
+            tryFindCandidateForEditorFile: async () => undefined,
+            discover: async () => [{
+                path: workspaceAppHostPath,
+                language: 'java',
+                status: 'buildable',
+            }],
+        } as unknown as AppHostDiscoveryService;
+        const provider = new AspireEditorCommandProvider(discoveryService, createLaunchService());
+
+        try {
+            await provider.tryExecuteRunAppHost(true, activeEditor.document.uri);
+
+            assert.ok(startDebuggingStub.calledOnce);
+            const launchConfiguration = startDebuggingStub.firstCall.args[1] as vscode.DebugConfiguration;
+            assert.strictEqual(launchConfiguration.program, workspaceAppHostPath);
+        }
+        finally {
+            provider.dispose();
+        }
+    });
+
     test('explicit non-AppHost URI does not fall back to another workspace AppHost', async () => {
         const activeAppHostPath = path.join(tempDir, 'AppHost.java');
         const unrelatedPath = path.join(tempDir, 'Service.java');

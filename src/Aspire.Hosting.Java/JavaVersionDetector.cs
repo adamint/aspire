@@ -36,18 +36,21 @@ internal static partial class JavaVersionDetector
     /// a filter: Gradle projects often leave the release to a toolchain block that is not read here, and a
     /// sibling POM is still better evidence than the default.
     /// </param>
-    public static string Detect(string appDirectory, JavaBuildTool? tool = null)
+    /// <param name="buildArgs">The resolved arguments passed to the selected build tool, when known.</param>
+    public static string Detect(string appDirectory, JavaBuildTool? tool = null, string[]? buildArgs = null)
     {
         string?[] candidates = tool is JavaBuildTool.Gradle
             ?
             [
                 DetectFromGradle(Path.Combine(appDirectory, "build.gradle")),
                 DetectFromGradle(Path.Combine(appDirectory, "build.gradle.kts")),
-                DetectFromPom(Path.Combine(appDirectory, "pom.xml")),
+                DetectFromPom(Path.Combine(appDirectory, "pom.xml"), buildArgs: null),
             ]
             :
             [
-                DetectFromPom(Path.Combine(appDirectory, "pom.xml")),
+                DetectFromPom(
+                    Path.Combine(appDirectory, "pom.xml"),
+                    tool is JavaBuildTool.Maven ? buildArgs : null),
                 DetectFromGradle(Path.Combine(appDirectory, "build.gradle")),
                 DetectFromGradle(Path.Combine(appDirectory, "build.gradle.kts")),
             ];
@@ -72,7 +75,7 @@ internal static partial class JavaVersionDetector
     /// Property references such as <c>&lt;release&gt;${java.version}&lt;/release&gt;</c> are not expanded —
     /// the literal properties are checked first, so the reference is only reached when nothing else matched.
     /// </remarks>
-    private static string? DetectFromPom(string pomPath)
+    private static string? DetectFromPom(string pomPath, string[]? buildArgs)
     {
         if (!File.Exists(pomPath))
         {
@@ -97,10 +100,11 @@ internal static partial class JavaVersionDetector
         // Every project element with a matching name is considered, not just the first: a POM
         // often declares <release>${java.version}</release> on the compiler plugin and a literal elsewhere,
         // and stopping at the unresolvable property reference would fall back to the default version instead.
-        // Within each declaration kind, active-by-default profile values are checked before the project's
+        // Within each declaration kind, explicitly selected profile values are checked first. If none of
+        // those profiles exist in this POM, active-by-default profile values are checked before the project's
         // base values because Maven applies them as overrides in its effective model. Other profile activation
         // rules are not evaluated because they can depend on the JDK, operating system, system properties,
-        // files, settings, or command-line profile selection.
+        // files, or settings.
         // Ordered by how directly each one decides the bytecode version, most direct first, because the
         // runtime image has to be at least what the compiler actually emitted.
         //
@@ -110,6 +114,20 @@ internal static partial class JavaVersionDetector
         // java.version and maven.compiler.release overrides that mapping, so Maven compiles to the
         // latter and reading java.version would pick a runtime too old to load the classes.
         // https://docs.spring.io/spring-boot/maven-plugin/using.html
+        var profiles = GetProfiles(document).ToArray();
+        var profileSelection = ParseMavenProfileSelection(buildArgs);
+        var explicitlyActivatedProfiles = profiles
+            .Where(profile => GetProfileId(profile) is { } id
+                && profileSelection.Activated.Contains(id)
+                && !profileSelection.Deactivated.Contains(id))
+            .ToArray();
+        var activeProfiles = explicitlyActivatedProfiles.Length > 0
+            ? explicitlyActivatedProfiles
+            : profiles
+                .Where(profile => IsActiveByDefaultProfile(profile)
+                    && (GetProfileId(profile) is not { } id || !profileSelection.Deactivated.Contains(id)))
+                .ToArray();
+
         foreach (var (name, mustBePluginConfiguration) in ((string, bool)[])
         [
             // Explicit plugin configuration beats the property that merely supplies the parameter's
@@ -131,7 +149,7 @@ internal static partial class JavaVersionDetector
             IEnumerable<XElement>[] candidateGroups =
             [
                 // Maven merges active profiles in declaration order, with later profile values taking precedence.
-                document.Descendants().Where(IsInActiveByDefaultProfile).Reverse(),
+                activeProfiles.SelectMany(profile => profile.Descendants()).Reverse(),
                 document.Descendants().Where(element => !IsInProfile(element)),
             ];
 
@@ -156,7 +174,94 @@ internal static partial class JavaVersionDetector
     }
 
     /// <summary>
-    /// Determines whether an element belongs to a Maven profile that is active by default.
+    /// Reads the profiles declared directly by this Maven project.
+    /// </summary>
+    private static IEnumerable<XElement> GetProfiles(XDocument document) =>
+        document.Root?
+            .Elements()
+            .Where(element => string.Equals(element.Name.LocalName, "profiles", StringComparison.Ordinal))
+            .SelectMany(element => element.Elements().Where(IsProfile))
+        ?? [];
+
+    /// <summary>
+    /// Reads a Maven profile's direct <c>&lt;id&gt;</c> child.
+    /// </summary>
+    private static string? GetProfileId(XElement profile) =>
+        profile.Elements()
+            .FirstOrDefault(element => string.Equals(element.Name.LocalName, "id", StringComparison.Ordinal))
+            ?.Value.Trim() is { Length: > 0 } id
+                ? id
+                : null;
+
+    /// <summary>
+    /// Reads Maven's explicit profile activation and deactivation arguments.
+    /// </summary>
+    private static MavenProfileSelection ParseMavenProfileSelection(string[]? buildArgs)
+    {
+        var activated = new HashSet<string>(StringComparer.Ordinal);
+        var deactivated = new HashSet<string>(StringComparer.Ordinal);
+
+        if (buildArgs is null)
+        {
+            return new MavenProfileSelection(activated, deactivated);
+        }
+
+        for (var index = 0; index < buildArgs.Length; index++)
+        {
+            var argument = buildArgs[index];
+            string? expression = argument switch
+            {
+                "-P" or "--activate-profiles" when index + 1 < buildArgs.Length => buildArgs[++index],
+                _ when argument.StartsWith("-P=", StringComparison.Ordinal) => argument[3..],
+                _ when argument.StartsWith("-P", StringComparison.Ordinal) => argument[2..],
+                _ when argument.StartsWith("--activate-profiles=", StringComparison.Ordinal) =>
+                    argument["--activate-profiles=".Length..],
+                _ => null,
+            };
+
+            if (expression is null)
+            {
+                continue;
+            }
+
+            // Maven accepts `-Pprod`, `-P prod`, `-P=prod`, `--activate-profiles prod`, and
+            // `--activate-profiles=prod`. Each value can be comma-separated, `!`/`-` deactivates a
+            // profile, and Maven 4's `?` prefix makes an activation optional. Parse only these argv shapes
+            // so malformed or unrelated switches remain Maven's responsibility.
+            // https://maven.apache.org/guides/introduction/introduction-to-profiles.html
+            foreach (var item in expression.Split(','))
+            {
+                var profileExpression = item.Trim();
+                if (profileExpression.Length == 0)
+                {
+                    continue;
+                }
+
+                var isDeactivation = profileExpression[0] is '!' or '-';
+                if (isDeactivation)
+                {
+                    profileExpression = profileExpression[1..];
+                }
+
+                if (profileExpression.Length > 0 && profileExpression[0] == '?')
+                {
+                    profileExpression = profileExpression[1..];
+                }
+
+                if (profileExpression.Length == 0)
+                {
+                    continue;
+                }
+
+                (isDeactivation ? deactivated : activated).Add(profileExpression);
+            }
+        }
+
+        return new MavenProfileSelection(activated, deactivated);
+    }
+
+    /// <summary>
+    /// Determines whether a Maven profile is active by default.
     /// </summary>
     /// <remarks>
     /// Maven expresses this activation as:
@@ -168,14 +273,8 @@ internal static partial class JavaVersionDetector
     /// Other activation forms are not evaluated because they can depend on the JDK, operating system,
     /// system properties, files, or command-line profile selection.
     /// </remarks>
-    private static bool IsInActiveByDefaultProfile(XElement element)
+    private static bool IsActiveByDefaultProfile(XElement profile)
     {
-        var profile = element.Ancestors().FirstOrDefault(IsProfile);
-        if (profile is null)
-        {
-            return false;
-        }
-
         var activation = profile.Elements().FirstOrDefault(e =>
             string.Equals(e.Name.LocalName, "activation", StringComparison.Ordinal));
 
@@ -189,6 +288,10 @@ internal static partial class JavaVersionDetector
 
     private static bool IsProfile(XElement element) =>
         string.Equals(element.Name.LocalName, "profile", StringComparison.Ordinal);
+
+    private readonly record struct MavenProfileSelection(
+        HashSet<string> Activated,
+        HashSet<string> Deactivated);
 
     /// <summary>
     /// Determines whether an element is a <c>&lt;configuration&gt;</c> belonging to
@@ -264,10 +367,11 @@ internal static partial class JavaVersionDetector
         }
 
         var script = StripComments(contents);
+        var foreignProjectBlocks = FindForeignProjectBlocks(script);
 
-        var assignment = LastActiveToolchainMatch(script)
-            ?? LastActiveMatch(TargetCompatibilityRegex(), script)
-            ?? LastActiveMatch(SourceCompatibilityRegex(), script);
+        var assignment = LastActiveToolchainMatch(script, foreignProjectBlocks)
+            ?? LastActiveMatch(TargetCompatibilityRegex(), script, excludedBlocks: foreignProjectBlocks)
+            ?? LastActiveMatch(SourceCompatibilityRegex(), script, excludedBlocks: foreignProjectBlocks);
 
         return Normalize(assignment?.Groups["version"].Value.Replace('_', '.'));
     }
@@ -275,11 +379,14 @@ internal static partial class JavaVersionDetector
     /// <summary>
     /// Finds the final toolchain assignment that configures the application Java extension.
     /// </summary>
-    private static Match? LastActiveToolchainMatch(GradleScript script)
+    private static Match? LastActiveToolchainMatch(
+        GradleScript script,
+        ImmutableArray<GradleBlock> foreignProjectBlocks)
     {
-        var lastMatch = LastActiveMatch(DirectToolchainRegex(), script);
+        var lastMatch = LastActiveMatch(DirectToolchainRegex(), script, excludedBlocks: foreignProjectBlocks);
         var applicationBlocks = FindNamedBlocks(script, "java", 0, script.Text.Length, directOnly: false)
             .Concat(FindConfiguredJavaBlocks(script, 0, script.Text.Length))
+            .Where(block => !IsInsideAnyBlock(block.ContentStart, foreignProjectBlocks))
             .OrderBy(block => block.ContentStart);
 
         foreach (var javaBlock in applicationBlocks)
@@ -288,7 +395,8 @@ internal static partial class JavaVersionDetector
                 ScopedToolchainRegex(),
                 script,
                 javaBlock.ContentStart,
-                javaBlock.ContentEnd);
+                javaBlock.ContentEnd,
+                foreignProjectBlocks);
             if (scopedMatch is not null && (lastMatch is null || scopedMatch.Index > lastMatch.Index))
             {
                 lastMatch = scopedMatch;
@@ -300,7 +408,8 @@ internal static partial class JavaVersionDetector
                     LanguageVersionRegex(),
                     script,
                     toolchainBlock.ContentStart,
-                    toolchainBlock.ContentEnd);
+                    toolchainBlock.ContentEnd,
+                    foreignProjectBlocks);
 
                 if (match is not null && (lastMatch is null || match.Index > lastMatch.Index))
                 {
@@ -335,14 +444,18 @@ internal static partial class JavaVersionDetector
         Regex regex,
         GradleScript script,
         int start = 0,
-        int? end = null)
+        int? end = null,
+        ImmutableArray<GradleBlock> excludedBlocks = default)
     {
         Match? lastActiveMatch = null;
         var endOffset = end ?? script.Text.Length;
 
         for (var match = regex.Match(script.Text, start); match.Success && match.Index < endOffset; match = match.NextMatch())
         {
-            if (match.Index + match.Length <= endOffset && !script.IsInsideStringLiteral(match.Index))
+            if (match.Index + match.Length <= endOffset
+                && !script.IsInsideStringLiteral(match.Index)
+                && !IsInsideAnyBlock(match.Index, excludedBlocks)
+                && !HasForeignProjectReceiver(script, match.Index))
             {
                 lastActiveMatch = match;
             }
@@ -350,6 +463,173 @@ internal static partial class JavaVersionDetector
 
         return lastActiveMatch;
     }
+
+    private static ImmutableArray<GradleBlock> FindForeignProjectBlocks(GradleScript script)
+    {
+        var blocks = ImmutableArray.CreateBuilder<GradleBlock>();
+
+        // Exclude scopes that configure a different project:
+        //   project(":legacy") { java { ... } }
+        //   subprojects { targetCompatibility = JavaVersion.VERSION_17 }
+        //   configure(subprojects) { sourceCompatibility = JavaVersion.VERSION_17 }
+        // Keep allprojects { ... } because Gradle applies it to the current/root project too.
+        // https://docs.gradle.org/current/userguide/multi_project_builds.html
+        for (var index = 0; index < script.Text.Length; index++)
+        {
+            if (script.IsInsideStringLiteral(index))
+            {
+                continue;
+            }
+
+            var openingBrace = -1;
+            if (IsIdentifierAt(script.Text, "subprojects", index))
+            {
+                openingBrace = SkipWhitespace(script.Text, index + "subprojects".Length);
+            }
+            else if (IsIdentifierAt(script.Text, "configure", index))
+            {
+                var openingParenthesis = SkipWhitespace(script.Text, index + "configure".Length);
+                if (openingParenthesis >= script.Text.Length || script.Text[openingParenthesis] is not '(')
+                {
+                    continue;
+                }
+
+                var closingParenthesis = FindClosingParenthesis(script, openingParenthesis);
+                if (closingParenthesis < 0)
+                {
+                    break;
+                }
+
+                var configuredTarget = script.Text.AsSpan(
+                    openingParenthesis + 1,
+                    closingParenthesis - openingParenthesis - 1).Trim();
+                if (!configuredTarget.Equals("subprojects", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                openingBrace = SkipWhitespace(script.Text, closingParenthesis + 1);
+            }
+            else if (IsIdentifierAt(script.Text, "project", index))
+            {
+                var openingParenthesis = SkipWhitespace(script.Text, index + "project".Length);
+                if (openingParenthesis >= script.Text.Length || script.Text[openingParenthesis] is not '(')
+                {
+                    continue;
+                }
+
+                var closingParenthesis = FindClosingParenthesis(script, openingParenthesis);
+                if (closingParenthesis < 0)
+                {
+                    break;
+                }
+
+                openingBrace = SkipWhitespace(script.Text, closingParenthesis + 1);
+            }
+
+            if (openingBrace < 0
+                || openingBrace >= script.Text.Length
+                || script.Text[openingBrace] is not '{')
+            {
+                continue;
+            }
+
+            var closingBrace = FindClosingBrace(script, openingBrace, script.Text.Length);
+            if (closingBrace < 0)
+            {
+                break;
+            }
+
+            blocks.Add(new GradleBlock(openingBrace + 1, closingBrace));
+            index = closingBrace;
+        }
+
+        return blocks.ToImmutable();
+    }
+
+    private static bool HasForeignProjectReceiver(GradleScript script, int memberOffset)
+    {
+        // Gradle lets a build configure a single foreign project without opening a block:
+        //   project(":legacy").sourceCompatibility = JavaVersion.VERSION_17
+        //   project(":legacy").targetCompatibility = JavaVersion.VERSION_17
+        //   project(":legacy").java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+        // Only suppress a supported declaration when its matched receiver immediately follows project(...);
+        // unrelated statements later in the script still belong to the current project.
+        // https://docs.gradle.org/current/userguide/multi_project_builds.html
+        for (var index = 0; index < memberOffset; index++)
+        {
+            if (script.IsInsideStringLiteral(index) || !IsIdentifierAt(script.Text, "project", index))
+            {
+                continue;
+            }
+
+            var openingParenthesis = SkipWhitespace(script.Text, index + "project".Length);
+            if (openingParenthesis >= script.Text.Length || script.Text[openingParenthesis] is not '(')
+            {
+                continue;
+            }
+
+            var closingParenthesis = FindClosingParenthesis(script, openingParenthesis);
+            if (closingParenthesis < 0 || closingParenthesis >= memberOffset)
+            {
+                continue;
+            }
+
+            var dot = SkipWhitespace(script.Text, closingParenthesis + 1);
+            if (dot >= memberOffset || script.Text[dot] is not '.')
+            {
+                index = closingParenthesis;
+                continue;
+            }
+
+            if (SkipWhitespace(script.Text, dot + 1) == memberOffset)
+            {
+                return true;
+            }
+
+            index = closingParenthesis;
+        }
+
+        return false;
+    }
+
+    private static int FindClosingParenthesis(GradleScript script, int openingParenthesis)
+    {
+        var depth = 1;
+
+        for (var index = openingParenthesis + 1; index < script.Text.Length; index++)
+        {
+            if (script.IsInsideStringLiteral(index))
+            {
+                continue;
+            }
+
+            if (script.Text[index] is '(')
+            {
+                depth++;
+            }
+            else if (script.Text[index] is ')' && --depth == 0)
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int SkipWhitespace(string text, int start)
+    {
+        while (start < text.Length && char.IsWhiteSpace(text[start]))
+        {
+            start++;
+        }
+
+        return start;
+    }
+
+    private static bool IsInsideAnyBlock(int offset, ImmutableArray<GradleBlock> blocks) =>
+        !blocks.IsDefaultOrEmpty
+        && blocks.Any(block => offset >= block.ContentStart && offset < block.ContentEnd);
 
     /// <summary>
     /// Finds named Gradle blocks at the top level of the specified script range.

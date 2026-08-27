@@ -81,7 +81,8 @@ export class AspireEditorCommandProvider implements vscode.Disposable {
      * Returns the resolved AppHost path from the explicit resource, active editor, or workspace settings, or null if none is available.
      */
     public async getAppHostPath(resource?: vscode.Uri): Promise<string | null> {
-        const appHostUri = resource ?? vscode.window.activeTextEditor?.document.uri;
+        const activeEditorUri = vscode.window.activeTextEditor?.document.uri;
+        const appHostUri = resource ?? activeEditorUri;
 
         if (appHostUri) {
             const candidate = await this.tryFindCandidateForEditorFile(appHostUri.fsPath);
@@ -89,7 +90,7 @@ export class AspireEditorCommandProvider implements vscode.Disposable {
                 return getDebugTargetForCandidate(candidate);
             }
 
-            if (resource) {
+            if (resource && resource.toString() !== activeEditorUri?.toString()) {
                 return null;
             }
         }
