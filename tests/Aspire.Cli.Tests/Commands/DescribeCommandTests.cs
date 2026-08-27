@@ -525,6 +525,7 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
             [],
             configureConnection: connection =>
             {
+                connection.SupportsV4 = true;
                 connection.GetResourceSnapshotsHandler = async cancellationToken =>
                 {
                     await watchStarted.Task.WaitAsync(cancellationToken);
