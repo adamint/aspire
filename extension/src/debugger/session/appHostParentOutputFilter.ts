@@ -165,7 +165,7 @@ function isIndentedContinuation(line: string): boolean {
 }
 
 function isPythonTracebackStart(line: string): boolean {
-  return /^Traceback \(most recent call last\):$/.test(line);
+  return /^(?:\+ Exception Group )?Traceback \(most recent call last\):$/.test(line);
 }
 
 function isPythonTracebackChainMarker(line: string): boolean {

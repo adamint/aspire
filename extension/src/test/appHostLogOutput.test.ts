@@ -187,6 +187,41 @@ suite('AppHost log output coordinator', () => {
         assert.deepStrictEqual(coordinator.flush(), []);
     });
 
+    test('bounds ConsoleLogger records without losing raw output', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const header = 'fail: Example.Category[7]\n';
+        const continuation = `      dbug: ${'x'.repeat(4084)}\n`;
+        const raw = header + continuation.repeat(17);
+
+        const outputs = coordinator.handleDebugAdapterOutput(raw, 'stdout');
+        assert.strictEqual(outputs.map(output => output.output).join(''), raw);
+        assert.ok(outputs.every(output => output.category === 'stderr'));
+        assert.deepStrictEqual(coordinator.flush(), []);
+
+        const oversizedLine = `dbug: Example.Category[7] ${'x'.repeat(64 * 1024)}\n`;
+        const singleLine = new AppHostLogOutputCoordinator();
+        assert.deepStrictEqual(
+            singleLine.handleDebugAdapterOutput(oversizedLine, 'stdout'),
+            [{
+                output: oversizedLine,
+                category: 'stdout'
+            }]);
+        assert.deepStrictEqual(singleLine.flush(), []);
+
+        const windows = new AppHostLogOutputCoordinator();
+        const windowsHeader = 'fail: Example.Category[7]\r\n';
+        const windowsContinuation = `      ${'x'.repeat(4090)}\r\n`;
+        const windowsOverflow = `      ${'x'.repeat(4090)}\n`;
+        const windowsRaw = windowsHeader
+            + windowsContinuation.repeat(15)
+            + windowsOverflow
+            + 'dbug: unindented tail\r\n';
+        const windowsOutputs = windows.handleDebugAdapterOutput(windowsRaw, 'stdout');
+        assert.strictEqual(windowsOutputs.map(output => output.output).join(''), windowsRaw);
+        assert.ok(windowsOutputs.every(output => output.category === 'stderr'));
+        assert.deepStrictEqual(windows.flush(), []);
+    });
+
     test('keeps low-level adapter traffic from evicting pending Information records', () => {
         const coordinator = new AppHostLogOutputCoordinator();
         assert.ok(coordinator.handleBackchannelEntry(createEntry({ message: 'Still pending.' })));
@@ -1053,6 +1088,29 @@ suite('AppHost log output coordinator', () => {
                 category: 'stdout'
             });
         assert.deepStrictEqual(coordinator.flush(), []);
+    });
+
+    test('matches bracketed timestamps in single-line and multiline output', () => {
+        const multiline = new AppHostLogOutputCoordinator();
+        assert.ok(multiline.handleBackchannelEntry(createEntry({
+            logLevel: 'Warning',
+            message: 'Bracketed warning.'
+        })));
+        assert.deepStrictEqual(
+            multiline.handleDebugAdapterOutput(
+                '[12:34:56] warn: Example.Category[7]\n      Bracketed warning.\n',
+                'stdout'),
+            []);
+        assert.deepStrictEqual(multiline.flush(), []);
+
+        const singleLine = new AppHostLogOutputCoordinator();
+        assert.ok(singleLine.handleBackchannelEntry(createEntry({ message: 'Bracketed information.' })));
+        assert.deepStrictEqual(
+            singleLine.handleDebugAdapterOutput(
+                '[12:34:56] info: Example.Category[7] Bracketed information.\n',
+                'stdout'),
+            []);
+        assert.deepStrictEqual(singleLine.flush(), []);
     });
 
     test('deduplicates a scope-free structured record after scoped ConsoleLogger output arrives first', () => {
@@ -2039,6 +2097,18 @@ suite('AppHost log output coordinator', () => {
                 output: traceback,
                 category: 'stderr'
             });
+    });
+
+    test('keeps Python exception group tracebacks on stderr', () => {
+        const filter = new AppHostParentOutputFilter();
+        const traceback = '+ Exception Group Traceback (most recent call last):\n'
+            + '  |   File "app.py", line 1, in <module>\n'
+            + '  | ExceptionGroup: grouped failure (1 sub-exception)\n';
+
+        assert.deepStrictEqual(filter.filter(traceback, 'console'), {
+            output: traceback,
+            category: 'stderr'
+        });
     });
 
     test('keeps multiline Python exception messages on stderr until a logger boundary', () => {

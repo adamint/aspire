@@ -63,6 +63,9 @@ interface PendingConsoleRecord {
     allowsContinuation: boolean;
     hasBodyLine: boolean;
     hasNonScopeBodyLine: boolean;
+    overflowed: boolean;
+    hasCrLf: boolean;
+    endsWithBareLf: boolean;
 }
 
 interface PendingDebugRecord {
@@ -231,7 +234,33 @@ export class AppHostLogOutputCoordinator {
             const hasConsoleIndentation =
                 pending.record.singleLine !== true && isConsoleLoggerContinuation(line);
             if (pending.allowsContinuation && (hasConsoleIndentation || isWindowsBareLfContinuation(pending, line))) {
+                if (pending.overflowed) {
+                    this.emitRawConsoleLoggerOutput(line, pending.category, pending.record.logLevel, outputs);
+                    updatePendingConsoleLineEnding(pending, line);
+                    return;
+                }
+
+                if (pending.raw.length + line.length > AppHostLogOutputCoordinator._maxPendingDebugRecordCharacters) {
+                    this.emitRawConsoleLoggerOutput(
+                        pending.raw,
+                        pending.category,
+                        pending.record.logLevel,
+                        outputs);
+                    this.emitRawConsoleLoggerOutput(
+                        line,
+                        pending.category,
+                        pending.record.logLevel,
+                        outputs);
+                    pending.body = '';
+                    pending.alternativeRecords.length = 0;
+                    pending.leadingScopeBodyOffsets.length = 0;
+                    pending.overflowed = true;
+                    updatePendingConsoleLineEnding(pending, line);
+                    return;
+                }
+
                 pending.raw += line;
+                updatePendingConsoleLineEnding(pending, line);
                 const bodyLine = hasConsoleIndentation
                     ? removeConsoleIndentation(line)
                     : `${pending.record.singleLine && !pending.body.endsWith('\n') ? '\n' : ''}`
@@ -267,6 +296,15 @@ export class AppHostLogOutputCoordinator {
         }
 
         if (category !== 'console'
+            && line.length > AppHostLogOutputCoordinator._maxPendingDebugRecordCharacters) {
+            const record = parseMultilineConsoleLoggerHeader(line) ?? parseSingleLineConsoleLoggerRecord(line);
+            if (record) {
+                this.emitRawConsoleLoggerOutput(line, category, record.logLevel, outputs);
+                return;
+            }
+        }
+
+        if (category !== 'console'
             && line.length <= AppHostLogOutputCoordinator._maxPendingDebugRecordCharacters
             && singleLineConsoleLoggerPrefixRegex.test(line)) {
             this._pendingConsoleHeaderFragments.set(category, line);
@@ -277,7 +315,8 @@ export class AppHostLogOutputCoordinator {
     }
 
     private tryStartConsoleLoggerRecord(line: string, category: string): boolean {
-        if (category === 'console') {
+        if (category === 'console'
+            || line.length > AppHostLogOutputCoordinator._maxPendingDebugRecordCharacters) {
             return false;
         }
 
@@ -293,7 +332,10 @@ export class AppHostLogOutputCoordinator {
                 category,
                 allowsContinuation: true,
                 hasBodyLine: false,
-                hasNonScopeBodyLine: false
+                hasNonScopeBodyLine: false,
+                overflowed: false,
+                hasCrLf: line.includes('\r\n'),
+                endsWithBareLf: line.endsWith('\n') && !line.endsWith('\r\n')
             });
             return true;
         }
@@ -328,6 +370,10 @@ export class AppHostLogOutputCoordinator {
 
         this.clearIdleFlushTimer(category);
         this._pendingRecords.delete(category);
+
+        if (pending.overflowed) {
+            return;
+        }
 
         const identity = createPendingRecordIdentity(pending);
         if (hasUnconfirmedSingleLineContinuations(pending)
@@ -768,6 +814,19 @@ export class AppHostLogOutputCoordinator {
         }
     }
 
+    private emitRawConsoleLoggerOutput(
+        output: string,
+        category: string,
+        logLevel: AppHostLogLevel,
+        outputs: AppHostParentOutput[]): void {
+        outputs.push({
+            output,
+            category: category === 'stderr' || logLevel === 'Error' || logLevel === 'Critical'
+                ? 'stderr'
+                : 'stdout'
+        });
+    }
+
     private fallbackFilterFor(category: string): AppHostParentOutputFilter {
         let filter = this._fallbackFilters.get(category);
         if (!filter) {
@@ -818,7 +877,10 @@ export class AppHostLogOutputCoordinator {
             category,
             allowsContinuation: true,
             hasBodyLine: true,
-            hasNonScopeBodyLine: true
+            hasNonScopeBodyLine: true,
+            overflowed: false,
+            hasCrLf: line.includes('\r\n'),
+            endsWithBareLf: line.endsWith('\n') && !line.endsWith('\r\n')
         };
     }
 
@@ -934,8 +996,10 @@ function createPendingRecordIdentity(pending: PendingConsoleRecord): LogRecordId
     };
 }
 
+const consoleLoggerTimestamp =
+    String.raw`(?:\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:\s?(?:Z|[+-]\d{2}:?\d{2}))?|\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)`;
 const consoleLoggerTimestampPrefix =
-    String.raw`(?:(?:\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:\s?(?:Z|[+-]\d{2}:?\d{2}))?|\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)\s+)?`;
+    String.raw`(?:(?:${consoleLoggerTimestamp}|\[${consoleLoggerTimestamp}\])\s+)?`;
 const consoleLoggerAnsiSgrSequence = String.raw`\x1b\[[0-9;]*m`;
 const consoleLoggerLevelPattern =
     String.raw`(?:${consoleLoggerAnsiSgrSequence})*(trce|dbug|info|warn|fail|crit)(?:${consoleLoggerAnsiSgrSequence})*`;
@@ -1179,12 +1243,16 @@ function isConsoleLoggerContinuation(line: string): boolean {
 function isWindowsBareLfContinuation(pending: PendingConsoleRecord, line: string): boolean {
     // On Windows SimpleConsoleFormatter only indents Environment.NewLine (`\r\n`).
     // A bare LF embedded in the message therefore leaves the following line unindented.
-    return pending.raw.endsWith('\n')
-        && !pending.raw.endsWith('\r\n')
+    return pending.endsWithBareLf
         && (pending.record.singleLine === true
             ? !parseSingleLineConsoleLoggerRecord(line)
                 && !parseMultilineConsoleLoggerHeader(line)
-            : pending.raw.includes('\r\n'));
+            : pending.hasCrLf);
+}
+
+function updatePendingConsoleLineEnding(pending: PendingConsoleRecord, line: string): void {
+    pending.hasCrLf ||= line.includes('\r\n');
+    pending.endsWithBareLf = line.endsWith('\n') && !line.endsWith('\r\n');
 }
 
 function hasUnconfirmedSingleLineContinuations(pending: PendingConsoleRecord): boolean {
