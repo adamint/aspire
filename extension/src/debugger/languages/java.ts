@@ -161,6 +161,11 @@ function isAbsolutePath(value: string): boolean {
     return path.win32.isAbsolute(value) || path.posix.isAbsolute(value);
 }
 
+function isDirectlySpawnableJavaExecutable(value: string): boolean {
+    const executable = value.split(/[\\/]/).pop()?.toLowerCase() ?? value.toLowerCase();
+    return !executable.endsWith('.cmd') && !executable.endsWith('.bat');
+}
+
 // main_class is either a fully qualified class name (com.example.Api), optionally prefixed with a
 // module name (app/com.example.Api), or the path of a .java source file. Only the class name is
 // worth showing in the Call Stack view; a file path is less specific than the project directory the
@@ -225,6 +230,10 @@ export const javaDebuggerExtension: ResourceDebuggerExtension = {
 
         if (!isJavaLaunchConfiguration(launchConfig)) {
             extensionLogOutputChannel.info(`The resource type was not java for ${JSON.stringify(launchConfig)}`);
+            throw new Error(invalidLaunchConfiguration(JSON.stringify(launchConfig)));
+        }
+
+        if (launchConfig.java_exec && !isDirectlySpawnableJavaExecutable(launchConfig.java_exec)) {
             throw new Error(invalidLaunchConfiguration(JSON.stringify(launchConfig)));
         }
 
@@ -332,7 +341,7 @@ export function parseJavaAppHostCommand(args: string[]): { mainClass: string; cl
     const executable = args[0].split(/[\\/]/).pop() ?? args[0];
     const normalizedExecutable = executable.toLowerCase().replace(/\.(exe|com)$/, '');
     const isBareJava = args[0].toLowerCase() === 'java';
-    if (normalizedExecutable !== 'java' || (!isBareJava && !isAbsolutePath(args[0]))) {
+    if (!isDirectlySpawnableJavaExecutable(args[0]) || normalizedExecutable !== 'java' || (!isBareJava && !isAbsolutePath(args[0]))) {
         return null;
     }
 

@@ -199,6 +199,41 @@ suite('AspireEditorCommandProvider', () => {
         }
     });
 
+    test('explicit AppHost URI wins over the active editor AppHost', async () => {
+        const appHostADirectory = path.join(tempDir, 'AppHostA');
+        const appHostBDirectory = path.join(tempDir, 'AppHostB');
+        fs.mkdirSync(appHostADirectory);
+        fs.mkdirSync(appHostBDirectory);
+
+        const appHostAPath = path.join(appHostADirectory, 'AppHostA.csproj');
+        const appHostBPath = path.join(appHostBDirectory, 'AppHostB.csproj');
+        const programAPath = path.join(appHostADirectory, 'Program.cs');
+        fs.writeFileSync(appHostAPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        fs.writeFileSync(appHostBPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        fs.writeFileSync(programAPath, 'var builder = DistributedApplication.CreateBuilder(args);');
+        activeEditor = createEditor(programAPath);
+
+        const discoveryService = {
+            onDidChangeCandidates: () => ({ dispose: () => { } }),
+            tryFindCandidateForEditorFile: async (filePath: string) => ({
+                path: filePath === appHostBPath ? appHostBPath : appHostAPath,
+                language: 'csharp',
+                status: 'buildable',
+            }),
+        } as unknown as AppHostDiscoveryService;
+        const provider = new AspireEditorCommandProvider(discoveryService, createLaunchService());
+
+        try {
+            await provider.tryExecuteRunAppHost(true, vscode.Uri.file(appHostBPath));
+
+            const launchConfiguration = startDebuggingStub.firstCall.args[1] as vscode.DebugConfiguration;
+            assert.strictEqual(launchConfiguration.program, appHostBPath);
+        }
+        finally {
+            provider.dispose();
+        }
+    });
+
 });
 
 function createAppHostDiscoveryService(resolvedPath: string, language = 'csharp'): AppHostDiscoveryService {

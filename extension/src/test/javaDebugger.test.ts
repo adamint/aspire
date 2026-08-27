@@ -7,7 +7,7 @@ import { AspireDebugSession, getLoggableDebugConfiguration } from '../debugger/A
 import * as debuggerExtensionsModule from '../debugger/debuggerExtensions';
 import { getResourceDebuggerExtensions } from '../debugger/debuggerExtensions';
 import { javaDebuggerExtension, parseJavaAppHostCommand, resolveJavaClassPaths } from '../debugger/languages/java';
-import { javaAppHostCommandNotRecognized, javaDebuggerExtensionNotInstalled } from '../loc/strings';
+import { invalidLaunchConfiguration, javaAppHostCommandNotRecognized, javaDebuggerExtensionNotInstalled } from '../loc/strings';
 import { AspireResourceExtendedDebugConfiguration, GoLaunchConfiguration, JavaLaunchConfiguration } from '../dcp/types';
 
 suite('Java Debugger Extension Tests', () => {
@@ -68,17 +68,36 @@ suite('Java Debugger Extension Tests', () => {
     });
 
     test('uses the Java executable selected by the CLI', async () => {
-        const javaExec = path.join('/opt', 'jdk-25', 'bin', 'java');
-        const debugConfig = createDebugConfig();
+        const acceptedExecutables = [
+            'C:\\Program Files\\Java.cmd\\jdk-25\\bin\\java.exe',
+            'C:\\Program Files\\Java\\jdk-25\\bin\\java.com',
+            path.join('/opt', 'jdk-25', 'bin', 'java'),
+            'java',
+        ];
 
-        await javaDebuggerExtension.createDebugSessionConfigurationCallback!(
-            createJavaLaunchConfig({ java_exec: javaExec }),
-            [],
-            [],
-            { debug: true, runId: '1', debugSessionId: '1', isApphost: true, debugSession: fakeAspireDebugSession },
-            debugConfig);
+        for (const javaExec of acceptedExecutables) {
+            const debugConfig = createDebugConfig();
+            await javaDebuggerExtension.createDebugSessionConfigurationCallback!(
+                createJavaLaunchConfig({ java_exec: javaExec }),
+                [],
+                [],
+                { debug: true, runId: '1', debugSessionId: '1', isApphost: true, debugSession: fakeAspireDebugSession },
+                debugConfig);
 
-        assert.strictEqual(debugConfig.javaExec, javaExec);
+            assert.strictEqual(debugConfig.javaExec, javaExec);
+        }
+
+        for (const javaExec of ['C:\\Java\\bin\\java.cmd', 'C:\\Java\\bin\\java.BAT', '/opt/jdk/bin/java.CMD', '/opt/jdk/bin/java.bat']) {
+            const launchConfig = createJavaLaunchConfig({ java_exec: javaExec });
+            await assert.rejects(
+                () => javaDebuggerExtension.createDebugSessionConfigurationCallback!(
+                    launchConfig,
+                    [],
+                    [],
+                    { debug: true, runId: '1', debugSessionId: '1', isApphost: true, debugSession: fakeAspireDebugSession },
+                    createDebugConfig()),
+                new Error(invalidLaunchConfiguration(JSON.stringify(launchConfig))));
+        }
     });
 
     test('sets noDebug when launch option disables debugging', async () => {
