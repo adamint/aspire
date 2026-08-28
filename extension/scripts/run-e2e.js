@@ -36,7 +36,6 @@ const requestedTempRoot = verifyExtesterFeedOnly ? '' : process.env.ASPIRE_EXTEN
 // why `prepareRunDirectories` is a function rather than a module-scope block.
 const testSpec = process.env.ASPIRE_EXTENSION_E2E_SPEC || 'out/test-e2e/**/*.e2e.test.js';
 const matchedTestSpecs = verifyExtesterFeedOnly ? [] : findSpecMatches(testSpec);
-const matchedSpecsUseJavaStarterWorkspace = shouldUseJavaStarterWorkspace(matchedTestSpecs);
 // Java specs need the Java language server and the Java debug adapter (neither of which Aspire
 // ships) and a Java workspace in place of the scaffolded C# one, so they cannot share a run with
 // the other specs. Which specs are running is the whole requirement, so it is read off them rather
@@ -48,7 +47,15 @@ const matchedSpecsUseJavaStarterWorkspace = shouldUseJavaStarterWorkspace(matche
 const enableJavaE2E = process.env.ASPIRE_EXTENSION_E2E_ENABLE_JAVA
   ? process.env.ASPIRE_EXTENSION_E2E_ENABLE_JAVA === 'true'
   : matchedTestSpecs.length > 0 && matchedTestSpecs.every(isJavaSpecPath);
-const useJavaStarterWorkspace = enableJavaE2E && matchedSpecsUseJavaStarterWorkspace;
+const matchedJavaTestSpecs = enableJavaE2E ? matchedTestSpecs.filter(isJavaSpecPath) : [];
+const javaStarterTestSpecs = matchedJavaTestSpecs.filter(isJavaStarterSpecPath);
+const javaPlaygroundTestSpecs = matchedJavaTestSpecs.filter(specPath => !isJavaStarterSpecPath(specPath));
+if (javaStarterTestSpecs.length > 0 && javaPlaygroundTestSpecs.length > 0) {
+  const starterMatches = javaStarterTestSpecs.map(specPath => path.relative(extensionRoot, specPath)).sort();
+  const playgroundMatches = javaPlaygroundTestSpecs.map(specPath => path.relative(extensionRoot, specPath)).sort();
+  throw new Error(`Java E2E spec selection mixes workspace fixtures. Starter matches: ${starterMatches.join(', ')}. Playground matches: ${playgroundMatches.join(', ')}. Split these specs into separate runs.`);
+}
+const useJavaStarterWorkspace = javaStarterTestSpecs.length > 0;
 // redhat.java supplies the language server, which is what produces workspace diagnostics and the
 // classpath the debug adapter launches against. vscjava.vscode-java-debug supplies the `java` debug
 // adapter the Aspire debugger delegates to, and vscjava.vscode-java-dependency is a hard activation
@@ -339,14 +346,8 @@ function isJavaSpecPath(specPath) {
   return path.basename(specPath).toLowerCase().startsWith('java');
 }
 
-function shouldUseJavaStarterWorkspace(specPaths) {
-  const starterSpecCount = specPaths.filter(specPath =>
-    path.basename(specPath).toLowerCase().startsWith('javastarterprojectmodel.')).length;
-  if (starterSpecCount > 0 && starterSpecCount !== specPaths.length) {
-    throw new Error('Java starter E2E specs cannot run with other specs because they require different workspaces. Split the run into starter and non-starter spec sets.');
-  }
-
-  return starterSpecCount > 0;
+function isJavaStarterSpecPath(specPath) {
+  return path.basename(specPath).toLowerCase().startsWith('javastarterprojectmodel.');
 }
 
 function logStep(name) {

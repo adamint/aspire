@@ -209,6 +209,8 @@ suite('E2E launch profile', () => {
 
         // The validations that reject the environment, and the spec walk, have to come first.
         assert.ok(runner.indexOf('const matchedTestSpecs =') < runRootDeclaration);
+        assertTextOrder(runner, 'const javaStarterTestSpecs =', 'const shortRunRoot =');
+        assertTextOrder(runner, 'Java E2E spec selection mixes workspace fixtures', 'const shortRunRoot =');
         assert.ok(runner.indexOf("throw new Error('vscode-extension-tester must be pinned") < runRootDeclaration);
         assert.ok(runner.indexOf('const downloadCacheRoot =') < runRootDeclaration);
         assert.ok(runner.indexOf('const vscodeVersion = resolveCachedVsCodeVersion(') < runRootDeclaration);
@@ -218,6 +220,31 @@ suite('E2E launch profile', () => {
         const mainStart = runner.indexOf('async function main()');
         const mainBody = runner.slice(mainStart, runner.indexOf('\n  finally {', mainStart));
         assert.ok(mainBody.includes('prepareRunDirectories();'));
+    });
+
+    test('rejects mixed Java workspace fixtures before creating the per-run root', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const testArtifactsRoot = path.join(extensionRoot, '.test-artifacts', 'unit');
+        fs.mkdirSync(testArtifactsRoot, { recursive: true });
+        const tempRoot = fs.mkdtempSync(path.join(testArtifactsRoot, 'aev-java-fixture-guard-'));
+        try {
+            const result = runE2eRunnerAsPlatform(extensionRoot, 'linux', {
+                ...process.env,
+                ASPIRE_EXTENSION_E2E_ENABLE_JAVA: '',
+                ASPIRE_EXTENSION_E2E_SPEC: 'out/test-e2e/{javaAppHost,javaStarterProjectModel}.e2e.test.js',
+                ASPIRE_EXTENSION_E2E_TEMP_ROOT: tempRoot,
+                ASPIRE_EXTENSION_E2E_VSCODE_VERSION: '1.130.0',
+            });
+
+            assert.notStrictEqual(result.status, 0);
+            assert.match(
+                result.stderr,
+                /Java E2E spec selection mixes workspace fixtures\. Starter matches: out\/test-e2e\/javaStarterProjectModel\.e2e\.test\.js\. Playground matches: out\/test-e2e\/javaAppHost\.e2e\.test\.js\. Split these specs into separate runs\./);
+            assert.deepStrictEqual(fs.readdirSync(tempRoot), []);
+        }
+        finally {
+            removeDirectorySafely(tempRoot);
+        }
     });
 
     test('removes the per-run root when the environment is rejected before any download', () => {
