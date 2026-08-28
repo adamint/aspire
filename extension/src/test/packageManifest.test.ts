@@ -225,9 +225,25 @@ suite('extension/package.json', () => {
     test('Explorer AppHost commands include guest AppHost filenames', () => {
         const manifest = readManifest();
         const explorerMenus = manifest.contributes.menus?.['explorer/context'] ?? [];
+        const expectedExplorerCommands = [
+            'aspire-vscode.runAppHostFromExplorer',
+            'aspire-vscode.debugAppHostFromExplorer',
+        ];
         const expectedAppHostFiles = ['apphost.ts', 'apphost.mts', 'apphost.cts', 'apphost.js', 'apphost.mjs', 'apphost.cjs', 'apphost.rs', 'apphost.java'];
 
-        for (const commandName of ['aspire-vscode.runAppHostCommand', 'aspire-vscode.debugAppHostCommand']) {
+        assert.deepStrictEqual(explorerMenus.map(item => item.command), expectedExplorerCommands);
+        assert.deepStrictEqual(
+            (manifest.contributes.commands ?? [])
+                .map(item => item.command)
+                .filter(command => command?.endsWith('FromExplorer')),
+            expectedExplorerCommands);
+        assert.deepStrictEqual(
+            (manifest.contributes.menus?.commandPalette ?? [])
+                .filter(item => item.when === 'false' && item.command?.endsWith('FromExplorer'))
+                .map(item => item.command),
+            expectedExplorerCommands);
+
+        for (const commandName of expectedExplorerCommands) {
             const menuItem = explorerMenus.find(item => item.command === commandName);
             assert.ok(menuItem?.when, `Expected ${commandName} to have a when clause`);
 

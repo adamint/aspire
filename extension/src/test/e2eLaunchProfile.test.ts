@@ -232,6 +232,7 @@ suite('E2E launch profile', () => {
                 timeout: 120000,
                 env: {
                     ...process.env,
+                    ASPIRE_EXTENSION_E2E_SPEC: 'out/test/e2eLaunchProfile.test.js',
                     ASPIRE_EXTENSION_E2E_TEMP_ROOT: tempRoot,
                     ASPIRE_EXTENSION_E2E_VSCODE_VERSION: 'latest',
                 },
@@ -251,6 +252,66 @@ suite('E2E launch profile', () => {
         const testArtifactsRoot = path.join(extensionRoot, '.test-artifacts', 'unit');
         fs.mkdirSync(testArtifactsRoot, { recursive: true });
         const tempRoot = fs.mkdtempSync(path.join(testArtifactsRoot, 'mixed-java-specs-'));
+        const environment = { ...process.env };
+        delete environment.ASPIRE_EXTENSION_E2E_ENABLE_JAVA;
+        try {
+            fs.writeFileSync(path.join(tempRoot, 'javaStarterProjectModel.e2e.test.js'), '');
+            fs.writeFileSync(path.join(tempRoot, 'javaDebug.e2e.test.js'), '');
+
+            const result = spawnSync(process.execPath, [path.join(extensionRoot, 'scripts', 'run-e2e.js')], {
+                encoding: 'utf8',
+                timeout: 120000,
+                env: {
+                    ...environment,
+                    ASPIRE_EXTENSION_E2E_CLI_PATH: path.join(tempRoot, 'missing-aspire'),
+                    ASPIRE_EXTENSION_E2E_SPEC: path.join(tempRoot, 'java*.e2e.test.js'),
+                },
+            });
+
+            assert.ok(result.status !== null && result.status !== 0, result.stderr);
+            assert.match(result.stderr, /Java starter E2E specs cannot run with other specs/);
+            assert.match(result.stderr, /split the run/i);
+        }
+        finally {
+            removeDirectorySafely(tempRoot);
+        }
+    });
+
+    test('rejects Java starter specs mixed with non-Java specs before allocating a workspace', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const testArtifactsRoot = path.join(extensionRoot, '.test-artifacts', 'unit');
+        fs.mkdirSync(testArtifactsRoot, { recursive: true });
+        const tempRoot = fs.mkdtempSync(path.join(testArtifactsRoot, 'mixed-starter-specs-'));
+        const environment = { ...process.env };
+        delete environment.ASPIRE_EXTENSION_E2E_ENABLE_JAVA;
+        try {
+            fs.writeFileSync(path.join(tempRoot, 'javaStarterProjectModel.e2e.test.js'), '');
+            fs.writeFileSync(path.join(tempRoot, 'dashboard.e2e.test.js'), '');
+
+            const result = spawnSync(process.execPath, [path.join(extensionRoot, 'scripts', 'run-e2e.js')], {
+                encoding: 'utf8',
+                timeout: 120000,
+                env: {
+                    ...environment,
+                    ASPIRE_EXTENSION_E2E_CLI_PATH: path.join(tempRoot, 'missing-aspire'),
+                    ASPIRE_EXTENSION_E2E_SPEC: path.join(tempRoot, '*.e2e.test.js'),
+                },
+            });
+
+            assert.ok(result.status !== null && result.status !== 0, result.stderr);
+            assert.match(result.stderr, /Java starter E2E specs cannot run with other specs/);
+            assert.match(result.stderr, /split the run/i);
+        }
+        finally {
+            removeDirectorySafely(tempRoot);
+        }
+    });
+
+    test('rejects mixed Java starter specs when Java E2E is explicitly disabled', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const testArtifactsRoot = path.join(extensionRoot, '.test-artifacts', 'unit');
+        fs.mkdirSync(testArtifactsRoot, { recursive: true });
+        const tempRoot = fs.mkdtempSync(path.join(testArtifactsRoot, 'disabled-mixed-java-specs-'));
         try {
             fs.writeFileSync(path.join(tempRoot, 'javaStarterProjectModel.e2e.test.js'), '');
             fs.writeFileSync(path.join(tempRoot, 'javaDebug.e2e.test.js'), '');
@@ -261,6 +322,7 @@ suite('E2E launch profile', () => {
                 env: {
                     ...process.env,
                     ASPIRE_EXTENSION_E2E_CLI_PATH: path.join(tempRoot, 'missing-aspire'),
+                    ASPIRE_EXTENSION_E2E_ENABLE_JAVA: 'false',
                     ASPIRE_EXTENSION_E2E_SPEC: path.join(tempRoot, 'java*.e2e.test.js'),
                 },
             });

@@ -36,6 +36,7 @@ const requestedTempRoot = verifyExtesterFeedOnly ? '' : process.env.ASPIRE_EXTEN
 // why `prepareRunDirectories` is a function rather than a module-scope block.
 const testSpec = process.env.ASPIRE_EXTENSION_E2E_SPEC || 'out/test-e2e/**/*.e2e.test.js';
 const matchedTestSpecs = verifyExtesterFeedOnly ? [] : findSpecMatches(testSpec);
+const matchedSpecsUseJavaStarterWorkspace = shouldUseJavaStarterWorkspace(matchedTestSpecs);
 // Java specs need the Java language server and the Java debug adapter (neither of which Aspire
 // ships) and a Java workspace in place of the scaffolded C# one, so they cannot share a run with
 // the other specs. Which specs are running is the whole requirement, so it is read off them rather
@@ -47,7 +48,7 @@ const matchedTestSpecs = verifyExtesterFeedOnly ? [] : findSpecMatches(testSpec)
 const enableJavaE2E = process.env.ASPIRE_EXTENSION_E2E_ENABLE_JAVA
   ? process.env.ASPIRE_EXTENSION_E2E_ENABLE_JAVA === 'true'
   : matchedTestSpecs.length > 0 && matchedTestSpecs.every(isJavaSpecPath);
-const useJavaStarterWorkspace = enableJavaE2E && shouldUseJavaStarterWorkspace(matchedTestSpecs);
+const useJavaStarterWorkspace = enableJavaE2E && matchedSpecsUseJavaStarterWorkspace;
 // redhat.java supplies the language server, which is what produces workspace diagnostics and the
 // classpath the debug adapter launches against. vscjava.vscode-java-debug supplies the `java` debug
 // adapter the Aspire debugger delegates to, and vscjava.vscode-java-dependency is a hard activation
