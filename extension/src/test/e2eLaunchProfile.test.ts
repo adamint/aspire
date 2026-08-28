@@ -85,6 +85,21 @@ function runE2eRunnerAsPlatform(extensionRoot: string, platform: 'darwin' | 'lin
     });
 }
 
+function createE2eSpecFixtures(extensionRoot: string, fileNames: readonly string[]): string {
+    const testArtifactsRoot = path.join(extensionRoot, '.test-artifacts', 'unit');
+    fs.mkdirSync(testArtifactsRoot, { recursive: true });
+    const fixtureRoot = fs.mkdtempSync(path.join(testArtifactsRoot, 'e2e-spec-fixtures-'));
+    for (const fileName of fileNames) {
+        fs.writeFileSync(path.join(fixtureRoot, fileName), '');
+    }
+
+    return fixtureRoot;
+}
+
+function toPosixRelativePath(from: string, to: string): string {
+    return path.relative(from, to).split(path.sep).join('/');
+}
+
 function getTestBlock(source: string, testName: string): string {
     const sourceFile = ts.createSourceFile('e2e.test.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
     const suiteStatements = getSuiteStatements(sourceFile);
@@ -211,6 +226,7 @@ suite('E2E launch profile', () => {
         assert.ok(runner.indexOf('const matchedTestSpecs =') < runRootDeclaration);
         assertTextOrder(runner, 'const javaStarterTestSpecs =', 'const shortRunRoot =');
         assertTextOrder(runner, 'Java E2E spec selection mixes workspace fixtures', 'const shortRunRoot =');
+        assertTextOrder(runner, 'mixes Java and non-Java workspace fixtures', 'const shortRunRoot =');
         assert.ok(runner.indexOf("throw new Error('vscode-extension-tester must be pinned") < runRootDeclaration);
         assert.ok(runner.indexOf('const downloadCacheRoot =') < runRootDeclaration);
         assert.ok(runner.indexOf('const vscodeVersion = resolveCachedVsCodeVersion(') < runRootDeclaration);
@@ -222,28 +238,68 @@ suite('E2E launch profile', () => {
         assert.ok(mainBody.includes('prepareRunDirectories();'));
     });
 
-    test('rejects mixed Java workspace fixtures before creating the per-run root', () => {
+    test('rejects mixed Java workspace fixtures before creating the per-run root even when Java E2E is explicitly disabled', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const testArtifactsRoot = path.join(extensionRoot, '.test-artifacts', 'unit');
         fs.mkdirSync(testArtifactsRoot, { recursive: true });
+        const fixtureRoot = createE2eSpecFixtures(extensionRoot, [
+            'javaAppHost.e2e.test.js',
+            'javaStarterProjectModel.e2e.test.js',
+        ]);
         const tempRoot = fs.mkdtempSync(path.join(testArtifactsRoot, 'aev-java-fixture-guard-'));
         try {
             const result = runE2eRunnerAsPlatform(extensionRoot, 'linux', {
                 ...process.env,
-                ASPIRE_EXTENSION_E2E_ENABLE_JAVA: '',
-                ASPIRE_EXTENSION_E2E_SPEC: 'out/test-e2e/{javaAppHost,javaStarterProjectModel}.e2e.test.js',
+                ASPIRE_EXTENSION_E2E_ENABLE_JAVA: 'false',
+                ASPIRE_EXTENSION_E2E_SPEC: path.join(fixtureRoot, '{javaAppHost,javaStarterProjectModel}.e2e.test.js'),
                 ASPIRE_EXTENSION_E2E_TEMP_ROOT: tempRoot,
                 ASPIRE_EXTENSION_E2E_VSCODE_VERSION: '1.130.0',
             });
 
+            const starterSpec = toPosixRelativePath(extensionRoot, path.join(fixtureRoot, 'javaStarterProjectModel.e2e.test.js'));
+            const playgroundSpec = toPosixRelativePath(extensionRoot, path.join(fixtureRoot, 'javaAppHost.e2e.test.js'));
             assert.notStrictEqual(result.status, 0);
-            assert.match(
-                result.stderr,
-                /Java E2E spec selection mixes workspace fixtures\. Starter matches: out\/test-e2e\/javaStarterProjectModel\.e2e\.test\.js\. Playground matches: out\/test-e2e\/javaAppHost\.e2e\.test\.js\. Split these specs into separate runs\./);
+            assert.ok(
+                result.stderr.includes(`Java E2E spec selection mixes workspace fixtures. Starter matches: ${starterSpec}. Playground matches: ${playgroundSpec}. Split these specs into separate runs.`),
+                result.stderr);
             assert.deepStrictEqual(fs.readdirSync(tempRoot), []);
         }
         finally {
             removeDirectorySafely(tempRoot);
+            removeDirectorySafely(fixtureRoot);
+        }
+    });
+
+    test('rejects mixed Java and non-Java specs before creating the per-run root', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const testArtifactsRoot = path.join(extensionRoot, '.test-artifacts', 'unit');
+        fs.mkdirSync(testArtifactsRoot, { recursive: true });
+        const fixtureRoot = createE2eSpecFixtures(extensionRoot, [
+            'javaAppHost.e2e.test.js',
+            'packageSurface.e2e.test.js',
+        ]);
+        const tempRoot = fs.mkdtempSync(path.join(testArtifactsRoot, 'aev-java-non-java-guard-'));
+        try {
+            const result = runE2eRunnerAsPlatform(extensionRoot, 'linux', {
+                ...process.env,
+                ASPIRE_EXTENSION_E2E_CLI_PATH: path.join(tempRoot, 'missing-aspire'),
+                ASPIRE_EXTENSION_E2E_ENABLE_JAVA: '',
+                ASPIRE_EXTENSION_E2E_SPEC: path.join(fixtureRoot, '{javaAppHost,packageSurface}.e2e.test.js'),
+                ASPIRE_EXTENSION_E2E_TEMP_ROOT: tempRoot,
+                ASPIRE_EXTENSION_E2E_VSCODE_VERSION: '1.130.0',
+            });
+
+            const javaSpec = toPosixRelativePath(extensionRoot, path.join(fixtureRoot, 'javaAppHost.e2e.test.js'));
+            const nonJavaSpec = toPosixRelativePath(extensionRoot, path.join(fixtureRoot, 'packageSurface.e2e.test.js'));
+            assert.notStrictEqual(result.status, 0);
+            assert.ok(
+                result.stderr.includes(`Java E2E spec selection mixes Java and non-Java workspace fixtures. Java matches: ${javaSpec}. Non-Java matches: ${nonJavaSpec}. Split these specs into separate runs.`),
+                result.stderr);
+            assert.deepStrictEqual(fs.readdirSync(tempRoot), []);
+        }
+        finally {
+            removeDirectorySafely(tempRoot);
+            removeDirectorySafely(fixtureRoot);
         }
     });
 
@@ -268,95 +324,6 @@ suite('E2E launch profile', () => {
             assert.notStrictEqual(result.status, 0);
             assert.match(result.stderr, /latest/);
             assert.deepStrictEqual(fs.readdirSync(tempRoot), []);
-        }
-        finally {
-            removeDirectorySafely(tempRoot);
-        }
-    });
-
-    test('rejects mixed Java starter specs before allocating a workspace', () => {
-        const extensionRoot = path.resolve(__dirname, '..', '..');
-        const testArtifactsRoot = path.join(extensionRoot, '.test-artifacts', 'unit');
-        fs.mkdirSync(testArtifactsRoot, { recursive: true });
-        const tempRoot = fs.mkdtempSync(path.join(testArtifactsRoot, 'mixed-java-specs-'));
-        const environment = { ...process.env };
-        delete environment.ASPIRE_EXTENSION_E2E_ENABLE_JAVA;
-        try {
-            fs.writeFileSync(path.join(tempRoot, 'javaStarterProjectModel.e2e.test.js'), '');
-            fs.writeFileSync(path.join(tempRoot, 'javaDebug.e2e.test.js'), '');
-
-            const result = spawnSync(process.execPath, [path.join(extensionRoot, 'scripts', 'run-e2e.js')], {
-                encoding: 'utf8',
-                timeout: 120000,
-                env: {
-                    ...environment,
-                    ASPIRE_EXTENSION_E2E_CLI_PATH: path.join(tempRoot, 'missing-aspire'),
-                    ASPIRE_EXTENSION_E2E_SPEC: path.join(tempRoot, 'java*.e2e.test.js'),
-                },
-            });
-
-            assert.ok(result.status !== null && result.status !== 0, result.stderr);
-            assert.match(result.stderr, /Java starter E2E specs cannot run with other specs/);
-            assert.match(result.stderr, /split the run/i);
-        }
-        finally {
-            removeDirectorySafely(tempRoot);
-        }
-    });
-
-    test('rejects Java starter specs mixed with non-Java specs before allocating a workspace', () => {
-        const extensionRoot = path.resolve(__dirname, '..', '..');
-        const testArtifactsRoot = path.join(extensionRoot, '.test-artifacts', 'unit');
-        fs.mkdirSync(testArtifactsRoot, { recursive: true });
-        const tempRoot = fs.mkdtempSync(path.join(testArtifactsRoot, 'mixed-starter-specs-'));
-        const environment = { ...process.env };
-        delete environment.ASPIRE_EXTENSION_E2E_ENABLE_JAVA;
-        try {
-            fs.writeFileSync(path.join(tempRoot, 'javaStarterProjectModel.e2e.test.js'), '');
-            fs.writeFileSync(path.join(tempRoot, 'dashboard.e2e.test.js'), '');
-
-            const result = spawnSync(process.execPath, [path.join(extensionRoot, 'scripts', 'run-e2e.js')], {
-                encoding: 'utf8',
-                timeout: 120000,
-                env: {
-                    ...environment,
-                    ASPIRE_EXTENSION_E2E_CLI_PATH: path.join(tempRoot, 'missing-aspire'),
-                    ASPIRE_EXTENSION_E2E_SPEC: path.join(tempRoot, '*.e2e.test.js'),
-                },
-            });
-
-            assert.ok(result.status !== null && result.status !== 0, result.stderr);
-            assert.match(result.stderr, /Java starter E2E specs cannot run with other specs/);
-            assert.match(result.stderr, /split the run/i);
-        }
-        finally {
-            removeDirectorySafely(tempRoot);
-        }
-    });
-
-    test('rejects mixed Java starter specs when Java E2E is explicitly disabled', () => {
-        const extensionRoot = path.resolve(__dirname, '..', '..');
-        const testArtifactsRoot = path.join(extensionRoot, '.test-artifacts', 'unit');
-        fs.mkdirSync(testArtifactsRoot, { recursive: true });
-        const tempRoot = fs.mkdtempSync(path.join(testArtifactsRoot, 'disabled-mixed-java-specs-'));
-        try {
-            fs.writeFileSync(path.join(tempRoot, 'javaStarterProjectModel.e2e.test.js'), '');
-            fs.writeFileSync(path.join(tempRoot, 'javaDebug.e2e.test.js'), '');
-
-            const result = spawnSync(process.execPath, [path.join(extensionRoot, 'scripts', 'run-e2e.js')], {
-                encoding: 'utf8',
-                timeout: 120000,
-                env: {
-                    ...process.env,
-                    ASPIRE_EXTENSION_E2E_CLI_PATH: path.join(tempRoot, 'missing-aspire'),
-                    ASPIRE_EXTENSION_E2E_ENABLE_JAVA: 'false',
-                    ASPIRE_EXTENSION_E2E_SPEC: path.join(tempRoot, 'java*.e2e.test.js'),
-                },
-            });
-
-            assert.ok(result.status !== null && result.status !== 0, result.stderr);
-            assert.match(result.stderr, /Java starter E2E specs cannot run with other specs/);
-            assert.match(result.stderr, /split the run/i);
         }
         finally {
             removeDirectorySafely(tempRoot);

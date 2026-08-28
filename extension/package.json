@@ -1206,7 +1206,11 @@
             },
             "completionEvents": [
               "onCommand:aspire-vscode.runAppHostCommand",
-              "onCommand:aspire-vscode.debugAppHostCommand"
+              "onCommand:aspire-vscode.debugAppHostCommand",
+              "onCommand:aspire-vscode.runAppHostFromExplorer",
+              "onCommand:aspire-vscode.debugAppHostFromExplorer",
+              "onCommand:aspire-vscode.runAppHostFromEditorCommand",
+              "onCommand:aspire-vscode.debugAppHostFromEditorCommand"
             ]
           },
           {

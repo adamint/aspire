@@ -47,6 +47,7 @@ type ExtensionManifest = {
             'view/item/context'?: ManifestMenuItem[];
         };
         debuggers?: DebuggerContribution[];
+        walkthroughs?: Array<{ steps?: Array<{ id?: string; completionEvents?: string[] }> }>;
     };
 };
 
@@ -175,6 +176,8 @@ suite('extension/package.json', () => {
         const appHostCommands = (manifest.contributes.commands ?? []).filter(command =>
             command.command === 'aspire-vscode.runAppHostCommand' ||
             command.command === 'aspire-vscode.debugAppHostCommand' ||
+            command.command === 'aspire-vscode.runAppHostFromExplorer' ||
+            command.command === 'aspire-vscode.debugAppHostFromExplorer' ||
             command.command === 'aspire-vscode.runAppHostFromEditorCommand' ||
             command.command === 'aspire-vscode.debugAppHostFromEditorCommand');
         const explorerMenus = manifest.contributes.menus?.['explorer/context'] ?? [];
@@ -197,6 +200,18 @@ suite('extension/package.json', () => {
                 icon: '$(debug-all)',
             },
             {
+                command: 'aspire-vscode.runAppHostFromExplorer',
+                title: '%command.runAppHost%',
+                category: 'Aspire',
+                icon: '$(run-all)',
+            },
+            {
+                command: 'aspire-vscode.debugAppHostFromExplorer',
+                title: '%command.debugAppHost%',
+                category: 'Aspire',
+                icon: '$(debug-all)',
+            },
+            {
                 command: 'aspire-vscode.runAppHostFromEditorCommand',
                 title: '%command.runAppHost%',
                 category: 'Aspire',
@@ -211,7 +226,7 @@ suite('extension/package.json', () => {
         ]);
         assert.deepStrictEqual(
             explorerMenus.map(item => item.command),
-            ['aspire-vscode.runAppHostCommand', 'aspire-vscode.debugAppHostCommand']);
+            ['aspire-vscode.runAppHostFromExplorer', 'aspire-vscode.debugAppHostFromExplorer']);
         assert.deepStrictEqual(editorRunMenus, [
             {
                 command: 'aspire-vscode.runAppHostFromEditorCommand',
@@ -224,8 +239,26 @@ suite('extension/package.json', () => {
                 group: 'navigation@-3',
             },
         ]);
+        assert.ok(hiddenFromPalette.includes('aspire-vscode.runAppHostFromExplorer'));
+        assert.ok(hiddenFromPalette.includes('aspire-vscode.debugAppHostFromExplorer'));
         assert.ok(hiddenFromPalette.includes('aspire-vscode.runAppHostFromEditorCommand'));
         assert.ok(hiddenFromPalette.includes('aspire-vscode.debugAppHostFromEditorCommand'));
+    });
+
+    test('run AppHost walkthrough completes from Explorer and editor-title commands', () => {
+        const manifest = readManifest();
+        const runAppStep = (manifest.contributes.walkthroughs ?? [])
+            .flatMap(walkthrough => walkthrough.steps ?? [])
+            .find(step => step.id === 'aspire-vscode.getStarted.runApp');
+
+        assert.deepStrictEqual(runAppStep?.completionEvents, [
+            'onCommand:aspire-vscode.runAppHostCommand',
+            'onCommand:aspire-vscode.debugAppHostCommand',
+            'onCommand:aspire-vscode.runAppHostFromExplorer',
+            'onCommand:aspire-vscode.debugAppHostFromExplorer',
+            'onCommand:aspire-vscode.runAppHostFromEditorCommand',
+            'onCommand:aspire-vscode.debugAppHostFromEditorCommand',
+        ]);
     });
 
     test('Node module AppHost files activate the extension', () => {

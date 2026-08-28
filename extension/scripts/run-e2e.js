@@ -44,18 +44,24 @@ const matchedTestSpecs = verifyExtesterFeedOnly ? [] : findSpecMatches(testSpec)
 //
 // ASPIRE_EXTENSION_E2E_ENABLE_JAVA remains as an explicit override for running a Java spec through
 // a glob, or for forcing the Java workspace off while debugging the runner.
-const enableJavaE2E = process.env.ASPIRE_EXTENSION_E2E_ENABLE_JAVA
-  ? process.env.ASPIRE_EXTENSION_E2E_ENABLE_JAVA === 'true'
-  : matchedTestSpecs.length > 0 && matchedTestSpecs.every(isJavaSpecPath);
-const matchedJavaTestSpecs = enableJavaE2E ? matchedTestSpecs.filter(isJavaSpecPath) : [];
+const matchedJavaTestSpecs = matchedTestSpecs.filter(isJavaSpecPath);
 const javaStarterTestSpecs = matchedJavaTestSpecs.filter(isJavaStarterSpecPath);
 const javaPlaygroundTestSpecs = matchedJavaTestSpecs.filter(specPath => !isJavaStarterSpecPath(specPath));
+const matchedNonJavaTestSpecs = matchedTestSpecs.filter(specPath => !isJavaSpecPath(specPath));
+if (matchedJavaTestSpecs.length > 0 && matchedNonJavaTestSpecs.length > 0) {
+  const javaMatches = matchedJavaTestSpecs.map(specPath => toPosixPath(path.relative(extensionRoot, specPath))).sort();
+  const nonJavaMatches = matchedNonJavaTestSpecs.map(specPath => toPosixPath(path.relative(extensionRoot, specPath))).sort();
+  throw new Error(`Java E2E spec selection mixes Java and non-Java workspace fixtures. Java matches: ${javaMatches.join(', ')}. Non-Java matches: ${nonJavaMatches.join(', ')}. Split these specs into separate runs.`);
+}
+const enableJavaE2E = process.env.ASPIRE_EXTENSION_E2E_ENABLE_JAVA
+  ? process.env.ASPIRE_EXTENSION_E2E_ENABLE_JAVA === 'true'
+  : matchedJavaTestSpecs.length > 0 && matchedNonJavaTestSpecs.length === 0;
 if (javaStarterTestSpecs.length > 0 && javaPlaygroundTestSpecs.length > 0) {
-  const starterMatches = javaStarterTestSpecs.map(specPath => path.relative(extensionRoot, specPath)).sort();
-  const playgroundMatches = javaPlaygroundTestSpecs.map(specPath => path.relative(extensionRoot, specPath)).sort();
+  const starterMatches = javaStarterTestSpecs.map(specPath => toPosixPath(path.relative(extensionRoot, specPath))).sort();
+  const playgroundMatches = javaPlaygroundTestSpecs.map(specPath => toPosixPath(path.relative(extensionRoot, specPath))).sort();
   throw new Error(`Java E2E spec selection mixes workspace fixtures. Starter matches: ${starterMatches.join(', ')}. Playground matches: ${playgroundMatches.join(', ')}. Split these specs into separate runs.`);
 }
-const useJavaStarterWorkspace = javaStarterTestSpecs.length > 0;
+const useJavaStarterWorkspace = enableJavaE2E && javaStarterTestSpecs.length > 0;
 // redhat.java supplies the language server, which is what produces workspace diagnostics and the
 // classpath the debug adapter launches against. vscjava.vscode-java-debug supplies the `java` debug
 // adapter the Aspire debugger delegates to, and vscjava.vscode-java-dependency is a hard activation
@@ -435,7 +441,7 @@ function escapeRegExp(value) {
 }
 
 function toPosixPath(value) {
-  return path.resolve(value).replace(/^\\\\\?\\/, '').split(path.sep).join('/');
+  return value.replace(/^\\\\\?\\/, '').split(path.sep).join('/');
 }
 
 function writeVsCodeLocaleFile() {
