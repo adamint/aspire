@@ -476,6 +476,15 @@ internal sealed class AtsPythonCodeGenerator : ICodeGenerator
         };
     }
 
+    private static bool RequiresOmissionSentinel(AtsParameterInfo param) =>
+        GetPythonDefaultValue(param) != "None" &&
+        (param.IsNullable || AllowsNoneAtTopLevel(param.Type));
+
+    private static string GetOptionalParameterPresenceCheck(AtsParameterInfo param, string parameterName) =>
+        RequiresOmissionSentinel(param)
+            ? $"{parameterName} is not _ASPIRE_UNSET"
+            : $"{parameterName} is not None";
+
     private static string MakeNullable(AtsParameterInfo param, string type)
     {
         return AllowsNoneAtTopLevel(param.Type) ? type : $"{type} | None";
@@ -510,19 +519,20 @@ internal sealed class AtsPythonCodeGenerator : ICodeGenerator
     private string GetOptionalParamSuffix(AtsParameterInfo param)
     {
         var pythonDefault = GetPythonDefaultValue(param);
+        var mappedType = MapParameterToPython(param);
         if (pythonDefault == "None")
         {
-            var paramType = MapParameterToPython(param);
-            return $"{MakeNullable(param, paramType)} = None";
+            return $"{MakeNullable(param, mappedType)} = None";
         }
 
-        var type = MapParameterToPython(param);
         // When we have a real default, the type doesn't need "| None" unless the param is also nullable
-        if (param.IsNullable)
+        var annotatedType = param.IsNullable ? MakeNullable(param, mappedType) : mappedType;
+        if (RequiresOmissionSentinel(param))
         {
-            return $"{MakeNullable(param, type)} = {pythonDefault}";
+            return $"{annotatedType} = typing.cast({annotatedType}, _ASPIRE_UNSET)";
         }
-        return $"{type} = {pythonDefault}";
+
+        return $"{annotatedType} = {pythonDefault}";
     }
 
     /// <summary>
@@ -1355,7 +1365,8 @@ internal sealed class AtsPythonCodeGenerator : ICodeGenerator
 
             if (param.IsOptional || param.IsNullable)
             {
-                sb.AppendLine(CultureInfo.InvariantCulture, $"        if {paramName} is not None:");
+                var presenceCheck = GetOptionalParameterPresenceCheck(param, paramName);
+                sb.AppendLine(CultureInfo.InvariantCulture, $"        if {presenceCheck}:");
                 sb.AppendLine(CultureInfo.InvariantCulture, $"            rpc_args['{param.Name}'] = {paramHandler}");
             }
             else
@@ -1694,7 +1705,8 @@ internal sealed class AtsPythonCodeGenerator : ICodeGenerator
 
             if (param.IsOptional || param.IsNullable)
             {
-                sb.AppendLine(CultureInfo.InvariantCulture, $"        if {paramName} is not None:");
+                var presenceCheck = GetOptionalParameterPresenceCheck(param, paramName);
+                sb.AppendLine(CultureInfo.InvariantCulture, $"        if {presenceCheck}:");
                 sb.AppendLine(CultureInfo.InvariantCulture, $"            rpc_args['{param.Name}'] = {paramHandler}");
             }
             else
@@ -1705,12 +1717,13 @@ internal sealed class AtsPythonCodeGenerator : ICodeGenerator
 
         // Check if this is a merged capability that needs conditional dispatch
         _mergedCapabilityDispatches.TryGetValue(capability.CapabilityId, out var mergedDispatch);
-        var discriminatingPythonParam = mergedDispatch is not null ? GetParamName(
-            userParams.First(p => string.Equals(p.Name, mergedDispatch.DiscriminatingParamName, StringComparison.Ordinal))) : null;
 
         if (mergedDispatch is not null)
         {
-            sb.AppendLine(CultureInfo.InvariantCulture, $"        capability_id = '{mergedDispatch.AlternateCapabilityId}' if {discriminatingPythonParam} is not None else '{capability.CapabilityId}'");
+            var discriminatingParam = userParams.First(p => string.Equals(p.Name, mergedDispatch.DiscriminatingParamName, StringComparison.Ordinal));
+            var discriminatingPythonParam = GetParamName(discriminatingParam);
+            var presenceCheck = GetOptionalParameterPresenceCheck(discriminatingParam, discriminatingPythonParam);
+            sb.AppendLine(CultureInfo.InvariantCulture, $"        capability_id = '{mergedDispatch.AlternateCapabilityId}' if {presenceCheck} else '{capability.CapabilityId}'");
         }
 
         var capabilityIdExpr = mergedDispatch is not null ? "capability_id" : $"'{capability.CapabilityId}'";
@@ -1810,7 +1823,8 @@ internal sealed class AtsPythonCodeGenerator : ICodeGenerator
             var paramName = GetParamName(param);
             if (param.IsOptional || param.IsNullable)
             {
-                sb.AppendLine(CultureInfo.InvariantCulture, $"    if {paramName} is not None:");
+                var presenceCheck = GetOptionalParameterPresenceCheck(param, paramName);
+                sb.AppendLine(CultureInfo.InvariantCulture, $"    if {presenceCheck}:");
                 sb.AppendLine(CultureInfo.InvariantCulture, $"        rpc_args['{param.Name}'] = {paramName}");
             }
             else

@@ -328,13 +328,27 @@ public class AtsPythonCodeGeneratorTests
     }
 
     [Fact]
-    public void GeneratedCode_DoesNotRepeatTopLevelNoneForUnionParameters()
+    public void GeneratedCode_DistinguishesOmittedAndExplicitNoneForNullableUnionParameters()
     {
         var files = _generator.GenerateDistributedApplication(CreateContextWithNullableUnionParameters());
         var aspirePy = files["aspire_app.py"];
 
         Assert.Contains(
-            "def with_nullable_unions(client: AspireClient, optional_union: int | None | str = None, nullable_union: int | None | str = 1, nullable_items: typing.Iterable[int | None] | None = None)",
+            """
+            # Optional parameters with non-null defaults use this sentinel so omission remains distinct from explicit None.
+            _ASPIRE_UNSET = object()
+            """,
+            aspirePy);
+        Assert.Contains(
+            "def with_nullable_unions(client: AspireClient, optional_union: int | None | str = None, nullable_union: int | None | str = typing.cast(int | None | str, _ASPIRE_UNSET), nullable_items: typing.Iterable[int | None] | None = None)",
+            aspirePy);
+        Assert.Contains(
+            """
+                if optional_union is not None:
+                    rpc_args['optionalUnion'] = optional_union
+                if nullable_union is not _ASPIRE_UNSET:
+                    rpc_args['nullableUnion'] = nullable_union
+            """,
             aspirePy);
     }
 
