@@ -5,7 +5,15 @@ import * as path from 'path';
 import { spawnSync } from 'child_process';
 import * as ts from 'typescript';
 
-import { removeDirectorySafely } from './testHelpers';
+function removeDirectorySafely(directory: string): void {
+    try {
+        fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+    catch (error) {
+        console.warn(`Failed to remove test directory '${directory}': ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+
 function readSourcePattern(source: string, name: string): RegExp {
     const declaration = new RegExp(`const ${name} = /(.+)/;`).exec(source);
     assert.ok(declaration, `run-e2e.js must define ${name}`);
@@ -232,6 +240,34 @@ suite('E2E launch profile', () => {
             assert.notStrictEqual(result.status, 0);
             assert.match(result.stderr, /latest/);
             assert.deepStrictEqual(fs.readdirSync(tempRoot), []);
+        }
+        finally {
+            removeDirectorySafely(tempRoot);
+        }
+    });
+
+    test('rejects mixed Java starter specs before allocating a workspace', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const testArtifactsRoot = path.join(extensionRoot, '.test-artifacts', 'unit');
+        fs.mkdirSync(testArtifactsRoot, { recursive: true });
+        const tempRoot = fs.mkdtempSync(path.join(testArtifactsRoot, 'mixed-java-specs-'));
+        try {
+            fs.writeFileSync(path.join(tempRoot, 'javaStarterProjectModel.e2e.test.js'), '');
+            fs.writeFileSync(path.join(tempRoot, 'javaDebug.e2e.test.js'), '');
+
+            const result = spawnSync(process.execPath, [path.join(extensionRoot, 'scripts', 'run-e2e.js')], {
+                encoding: 'utf8',
+                timeout: 120000,
+                env: {
+                    ...process.env,
+                    ASPIRE_EXTENSION_E2E_CLI_PATH: path.join(tempRoot, 'missing-aspire'),
+                    ASPIRE_EXTENSION_E2E_SPEC: path.join(tempRoot, 'java*.e2e.test.js'),
+                },
+            });
+
+            assert.ok(result.status !== null && result.status !== 0, result.stderr);
+            assert.match(result.stderr, /Java starter E2E specs cannot run with other specs/);
+            assert.match(result.stderr, /split the run/i);
         }
         finally {
             removeDirectorySafely(tempRoot);
