@@ -685,6 +685,7 @@ const expectedConfigurationKeys = [
     'aspire.enableCodeLens',
     'aspire.enableDebugConfigEnvironmentLogging',
     'aspire.enableGutterDecorations',
+    'aspire.enableHotReloadNotification',
     'aspire.enableSettingsFileCreationPromptOnStartup',
     'aspire.globalAppHostsPollingInterval',
     'aspire.registerMcpServerInWorkspace',
