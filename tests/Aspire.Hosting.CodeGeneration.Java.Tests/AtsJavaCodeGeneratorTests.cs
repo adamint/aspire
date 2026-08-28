@@ -2784,6 +2784,48 @@ public class AtsJavaCodeGeneratorTests
     }
 
     [Fact]
+    public void GeneratedPropertySetters_BoxTypeLevelNullableNumericParameters()
+    {
+        var resourceType = new AtsTypeRef { TypeId = "Tests/ProbeResource", Category = AtsTypeCategory.Handle };
+        var capability = new AtsCapabilityInfo
+        {
+            CapabilityId = "Tests/ProbeResource.setAmount",
+            MethodName = "setAmount",
+            Parameters =
+            [
+                new AtsParameterInfo
+                {
+                    Name = "context",
+                    Type = resourceType,
+                    IsNullable = false
+                },
+                new AtsParameterInfo
+                {
+                    Name = "value",
+                    Type = new AtsTypeRef
+                    {
+                        TypeId = AtsConstants.Number,
+                        Category = AtsTypeCategory.Primitive,
+                        IsNullable = true
+                    },
+                    IsNullable = false
+                }
+            ],
+            ReturnType = resourceType,
+            TargetTypeId = resourceType.TypeId,
+            TargetType = resourceType,
+            TargetParameterName = "context",
+            ExpandedTargetTypes = [resourceType],
+            CapabilityKind = AtsCapabilityKind.PropertySetter
+        };
+
+        var generated = _generator.GenerateDistributedApplication(
+            CreateContextWithProbeCapabilities(resourceType, capability))["aspire/ProbeResource.java"];
+
+        Assert.Contains("public ProbeResource setAmount(Number value)", generated, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task GeneratedCapabilities_NullablePrimitiveResultsReturnNull()
     {
         var resourceType = new AtsTypeRef

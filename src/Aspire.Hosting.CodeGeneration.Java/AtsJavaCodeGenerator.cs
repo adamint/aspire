@@ -2620,7 +2620,9 @@ internal sealed class AtsJavaCodeGenerator : ICodeGenerator
             return GenerateCallbackTypeSignature(parameter.CallbackParameters, parameter.CallbackReturnType);
         }
 
-        return MapInputTypeToJava(parameter.Type, parameter.IsOptional || parameter.IsNullable);
+        return MapInputTypeToJava(
+            parameter.Type,
+            parameter.IsOptional || parameter.IsNullable || parameter.Type?.IsNullable == true);
     }
 
     private string MapHandleType(string typeId) =>
