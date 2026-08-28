@@ -11230,7 +11230,7 @@ public class EndpointUpdateContext extends HandleWrapperBase {
     }
 
     /** Sets the Port property */
-    public EndpointUpdateContext setPort(double value) {
+    public EndpointUpdateContext setPort(Number value) {
         Map<String, Object> reqArgs = new HashMap<>();
         reqArgs.put("context", AspireClient.serializeValue(getHandle()));
         reqArgs.put("value", AspireClient.serializeValue(value));
@@ -11247,7 +11247,7 @@ public class EndpointUpdateContext extends HandleWrapperBase {
     }
 
     /** Sets the TargetPort property */
-    public EndpointUpdateContext setTargetPort(double value) {
+    public EndpointUpdateContext setTargetPort(Number value) {
         Map<String, Object> reqArgs = new HashMap<>();
         reqArgs.put("context", AspireClient.serializeValue(getHandle()));
         reqArgs.put("value", AspireClient.serializeValue(value));
@@ -11332,7 +11332,7 @@ public class EndpointUpdateContext extends HandleWrapperBase {
     }
 
     /** Sets the IsProxied property */
-    public EndpointUpdateContext setIsProxied(boolean value) {
+    public EndpointUpdateContext setIsProxied(Boolean value) {
         Map<String, Object> reqArgs = new HashMap<>();
         reqArgs.put("context", AspireClient.serializeValue(getHandle()));
         reqArgs.put("value", AspireClient.serializeValue(value));
