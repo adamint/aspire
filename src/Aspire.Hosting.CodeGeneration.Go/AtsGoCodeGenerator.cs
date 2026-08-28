@@ -1003,8 +1003,8 @@ internal sealed class AtsGoCodeGenerator : ICodeGenerator
         WriteLine($"func (s *{implName}) Value(name string) (string, error) {{");
         WriteLine("\tinput, err := s.Get(name)");
         WriteLine("\tif err != nil { return \"\", err }");
-        WriteLine("\tif input == nil { return \"\", nil }");
-        WriteLine("\treturn input.Value, nil");
+        WriteLine("\tif input == nil || input.Value == nil { return \"\", nil }");
+        WriteLine("\treturn *input.Value, nil");
         WriteLine("}");
         WriteLine();
 
@@ -1012,7 +1012,8 @@ internal sealed class AtsGoCodeGenerator : ICodeGenerator
         WriteLine($"func (s *{implName}) RequiredValue(name string) (string, error) {{");
         WriteLine("\tinput, err := s.Required(name)");
         WriteLine("\tif err != nil { return \"\", err }");
-        WriteLine("\treturn input.Value, nil");
+        WriteLine("\tif input.Value == nil { return \"\", nil }");
+        WriteLine("\treturn *input.Value, nil");
         WriteLine("}");
         WriteLine();
     }

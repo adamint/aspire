@@ -17961,15 +17961,16 @@ func (s *interactionInputCollection) Required(name string) (*InteractionInput, e
 func (s *interactionInputCollection) Value(name string) (string, error) {
 	input, err := s.Get(name)
 	if err != nil { return "", err }
-	if input == nil { return "", nil }
-	return input.Value, nil
+	if input == nil || input.Value == nil { return "", nil }
+	return *input.Value, nil
 }
 
 // RequiredValue returns the value of the input with the specified name, or an error if no input matches.
 func (s *interactionInputCollection) RequiredValue(name string) (string, error) {
 	input, err := s.Required(name)
 	if err != nil { return "", err }
-	return input.Value, nil
+	if input.Value == nil { return "", nil }
+	return *input.Value, nil
 }
 
 // InteractionInputLoadContext is the public interface for handle type InteractionInputLoadContext.

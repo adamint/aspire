@@ -371,7 +371,7 @@ public class AtsGoCodeGeneratorTests
     public void GeneratedCode_RequiredNullableSetterSendsNullValue()
     {
         var atsContext = CreateContextFromBothAssemblies();
-        var aspireGo = _generator.GenerateDistributedApplication(atsContext)["aspire.go"];
+        var aspireGo = _generator.GenerateDistributedApplication(atsContext)["aspire.go"].ReplaceLineEndings("\n");
         const string signature = "func (s *endpointUpdateContext) SetPort(value *float64)";
         var methodStart = aspireGo.IndexOf(signature, StringComparison.Ordinal);
         Assert.True(methodStart >= 0);
@@ -381,6 +381,32 @@ public class AtsGoCodeGeneratorTests
 
         Assert.Contains("reqArgs[\"value\"] = serializeValue(value)", method, StringComparison.Ordinal);
         Assert.DoesNotContain("if value != nil", method, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GeneratedCode_InteractionInputValueHelpersHandleNullableValues()
+    {
+        var atsContext = CreateContextFromBothAssemblies();
+        var aspireGo = _generator.GenerateDistributedApplication(atsContext)["aspire.go"].ReplaceLineEndings("\n");
+
+        Assert.Contains(
+            "func (s *interactionInputCollection) Value(name string) (string, error) {\n" +
+            "\tinput, err := s.Get(name)\n" +
+            "\tif err != nil { return \"\", err }\n" +
+            "\tif input == nil || input.Value == nil { return \"\", nil }\n" +
+            "\treturn *input.Value, nil\n" +
+            "}",
+            aspireGo,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "func (s *interactionInputCollection) RequiredValue(name string) (string, error) {\n" +
+            "\tinput, err := s.Required(name)\n" +
+            "\tif err != nil { return \"\", err }\n" +
+            "\tif input.Value == nil { return \"\", nil }\n" +
+            "\treturn *input.Value, nil\n" +
+            "}",
+            aspireGo,
+            StringComparison.Ordinal);
     }
 
     [Fact]
