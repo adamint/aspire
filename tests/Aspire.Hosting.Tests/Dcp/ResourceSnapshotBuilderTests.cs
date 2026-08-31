@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 #pragma warning disable ASPIREPROJECTS001 // Project launch defaults are experimental but needed to verify snapshot emission.
+#pragma warning disable ASPIREEXTENSION001 // Debug support annotations are experimental.
 
 using Aspire.Dashboard.Model;
 using Aspire.Hosting.Dcp;
@@ -214,6 +215,41 @@ public class ResourceSnapshotBuilderTests
         var launchCommand = GetProperty(snapshot, KnownProperties.Project.LaunchCommand);
         Assert.Null(launchCommand.Value);
         Assert.False(launchCommand.IsSensitive);
+    }
+
+    [Fact]
+    public void ExecutableSnapshotPublishesLaunchConfigurationTypeOnlyWhenInstallingDebuggerCanEnableDebugging()
+    {
+        const string propertyName = "resource.launchConfigurationType";
+        var resource = new TestDotnetProjectResource("python");
+        resource.Annotations.Add(SupportsDebuggingAnnotation.Create<object>(
+            resource.Name,
+            "python",
+            _ => Task.FromResult(new object())));
+
+        var executable = Executable.Create(resource.Name, "python");
+        executable.Annotate(DcpCustomResource.ResourceNameAnnotation, resource.Name);
+
+        var snapshotBuilder = CreateSnapshotBuilder(new Dictionary<string, IResource>
+        {
+            [resource.Name] = resource
+        });
+        var snapshot = snapshotBuilder.ToSnapshot(executable, CreatePreviousSnapshot());
+
+        Assert.Equal("python", GetProperty(snapshot, propertyName).Value);
+
+        resource.Annotations.Add(new ForceProcessExecutionAnnotation());
+        snapshot = snapshotBuilder.ToSnapshot(executable, snapshot);
+
+        Assert.Empty(snapshot.Properties.Where(property => property.Name == propertyName));
+
+        resource.Annotations.Remove(resource.Annotations.OfType<ForceProcessExecutionAnnotation>().Single());
+        resource.Annotations.Add(new ContainerLifetimeAnnotation
+        {
+            Lifetime = ContainerLifetime.Persistent
+        });
+        snapshot = snapshotBuilder.ToSnapshot(executable, snapshot);
+        Assert.Empty(snapshot.Properties.Where(property => property.Name == propertyName));
     }
 
     [Fact]

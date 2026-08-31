@@ -134,17 +134,11 @@ internal class ResourceSnapshotBuilder
     {
         string? projectPath = null;
         string? launchProfileName = null;
-        string? launchConfigurationType = null;
         IResource? appModelResource = null;
 
         if (executable.AppModelResourceName is not null &&
             _resourceState.ApplicationModel.TryGetValue(executable.AppModelResourceName, out appModelResource))
         {
-            if (appModelResource.TryGetLastAnnotation<SupportsDebuggingAnnotation>(out var debugSupport))
-            {
-                launchConfigurationType = debugSupport.LaunchConfigurationType;
-            }
-
             if (appModelResource is ProjectResource projectResource)
             {
                 projectPath = projectResource.GetProjectMetadata().ProjectPath;
@@ -176,9 +170,9 @@ internal class ResourceSnapshotBuilder
         }
 
         var launchArguments = GetLaunchArgs(executable, effectiveArgs);
-        ImmutableArray<ResourcePropertySnapshot> launchConfigurationProperties = launchConfigurationType is null
-            ? []
-            : [new(KnownProperties.Resource.LaunchConfigurationType, launchConfigurationType)];
+        var properties = GetLaunchConfigurationType(appModelResource) is { } launchConfigurationType
+            ? previous.Properties.SetResourceProperty(KnownProperties.Resource.LaunchConfigurationType, launchConfigurationType)
+            : previous.Properties.RemoveResourceProperty(KnownProperties.Resource.LaunchConfigurationType);
         var dotNetLaunchProperties = GetDotNetLaunchProperties(executable.Spec.ExecutablePath, effectiveArgs);
 
         if (projectPath is not null)
@@ -188,7 +182,7 @@ internal class ResourceSnapshotBuilder
                 ResourceType = previous.ResourceType ?? KnownResourceTypes.Project,
                 State = state,
                 ExitCode = executable.Status?.ExitCode,
-                Properties = previous.Properties.SetResourcePropertyRange([
+                Properties = properties.SetResourcePropertyRange([
                     ResourcePropertySnapshotMetadata.Create(KnownResourceTypes.Project, KnownProperties.Executable.Path, executable.Spec.ExecutablePath),
                     ResourcePropertySnapshotMetadata.Create(KnownResourceTypes.Project, KnownProperties.Executable.WorkDir, executable.Spec.WorkingDirectory),
                     ResourcePropertySnapshotMetadata.Create(KnownResourceTypes.Project, KnownProperties.Executable.Args, effectiveArgs ?? [], isSensitive: true),
@@ -198,7 +192,6 @@ internal class ResourceSnapshotBuilder
                     new(KnownProperties.Resource.AppArgs, launchArguments?.Args) { IsSensitive = launchArguments?.IsSensitive ?? false },
                     new(KnownProperties.Resource.AppArgsSensitivity, launchArguments?.ArgsAreSensitive) { IsSensitive = launchArguments?.IsSensitive ?? false },
                     .. dotNetLaunchProperties,
-                    .. launchConfigurationProperties,
                 ]),
                 EnvironmentVariables = environment,
                 CreationTimeStamp = executable.Metadata.CreationTimestamp?.ToUniversalTime(),
@@ -214,14 +207,13 @@ internal class ResourceSnapshotBuilder
             ResourceType = previous.ResourceType ?? KnownResourceTypes.Executable,
             State = state,
             ExitCode = executable.Status?.ExitCode,
-            Properties = previous.Properties.SetResourcePropertyRange([
+            Properties = properties.SetResourcePropertyRange([
                 ResourcePropertySnapshotMetadata.Create(KnownResourceTypes.Executable, KnownProperties.Executable.Path, executable.Spec.ExecutablePath),
                 ResourcePropertySnapshotMetadata.Create(KnownResourceTypes.Executable, KnownProperties.Executable.WorkDir, executable.Spec.WorkingDirectory),
                 ResourcePropertySnapshotMetadata.Create(KnownResourceTypes.Executable, KnownProperties.Executable.Args, effectiveArgs ?? [], isSensitive: true),
                 ResourcePropertySnapshotMetadata.Create(KnownResourceTypes.Executable, KnownProperties.Executable.Pid, executable.Status?.ProcessId),
                 new(KnownProperties.Resource.AppArgs, launchArguments?.Args) { IsSensitive = launchArguments?.IsSensitive ?? false },
                 new(KnownProperties.Resource.AppArgsSensitivity, launchArguments?.ArgsAreSensitive) { IsSensitive = launchArguments?.IsSensitive ?? false },
-                .. launchConfigurationProperties,
             ]),
             EnvironmentVariables = environment,
             CreationTimeStamp = executable.Metadata.CreationTimestamp?.ToUniversalTime(),
@@ -230,6 +222,21 @@ internal class ResourceSnapshotBuilder
             Urls = urls,
             Relationships = relationships
         };
+    }
+
+    private static string? GetLaunchConfigurationType(IResource? resource)
+    {
+        // The annotation identifies the debugger even when the current IDE lacks it. Structural exclusions
+        // cannot be fixed by installing an extension, so do not advertise those resources as debuggable.
+        if (resource is not null
+            && resource.TryGetLastAnnotation<SupportsDebuggingAnnotation>(out var annotation)
+            && !resource.HasAnnotationOfType<ForceProcessExecutionAnnotation>()
+            && !resource.HasPersistentLifetime())
+        {
+            return annotation.LaunchConfigurationType;
+        }
+
+        return null;
     }
 
     private static bool IsNotStartedExecutableState(string? state)
