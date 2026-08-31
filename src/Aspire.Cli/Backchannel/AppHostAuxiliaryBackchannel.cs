@@ -196,6 +196,7 @@ internal sealed class AppHostAuxiliaryBackchannel : IAppHostAuxiliaryBackchannel
         {
             ActivityTracingStrategy = new ActivityTracingStrategy()
         };
+        Task? pendingHandshakeRpcTask = null;
 
         try
         {
@@ -207,13 +208,18 @@ internal sealed class AppHostAuxiliaryBackchannel : IAppHostAuxiliaryBackchannel
             handshakeCancellation.CancelAfter(handshakeTimeout);
 
             // Fetch all connection info
-            var appHostInfo = await rpc.InvokeWithProfilingAsync<AppHostInformation?>(
+            var appHostInfoTask = rpc.InvokeWithProfilingAsync<AppHostInformation?>(
                 profilingTelemetry,
                 "auxiliary",
                 "GetAppHostInformationAsync",
                 [],
-                handshakeCancellation.Token).ConfigureAwait(false);
-            var capabilities = await FetchCapabilitiesAsync(rpc, logger, profilingTelemetry, handshakeCancellation.Token).ConfigureAwait(false);
+                handshakeCancellation.Token);
+            pendingHandshakeRpcTask = appHostInfoTask;
+            var appHostInfo = await appHostInfoTask.WaitAsync(handshakeCancellation.Token).ConfigureAwait(false);
+
+            var capabilitiesTask = FetchCapabilitiesAsync(rpc, logger, profilingTelemetry, handshakeCancellation.Token);
+            pendingHandshakeRpcTask = capabilitiesTask;
+            var capabilities = await capabilitiesTask.WaitAsync(handshakeCancellation.Token).ConfigureAwait(false);
 
             var capabilitiesSet = capabilities?.ToImmutableHashSet() ?? ImmutableHashSet.Create(AuxiliaryBackchannelCapabilities.V1);
 
@@ -224,8 +230,24 @@ internal sealed class AppHostAuxiliaryBackchannel : IAppHostAuxiliaryBackchannel
             // JsonRpc owns the message handler, stream, and socket, so failed initialization must release
             // that chain before propagating.
             rpc.Dispose();
+            if (pendingHandshakeRpcTask is not null)
+            {
+                // WaitAsync can abandon the invocation when the local deadline wins. JsonRpc disposal
+                // completes it independently, so observe any later fault without extending cleanup.
+                ObserveFaults(pendingHandshakeRpcTask);
+            }
+
             throw;
         }
+    }
+
+    private static void ObserveFaults(Task task)
+    {
+        _ = task.ContinueWith(
+            static completedTask => _ = completedTask.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     /// <summary>

@@ -98,8 +98,10 @@ public class AppHostAuxiliaryBackchannelTests
     {
         using var server = TestAppHostBackchannelServer.Start(stalledMethod);
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => server.ConnectAsync(TimeSpan.FromMilliseconds(100))).DefaultTimeout();
+        var connectTask = server.ConnectAsync(TimeSpan.FromSeconds(3));
+        await server.WaitForStalledMethodEntryAsync().DefaultTimeout();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connectTask).DefaultTimeout();
         await server.WaitForClientDisconnectAsync().DefaultTimeout();
     }
 
@@ -154,8 +156,12 @@ public class AppHostAuxiliaryBackchannelTests
 
         public Task WaitForClientDisconnectAsync() => _clientDisconnected.Task;
 
+        public Task WaitForStalledMethodEntryAsync() => Target.WaitForStalledMethodEntryAsync();
+
         public void Dispose()
         {
+            Target.ReleaseStall();
+
             foreach (var disposable in _disposables)
             {
                 disposable.Dispose();
@@ -169,6 +175,8 @@ public class AppHostAuxiliaryBackchannelTests
     {
         private readonly int _processId = Environment.ProcessId;
         private readonly string? _stalledMethod;
+        private readonly TaskCompletionSource _stalledMethodEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseStall = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly string[] _capabilities =
         [
             AuxiliaryBackchannelCapabilities.V1,
@@ -187,7 +195,8 @@ public class AppHostAuxiliaryBackchannelTests
 
         public async Task<AppHostInformation> GetAppHostInformationAsync(CancellationToken cancellationToken = default)
         {
-            await StallIfRequestedAsync(nameof(GetAppHostInformationAsync), cancellationToken);
+            _ = cancellationToken;
+            await StallIfRequestedAsync(nameof(GetAppHostInformationAsync));
 
             return new AppHostInformation
             {
@@ -199,7 +208,8 @@ public class AppHostAuxiliaryBackchannelTests
         public async Task<GetCapabilitiesResponse> GetCapabilitiesAsync(GetCapabilitiesRequest? request = null, CancellationToken cancellationToken = default)
         {
             _ = request;
-            await StallIfRequestedAsync(nameof(GetCapabilitiesAsync), cancellationToken);
+            _ = cancellationToken;
+            await StallIfRequestedAsync(nameof(GetCapabilitiesAsync));
 
             return new GetCapabilitiesResponse
             {
@@ -232,12 +242,19 @@ public class AppHostAuxiliaryBackchannelTests
                 ResourceType = "Project"
             };
 
-        private async Task StallIfRequestedAsync(string method, CancellationToken cancellationToken)
+        public void ReleaseStall() => _releaseStall.TrySetResult();
+
+        public Task WaitForStalledMethodEntryAsync() => _stalledMethodEntered.Task;
+
+        private Task StallIfRequestedAsync(string method)
         {
-            if (_stalledMethod == method)
+            if (_stalledMethod != method)
             {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return Task.CompletedTask;
             }
+
+            _stalledMethodEntered.TrySetResult();
+            return _releaseStall.Task;
         }
     }
 }
