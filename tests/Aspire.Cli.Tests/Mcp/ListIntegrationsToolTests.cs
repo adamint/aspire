@@ -17,6 +17,7 @@ public class ListIntegrationsToolTests
 
         Assert.Equal("list_integrations", tool.Name);
     }
+
     [Fact]
     public void ListIntegrationsTool_HasCorrectDescription()
     {
@@ -122,3 +123,4 @@ public class ListIntegrationsToolTests
         Assert.Equal(1, integrations.GetArrayLength());
     }
 }
+
