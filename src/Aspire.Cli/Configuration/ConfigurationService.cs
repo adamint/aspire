@@ -398,7 +398,8 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
             var legacySettingsPath = ConfigurationHelper.BuildPathToSettingsJsonFile(searchDirectory.FullName);
             if (TryReadConfigurationValue(legacySettingsPath, configKey, out var legacySettingsValue))
             {
-                return Task.FromResult<ConfigurationValueWithOrigin?>(new(legacySettingsValue, searchDirectory, IsGlobal: false));
+                return Task.FromResult<ConfigurationValueWithOrigin?>(
+                    new(legacySettingsValue, new FileInfo(legacySettingsPath).Directory!, IsGlobal: false));
             }
             else if (File.Exists(legacySettingsPath) && !continueSearchWhenKeyMissing)
             {

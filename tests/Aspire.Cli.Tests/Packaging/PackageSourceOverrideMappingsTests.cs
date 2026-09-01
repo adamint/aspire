@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Aspire.Cli.Packaging;
+using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
 using Aspire.Hosting.Utils;
 
@@ -208,6 +209,85 @@ public class PackageSourceOverrideMappingsTests(ITestOutputHelper outputHelper)
             new TestEnvironment());
 
         Assert.True(result);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void IsSourceMappedForPackage_ExpandsEnvironmentVariablesInPackageSources(bool configWillBeRelocated)
+    {
+        const string sourceVariable = "ASPIRE_CLI_TEST_CONFIGURED_SOURCE";
+        const string source = "https://configured.example/v3/index.json";
+        using var environmentVariable = new EnvVarOverride(sourceVariable, source);
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var configPath = Path.Combine(workspace.WorkspaceRoot.FullName, "NuGet.Config");
+        File.WriteAllText(configPath, $$"""
+            <configuration>
+              <packageSources>
+                <add key="configured" value="%{{sourceVariable}}%" />
+              </packageSources>
+              <packageSourceMapping>
+                <packageSource key="configured">
+                  <package pattern="Aspire*" />
+                </packageSource>
+              </packageSourceMapping>
+            </configuration>
+            """);
+
+        var result = PackageSourceOverrideMappings.IsSourceMappedForPackage(
+            source,
+            "Aspire.Hosting.Redis",
+            [configPath],
+            workspace.WorkspaceRoot,
+            configWillBeRelocated,
+            new TestEnvironment());
+
+        Assert.True(result);
+    }
+
+    [Fact]
+    public void IsSourceMappedForPackage_HigherPriorityRemoveDisablesRemovedSourceMapping()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        const string source = "https://configured.example/v3/index.json";
+        var globalConfigPath = Path.Combine(workspace.WorkspaceRoot.FullName, "NuGet.Config");
+        File.WriteAllText(globalConfigPath, $$"""
+            <configuration>
+              <packageSources>
+                <add key="removed" value="{{source}}" />
+              </packageSources>
+              <packageSourceMapping>
+                <packageSource key="removed">
+                  <package pattern="Aspire*" />
+                </packageSource>
+              </packageSourceMapping>
+            </configuration>
+            """);
+        var projectDirectory = workspace.CreateDirectory("project");
+        var localConfigPath = Path.Combine(projectDirectory.FullName, "NuGet.Config");
+        File.WriteAllText(localConfigPath, $$"""
+            <configuration>
+              <packageSources>
+                <remove key="removed" />
+                <add key="active" value="{{source}}" />
+              </packageSources>
+              <packageSourceMapping>
+                <packageSource key="active">
+                  <package pattern="Other*" />
+                </packageSource>
+              </packageSourceMapping>
+            </configuration>
+            """);
+
+        var result = PackageSourceOverrideMappings.IsSourceMappedForPackage(
+            source,
+            "Aspire.Hosting.Redis",
+            [localConfigPath, globalConfigPath],
+            projectDirectory,
+            configWillBeRelocated: false,
+            new TestEnvironment());
+
+        Assert.False(result);
     }
 
     [Fact]

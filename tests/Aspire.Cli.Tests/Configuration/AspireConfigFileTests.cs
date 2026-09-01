@@ -577,6 +577,26 @@ public class AspireConfigFileTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public void LoadOrCreate_MigratesRelativeLegacyNuGetSourceFromAspireDirectory()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var root = workspace.WorkspaceRoot.FullName;
+        var settingsPath = Path.Combine(root, ".aspire", "settings.json");
+        File.WriteAllText(settingsPath, """
+            {
+              "nugetSource": "feeds/local"
+            }
+            """);
+
+        var config = AspireConfigFile.LoadOrCreate(root);
+        var saved = AspireConfigFile.Load(root);
+
+        Assert.Equal(".aspire/feeds/local", config.NuGetSource);
+        Assert.NotNull(saved);
+        Assert.Equal(".aspire/feeds/local", saved.NuGetSource);
+    }
+
+    [Fact]
     public void LoadOrCreate_MigratesLegacy_LeavesAbsolutePathUnchanged()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);

@@ -469,6 +469,35 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task ConfiguredSourceResolutionUsesLegacySettingsDirectoryForRelativeSource()
+    {
+        const string legacySource = "feeds/local";
+
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var legacySettingsDirectory = workspace.CreateDirectory(".aspire");
+        await File.WriteAllTextAsync(
+            Path.Combine(legacySettingsDirectory.FullName, "settings.json"),
+            $$"""
+            {
+              "nugetSource": "{{legacySource}}"
+            }
+            """);
+        var appHostFile = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, "AppHost.csproj"));
+        await File.WriteAllTextAsync(appHostFile.FullName, "<Project />");
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+
+        var source = await provider.GetRequiredService<IntegrationPackageSearchService>().GetConfiguredNuGetSourceAsync(
+            appHostFile,
+            appHostWasExplicitlyPassed: false,
+            invocationConfiguredSource: null,
+            CancellationToken.None);
+
+        Assert.Equal(Path.Combine(legacySettingsDirectory.FullName, "feeds", "local"), source);
+    }
+
+    [Fact]
     public async Task ConfiguredSourceResolutionUsesDeclaringDirectoryForRelativeSelectingSource()
     {
         const string workspaceSource = "feeds/local";

@@ -14,7 +14,6 @@ using Aspire.Cli.Diagnostics;
 using Aspire.Cli.DotNet;
 using Aspire.Cli.Exceptions;
 using Aspire.Cli.Interaction;
-using Aspire.Cli.Packaging;
 using Aspire.Cli.Processes;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Telemetry;
@@ -2444,33 +2443,11 @@ internal sealed partial class DotNetAppHostProject : IAppHostProject
             StandardOutputCallback = outputCollector.AppendOutput,
             StandardErrorCallback = outputCollector.AppendError,
         };
-        var packageInstallSource = context.Source;
-        if (!context.IsSourceExplicit && packageInstallSource is not null)
-        {
-            var (exitCode, enabledSources) = await _runner.GetNuGetSourcesAsync(
-                context.AppHostFile.Directory!,
-                new ProcessInvocationOptions(),
-                cancellationToken);
-            if (exitCode == 0 &&
-                enabledSources.Any(source => PackageSourceOverrideMappings.SourcesMatch(source, packageInstallSource, _environment)))
-            {
-                var (configExitCode, configPaths) = await _runner.GetNuGetConfigPathsAsync(
-                    context.AppHostFile.Directory!,
-                    new ProcessInvocationOptions(),
-                    cancellationToken);
-                if (configExitCode == 0 &&
-                    PackageSourceOverrideMappings.IsSourceMappedForPackage(
-                        packageInstallSource,
-                        context.PackageId,
-                        configPaths,
-                        context.AppHostFile.Directory!,
-                        configWillBeRelocated: false,
-                        _environment))
-                {
-                    packageInstallSource = null;
-                }
-            }
-        }
+        var packageInstallSource = await context.GetPackageSourceOverrideAsync(
+            _runner,
+            _environment,
+            configWillBeRelocated: false,
+            cancellationToken);
 
         var result = await _runner.AddPackageAsync(
             context.AppHostFile,

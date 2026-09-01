@@ -130,8 +130,9 @@ internal static class PackageSourceOverrideMappings
                         .OfType<string>()
                         .Any(value =>
                         {
-                            var resolvedValue = ResolveForWorkingDirectory(value, configDirectory);
-                            return !string.Equals(value, resolvedValue, StringComparison.Ordinal) &&
+                            var expandedValue = Environment.ExpandEnvironmentVariables(value);
+                            var resolvedValue = ResolveForWorkingDirectory(expandedValue, configDirectory);
+                            return !string.Equals(expandedValue, resolvedValue, StringComparison.Ordinal) &&
                                 SourcesMatch(resolvedValue, source, environment);
                         }) == true)
                 {
@@ -151,6 +152,11 @@ internal static class PackageSourceOverrideMappings
                         if (HasName(element, "clear"))
                         {
                             sourceMappings.Clear();
+                        }
+                        else if (HasName(element, "remove") &&
+                            GetAttributeValue(element, "key") is { Length: > 0 } removedSourceKey)
+                        {
+                            sourceMappings.Remove(removedSourceKey);
                         }
                         else if (HasName(element, "packageSource") &&
                             GetAttributeValue(element, "key") is { Length: > 0 } sourceKey)
@@ -242,13 +248,26 @@ internal static class PackageSourceOverrideMappings
                 {
                     values.Clear();
                 }
+                else if (HasName(element, "remove") &&
+                    GetAttributeValue(element, "key") is { Length: > 0 } removedKey)
+                {
+                    values.Remove(removedKey);
+                }
                 else if (HasName(element, "add") &&
                     GetAttributeValue(element, "key") is { Length: > 0 } addKey &&
                     GetAttributeValue(element, "value") is { Length: > 0 } value)
                 {
-                    values[addKey] = ResolveForWorkingDirectory(value, configDirectory);
+                    values[addKey] = ResolveConfiguredSource(value, configDirectory);
                 }
             }
+        }
+
+        static string ResolveConfiguredSource(string source, DirectoryInfo configDirectory)
+        {
+            // NuGet expands environment variables in NuGet.Config values on every platform using
+            // Environment.ExpandEnvironmentVariables. Keep source matching aligned with that behavior.
+            // https://learn.microsoft.com/nuget/reference/nuget-config-file#using-environment-variables
+            return ResolveForWorkingDirectory(Environment.ExpandEnvironmentVariables(source), configDirectory);
         }
 
         static void ApplyKeyValueSection(XElement? section, Dictionary<string, string> values)
@@ -263,6 +282,11 @@ internal static class PackageSourceOverrideMappings
                 if (HasName(element, "clear"))
                 {
                     values.Clear();
+                }
+                else if (HasName(element, "remove") &&
+                    GetAttributeValue(element, "key") is { Length: > 0 } removedKey)
+                {
+                    values.Remove(removedKey);
                 }
                 else if (HasName(element, "add") &&
                     GetAttributeValue(element, "key") is { Length: > 0 } addKey &&
