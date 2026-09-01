@@ -246,12 +246,12 @@ public class ListIntegrationsToolTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task ListIntegrationsTool_SelectedAppHostUsesAmbientProviderSource()
+    public async Task ListIntegrationsTool_SelectedAppHostResolvesAmbientProviderSourceFromInvocationDirectory()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var selectedAppHostDirectory = workspace.CreateDirectory("selected");
         var selectedAppHostPath = Path.Combine(selectedAppHostDirectory.FullName, "apphost.ts");
-        const string ambientSource = "https://ambient.example/v3/index.json";
+        const string ambientSource = "feeds/ambient";
         string? searchSource = null;
         var cache = new FakeNuGetPackageCache
         {
@@ -305,6 +305,6 @@ public class ListIntegrationsToolTests(ITestOutputHelper outputHelper)
             CancellationToken.None).DefaultTimeout();
 
         Assert.True(result.IsError is null or false);
-        Assert.Equal(ambientSource, searchSource);
+        Assert.Equal(Path.Combine(workspace.WorkspaceRoot.FullName, "feeds", "ambient"), searchSource);
     }
 }

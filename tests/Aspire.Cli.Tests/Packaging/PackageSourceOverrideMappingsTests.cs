@@ -165,6 +165,7 @@ public class PackageSourceOverrideMappingsTests(ITestOutputHelper outputHelper)
             "Aspire.Hosting.Redis",
             [configPath],
             configDirectory,
+            configWillBeRelocated: true,
             new TestEnvironment());
 
         Assert.False(result);
@@ -203,6 +204,7 @@ public class PackageSourceOverrideMappingsTests(ITestOutputHelper outputHelper)
             "Aspire.Hosting.Redis",
             [localConfigPath, globalConfigPath],
             projectDirectory,
+            configWillBeRelocated: false,
             new TestEnvironment());
 
         Assert.True(result);
@@ -239,6 +241,7 @@ public class PackageSourceOverrideMappingsTests(ITestOutputHelper outputHelper)
             "Aspire.Hosting.Redis",
             [configPath],
             workspace.WorkspaceRoot,
+            configWillBeRelocated: false,
             new TestEnvironment());
 
         Assert.False(result);
@@ -274,6 +277,7 @@ public class PackageSourceOverrideMappingsTests(ITestOutputHelper outputHelper)
             "Aspire.Hosting.Redis",
             [localConfigPath, parentConfigPath],
             projectDirectory,
+            configWillBeRelocated: true,
             new TestEnvironment());
 
         Assert.False(result);
@@ -309,6 +313,7 @@ public class PackageSourceOverrideMappingsTests(ITestOutputHelper outputHelper)
             "Aspire.Hosting.Redis",
             [configPath],
             workspace.WorkspaceRoot,
+            configWillBeRelocated: false,
             new TestEnvironment());
 
         Assert.False(result);

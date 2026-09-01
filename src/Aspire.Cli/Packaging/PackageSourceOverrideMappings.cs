@@ -86,6 +86,7 @@ internal static class PackageSourceOverrideMappings
         string packageId,
         IEnumerable<string> configPaths,
         DirectoryInfo workingDirectory,
+        bool configWillBeRelocated,
         IEnvironment environment)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(source);
@@ -101,7 +102,8 @@ internal static class PackageSourceOverrideMappings
         // A generated guest server can preserve one AppHost-local config plus the normal global
         // hierarchy. If multiple local files contribute, retain the source override instead of
         // pretending the relocated generated project can reproduce that hierarchy.
-        if (configPathArray.Count(path => IsSameOrAncestor(new FileInfo(path).Directory!, workingDirectory)) > 1)
+        if (configWillBeRelocated &&
+            configPathArray.Count(path => IsSameOrAncestor(new FileInfo(path).Directory!, workingDirectory)) > 1)
         {
             return false;
         }
@@ -119,7 +121,8 @@ internal static class PackageSourceOverrideMappings
                 }
 
                 var configDirectory = new FileInfo(configPath).Directory!;
-                if (IsSameOrAncestor(configDirectory, workingDirectory) &&
+                if (configWillBeRelocated &&
+                    IsSameOrAncestor(configDirectory, workingDirectory) &&
                     GetSection(configuration, "packageSources")?
                         .Elements()
                         .Where(element => HasName(element, "add"))

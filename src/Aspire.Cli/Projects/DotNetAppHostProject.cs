@@ -2464,6 +2464,7 @@ internal sealed partial class DotNetAppHostProject : IAppHostProject
                         context.PackageId,
                         configPaths,
                         context.AppHostFile.Directory!,
+                        configWillBeRelocated: false,
                         _environment))
                 {
                     packageInstallSource = null;

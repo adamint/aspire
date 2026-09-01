@@ -1491,6 +1491,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
                             context.PackageId,
                             configPaths,
                             directory,
+                            configWillBeRelocated: true,
                             _environment))
                     {
                         // The configured source is already part of the effective NuGet hierarchy.

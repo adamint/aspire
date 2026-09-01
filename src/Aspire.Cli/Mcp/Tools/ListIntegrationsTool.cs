@@ -98,6 +98,7 @@ internal sealed class ListIntegrationsTool(
                 workingDirectory,
                 cancellationToken: cancellationToken);
             var source = configuredSource?.Value;
+            var sourceBaseDirectory = configuredSource?.BaseDirectory;
             if (source is null)
             {
                 var invocationSource = await configurationService.GetConfigurationAsync(
@@ -112,18 +113,20 @@ internal sealed class ListIntegrationsTool(
                     if (selectingSource is null)
                     {
                         source = invocationSource;
+                        sourceBaseDirectory = executionContext.WorkingDirectory;
                     }
                 }
                 else
                 {
                     source = invocationSource;
+                    sourceBaseDirectory = executionContext.WorkingDirectory;
                 }
             }
             if (!string.IsNullOrWhiteSpace(source))
             {
                 source = PackageSourceOverrideMappings.ResolveForWorkingDirectory(
                     source,
-                    configuredSource?.BaseDirectory ?? workingDirectory);
+                    sourceBaseDirectory ?? workingDirectory);
                 defaultChannel = defaultChannel.WithMappings(
                     PackageSourceOverrideMappings.CreateForTemplateOperations(source));
             }
