@@ -8,6 +8,7 @@ import { prepareDebugSession } from '../debugger/debuggerExtensions';
 import { cleanupRun, registerRunCleanup } from '../debugger/runCleanupRegistry';
 import { AspireResourceDebugSession, AspireResourceExtendedDebugConfiguration, BrowserLaunchConfiguration, SessionTerminatedNotification } from '../dcp/types';
 import { unsupportedBrowserDebugTarget, unsupportedBrowserDebugTargetWithoutUrl } from '../loc/strings';
+import { extensionLogOutputChannel } from '../utils/logging';
 
 suite('Browser Debugger Tests', () => {
     teardown(() => {
@@ -40,55 +41,36 @@ suite('Browser Debugger Tests', () => {
         assert.strictEqual(configuration.resourceType, 'browser');
     });
 
-    test('forces Firefox to terminate instead of reattaching to the launched browser', async () => {
-        sinon.stub(vscode.extensions, 'getExtension').callsFake((id: string) =>
-            id === 'firefox-devtools.vscode-firefox-debug' ? ({ id } as vscode.Extension<unknown>) : undefined);
+    test('removes a mixed-case combined Chromium user data directory argument without consuming the following argument', async () => {
         const configuration = await createBrowserConfiguration(
-            { type: 'browser', url: 'https://localhost:5001', browser: 'firefox' },
+            { type: 'browser', url: 'https://localhost:5001', browser: 'chrome' },
             {
-                reAttach: true,
-                runtimeArgs: ['--headless'],
-                userDataDir: '/workspace/chrome-profile'
+                runtimeArgs: ['--User-Data-Dir=C:\\profile', 'unrelated-value', '--start-maximized']
             });
 
-        assert.strictEqual(configuration.type, 'firefox');
-        assert.strictEqual(configuration.reAttach, false);
-        assert.strictEqual(configuration.runtimeArgs, undefined);
-        assert.strictEqual(configuration.userDataDir, undefined);
-        assert.deepStrictEqual(configuration.pathMappings, []);
+        assert.deepStrictEqual(configuration.runtimeArgs, [
+            'unrelated-value',
+            '--start-maximized',
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-background-mode'
+        ]);
     });
 
-    test('prompts to install the Firefox debugger when its adapter is missing', async () => {
-        const getExtension = sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
-        const showErrorMessage = sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined);
+    test('removes a mixed-case split Chromium user data directory argument and its value only', async () => {
+        const configuration = await createBrowserConfiguration(
+            { type: 'browser', url: 'https://localhost:5001', browser: 'msedge' },
+            {
+                runtimeArgs: ['--USER-DATA-DIR', 'C:\\profile', '--start-maximized', 'unrelated-value']
+            });
 
-        await assert.rejects(
-            createBrowserConfiguration(
-                { type: 'browser', url: 'https://localhost:5001', browser: 'firefox' },
-                {}),
-            /Firefox Debugger extension/);
-
-        assert.strictEqual(getExtension.calledWith('firefox-devtools.vscode-firefox-debug'), true);
-        assert.strictEqual(showErrorMessage.calledOnce, true);
-        assert.match(showErrorMessage.firstCall.args[0], /Firefox Debugger extension/);
-    });
-
-    test('installs the Firefox debugger when selected from the missing-adapter prompt', async () => {
-        sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
-        sinon.stub(vscode.window, 'showErrorMessage').resolves('Install' as any);
-        const executeCommand = sinon.stub(vscode.commands, 'executeCommand').resolves();
-
-        await assert.rejects(
-            createBrowserConfiguration(
-                { type: 'browser', url: 'https://localhost:5001', browser: 'firefox' },
-                {}),
-            /Firefox Debugger extension/);
-        await Promise.resolve();
-        await Promise.resolve();
-
-        assert.strictEqual(executeCommand.calledOnceWithExactly(
-            'workbench.extensions.installExtension',
-            'firefox-devtools.vscode-firefox-debug'), true);
+        assert.deepStrictEqual(configuration.runtimeArgs, [
+            '--start-maximized',
+            'unrelated-value',
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-background-mode'
+        ]);
     });
 
     test('reports a natural root browser termination exactly once', () => {
@@ -112,6 +94,48 @@ suite('Browser Debugger Tests', () => {
         assert.strictEqual(send.calledOnce, true);
         assert.strictEqual(cleanup.calledOnce, true);
         assert.strictEqual(terminateListener, undefined);
+    });
+
+    test('cleans up exactly once when reporting browser termination throws', () => {
+        let terminateListener: ((session: vscode.DebugSession) => void) | undefined;
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(listener => {
+            terminateListener = listener;
+            return { dispose: () => { terminateListener = undefined; } };
+        });
+        const notificationError = new Error('notification failed');
+        const send = sinon.stub().throws(notificationError);
+        const cleanup = sinon.stub();
+        registerRunCleanup('run-1', cleanup);
+        const session = createDebugSession('browser-root');
+        new BrowserDebugSessionTermination(session, 'run-1', 'dcp-1', send);
+        const listener = terminateListener!;
+
+        assert.throws(() => listener(session), notificationError);
+        listener(session);
+
+        assert.strictEqual(send.calledOnce, true);
+        assert.strictEqual(cleanup.calledOnce, true);
+        assert.strictEqual(terminateListener, undefined);
+    });
+
+    test('warns when browser termination cannot be reported without a DCP session ID', () => {
+        let terminateListener: ((session: vscode.DebugSession) => void) | undefined;
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(listener => {
+            terminateListener = listener;
+            return { dispose: () => { terminateListener = undefined; } };
+        });
+        const warn = sinon.stub(extensionLogOutputChannel, 'warn');
+        const cleanup = sinon.stub();
+        registerRunCleanup('run-1', cleanup);
+        const session = createDebugSession('browser-root');
+        new BrowserDebugSessionTermination(session, 'run-1', null, sinon.stub());
+
+        terminateListener!(session);
+
+        assert.strictEqual(
+            warn.calledOnceWithExactly('Unable to report termination for run run-1 because the DCP session ID is missing.'),
+            true);
+        assert.strictEqual(cleanup.calledOnce, true);
     });
 
     test('wires the started browser root session to DCP termination', async () => {
@@ -218,6 +242,90 @@ suite('Browser Debugger Tests', () => {
 
         assert.strictEqual(stopDebugging.callCount, 2);
         assert.strictEqual(send.calledOnce, true);
+    });
+
+    test('retries a permanently pending browser stop and deduplicates the new attempt', async () => {
+        const secondStop = deferred<void>();
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').returns({ dispose: () => { } });
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging');
+        stopDebugging.onFirstCall().returns(new Promise<void>(() => { }));
+        stopDebugging.onSecondCall().returns(secondStop.promise);
+        const termination = new BrowserDebugSessionTermination(
+            createDebugSession('browser-root'),
+            'run-1',
+            'dcp-1',
+            sinon.stub());
+
+        const first = termination.stop();
+        termination.resetStopAttempt(first);
+        const retry = termination.stop();
+        const concurrent = termination.stop();
+
+        assert.strictEqual(concurrent, retry);
+        assert.strictEqual(stopDebugging.callCount, 2);
+
+        secondStop.resolve();
+        await retry;
+        await concurrent;
+    });
+
+    test('stale browser stop success settles a pending retry through shared completion', async () => {
+        const firstStop = deferred<void>();
+        const secondStop = deferred<void>();
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').returns({ dispose: () => { } });
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging');
+        stopDebugging.onFirstCall().returns(firstStop.promise);
+        stopDebugging.onSecondCall().returns(secondStop.promise);
+        const send = sinon.stub();
+        const cleanup = sinon.stub();
+        registerRunCleanup('run-1', cleanup);
+        const termination = new BrowserDebugSessionTermination(
+            createDebugSession('browser-root'),
+            'run-1',
+            'dcp-1',
+            send);
+
+        const first = termination.stop();
+        termination.resetStopAttempt(first);
+        const retry = termination.stop();
+
+        firstStop.resolve();
+        await first;
+        const retryOutcome = await Promise.race([
+            retry.then(() => 'completed'),
+            new Promise<'pending'>(resolve => setTimeout(() => resolve('pending'), 25)),
+        ]);
+
+        assert.strictEqual(retryOutcome, 'completed');
+        assert.strictEqual(stopDebugging.callCount, 2);
+        assert.strictEqual(send.calledOnceWithExactly('run-1', 'dcp-1'), true);
+        assert.strictEqual(cleanup.calledOnce, true);
+    });
+
+    test('does not let a stale browser stop rejection clear the active retry', async () => {
+        const firstStop = deferred<void>();
+        const secondStop = deferred<void>();
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').returns({ dispose: () => { } });
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging');
+        stopDebugging.onFirstCall().returns(firstStop.promise);
+        stopDebugging.onSecondCall().returns(secondStop.promise);
+        const termination = new BrowserDebugSessionTermination(
+            createDebugSession('browser-root'),
+            'run-1',
+            'dcp-1',
+            sinon.stub());
+
+        const first = termination.stop();
+        termination.resetStopAttempt(first);
+        const retry = termination.stop();
+
+        firstStop.reject(new Error('stale stop failed'));
+        await assert.rejects(first, /stale stop failed/);
+        assert.strictEqual(termination.stop(), retry);
+        assert.strictEqual(stopDebugging.callCount, 2);
+
+        secondStop.resolve();
+        await retry;
     });
 
     test('keeps natural termination armed after a disposal stop fails', async () => {
@@ -353,13 +461,15 @@ async function startBrowserAfterAspireDisposal(): Promise<{
     return { result, browserSession };
 }
 
-function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+function deferred<T>(): { promise: Promise<T>; reject(reason?: unknown): void; resolve(value: T): void } {
     let resolve!: (value: T) => void;
-    const promise = new Promise<T>(promiseResolve => {
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((promiseResolve, promiseReject) => {
         resolve = promiseResolve;
+        reject = promiseReject;
     });
 
-    return { promise, resolve };
+    return { promise, reject, resolve };
 }
 suite('Browser Debugger Tests', () => {
     const fakeAspireDebugSession = {} as AspireDebugSession;
@@ -440,7 +550,7 @@ suite('Browser Debugger Tests', () => {
     test('rejects a browser that has no supported debug adapter', async () => {
         await assert.rejects(
             () => createConfiguration({ type: 'browser', url: 'http://localhost:5173', browser: 'safari' }),
-            new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget('safari', BROWSER_RESOURCE_URL, 'msedge, chrome, firefox'))));
+            new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget('safari', BROWSER_RESOURCE_URL, 'msedge, chrome'))));
     });
 
     // The failure surfaces as a toast carrying only this message. An AppHost can declare several
@@ -465,7 +575,7 @@ suite('Browser Debugger Tests', () => {
         await assert.rejects(
             () => createConfiguration({ type: 'browser', browser: 'safari' }),
             (err: Error) => {
-                assert.strictEqual(err.message, unsupportedBrowserDebugTargetWithoutUrl('safari', 'msedge, chrome, firefox'));
+                assert.strictEqual(err.message, unsupportedBrowserDebugTargetWithoutUrl('safari', 'msedge, chrome'));
                 assert.ok(
                     !err.message.includes('1'),
                     `Message must not repeat the run ID the DCP error response already carries: ${err.message}`);
@@ -479,7 +589,7 @@ suite('Browser Debugger Tests', () => {
     test('rejects an explicitly empty browser instead of silently defaulting to Edge', async () => {
         await assert.rejects(
             () => createConfiguration({ type: 'browser', url: 'http://localhost:5173', browser: '' }),
-            new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget('', BROWSER_RESOURCE_URL, 'msedge, chrome, firefox'))));
+            new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget('', BROWSER_RESOURCE_URL, 'msedge, chrome'))));
     });
 
     // An AppHost predating the `browser` field omits it entirely, and a null survives untyped
@@ -503,7 +613,7 @@ suite('Browser Debugger Tests', () => {
         test(`rejects '${inheritedMember}' instead of resolving it through Object.prototype`, async () => {
             await assert.rejects(
                 () => createConfiguration({ type: 'browser', url: 'http://localhost:5173', browser: inheritedMember }),
-                new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget(inheritedMember, BROWSER_RESOURCE_URL, 'msedge, chrome, firefox'))));
+                new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget(inheritedMember, BROWSER_RESOURCE_URL, 'msedge, chrome'))));
         });
     }
 });

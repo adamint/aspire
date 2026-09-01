@@ -7,9 +7,9 @@ export type SendBrowserSessionTerminated = (runId: string, dcpId: string) => voi
 /**
  * Owns the terminal state for one Aspire-launched browser debug session.
  *
- * Browser adapters do not have a per-run adapter exit: js-debug is server-hosted, and Firefox can
- * disconnect independently from its browser process. The root VS Code session ending, or a
- * successful `stopDebugging`, is therefore the only point where Aspire can report termination.
+ * js-debug is server-hosted and does not have a per-run adapter exit. The root VS Code session
+ * ending, or a successful `stopDebugging`, is therefore the only point where Aspire can report
+ * termination.
  */
 export class BrowserDebugSessionTermination {
     private readonly _session: vscode.DebugSession;
@@ -17,6 +17,8 @@ export class BrowserDebugSessionTermination {
     private readonly _dcpId: string | null;
     private readonly _sendSessionTerminated: SendBrowserSessionTerminated;
     private readonly _terminationListener: vscode.Disposable;
+    private readonly _completion: Promise<void>;
+    private _resolveCompletion!: () => void;
     private _finished = false;
     private _stopPromise: Promise<void> | undefined;
 
@@ -25,9 +27,12 @@ export class BrowserDebugSessionTermination {
         this._runId = runId;
         this._dcpId = dcpId;
         this._sendSessionTerminated = sendSessionTerminated;
+        this._completion = new Promise(resolve => {
+            this._resolveCompletion = resolve;
+        });
         this._terminationListener = vscode.debug.onDidTerminateDebugSession(terminatedSession => {
-            // Chromium and Firefox create child target sessions. Only the root session that DCP
-            // launched represents the resource lifetime.
+            // Chromium creates child target sessions. Only the root session that DCP launched
+            // represents the resource lifetime.
             if (terminatedSession.id === session.id) {
                 this.finish();
             }
@@ -39,9 +44,23 @@ export class BrowserDebugSessionTermination {
             return Promise.resolve();
         }
 
-        this._stopPromise ??= this.stopCore();
+        if (!this._stopPromise) {
+            const stop = this.stopCore();
+            this._stopPromise = stop;
+            void stop.catch(() => {
+                if (this._stopPromise === stop) {
+                    this._stopPromise = undefined;
+                }
+            });
+        }
 
         return this._stopPromise;
+    }
+
+    resetStopAttempt(attempt: Promise<void>): void {
+        if (this._stopPromise === attempt) {
+            this._stopPromise = undefined;
+        }
     }
 
     stopAndDisposeOnFailure(): void {
@@ -53,14 +72,19 @@ export class BrowserDebugSessionTermination {
 
     private async stopCore(): Promise<void> {
         try {
-            await vscode.debug.stopDebugging(this._session);
+            // A timed-out attempt may still confirm the shared session's termination while a newer
+            // VS Code stop request is pending. Every generation races the same completion signal so
+            // that confirmation settles all of them without letting stale promises own the cache.
+            await Promise.race([
+                Promise.resolve(vscode.debug.stopDebugging(this._session)),
+                this._completion,
+            ]);
         }
         catch (error) {
             if (this._finished) {
                 return;
             }
 
-            this._stopPromise = undefined;
             extensionLogOutputChannel.warn(`Failed to stop browser debug session '${this._session.name}': ${error instanceof Error ? error.message : String(error)}`);
             throw error;
         }
@@ -74,12 +98,19 @@ export class BrowserDebugSessionTermination {
         }
 
         this._finished = true;
+        this._resolveCompletion();
         this._terminationListener.dispose();
 
-        if (this._dcpId) {
-            this._sendSessionTerminated(this._runId, this._dcpId);
+        try {
+            if (this._dcpId) {
+                this._sendSessionTerminated(this._runId, this._dcpId);
+            }
+            else {
+                extensionLogOutputChannel.warn(`Unable to report termination for run ${this._runId} because the DCP session ID is missing.`);
+            }
         }
-
-        cleanupRun(this._runId);
+        finally {
+            cleanupRun(this._runId);
+        }
     }
 }

@@ -5625,9 +5625,10 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         clock.restore();
     });
 
-    test('resource stopSession deduplicates concurrent stops and retries after rejection', async () => {
+    test('resource stopSession resets a pending attempt without letting its stale rejection clear the retry', async () => {
         let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
         const firstStop = createDeferred<void>();
+        const secondStop = createDeferred<void>();
         const parentDebugSession = {
             id: 'aspire-session',
             type: 'aspire',
@@ -5670,7 +5671,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         });
         const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging');
         stopDebugging.onFirstCall().returns(firstStop.promise);
-        stopDebugging.onSecondCall().resolves();
+        stopDebugging.onSecondCall().returns(secondStop.promise);
         const aspireDebugSession = new AspireDebugSession(
             parentDebugSession as unknown as vscode.DebugSession,
             {} as any,
@@ -5687,11 +5688,20 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(concurrent, first);
         assert.strictEqual(stopDebugging.calledOnce, true);
 
+        resource.resetStopSessionAttempt?.(first);
+        const retry = resource.stopSession();
+        const retryConcurrent = resource.stopSession();
+        assert.strictEqual(retryConcurrent, retry);
+        assert.strictEqual(stopDebugging.callCount, 2);
+
         firstStop.reject(new Error('stop failed'));
         await assert.rejects(Promise.resolve(first), /stop failed/);
-
-        await resource.stopSession();
+        assert.strictEqual(resource.stopSession(), retry);
         assert.strictEqual(stopDebugging.callCount, 2);
+
+        secondStop.resolve();
+        await retry;
+        await retryConcurrent;
 
         aspireDebugSession.dispose();
     });

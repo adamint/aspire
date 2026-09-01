@@ -590,6 +590,7 @@ suite('Aspire DCP run session lifecycle', () => {
         const createPromise = createRunResponse(harness, 'node', stopSession);
 
         await waitFor(() => harness.beginPendingDebugSessionStart.calledOnce);
+        await waitFor(() => prepareDebugSession.calledOnce);
         const pendingStart = harness.beginPendingDebugSessionStart.firstCall.returnValue;
         assert.strictEqual(harness.beginPendingDebugSessionStart.calledBefore(prepareDebugSession), true);
         assert.strictEqual(pendingStart.dispose.notCalled, true);
@@ -679,6 +680,84 @@ suite('Aspire DCP run session lifecycle', () => {
         }
     });
 
+    test('browser DELETE during startup reports a late stop failure and remains retryable', async () => {
+        const startCompleted = createDeferred<AspireResourceDebugSession>();
+        const startInvoked = createDeferred<string>();
+        const stopSession = sinon.stub();
+        stopSession.onFirstCall().rejects(new Error('late browser stop failed'));
+        stopSession.onSecondCall().resolves();
+        const resetStopSessionAttempt = sinon.stub();
+        harness.startDebugSession.resetBehavior();
+        harness.startDebugSession.callsFake((configuration: { runId: string }) => {
+            startInvoked.resolve(configuration.runId);
+            return startCompleted.promise;
+        });
+        const client = await openNotificationClient(harness);
+        const createPromise = createRunResponse(harness, 'browser', stopSession, resetStopSessionAttempt);
+        const runId = await startInvoked.promise;
+
+        const deleteRequestReceived = once(getInternals(harness.dcpServer).server, 'request');
+        const deletePromise = request(harness, 'DELETE', `/run_session/${runId}`);
+        await deleteRequestReceived;
+        await new Promise(resolve => setImmediate(resolve));
+        startCompleted.resolve(createResourceSession('late-browser-session', stopSession, resetStopSessionAttempt));
+        const [createResponse, failedDeleteResponse] = await Promise.all([createPromise, deletePromise]);
+        await drainNotifications(client);
+
+        assert.strictEqual(createResponse.statusCode, 201);
+        assert.strictEqual(failedDeleteResponse.statusCode, 500);
+        assert.strictEqual(stopSession.calledOnce, true);
+        assert.strictEqual(resetStopSessionAttempt.calledOnce, true);
+        assert.deepStrictEqual(client.notifications, []);
+
+        const retryResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+        const terminal = await client.waitForNotification();
+
+        assert.strictEqual(retryResponse.statusCode, 200);
+        assert.strictEqual(stopSession.callCount, 2);
+        assert.deepStrictEqual(client.notifications, [terminal]);
+    });
+
+    test('browser DELETE during startup keeps a late stop timeout retryable', async () => {
+        await stopHarness(harness);
+        harness = await startHarness({ debuggerStopTimeoutMs: 25 });
+        const startCompleted = createDeferred<AspireResourceDebugSession>();
+        const startInvoked = createDeferred<string>();
+        const stopSession = sinon.stub();
+        stopSession.onFirstCall().returns(new Promise<void>(() => { }));
+        stopSession.onSecondCall().resolves();
+        const resetStopSessionAttempt = sinon.stub();
+        harness.startDebugSession.resetBehavior();
+        harness.startDebugSession.callsFake((configuration: { runId: string }) => {
+            startInvoked.resolve(configuration.runId);
+            return startCompleted.promise;
+        });
+        const client = await openNotificationClient(harness);
+        const createPromise = createRunResponse(harness, 'browser', stopSession, resetStopSessionAttempt);
+        const runId = await startInvoked.promise;
+
+        const deleteRequestReceived = once(getInternals(harness.dcpServer).server, 'request');
+        const deletePromise = request(harness, 'DELETE', `/run_session/${runId}`);
+        await deleteRequestReceived;
+        await new Promise(resolve => setImmediate(resolve));
+        startCompleted.resolve(createResourceSession('late-browser-session', stopSession, resetStopSessionAttempt));
+        const [createResponse, timedOutDeleteResponse] = await Promise.all([createPromise, deletePromise]);
+        await drainNotifications(client);
+
+        assert.strictEqual(createResponse.statusCode, 201);
+        assert.strictEqual(timedOutDeleteResponse.statusCode, 500);
+        assert.strictEqual(stopSession.calledOnce, true);
+        assert.strictEqual(resetStopSessionAttempt.calledOnce, true);
+        assert.deepStrictEqual(client.notifications, []);
+
+        const retryResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+        const terminal = await client.waitForNotification();
+
+        assert.strictEqual(retryResponse.statusCode, 200);
+        assert.strictEqual(stopSession.callCount, 2);
+        assert.deepStrictEqual(client.notifications, [terminal]);
+    });
+
     test('browser DELETE waits for confirmed stop before terminating', async () => {
         const stopCompleted = createDeferred<void>();
         const stopSession = sinon.stub().returns(stopCompleted.promise);
@@ -723,25 +802,105 @@ suite('Aspire DCP run session lifecycle', () => {
         assert.deepStrictEqual(client.notifications, [terminal]);
     });
 
-    test('timed-out browser stop returns 500 and a later retry can confirm termination', async () => {
+    test('timed-out browser stop starts a fresh deduplicated attempt on retry', async () => {
         await stopHarness(harness);
         harness = await startHarness({ debuggerStopTimeoutMs: 25 });
-        const stopCompleted = createDeferred<void>();
-        const stopSession = sinon.stub().returns(stopCompleted.promise);
+        const retryStop = createDeferred<void>();
+        const stopSession = sinon.stub();
+        stopSession.onFirstCall().returns(new Promise<void>(() => { }));
+        stopSession.onSecondCall().returns(retryStop.promise);
+        const resetStopSessionAttempt = sinon.stub();
         const client = await openNotificationClient(harness);
-        const runId = await createRun(harness, 'browser', stopSession);
+        const runId = await createRun(harness, 'browser', stopSession, resetStopSessionAttempt);
 
         const timedOutResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
         await drainNotifications(client);
         assert.strictEqual(timedOutResponse.statusCode, 500);
         assert.deepStrictEqual(client.notifications, []);
+        assert.strictEqual(resetStopSessionAttempt.calledOnce, true);
 
-        stopCompleted.resolve();
-        const retryResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+        const retryResponsePromise = request(harness, 'DELETE', `/run_session/${runId}`);
+        await waitFor(() => stopSession.callCount === 2);
+        const concurrentRequestReceived = once(getInternals(harness.dcpServer).server, 'request');
+        const concurrentResponsePromise = request(harness, 'DELETE', `/run_session/${runId}`);
+        await concurrentRequestReceived;
+        assert.strictEqual(stopSession.callCount, 2);
+
+        retryStop.resolve();
+        const [retryResponse, concurrentResponse] = await Promise.all([retryResponsePromise, concurrentResponsePromise]);
         const terminal = await client.waitForNotification();
 
         assert.strictEqual(retryResponse.statusCode, 200);
-        assert.strictEqual(stopSession.calledOnce, true);
+        assert.strictEqual(concurrentResponse.statusCode, 200);
+        assert.strictEqual(stopSession.callCount, 2);
+        assert.deepStrictEqual(client.notifications, [terminal]);
+    });
+
+    test('stale timed-out browser stop rejection cannot clear the active retry', async () => {
+        await stopHarness(harness);
+        harness = await startHarness({ debuggerStopTimeoutMs: 25 });
+        const firstStop = createDeferred<void>();
+        const retryStop = createDeferred<void>();
+        const stopSession = sinon.stub();
+        stopSession.onFirstCall().returns(firstStop.promise);
+        stopSession.onSecondCall().returns(retryStop.promise);
+        const resetStopSessionAttempt = sinon.stub();
+        const client = await openNotificationClient(harness);
+        const runId = await createRun(harness, 'browser', stopSession, resetStopSessionAttempt);
+
+        const timedOutResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+        assert.strictEqual(timedOutResponse.statusCode, 500);
+
+        const retryResponsePromise = request(harness, 'DELETE', `/run_session/${runId}`);
+        await waitFor(() => stopSession.callCount === 2);
+        firstStop.reject(new Error('stale stop failed'));
+        await new Promise(resolve => setImmediate(resolve));
+
+        const concurrentRequestReceived = once(getInternals(harness.dcpServer).server, 'request');
+        const concurrentResponsePromise = request(harness, 'DELETE', `/run_session/${runId}`);
+        await concurrentRequestReceived;
+        assert.strictEqual(stopSession.callCount, 2);
+
+        retryStop.resolve();
+        const [retryResponse, concurrentResponse] = await Promise.all([retryResponsePromise, concurrentResponsePromise]);
+        const terminal = await client.waitForNotification();
+
+        assert.strictEqual(retryResponse.statusCode, 200);
+        assert.strictEqual(concurrentResponse.statusCode, 200);
+        assert.strictEqual(resetStopSessionAttempt.calledOnce, true);
+        assert.deepStrictEqual(client.notifications, [terminal]);
+    });
+
+    test('stale timed-out browser stop completion cannot clear the active retry', async () => {
+        await stopHarness(harness);
+        harness = await startHarness({ debuggerStopTimeoutMs: 25 });
+        const firstStop = createDeferred<void>();
+        const retryStop = createDeferred<void>();
+        const stopSession = sinon.stub();
+        stopSession.onFirstCall().returns(firstStop.promise);
+        stopSession.onSecondCall().returns(retryStop.promise);
+        const client = await openNotificationClient(harness);
+        const runId = await createRun(harness, 'browser', stopSession, sinon.stub());
+
+        const timedOutResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+        assert.strictEqual(timedOutResponse.statusCode, 500);
+
+        const retryResponsePromise = request(harness, 'DELETE', `/run_session/${runId}`);
+        await waitFor(() => stopSession.callCount === 2);
+        firstStop.resolve();
+        await new Promise(resolve => setImmediate(resolve));
+
+        const concurrentRequestReceived = once(getInternals(harness.dcpServer).server, 'request');
+        const concurrentResponsePromise = request(harness, 'DELETE', `/run_session/${runId}`);
+        await concurrentRequestReceived;
+        assert.strictEqual(stopSession.callCount, 2);
+
+        retryStop.resolve();
+        const [retryResponse, concurrentResponse] = await Promise.all([retryResponsePromise, concurrentResponsePromise]);
+        const terminal = await client.waitForNotification();
+
+        assert.strictEqual(retryResponse.statusCode, 200);
+        assert.strictEqual(concurrentResponse.statusCode, 200);
         assert.deepStrictEqual(client.notifications, [terminal]);
     });
 
@@ -841,7 +1000,13 @@ async function startHarness(options?: DcpServerOptions): Promise<Harness> {
     const dcpSessionId = 'aspire-extension-run-test';
     const dcpId = `${dcpSessionId}-resource`;
     const queuedSessions: AspireResourceDebugSession[] = [];
-    const beginPendingDebugSessionStart = sinon.stub().callsFake(() => ({ dispose: sinon.stub() }));
+    const beginPendingDebugSessionStart = sinon.stub().callsFake(() => {
+        const completion = createDeferred<void>();
+        return {
+            completion: completion.promise,
+            dispose: sinon.stub().callsFake(() => completion.resolve()),
+        };
+    });
     const startDebugSession = sinon.stub().callsFake(async () => queuedSessions.shift());
     const trackAlreadyStartedSession = sinon.stub().callsFake(
         (_configuration: unknown, session: AspireResourceDebugSession) => session);
@@ -882,16 +1047,24 @@ async function stopHarness(harness: Harness): Promise<void> {
     await Promise.all([serverClosed, ...socketClosures]);
 }
 
-async function createRun(harness: Harness, type: 'browser' | 'node', stopSession: sinon.SinonStub): Promise<string> {
-    const response = await createRunResponse(harness, type, stopSession);
+async function createRun(
+    harness: Harness,
+    type: 'browser' | 'node',
+    stopSession: sinon.SinonStub,
+    resetStopSessionAttempt?: sinon.SinonStub): Promise<string> {
+    const response = await createRunResponse(harness, type, stopSession, resetStopSessionAttempt);
     assert.strictEqual(response.statusCode, 201, response.body);
     const location = response.headers.location;
     assert.ok(location);
     return location.substring(location.lastIndexOf('/') + 1);
 }
 
-async function createRunResponse(harness: Harness, type: 'browser' | 'node', stopSession: sinon.SinonStub): Promise<HttpResponse> {
-    harness.queuedSessions.push(createResourceSession(`${type}-session`, stopSession));
+async function createRunResponse(
+    harness: Harness,
+    type: 'browser' | 'node',
+    stopSession: sinon.SinonStub,
+    resetStopSessionAttempt?: sinon.SinonStub): Promise<HttpResponse> {
+    harness.queuedSessions.push(createResourceSession(`${type}-session`, stopSession, resetStopSessionAttempt));
     const launchConfiguration: BrowserLaunchConfiguration | NodeLaunchConfiguration = type === 'browser'
         ? {
             type: 'browser',
@@ -912,11 +1085,15 @@ async function createRunResponse(harness: Harness, type: 'browser' | 'node', sto
     return await request(harness, 'PUT', '/run_session', payload);
 }
 
-function createResourceSession(id: string, stopSession: sinon.SinonStub): AspireResourceDebugSession {
+function createResourceSession(
+    id: string,
+    stopSession: sinon.SinonStub,
+    resetStopSessionAttempt?: sinon.SinonStub): AspireResourceDebugSession {
     return {
         id,
         session: { id } as AspireResourceDebugSession['session'],
         stopSession,
+        resetStopSessionAttempt,
     };
 }
 
