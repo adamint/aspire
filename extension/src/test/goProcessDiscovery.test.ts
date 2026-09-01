@@ -179,14 +179,24 @@ suite('Go process discovery', () => {
         assert.strictEqual(await resolver.resolveApplicationPid(10), 42);
     });
 
-    test('recognizes a Go launcher from its command when macOS truncates comm', () => {
+    test('does not trust a Go launcher command when executable identity differs', () => {
         const identity = createGoRunProcessIdentity();
 
         assert.strictEqual(identity.isLauncher(process(
             10,
             1,
             '/Users/me/Very',
-            '/Users/me/Very Long Go Installation/bin/go run ./cmd/api')), true);
+            '/Users/me/Very Long Go Installation/bin/go run ./cmd/api')), false);
+        assert.strictEqual(identity.isLauncher(process(
+            11,
+            1,
+            '/bin/bash',
+            'bash -c "go run ./cmd/api"')), false);
+        assert.strictEqual(identity.isCandidate(process(
+            42,
+            10,
+            '/usr/bin/other',
+            '/private/var/folders/x/go-build123/b001/exe/api')), false);
     });
 
     test('waits for the same Go build application candidate twice', async () => {

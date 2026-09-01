@@ -228,6 +228,9 @@ suite('Aspire resource debug language model tool', () => {
             assert.strictEqual(registration.registered, true);
             assert.deepStrictEqual(registerToolStub.getCalls().map(call => call.args[0]), [aspireResourceDebugToolName]);
             assert.deepStrictEqual([...registration.tools.keys()], [aspireResourceDebugToolName]);
+            assert.strictEqual(
+                typeof (registration.tools.get(aspireResourceDebugToolName) as { invoke?: unknown }).invoke,
+                'function');
             registration.dispose();
             assert.deepStrictEqual(disposed, [aspireResourceDebugToolName]);
         });

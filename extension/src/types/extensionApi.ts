@@ -270,5 +270,16 @@ export type AspireExtensionE2EControlCommand =
         debuggers?: Readonly<Record<string, DebugLaunchSettings>>;
         environmentKeys?: readonly string[];
     }
+    | {
+        name: 'proveAttachedResourceDebugging';
+        appHostPath: string;
+        resourceName: string;
+        sourcePath: string;
+        breakpointLine: number;
+        expectedDebugType: 'coreclr' | 'go';
+        expectedResponse: string;
+        resourceRequestPath?: string;
+        timeoutMs?: number;
+    }
     | { name: 'proveAppHostAndResourceDebugging'; appHostPath: string; resourceName: string; appHostSourcePath: string; appHostBreakpointLine: number; resourceSourcePath: string; resourceBreakpointLine: number; resourceRequestPath?: string; timeoutMs?: number }
     | { name: 'proveMauiResourceDebugging'; appHostPath: string; resourceName: string; sourcePath: string; breakpointLine: number; timeoutMs?: number; pauseOnBreakpointMs?: number };

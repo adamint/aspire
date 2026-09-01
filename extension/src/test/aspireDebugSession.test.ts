@@ -5297,6 +5297,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
                 exit_code: 17,
             },
         ]);
+        assert.strictEqual(aspireDebugSession.hasResourceDebugSessionProcess(4242), false);
 
         aspireDebugSession.dispose();
     });
@@ -5377,6 +5378,11 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             (aspireDebugSession as unknown as { hasResourceDebugSessionProcess(processId: number): boolean })
                 .hasResourceDebugSessionProcess(5252),
             false);
+        (aspireDebugSession as any)._resourceDebugSessionProcessIds.set('run-2', 5252);
+        assert.strictEqual(
+            (aspireDebugSession as unknown as { hasResourceDebugSessionProcess(processId: number): boolean })
+                .hasResourceDebugSessionProcess(5252),
+            true);
         aspireDebugSession.dispose();
     });
 

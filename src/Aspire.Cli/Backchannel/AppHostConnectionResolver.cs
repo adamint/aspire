@@ -88,6 +88,9 @@ internal sealed class AppHostConnectionResolver(
     /// Whether AppHosts running in a different git worktree are hidden from interactive selection.
     /// AppHosts elsewhere in the same worktree remain selectable.
     /// </param>
+    /// <param name="appHostPid">
+    /// Optional process ID that restricts an explicit project lookup to one AppHost instance.
+    /// </param>
     /// <returns>The resolved connection, or null with an error message.</returns>
     public async Task<AppHostConnectionResult> ResolveConnectionAsync(
         FileInfo? projectFile,
@@ -95,7 +98,8 @@ internal sealed class AppHostConnectionResolver(
         string selectPrompt,
         string notFoundMessage,
         CancellationToken cancellationToken,
-        bool restrictToCurrentWorktree = false)
+        bool restrictToCurrentWorktree = false,
+        int? appHostPid = null)
     {
         // Fast path: If --apphost was specified, check directly for its socket
         if (projectFile is not null)
@@ -146,7 +150,8 @@ internal sealed class AppHostConnectionResolver(
                 projectFile.FullName,
                 executionContext.HomeDirectory.FullName,
                 Environment.ProcessId,
-                logger);
+                logger,
+                appHostPid);
 
             // Try each matching socket until we get a connection
             foreach (var socketPath in matchingSockets)
@@ -155,6 +160,12 @@ internal sealed class AppHostConnectionResolver(
                 {
                     var connection = await AppHostAuxiliaryBackchannel.ConnectAsync(
                         socketPath, logger, profilingTelemetry, cancellationToken).ConfigureAwait(false);
+                    if (appHostPid is not null && connection.AppHostInfo?.ProcessId != appHostPid)
+                    {
+                        connection.Dispose();
+                        continue;
+                    }
+
                     if (connection is not null)
                     {
                         var result = new AppHostConnectionResult { Connection = connection };

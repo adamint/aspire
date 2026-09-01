@@ -410,6 +410,39 @@ public class AppHostHelperTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public void FindMatchingNonOrphanedSockets_WithAppHostPid_ReturnsOnlyThatPidQualifiedSocket()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var backchannelsDir = Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire", "cli", "bch");
+        Directory.CreateDirectory(backchannelsDir);
+
+        var appHostPath = "/path/to/MyApp.AppHost.csproj";
+        var resolvedAppHostPath = PathNormalizer.ResolveSymlinks(appHostPath);
+        var prefix = AppHostHelper.ComputeAuxiliarySocketPrefix(resolvedAppHostPath, workspace.WorkspaceRoot.FullName);
+        var appHostId = Path.GetFileName(prefix);
+        var selectedPid = Environment.ProcessId;
+        var otherPid = int.MaxValue - 1;
+        var selectedSocket = Path.Combine(backchannelsDir, $"{appHostId}a1b2C3d4.{selectedPid}");
+        var otherSocket = Path.Combine(backchannelsDir, $"{appHostId}Z9y8X7w6.{otherPid}");
+        var pidlessSocket = Path.Combine(backchannelsDir, appHostId);
+        File.WriteAllText(selectedSocket, "");
+        File.WriteAllText(otherSocket, "");
+        File.WriteAllText(pidlessSocket, "");
+
+        var matchingSockets = AppHostHelper.FindMatchingNonOrphanedSockets(
+            appHostPath,
+            workspace.WorkspaceRoot.FullName,
+            otherPid,
+            NullLogger.Instance,
+            selectedPid);
+
+        Assert.Collection(
+            matchingSockets.Order(StringComparer.Ordinal),
+            socket => Assert.Equal(pidlessSocket, socket),
+            socket => Assert.Equal(selectedSocket, socket));
+    }
+
+    [Fact]
     public void FindMatchingNonOrphanedSockets_WithSymlinkedPath_MatchesCanonicalSocket()
     {
         Assert.SkipUnless(OperatingSystem.IsLinux() || OperatingSystem.IsMacOS(),

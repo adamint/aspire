@@ -933,7 +933,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
                 const hasChildren = element.resources.some(r => getParentResourceName(r) === resource.name);
                 items.push(new ResourceItem(
                     resource,
-                    null,
+                    element.appHost?.appHostPid ?? null,
                     hasChildren,
                     element.resources,
                     element.appHostPath,

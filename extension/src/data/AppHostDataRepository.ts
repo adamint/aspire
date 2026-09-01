@@ -7,7 +7,7 @@ import { extensionLogOutputChannel } from '../utils/logging';
 import { appHostDescribeMayNotBeSupported, appHostDiscoveryProgress, appHostPathMustBeNonEmptyAbsolute, aspireCliDescribeNotSupported, aspireDescribeMinimumVersion, errorFetchingAppHosts, workspaceViewSelectedMultipleAppHosts, workspaceViewSelectedSingleAppHost } from '../loc/strings';
 import { AppHostCandidate, AppHostDiscoveryService, CandidateAppHostDisplayInfo, formatAppHostLanguage, getWorkspaceAppHostProjectSearchResult, isBuildableAppHostCandidate } from '../utils/appHostDiscovery';
 import { ConfigInfoProvider } from '../utils/configInfoProvider';
-import { describeIncludeDisabledCommandsCapability } from '../types/configInfo';
+import { describeAppHostPidCapability, describeIncludeDisabledCommandsCapability } from '../types/configInfo';
 import { nonInteractiveCliEnvironment } from '../utils/environment';
 import { getComparisonKey, isAppHostPathUnderFolder, isSameAppHostPath } from '../utils/paths/comparison';
 import { FileSystemEntryDescriptor, FileSystemEntryDescriptorIndex, getFileSystemEntryDescriptor } from '../utils/paths/fileSystemIdentity';
@@ -1325,11 +1325,30 @@ export class AppHostDataRepository {
         }
     }
 
-    async fetchAppHostResourcesOnce(appHostPath: string, cancellationToken?: vscode.CancellationToken): Promise<ResourceJson[]> {
+    async fetchAppHostResourcesOnce(appHostPath: string, cancellationToken?: vscode.CancellationToken, appHostPid?: number): Promise<ResourceJson[]> {
+        const args = ['describe', '--format', 'json', '--apphost', appHostPath];
+        const target = getCliPathTargetForUri(vscode.Uri.file(appHostPath));
+        if (appHostPid !== undefined) {
+            if (!Number.isInteger(appHostPid) || appHostPid <= 0) {
+                throw new Error('The AppHost process ID must be a positive integer.');
+            }
+
+            const capability = await this._configInfoProvider.getCapabilityStatus(describeAppHostPidCapability, {
+                target,
+                cancellationToken,
+                suppressErrors: true,
+            });
+            if (capability !== 'supported') {
+                throw new Error('The selected Aspire CLI cannot bind resource snapshots to an AppHost process.');
+            }
+
+            args.push('--apphost-pid', String(appHostPid));
+        }
+
         const snapshot = await this._runCliJson<DescribeSnapshotJson>(
             'aspire describe',
-            this._cliRunner.withNoLogo(['describe', '--format', 'json', '--apphost', appHostPath]),
-            { cancellationToken, target: getCliPathTargetForUri(vscode.Uri.file(appHostPath)) });
+            this._cliRunner.withNoLogo(args),
+            { cancellationToken, target });
         return snapshot.resources ?? [];
     }
 

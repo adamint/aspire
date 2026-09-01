@@ -138,7 +138,8 @@ internal static class AppHostHelper
         string appHostPath,
         string homeDirectory,
         int currentPid,
-        ILogger logger)
+        ILogger logger,
+        int? appHostPid = null)
     {
         // Resolve symlinks so callers that provide "/tmp/..." can still match sockets keyed
         // off the physical path (for example "/private/tmp/..." on macOS).
@@ -150,7 +151,13 @@ internal static class AppHostHelper
             logger.LogDebug("Cleaned up {Count} orphaned AppHost socket(s).", deletedCount);
         }
 
-        return remainingSockets;
+        // PID-less legacy sockets cannot be filtered before connecting. Keep them so an older
+        // AppHost remains reachable, then let the caller validate AppHostInfo.ProcessId.
+        return appHostPid is null
+            ? remainingSockets
+            : remainingSockets.Where(socketPath =>
+                ExtractPidFromSocketPath(socketPath) is not { } socketPid ||
+                socketPid == appHostPid).ToArray();
     }
 
     /// <summary>

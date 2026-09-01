@@ -194,8 +194,10 @@ function createService(options: {
 } {
     const repository: ResourceDebugAppHostRepository = {
         fetchRunningAppHostsOnce: async () => options.appHosts ?? [createAppHost()],
-        fetchAppHostResourcesOnce: async appHostPath =>
-            (options.appHosts ?? [createAppHost()]).find(appHost => appHost.appHostPath === appHostPath)?.resources ?? [],
+        fetchAppHostResourcesOnce: async (appHostPath, _cancellationToken, appHostPid) =>
+            (options.appHosts ?? [createAppHost()]).find(appHost =>
+                appHost.appHostPath === appHostPath &&
+                (appHostPid === undefined || appHost.appHostPid === appHostPid))?.resources ?? [],
     };
     const events = new TestDebugSessionEvents();
     const telemetry = options.telemetry ?? new TestResourceDebugTelemetry();
@@ -468,7 +470,8 @@ suite('Resource debug service', () => {
             createAppHost({ appHostPid: 1111 }),
             createAppHost({ appHostPid: 2222 }),
         ];
-        const { service, sessions } = createService({ appHosts });
+        const { service, repository, sessions } = createService({ appHosts });
+        const fetchResources = sinon.spy(repository, 'fetchAppHostResourcesOnce');
 
         assert.deepStrictEqual(await service.debug(createRequest({
             appHost: {
@@ -476,6 +479,7 @@ suite('Resource debug service', () => {
                 appHostPid: 2222,
             },
         })), { outcome: 'started', providerId: 'dotnet' });
+        assert.deepStrictEqual(fetchResources.firstCall.args, [target.absolutePath, undefined, 2222]);
         sessions.dispose();
     });
 
@@ -532,6 +536,36 @@ suite('Resource debug service', () => {
                 })],
             })],
             isProcessAlreadyDebugged: processId => processId === 4242,
+            startDebugging,
+        });
+
+        assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'alreadyDebugging' });
+        assert.strictEqual(startDebugging.called, false);
+        sessions.dispose();
+    });
+
+    test('returns alreadyDebugging when Aspire owns the resolved attach process', async () => {
+        const startDebugging = sinon.stub().resolves(true);
+        const provider = createProvider({
+            createDebugConfiguration: async () => ({
+                type: 'coreclr',
+                request: 'attach',
+                name: 'Attach debugger: API',
+                processId: 5252,
+            }),
+        });
+        const { service, sessions } = createService({
+            appHosts: [createAppHost({
+                resources: [createResource({
+                    properties: {
+                        'project.path': '/repo/api/Api.csproj',
+                        'executable.path': 'dotnet',
+                        'executable.pid': 4242,
+                    } as unknown as ResourceJson['properties'],
+                })],
+            })],
+            provider,
+            isProcessAlreadyDebugged: processId => processId === 5252,
             startDebugging,
         });
 

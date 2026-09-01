@@ -5,7 +5,6 @@ import { extensionLogOutputChannel } from "../../utils/logging";
 import { ResourceDebuggerExtension } from "../debuggerExtensions";
 import { ResourceAttachConfigurationError, type ResourceAttachProvider, type ResourceDebugResourceSnapshot } from '../resourceDebugContracts';
 import {
-    getProcessCommandProgram,
     launchedChildProcessResolver,
     type LaunchedChildProcess,
     type LaunchedChildProcessIdentity,
@@ -193,17 +192,12 @@ function getProcessId(resource: ResourceDebugResourceSnapshot): number | undefin
 }
 
 function isGoBuildApplication(process: LaunchedChildProcess): boolean {
-    return isGoRunApplicationPath(process.executable) ||
-        isGoRunApplicationPath(getProcessCommandProgram(process.command));
+    return isGoRunApplicationPath(process.executable);
 }
 
 function isGoToolProcess(process: LaunchedChildProcess): boolean {
-    const programs = [getProcessCommandProgram(process.command), process.executable];
-    return programs.some(program => {
-        const executableName = program?.split(/[\\/]/).pop()?.toLowerCase();
-        return executableName === 'go' || executableName === 'go.exe';
-    }) ||
-        /(?:^|[\\/\s])go(?:\.exe)?\s+run(?:\s|$)/i.test(process.command);
+    const executableName = process.executable.split(/[\\/]/).pop()?.toLowerCase();
+    return executableName === 'go' || executableName === 'go.exe';
 }
 
 function isGoRunApplicationPath(path: string | undefined): boolean {

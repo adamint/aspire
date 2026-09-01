@@ -253,21 +253,25 @@ internal class ResourceSnapshotBuilder
             return [];
         }
 
-        if (effectiveArgs is not [var command, ..] ||
-            (!string.Equals(command, "run", StringComparison.OrdinalIgnoreCase) &&
-             !string.Equals(command, "watch", StringComparison.OrdinalIgnoreCase)))
+        if (effectiveArgs is null ||
+            FindDotNetProjectCommand(effectiveArgs) is not { } commandInfo)
         {
             return [new(KnownProperties.Project.LaunchCommand, null)];
         }
 
+        var (command, commandIndex) = commandInfo;
         string? configuration = null;
         string? targetFramework = null;
 
         // DCP reports dotnet launch arguments as:
         //   ["watch", "--project", "/repo/api.csproj", "--configuration", "Release", "--framework=net10.0", "--", ...appArgs]
+        //   ["[env:NAME=value]", "--diagnostics", "run", "--project", "/repo/api.csproj"]
+        //   ["-d", "watch", "--project", "/repo/api.csproj"]
         // Only launcher arguments before "--" are safe to publish as launch metadata. Application
         // arguments after the separator can contain unrelated values and remain sensitive in executable.args.
-        for (var index = 1; index < effectiveArgs.Count; index++)
+        // See https://learn.microsoft.com/dotnet/core/tools/dotnet and
+        // https://github.com/dotnet/command-line-api/blob/main/src/System.CommandLine/EnvironmentVariablesDirective.cs.
+        for (var index = commandIndex + 1; index < effectiveArgs.Count; index++)
         {
             var argument = effectiveArgs[index];
             if (argument == "--")
@@ -313,6 +317,37 @@ internal class ResourceSnapshotBuilder
         }
 
         return properties.ToImmutable();
+
+        static (string Command, int Index)? FindDotNetProjectCommand(IReadOnlyList<string> arguments)
+        {
+            var index = 0;
+            var hasEnvironmentVariableDirective = false;
+            while (index < arguments.Count &&
+                (string.Equals(arguments[index], "[env]", StringComparison.OrdinalIgnoreCase) ||
+                 arguments[index].StartsWith("[env:", StringComparison.OrdinalIgnoreCase) && arguments[index].EndsWith(']')))
+            {
+                hasEnvironmentVariableDirective = true;
+                index++;
+            }
+
+            while (index < arguments.Count && arguments[index] is "-d" or "--diagnostics")
+            {
+                index++;
+            }
+
+            if (index >= arguments.Count)
+            {
+                return null;
+            }
+
+            return arguments[index].ToLowerInvariant() switch
+            {
+                "run" => ("run", index),
+                // .NET 10 cannot resolve the external watch command through an environment directive.
+                "watch" when !hasEnvironmentVariableDirective => ("watch", index),
+                _ => null,
+            };
+        }
 
         static bool TryReadOptionValue(string argument, string longOption, string shortOption, out string? value)
         {

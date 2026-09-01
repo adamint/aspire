@@ -5,6 +5,7 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import {
     LaunchedChildProcessResolver,
+    parseMacOsTextExecutablePath,
     parsePosixProcessList,
     parseWindowsProcessList,
     SystemLaunchedChildProcessQuery,
@@ -393,7 +394,7 @@ suite('Launched child process discovery', () => {
         }
     });
 
-    test('resolves a macOS child with a spaced non-ASCII executable path from per-candidate ps details', async () => {
+    test('resolves a macOS child with a spaced non-ASCII executable path from lsof identity', async () => {
         const calls: Array<{ command: string; args: readonly string[] }> = [];
         const processDetails = new Map([
             [10, { parentPid: 1, executable: '/tool/launcher', command: '/tool/launcher --run' }],
@@ -406,6 +407,16 @@ suite('Launched child process discovery', () => {
         const commandRunner: LaunchedChildProcessCommandRunner = {
             async run(command, args): Promise<string> {
                 calls.push({ command, args });
+                if (command === 'lsof') {
+                    const processId = Number(args[2]);
+                    const details = processDetails.get(processId);
+                    if (!details) {
+                        throw new Error(`Unexpected process ID: ${processId}`);
+                    }
+
+                    return `p${processId}\nftxt\nn${details.executable}\n`;
+                }
+
                 assert.strictEqual(command, 'ps');
                 if (args.join(' ') === '-axo pid=,ppid=') {
                     return '10 1\n42 10';
@@ -420,8 +431,6 @@ suite('Launched child process discovery', () => {
                 switch (args[args.length - 1]) {
                     case 'ppid=':
                         return String(details.parentPid);
-                    case 'comm=':
-                        return details.executable;
                     case 'args=':
                         return details.command;
                     default:
@@ -441,6 +450,16 @@ suite('Launched child process discovery', () => {
 
         assert.strictEqual(await resolver.resolveProcessId(10, exactPathIdentity), 42);
         assert.ok(calls.every(call => call.args.join(' ') !== '-axo pid=,ppid=,comm=,args='));
+    });
+
+    test('parses only the requested macOS lsof text executable record', () => {
+        const output = 'p42\nftxt\nn/Applications/My Long App.app/Contents/MacOS/My Long App\n';
+
+        assert.strictEqual(
+            parseMacOsTextExecutablePath(output, 42),
+            '/Applications/My Long App.app/Contents/MacOS/My Long App');
+        assert.strictEqual(parseMacOsTextExecutablePath(output, 43), undefined);
+        assert.strictEqual(parseMacOsTextExecutablePath('p42\nfcwd\nn/repo\n', 42), undefined);
     });
 
     test('retries when a Linux candidate exits between topology and procfs reads', async () => {

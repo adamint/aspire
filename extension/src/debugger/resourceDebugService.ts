@@ -30,7 +30,7 @@ import {
 
 export interface ResourceDebugAppHostRepository {
     fetchRunningAppHostsOnce(cancellationToken?: vscode.CancellationToken): Promise<readonly AppHostDisplayInfo[]>;
-    fetchAppHostResourcesOnce(appHostPath: string, cancellationToken?: vscode.CancellationToken): Promise<readonly ResourceJson[]>;
+    fetchAppHostResourcesOnce(appHostPath: string, cancellationToken?: vscode.CancellationToken, appHostPid?: number): Promise<readonly ResourceJson[]>;
 }
 
 export type ResourceDebugAppHostIdentityComparer =
@@ -192,7 +192,8 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
         try {
             resources = await this._dependencies.appHostRepository.fetchAppHostResourcesOnce(
                 resolvedTarget.absolutePath,
-                request.cancellationToken);
+                request.cancellationToken,
+                resolvedTarget.appHostPid);
         }
         catch (error) {
             if (isCommandCancellation(error) || request.cancellationToken?.isCancellationRequested) {
@@ -304,6 +305,14 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
                     : 'creating the resource attach configuration',
                 error);
             return { outcome: 'error', errorKind: 'configurationFailed' };
+        }
+
+        const attachProcessId = configuration.processId;
+        if (typeof attachProcessId === 'number' &&
+            Number.isInteger(attachProcessId) &&
+            attachProcessId > 0 &&
+            this._dependencies.isProcessAlreadyDebugged?.(attachProcessId)) {
+            return { outcome: 'alreadyDebugging' };
         }
 
         if (request.cancellationToken?.isCancellationRequested) {

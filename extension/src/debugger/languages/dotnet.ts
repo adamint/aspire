@@ -1081,8 +1081,8 @@ function isDotNetProcess(process: LaunchedChildProcess): boolean {
     return executableName === 'dotnet' || executableName === 'dotnet.exe';
 }
 
-function isAppHostProcessForTarget(process: LaunchedChildProcess, appHostPaths: readonly string[]): boolean {
-    return appHostPaths.some(appHostPath => areProcessPathsEqual(process.executable, appHostPath));
+function isAppHostProcessForTarget(candidate: LaunchedChildProcess, appHostPaths: readonly string[]): boolean {
+    return appHostPaths.some(appHostPath => areProcessPathsEqual(candidate.executable, appHostPath));
 }
 
 function isAppHostProcessForTargetName(process: LaunchedChildProcess, targetName: string): boolean {

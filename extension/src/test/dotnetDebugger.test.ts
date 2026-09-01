@@ -618,6 +618,7 @@ suite('Dotnet Debugger Extension Tests', () => {
     });
 
     test('attach configuration resolves an apphost child by its evaluated executable identity', async () => {
+        sinon.stub(process, 'platform').value('linux');
         const targetPath = '/repo/OneDrive - Microsoft/über-long-path/My Attach Service';
         const { dotNetService } = createDebuggerExtension(targetPath, null, true, true);
         dotNetService.getDotNetAttachTargetInfoStub.resolves({ targetPath, useAppHost: true });
@@ -664,6 +665,43 @@ suite('Dotnet Debugger Extension Tests', () => {
             parentPid: 1234,
             executable: `${targetPath} Worker`,
             command: `${targetPath} Worker`,
+        }), false);
+    });
+
+    test('matches a long macOS apphost path only through the exact executable identity', async () => {
+        sinon.stub(process, 'platform').value('darwin');
+        const targetPath = '/repo/OneDrive - Microsoft/über-long-path/My Attach Service With A Long Name';
+        const { dotNetService } = createDebuggerExtension(targetPath, null, true, true);
+        dotNetService.getDotNetAttachTargetInfoStub.resolves({ targetPath, useAppHost: true });
+        const resolver = {
+            resolveProcessId: sinon.stub().resolves(4321),
+        };
+        const attachProvider = createAttachProvider(dotNetService, resolver);
+
+        await attachProvider.createDebugConfiguration(createProjectResource({
+            'executable.pid': 1234,
+            'executable.path': 'dotnet',
+            'project.path': '/repo/api/Api.csproj',
+        }));
+
+        const processIdentity = resolver.resolveProcessId.firstCall.args[1] as TestLaunchedChildProcessIdentity;
+        assert.strictEqual(processIdentity.isCandidate({
+            pid: 4321,
+            parentPid: 1234,
+            executable: targetPath,
+            command: `${targetPath} --urls http://localhost:5000`,
+        }), true);
+        assert.strictEqual(processIdentity.isCandidate({
+            pid: 4322,
+            parentPid: 1234,
+            executable: '/repo/OneDrive -',
+            command: targetPath,
+        }), false);
+        assert.strictEqual(processIdentity.isCandidate({
+            pid: 4323,
+            parentPid: 1234,
+            executable: `${targetPath} Worker`,
+            command: targetPath,
         }), false);
     });
 

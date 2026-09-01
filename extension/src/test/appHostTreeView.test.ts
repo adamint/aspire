@@ -513,7 +513,7 @@ suite('AspireAppHostTreeProvider', () => {
             onDidChangeVisibility: visibilityEmitter.event,
             reveal,
         } as unknown as Parameters<AspireAppHostTreeProvider['setTreeView']>[0];
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), makeResourceDebugger());
 
         provider.setTreeView(treeView);
         dataEmitter.fire();
@@ -2799,7 +2799,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             globalSettingsSchema: { properties: [] },
             capabilities: [pipelineInteractionCapability],
         });
-        const provider = new AspireAppHostTreeProvider(repository, terminalProvider, launchService);
+        const provider = new AspireAppHostTreeProvider(repository, terminalProvider, launchService, makeResourceDebugger());
         const callbacks = registerTreeCommandCallbacks(sandbox, provider, repository);
         const [workspaceAppHostsGroup] = provider.getChildren();
         await waitForCondition(
@@ -2879,7 +2879,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             workspaceAppHostDescription: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const globalProvider = new AspireAppHostTreeProvider(globalRepository, terminalProvider, launchService);
+        const globalProvider = new AspireAppHostTreeProvider(globalRepository, terminalProvider, launchService, makeResourceDebugger());
         const [appHostItem] = globalProvider.getChildren();
         assert.ok(appHostItem instanceof AppHostItem);
         const workspaceResourcesRepository = {
@@ -2893,7 +2893,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             workspaceAppHostDescription: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const workspaceResourcesProvider = new AspireAppHostTreeProvider(workspaceResourcesRepository, terminalProvider, launchService);
+        const workspaceResourcesProvider = new AspireAppHostTreeProvider(workspaceResourcesRepository, terminalProvider, launchService, makeResourceDebugger());
         const [workspaceResourcesItem] = workspaceResourcesProvider.getChildren();
         assert.ok(workspaceResourcesItem instanceof WorkspaceResourcesItem);
         const workspaceAppHostRepository = {
@@ -2906,7 +2906,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             workspaceAppHostDescription: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const workspaceAppHostProvider = new AspireAppHostTreeProvider(workspaceAppHostRepository, terminalProvider, launchService);
+        const workspaceAppHostProvider = new AspireAppHostTreeProvider(workspaceAppHostRepository, terminalProvider, launchService, makeResourceDebugger());
         const [workspaceAppHostItem] = workspaceAppHostProvider.getChildren();
         assert.ok(workspaceAppHostItem instanceof WorkspaceAppHostItem);
 
@@ -2969,7 +2969,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         });
         sandbox.stub(vscode.window, 'showInputBox').resolves(undefined);
         const showErrorMessageStub = sandbox.stub(vscode.window, 'showErrorMessage').resolves(undefined);
-        const provider = new AspireAppHostTreeProvider(repository, terminalProvider, launchService);
+        const provider = new AspireAppHostTreeProvider(repository, terminalProvider, launchService, makeResourceDebugger());
         const callbacks = registerTreeCommandCallbacks(sandbox, provider, repository);
         const [appHostItem] = provider.getChildren();
 
@@ -3017,7 +3017,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         const launchStub = sandbox.stub(launchService, 'launch').rejects(launchError);
         sandbox.stub(configInfoProvider.ConfigInfoProvider.prototype, 'getCapabilityStatus').resolves('supported');
         const showErrorMessageStub = sandbox.stub(vscode.window, 'showErrorMessage').resolves(undefined);
-        const provider = new AspireAppHostTreeProvider(repository, terminalProvider, launchService);
+        const provider = new AspireAppHostTreeProvider(repository, terminalProvider, launchService, makeResourceDebugger());
         const callbacks = registerTreeCommandCallbacks(sandbox, provider, repository);
         const [appHostItem] = provider.getChildren();
 
@@ -3057,7 +3057,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
             workspaceAppHostDescription: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, terminalProvider, launchService);
+        const provider = new AspireAppHostTreeProvider(repository, terminalProvider, launchService, makeResourceDebugger());
         const callbacks = registerTreeCommandCallbacks(sandbox, provider, repository);
         const [appHostItem] = provider.getChildren();
 
@@ -3172,6 +3172,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         assert.ok(request);
         assert.strictEqual(request.appHost.absolutePath, appHostPath);
         assert.strictEqual(request.appHost.displayPath, vscode.workspace.asRelativePath(appHostPath));
+        assert.strictEqual(request.appHost.appHostPid, 1234);
         provider.dispose();
     });
 
@@ -4494,6 +4495,7 @@ suite('AppHost tree actions', () => {
             repository,
             makeTerminalProvider(),
             launchService,
+            makeResourceDebugger(),
             undefined,
             makeClipboard(),
             configInfoProviderInstance,

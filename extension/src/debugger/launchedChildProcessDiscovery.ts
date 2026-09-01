@@ -393,6 +393,24 @@ export class SystemLaunchedChildProcessQuery implements LaunchedChildProcessQuer
             return this._getLinuxProcess(processId, cancellationToken, timeoutMs);
         }
 
+        if (this._platform === 'darwin') {
+            const [parentPidOutput, executableOutput, commandOutput] = await Promise.all([
+                this._commandRunner.run('ps', ['-p', String(processId), '-o', 'ppid='], cancellationToken, timeoutMs),
+                this._commandRunner.run('lsof', ['-a', '-p', String(processId), '-d', 'txt', '-Fn'], cancellationToken, timeoutMs),
+                this._commandRunner.run('ps', ['-p', String(processId), '-o', 'args='], cancellationToken, timeoutMs),
+            ]);
+            const executablePath = parseMacOsTextExecutablePath(executableOutput, processId);
+            if (executablePath === undefined) {
+                return undefined;
+            }
+
+            return createProcessInfo(
+                processId,
+                parentPidOutput.trim(),
+                executablePath,
+                commandOutput.trim());
+        }
+
         const [parentPidOutput, executableOutput, commandOutput] = await Promise.all([
             this._commandRunner.run('ps', ['-p', String(processId), '-o', 'ppid='], cancellationToken, timeoutMs),
             this._commandRunner.run('ps', ['-p', String(processId), '-o', 'comm='], cancellationToken, timeoutMs),
@@ -434,6 +452,24 @@ export class SystemLaunchedChildProcessQuery implements LaunchedChildProcessQuer
             commandLineArguments.join(' '),
             commandLineArguments);
     }
+}
+
+export function parseMacOsTextExecutablePath(output: string, processId: number): string | undefined {
+    // `lsof -a -p 123 -d txt -Fn` reports the kernel-backed text executable as:
+    //   p123
+    //   ftxt
+    //   n/Applications/My Long App.app/Contents/MacOS/My Long App
+    // Require the requested PID record and the `txt` file descriptor before accepting its name.
+    const lines = output.split(/\r?\n/);
+    if (!lines.includes(`p${processId}`)) {
+        return undefined;
+    }
+
+    const textDescriptorIndex = lines.indexOf('ftxt');
+    const executableLine = textDescriptorIndex >= 0 ? lines[textDescriptorIndex + 1] : undefined;
+    return executableLine?.startsWith('n') && executableLine.length > 1
+        ? executableLine.slice(1)
+        : undefined;
 }
 
 export class SystemLaunchedChildProcessCommandRunner implements LaunchedChildProcessCommandRunner {

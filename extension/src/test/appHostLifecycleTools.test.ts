@@ -289,7 +289,10 @@ class FakeDiscoveryService implements AppHostLifecycleDiscoveryService {
         return this.registeredPaths
             .filter(candidatePath => {
                 const relative = path.relative(folderPath, candidatePath);
-                return relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative);
+                return relative.length > 0 &&
+                    relative !== '..' &&
+                    !relative.startsWith(`..${path.sep}`) &&
+                    !path.isAbsolute(relative);
             })
             .map(candidatePath => ({ path: candidatePath, language: 'csharp', status: 'buildable' }));
     }
@@ -852,6 +855,19 @@ suite('AppHost lifecycle language model tools', () => {
 
             assert.strictEqual(result.outcome, 'started');
             assert.strictEqual(result.appHostPath, 'SingleFile/apphost.cs');
+        });
+
+        test('accepts an in-workspace directory whose name begins with two dots', async () => {
+            const directory = path.join(workspaceRoot, '..services');
+            fs.mkdirSync(directory, { recursive: true });
+            const project = path.join(directory, 'AppHost.csproj');
+            fs.writeFileSync(project, appHostProjectContents);
+            discoveryService.registeredPaths.push(project);
+
+            const result = await service.start({ appHostPath: '..services/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'started');
+            assert.strictEqual(result.appHostPath, '..services/AppHost.csproj');
         });
 
         test('treats a symlinked AppHost as the AppHost it points at', async function () {

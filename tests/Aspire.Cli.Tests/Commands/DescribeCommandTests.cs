@@ -49,6 +49,24 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Theory]
+    [InlineData("describe --apphost-pid 42")]
+    [InlineData("describe --apphost missing.csproj --apphost-pid 0")]
+    [InlineData("describe --apphost missing.csproj --apphost-pid -1")]
+    public async Task DescribeCommand_AppHostPid_RejectsUnboundOrInvalidValues(string commandLine)
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse(commandLine);
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.NotEqual(CliExitCodes.Success, exitCode);
+    }
+
+    [Theory]
     [InlineData("json")]
     [InlineData("Json")]
     [InlineData("JSON")]

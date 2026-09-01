@@ -170,6 +170,34 @@ public class ResourceSnapshotBuilderTests
         Assert.False(GetProperty(snapshot, KnownProperties.Project.TargetFramework).IsSensitive);
     }
 
+    [Theory]
+    [InlineData("run", "[env:ASPNETCORE_ENVIRONMENT=Development]", "--diagnostics")]
+    [InlineData("watch", "-d")]
+    public void ProjectSnapshotIncludesLaunchMetadataAfterSupportedDotNetPrefixes(
+        string launchCommand,
+        params string[] prefixes)
+    {
+        var project = new ProjectResource("project");
+        project.Annotations.Add(new TestProjectMetadata());
+
+        var executable = Executable.Create("project", "dotnet");
+        executable.Annotate(DcpCustomResource.ResourceNameAnnotation, project.Name);
+        executable.Status = new ExecutableStatus
+        {
+            EffectiveArgs = [.. prefixes, launchCommand, "--configuration", "Release", "--framework", "net10.0"],
+            ProcessId = 1234
+        };
+
+        var snapshot = CreateSnapshotBuilder(new Dictionary<string, IResource>
+        {
+            [project.Name] = project
+        }).ToSnapshot(executable, CreatePreviousSnapshot());
+
+        Assert.Equal(launchCommand, GetProperty(snapshot, KnownProperties.Project.LaunchCommand).Value);
+        Assert.Equal("Release", GetProperty(snapshot, KnownProperties.Project.Configuration).Value);
+        Assert.Equal("net10.0", GetProperty(snapshot, KnownProperties.Project.TargetFramework).Value);
+    }
+
     [Fact]
     public void ProjectSnapshotIncludesNullLaunchCommandWhenDotNetArgumentsAreMissing()
     {

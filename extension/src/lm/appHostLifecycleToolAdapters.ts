@@ -144,18 +144,5 @@ function describeLaunchProfile(value: unknown): string | undefined {
         return undefined;
     }
 
-    return isValidLaunchProfile(value) ? escapeMarkdown(value) : appHostLifecycleInvalidLaunchProfile;
+    return isValidLaunchProfile(value) ? escapeMarkdownForConfirmation(value) : appHostLifecycleInvalidLaunchProfile;
 }
-
-/**
- * Escapes the Markdown constructs that change how a path renders inline.
- *
- * The confirmation body renders as Markdown, so an unescaped `*`, `_`, `` ` ``, `[`, or
- * `<` in a real file name would show the user something other than the file the tool is
- * about to launch. Escaping keeps the rendered text one-to-one with the path instead of
- * deleting characters, which would break that relationship in the other direction.
- * Characters that are only meaningful at the start of a line (`.`, `-`, `{`, `}`) are
- * left alone: the path is always interpolated mid-sentence and they are extremely common
- * in real project paths.
- * See https://spec.commonmark.org/0.31.2/#backslash-escapes
- */

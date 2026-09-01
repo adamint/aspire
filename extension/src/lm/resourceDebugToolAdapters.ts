@@ -65,6 +65,13 @@ export function registerAspireResourceDebugTool(service: AspireResourceDebugTool
         [aspireResourceDebugToolName, {
             prepareInvocation: (options: { readonly input: Record<string, unknown> }, token: vscode.CancellationToken) =>
                 tool.prepareInvocation({ input: options.input as unknown as AspireResourceDebugToolInput }, token),
+            invoke: (
+                options: { readonly input: Record<string, unknown>; readonly toolInvocationToken: undefined },
+                token: vscode.CancellationToken,
+            ) => tool.invoke({
+                input: options.input as unknown as AspireResourceDebugToolInput,
+                toolInvocationToken: options.toolInvocationToken,
+            }, token),
         }],
     ]);
 
