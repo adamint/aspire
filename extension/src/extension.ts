@@ -44,13 +44,14 @@ import { EditorAssistanceToolService } from './lm/editorAssistanceToolService';
 import { registerEditorAssistanceTools } from './lm/editorAssistanceToolAdapters';
 import { EditorUiHandoffService } from './lm/editorUiHandoffService';
 import { readLatestLaunchFailures } from './services/launchFailureJournal';
-import { getHotReloadDiagnostics } from './debugger/hotReload';
+import { getHotReloadDiagnostics, initializeHotReloadAdvisory } from './debugger/hotReload';
 
 let aspireExtensionContext = new AspireExtensionContext();
 
 export async function activate(context: vscode.ExtensionContext) {
   resetEditorAssistanceWindowState();
   aspireExtensionContext = new AspireExtensionContext();
+  initializeHotReloadAdvisory(context.workspaceState);
 
   const gitCommitSha = readGitCommitSha(context);
   extensionLogOutputChannel.info(`Activating Aspire extension (commit: ${gitCommitSha})`);

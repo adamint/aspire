@@ -90,12 +90,7 @@ suite('Aspire debug dashboard E2E', function () {
         await waitForNoDebugSessions();
     });
 
-    test('closes the dashboard debug browser when the AppHost debug session stops', async function () {
-        // js-debug cannot launch Chrome under the Linux xvfb runner: it activates on
-        // `onDebugResolve:pwa-chrome` and then never resolves `startDebugging`. Because
-        // `openDashboard` awaits that launch, the AppHost startup handshake stalls and every
-        // later test in this file fails too. Windows runs the real browser, so the shutdown
-        // behavior still gets end-to-end coverage there.
+    test('starts the AppHost without waiting for the dashboard debug browser and closes the browser on Windows', async function () {
         if (process.platform !== 'win32') {
             this.skip();
         }

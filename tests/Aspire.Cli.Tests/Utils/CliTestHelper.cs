@@ -319,6 +319,7 @@ internal static class CliTestHelper
         services.AddTransient<SdkCommand>();
         services.AddTransient<SdkGenerateCommand>();
         services.AddTransient<SdkDumpCommand>();
+        services.AddTransient<SdkExportCommand>();
         services.AddTransient<ApiCommand>();
         services.AddTransient<ApiListCommand>();
         services.AddTransient<ApiSearchCommand>();

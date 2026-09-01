@@ -429,7 +429,7 @@ export interface EditorUiHandoffDebugSession {
     readonly cliProcessId: number | undefined;
     readonly configuration: { readonly dashboardBrowser?: unknown };
     readonly isShuttingDown: boolean;
-    openDashboard(url: string, browserType: DashboardBrowserType): Promise<DashboardPresentation | undefined>;
+    openDashboard(url: string, browserType: DashboardBrowserType, waitForDebugBrowserStart?: boolean): Promise<DashboardPresentation | undefined>;
 }
 
 export type EditorUiHandoffDashboardResult =

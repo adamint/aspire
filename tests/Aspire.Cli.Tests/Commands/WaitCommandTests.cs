@@ -1,8 +1,10 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Globalization;
 using Aspire.Cli.Backchannel;
 using Aspire.Cli.Commands;
+using Aspire.Cli.Resources;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
 using Microsoft.AspNetCore.InternalTesting;
@@ -164,9 +166,14 @@ public class WaitCommandTests(ITestOutputHelper outputHelper)
         var exitCode = await result.InvokeAsync().DefaultTimeout();
         Assert.Equal(CliExitCodes.WaitResourceFailed, exitCode);
         Assert.Equal(
-            ["Scanning for running AppHosts...", "Waiting for resource 'nonexistent' to be healthy..."],
+            [
+                SharedCommandStrings.ScanningForRunningAppHosts,
+                string.Format(CultureInfo.CurrentCulture, WaitCommandStrings.WaitingForResource, "nonexistent", "healthy")
+            ],
             interactionService.ShownStatuses);
-        Assert.Equal(["Resource 'nonexistent' was not found."], interactionService.DisplayedErrors);
+        Assert.Equal(
+            [string.Format(CultureInfo.CurrentCulture, WaitCommandStrings.ResourceNotFound, "nonexistent")],
+            interactionService.DisplayedErrors);
         Assert.Equal([""], interactionService.DisplayedPlainText);
         Assert.Empty(interactionService.DisplayedSuccess);
     }
@@ -201,11 +208,16 @@ public class WaitCommandTests(ITestOutputHelper outputHelper)
         var exitCode = await result.InvokeAsync().DefaultTimeout();
         Assert.Equal(CliExitCodes.Success, exitCode);
         Assert.Equal(
-            ["Scanning for running AppHosts...", "Waiting for resource 'myapp' to be up (running)..."],
+            [
+                SharedCommandStrings.ScanningForRunningAppHosts,
+                string.Format(CultureInfo.CurrentCulture, WaitCommandStrings.WaitingForResource, "myapp", "up (running)")
+            ],
             interactionService.ShownStatuses);
         Assert.Empty(interactionService.DisplayedErrors);
         Assert.Equal([""], interactionService.DisplayedPlainText);
-        Assert.Equal(["Resource 'myapp' is up (running). (2.5s)"], interactionService.DisplayedSuccess);
+        Assert.Equal(
+            [string.Format(CultureInfo.CurrentCulture, WaitCommandStrings.ResourceReachedTargetStatus, "myapp", "up (running)", 2.5)],
+            interactionService.DisplayedSuccess);
     }
 
     [Fact]
@@ -264,10 +276,13 @@ public class WaitCommandTests(ITestOutputHelper outputHelper)
         var exitCode = await result.InvokeAsync().DefaultTimeout();
         Assert.Equal(CliExitCodes.WaitTimeout, exitCode);
         Assert.Equal(
-            ["Scanning for running AppHosts...", "Waiting for resource 'mydb' to be healthy..."],
+            [
+                SharedCommandStrings.ScanningForRunningAppHosts,
+                string.Format(CultureInfo.CurrentCulture, WaitCommandStrings.WaitingForResource, "mydb", "healthy")
+            ],
             interactionService.ShownStatuses);
         Assert.Equal(
-            ["Timed out waiting for resource 'mydb' to be healthy after 2s."],
+            [string.Format(CultureInfo.CurrentCulture, WaitCommandStrings.WaitTimedOut, "mydb", "healthy", 2)],
             interactionService.DisplayedErrors);
         Assert.Equal([""], interactionService.DisplayedPlainText);
         Assert.Empty(interactionService.DisplayedSuccess);
@@ -329,10 +344,13 @@ public class WaitCommandTests(ITestOutputHelper outputHelper)
         var exitCode = await result.InvokeAsync().DefaultTimeout();
         Assert.Equal(CliExitCodes.WaitResourceFailed, exitCode);
         Assert.Equal(
-            ["Scanning for running AppHosts...", "Waiting for resource 'myapp' to be up (running)..."],
+            [
+                SharedCommandStrings.ScanningForRunningAppHosts,
+                string.Format(CultureInfo.CurrentCulture, WaitCommandStrings.WaitingForResource, "myapp", "up (running)")
+            ],
             interactionService.ShownStatuses);
         Assert.Equal(
-            ["Resource 'myapp' entered a failed state: FailedToStart"],
+            [string.Format(CultureInfo.CurrentCulture, WaitCommandStrings.ResourceEnteredFailedState, "myapp", "FailedToStart")],
             interactionService.DisplayedErrors);
         Assert.Equal([""], interactionService.DisplayedPlainText);
         Assert.Empty(interactionService.DisplayedSuccess);
@@ -368,10 +386,13 @@ public class WaitCommandTests(ITestOutputHelper outputHelper)
         var exitCode = await result.InvokeAsync().DefaultTimeout();
         Assert.Equal(CliExitCodes.WaitResourceFailed, exitCode);
         Assert.Equal(
-            ["Scanning for running AppHosts...", "Waiting for resource 'myapp' to be down..."],
+            [
+                SharedCommandStrings.ScanningForRunningAppHosts,
+                string.Format(CultureInfo.CurrentCulture, WaitCommandStrings.WaitingForResource, "myapp", "down")
+            ],
             interactionService.ShownStatuses);
         Assert.Equal(
-            ["Resource 'myapp' entered a failed state: FailedToStart"],
+            [string.Format(CultureInfo.CurrentCulture, WaitCommandStrings.ResourceEnteredFailedState, "myapp", "FailedToStart")],
             interactionService.DisplayedErrors);
         Assert.Equal([""], interactionService.DisplayedPlainText);
         Assert.Empty(interactionService.DisplayedSuccess);

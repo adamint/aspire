@@ -13,6 +13,7 @@ using Aspire.Cli.Utils;
 using Aspire.Dashboard.Utils;
 using Aspire.Shared;
 using Aspire.Shared.Model.Serialization;
+using Microsoft.Extensions.Logging;
 using Spectre.Console;
 
 namespace Aspire.Cli.Commands;
@@ -75,6 +76,7 @@ internal sealed class DescribeCommand : BaseCommand
 
     private readonly AppHostConnectionResolver _connectionResolver;
     private readonly ResourceColorMap _resourceColorMap;
+    private readonly ILogger<ResourceSnapshotWatcher> _resourceSnapshotWatcherLogger;
 
     private static readonly Argument<string?> s_resourceArgument = new("resource")
     {
@@ -102,12 +104,14 @@ internal sealed class DescribeCommand : BaseCommand
     public DescribeCommand(
         AppHostConnectionResolver connectionResolver,
         ResourceColorMap resourceColorMap,
+        ILogger<ResourceSnapshotWatcher> resourceSnapshotWatcherLogger,
         CommonCommandServices services)
         : base("describe", DescribeCommandStrings.Description, services)
     {
         Aliases.Add("resources");
         _resourceColorMap = resourceColorMap;
         _connectionResolver = connectionResolver;
+        _resourceSnapshotWatcherLogger = resourceSnapshotWatcherLogger;
 
         Arguments.Add(s_resourceArgument);
         Options.Add(s_appHostOption);
@@ -147,7 +151,11 @@ internal sealed class DescribeCommand : BaseCommand
         // so the user can describe any resource by name.
         var effectiveIncludeHidden = includeHidden || resourceName is not null;
         var dashboardUrlsTask = connection.GetDashboardUrlsAsync(cancellationToken);
-        using var resourceWatcher = new ResourceSnapshotWatcher(connection, effectiveIncludeHidden, bufferUpdates: follow);
+        using var resourceWatcher = new ResourceSnapshotWatcher(
+            connection,
+            _resourceSnapshotWatcherLogger,
+            effectiveIncludeHidden,
+            bufferUpdates: follow);
         await resourceWatcher.WaitForInitialLoadAsync(cancellationToken).ConfigureAwait(false);
 
         var dashboardBaseUrl = TelemetryCommandHelpers.ExtractDashboardBaseUrl((await dashboardUrlsTask.ConfigureAwait(false))?.BaseUrlWithLoginToken);
@@ -280,18 +288,43 @@ internal sealed class DescribeCommand : BaseCommand
         }
 
         var initialCapture = resourceWatcher.CaptureAllResources();
-        var initialSnapshots = initialCapture.Resources;
-        foreach (var snapshot in initialSnapshots)
+        var currentSnapshots = initialCapture.Resources.ToList();
+        var snapshotIndexes = currentSnapshots
+            .Select((snapshot, index) => (snapshot.Name, index))
+            .ToDictionary(item => item.Name, item => item.index, StringComparers.ResourceName);
+        foreach (var snapshot in currentSnapshots)
         {
-            DisplaySnapshot(snapshot, initialSnapshots);
+            cancellationToken.ThrowIfCancellationRequested();
+            DisplaySnapshot(snapshot, currentSnapshots);
         }
 
-        // Stream resource snapshots. The watcher keeps its dictionary up to date in the
-        // background, so we use it for relationship resolution and display name deduplication.
-        await foreach (var snapshot in resourceWatcher.WatchResourceSnapshotsAsync(initialCapture.UpdateSequence, cancellationToken).ConfigureAwait(false))
+        await foreach (var batch in resourceWatcher.WatchResourceSnapshotBatchesAsync(initialCapture.UpdateSequence, cancellationToken).ConfigureAwait(false))
         {
-            var currentSnapshots = resourceWatcher.GetAllResources().ToList();
-            DisplaySnapshot(snapshot, currentSnapshots);
+            var changedSnapshots = new List<ResourceSnapshot>(batch.Snapshots.Count);
+            foreach (var snapshot in batch.Snapshots)
+            {
+                if (snapshotIndexes.TryGetValue(snapshot.Name, out var index))
+                {
+                    if (batch.IsResync && ReferenceEquals(currentSnapshots[index], snapshot))
+                    {
+                        continue;
+                    }
+
+                    currentSnapshots[index] = snapshot;
+                }
+                else
+                {
+                    snapshotIndexes.Add(snapshot.Name, currentSnapshots.Count);
+                    currentSnapshots.Add(snapshot);
+                }
+
+                changedSnapshots.Add(snapshot);
+            }
+
+            foreach (var snapshot in changedSnapshots)
+            {
+                DisplaySnapshot(snapshot, currentSnapshots);
+            }
         }
 
         return CliExitCodes.Success;

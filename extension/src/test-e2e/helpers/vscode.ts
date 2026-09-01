@@ -80,7 +80,25 @@ export async function hideAspireView(timeoutMs = 30000): Promise<void> {
     }, timeoutMs, `Timed out waiting for the '${aspireAppHostsSectionTitle}' section to be hidden.`);
 }
 
-export async function waitForTreeItem(section: TreeSection, label: string, timeoutMs = 30000): Promise<TreeItem> {    return await VSBrowser.instance.driver.wait(async () => {
+export async function observeVisibleSideBarSectionTitles(durationMs = 2000): Promise<string[]> {
+    const observedTitles = new Set<string>();
+    const deadline = Date.now() + durationMs;
+
+    do {
+        const sections = await new SideBarView().getContent().getSections();
+        const titles = await Promise.all(sections.map(section => section.getTitle()));
+        for (const title of titles) {
+            observedTitles.add(title);
+        }
+
+        await delay(100);
+    } while (Date.now() < deadline);
+
+    return [...observedTitles];
+}
+
+export async function waitForTreeItem(section: TreeSection, label: string, timeoutMs = 30000): Promise<TreeItem> {
+    return await VSBrowser.instance.driver.wait(async () => {
         try {
             const item = await section.findItem(label, 4);
             if (item) {
@@ -217,22 +235,29 @@ export async function cancelActiveInput(): Promise<void> {
 }
 
 export async function answerActiveInput(value: string, expectedPlaceholder: string, timeoutMs = 30000): Promise<void> {
+    const input = await waitForActiveInput(expectedPlaceholder, undefined, timeoutMs);
+    await input.setText(value);
+    await input.confirm();
+}
+
+export async function waitForActiveInput(expectedPlaceholder: string, expectedTitle?: string, timeoutMs = 30000): Promise<InputBox> {
     let lastPrompt = '<none>';
-    const input = await VSBrowser.instance.driver.wait(async () => {
+    return await VSBrowser.instance.driver.wait(async () => {
         try {
             const candidate = await InputBox.create();
             const placeholder = await candidate.getPlaceHolder();
             const title = await candidate.getTitle();
             lastPrompt = `${title ?? '<no title>'} / ${placeholder}`;
-            return placeholder === expectedPlaceholder ? candidate : false;
+            return placeholder === expectedPlaceholder
+                && (expectedTitle === undefined || title === expectedTitle)
+                ? candidate
+                : false;
         }
         catch (error) {
             throwIfWebDriverSessionFailure(error);
             return false;
         }
-    }, timeoutMs, `Timed out waiting for input placeholder '${expectedPlaceholder}'. Last prompt: ${lastPrompt}.`);
-    await input.setText(value);
-    await input.confirm();
+    }, timeoutMs, `Timed out waiting for input '${expectedTitle ?? '<any title>'}' / '${expectedPlaceholder}'. Last prompt: ${lastPrompt}.`);
 }
 
 export async function answerActiveInputByMessage(value: string, expectedMessage: string, timeoutMs = 30000): Promise<void> {
@@ -412,6 +437,9 @@ export async function interactWithModalDialog(buttonTitle: string, timeoutMs = 1
 
     return interaction as ModalDialogInteraction;
 }
+
+export type AcceptedModalDialog = ModalDialogInteraction;
+export const acceptModalDialog = interactWithModalDialog;
 
 export async function getOpenEditorTitles(): Promise<string[]> {
     return await new EditorView().getOpenEditorTitles();

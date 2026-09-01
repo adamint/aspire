@@ -309,6 +309,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                         requestedMode === 'run',
                         input.isolated,
                         lockToken,
+                        input.launchProfile,
                         preparedAction !== undefined && input.isolated === undefined
                             ? preparedAction.isolated
                             : undefined);

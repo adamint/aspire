@@ -157,6 +157,12 @@ export interface AspireExtensionE2ETaskProcessEvent extends AspireExtensionE2ESe
     exitCode?: number;
 }
 
+export interface AspireExtensionE2ECodeLensProbeResult {
+    filePath: string;
+    languageId: string;
+    commandTitles: readonly string[];
+}
+
 export interface AspireDebugConsoleOutputEvent {
     debugSessionId: string;
     appHostPath: string | undefined;
@@ -236,6 +242,7 @@ export type AspireExtensionE2EControlCommand =
     | { name: 'getExtensionPackageJson' }
     | { name: 'getExtensionFileStatus'; relativePaths: readonly string[] }
     | { name: 'getDiagnostics'; filePath: string }
+    | { name: 'getCodeLenses'; filePath: string }
     | { name: 'snapshotClipboard' }
     | { name: 'restoreClipboardSnapshot' }
     | { name: 'captureWorkspaceAppHostPathClipboardExpectation' }

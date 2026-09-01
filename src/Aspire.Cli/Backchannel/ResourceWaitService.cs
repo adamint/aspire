@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using Aspire.Hosting.ApplicationModel;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Cli.Backchannel;
@@ -44,8 +45,6 @@ internal sealed class ResourceWaitService(
     TimeProvider timeProvider,
     ILogger<ResourceWaitService> logger)
 {
-    private const string FailedToStartState = "FailedToStart";
-
     public async Task<ResourceWaitResult> WaitAsync(
         IAppHostAuxiliaryBackchannel connection,
         string resourceName,
@@ -175,7 +174,7 @@ internal sealed class ResourceWaitService(
     {
         return string.Equals(
             state,
-            FailedToStartState,
+            KnownResourceStates.FailedToStart,
             StringComparisons.ResourceState);
     }
 

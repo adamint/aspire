@@ -108,7 +108,7 @@ export class EditorUiHandoffService implements EditorUiHandoffOperations {
             }
 
             const browserType: DashboardBrowserType = resolvedBehavior.behavior;
-            const presentation = await editorSession.openDashboard(dashboardUrl, browserType);
+            const presentation = await editorSession.openDashboard(dashboardUrl, browserType, true);
             return presentation
                 ? { outcome: 'opened', presentation }
                 : { outcome: 'error' };
