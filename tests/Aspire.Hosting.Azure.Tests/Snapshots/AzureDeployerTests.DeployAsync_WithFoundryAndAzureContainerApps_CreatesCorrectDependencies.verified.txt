@@ -21,13 +21,13 @@ Steps with no dependencies run first, followed by steps that depend on them.
   5. prepare-foundry-project-foundry-project
   6. before-start
   7. process-parameters
-  8. build-prereq
-  9. check-container-runtime
- 10. build-agent
- 11. build-api
- 12. build
- 13. validate-build-only-container-references
- 14. deploy-prereq
+  8. validate-build-only-container-references
+  9. deploy-prereq
+ 10. build-prereq
+ 11. check-container-runtime
+ 12. build-agent
+ 13. build-api
+ 14. build
  15. validate-azure-login
  16. create-provisioning-context
  17. provision-aca-env-acr
@@ -80,26 +80,26 @@ Step: build
 
 Step: build-agent
     Description: Builds the container image for the agent project.
-    Dependencies: ✓ build-prereq, ✓ check-container-runtime
+    Dependencies: ✓ build-prereq, ✓ check-container-runtime, ✓ deploy-prereq
     Resource: agent (ProjectResource)
     Tags: build-compute
 
 Step: build-api
     Description: Builds the container image for the api project.
-    Dependencies: ✓ build-prereq, ✓ check-container-runtime
+    Dependencies: ✓ build-prereq, ✓ check-container-runtime, ✓ deploy-prereq
     Resource: api (ProjectResource)
     Tags: build-compute
 
 Step: build-prereq
     Description: Prerequisite step that runs before any build operations.
-    Dependencies: ✓ process-parameters
+    Dependencies: ✓ deploy-prereq, ✓ process-parameters
 
 Step: check-container-runtime
     Description: Checks whether the container runtime (Docker/Podman) is running.
-    Dependencies: none
+    Dependencies: ✓ deploy-prereq
 
 Step: compute-endpoints-foundry-project
-    Dependencies: ✓ provision-azure-bicep-resources
+    Dependencies: ✓ deploy-prereq, ✓ provision-azure-bicep-resources
     Resource: foundry-project (AzureCognitiveServicesProjectResource)
 
 Step: create-provisioning-context
@@ -148,12 +148,12 @@ Step: diagnostics
     Dependencies: none
 
 Step: login-to-acr-aca-env-acr
-    Dependencies: ✓ provision-aca-env-acr
+    Dependencies: ✓ deploy-prereq, ✓ provision-aca-env-acr
     Resource: aca-env-acr (AzureContainerRegistryResource)
     Tags: acr-login
 
 Step: login-to-acr-foundry-project-acr
-    Dependencies: ✓ provision-foundry-project-acr
+    Dependencies: ✓ deploy-prereq, ✓ provision-foundry-project-acr
     Resource: foundry-project-acr (AzureContainerRegistryResource)
     Tags: acr-login
 
@@ -169,13 +169,13 @@ Step: prepare-foundry-project-foundry-project
 
 Step: print-api-summary
     Description: Prints the deployment summary and URL for api.
-    Dependencies: ✓ provision-api-containerapp
+    Dependencies: ✓ deploy-prereq, ✓ provision-api-containerapp
     Resource: api-containerapp (AzureContainerAppResource)
     Tags: print-summary
 
 Step: print-dashboard-url-aca-env
     Description: Prints the deployment summary and dashboard URL for aca-env.
-    Dependencies: ✓ provision-aca-env, ✓ provision-azure-bicep-resources
+    Dependencies: ✓ deploy-prereq, ✓ provision-aca-env, ✓ provision-azure-bicep-resources
     Resource: aca-env (AzureContainerAppEnvironmentResource)
     Tags: print-summary
 
@@ -185,19 +185,19 @@ Step: process-parameters
 
 Step: provision-aca-env
     Description: Provisions the Azure Bicep resource aca-env using Azure infrastructure.
-    Dependencies: ✓ create-provisioning-context, ✓ provision-aca-env-acr
+    Dependencies: ✓ create-provisioning-context, ✓ deploy-prereq, ✓ provision-aca-env-acr
     Resource: aca-env (AzureContainerAppEnvironmentResource)
     Tags: provision-infra
 
 Step: provision-aca-env-acr
     Description: Provisions the Azure Bicep resource aca-env-acr using Azure infrastructure.
-    Dependencies: ✓ create-provisioning-context
+    Dependencies: ✓ create-provisioning-context, ✓ deploy-prereq
     Resource: aca-env-acr (AzureContainerRegistryResource)
     Tags: provision-infra
 
 Step: provision-api-containerapp
     Description: Provisions the Azure Bicep resource api-containerapp using Azure infrastructure.
-    Dependencies: ✓ create-provisioning-context, ✓ provision-aca-env, ✓ push-api
+    Dependencies: ✓ create-provisioning-context, ✓ deploy-prereq, ✓ provision-aca-env, ✓ push-api
     Resource: api-containerapp (AzureContainerAppResource)
     Tags: provision-infra
 
@@ -209,19 +209,19 @@ Step: provision-azure-bicep-resources
 
 Step: provision-foundry
     Description: Provisions the Azure Bicep resource foundry using Azure infrastructure.
-    Dependencies: ✓ create-provisioning-context
+    Dependencies: ✓ create-provisioning-context, ✓ deploy-prereq
     Resource: foundry (FoundryResource)
     Tags: provision-infra
 
 Step: provision-foundry-project
     Description: Provisions the Azure Bicep resource foundry-project using Azure infrastructure.
-    Dependencies: ✓ create-provisioning-context, ✓ provision-foundry, ✓ provision-foundry-project-acr
+    Dependencies: ✓ create-provisioning-context, ✓ deploy-prereq, ✓ provision-foundry, ✓ provision-foundry-project-acr
     Resource: foundry-project (AzureCognitiveServicesProjectResource)
     Tags: provision-infra
 
 Step: provision-foundry-project-acr
     Description: Provisions the Azure Bicep resource foundry-project-acr using Azure infrastructure.
-    Dependencies: ✓ create-provisioning-context
+    Dependencies: ✓ create-provisioning-context, ✓ deploy-prereq
     Resource: foundry-project-acr (AzureContainerRegistryResource)
     Tags: provision-infra
 
@@ -251,18 +251,18 @@ Step: push
     Dependencies: ✓ push-agent, ✓ push-api, ✓ push-prereq
 
 Step: push-agent
-    Dependencies: ✓ build-agent, ✓ push-prereq
+    Dependencies: ✓ build-agent, ✓ deploy-prereq, ✓ push-prereq
     Resource: agent (ProjectResource)
     Tags: push-container-image
 
 Step: push-api
-    Dependencies: ✓ build-api, ✓ push-prereq
+    Dependencies: ✓ build-api, ✓ deploy-prereq, ✓ push-prereq
     Resource: api (ProjectResource)
     Tags: push-container-image
 
 Step: push-prereq
     Description: Prerequisite step that runs before any push operations.
-    Dependencies: ✓ login-to-acr-aca-env-acr, ✓ login-to-acr-foundry-project-acr
+    Dependencies: ✓ deploy-prereq, ✓ login-to-acr-aca-env-acr, ✓ login-to-acr-foundry-project-acr
 
 Step: validate-azure-container-apps
     Dependencies: ✓ azure-prepare-resources
@@ -373,10 +373,10 @@ If targeting 'deploy':
   Direct dependencies: deploy-finalize
   Total steps: 27
   Execution order:
-    [0] check-container-runtime | process-parameters | validate-build-only-container-references (parallel)
-    [1] build-prereq | deploy-prereq (parallel)
-    [2] build-agent | build-api | validate-azure-login (parallel)
-    [3] create-provisioning-context
+    [0] process-parameters | validate-build-only-container-references (parallel)
+    [1] deploy-prereq
+    [2] build-prereq | check-container-runtime | validate-azure-login (parallel)
+    [3] build-agent | build-api | create-provisioning-context (parallel)
     [4] provision-aca-env-acr | provision-foundry | provision-foundry-project-acr (parallel)
     [5] login-to-acr-aca-env-acr | login-to-acr-foundry-project-acr | provision-aca-env | provision-foundry-project (parallel)
     [6] push-prereq
@@ -423,10 +423,10 @@ If targeting 'deploy-finalize':
   Direct dependencies: build-agent, build-api, compute-endpoints-foundry-project, create-provisioning-context, deploy-agent-ha, deploy-prereq, print-api-summary, print-dashboard-url-aca-env, provision-azure-bicep-resources, validate-azure-login
   Total steps: 26
   Execution order:
-    [0] check-container-runtime | process-parameters | validate-build-only-container-references (parallel)
-    [1] build-prereq | deploy-prereq (parallel)
-    [2] build-agent | build-api | validate-azure-login (parallel)
-    [3] create-provisioning-context
+    [0] process-parameters | validate-build-only-container-references (parallel)
+    [1] deploy-prereq
+    [2] build-prereq | check-container-runtime | validate-azure-login (parallel)
+    [3] build-agent | build-api | create-provisioning-context (parallel)
     [4] provision-aca-env-acr | provision-foundry | provision-foundry-project-acr (parallel)
     [5] login-to-acr-aca-env-acr | login-to-acr-foundry-project-acr | provision-aca-env | provision-foundry-project (parallel)
     [6] push-prereq

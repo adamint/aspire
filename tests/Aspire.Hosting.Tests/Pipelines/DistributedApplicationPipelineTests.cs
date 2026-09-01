@@ -304,6 +304,19 @@ public class DistributedApplicationPipelineTests(ITestOutputHelper testOutputHel
         var diagnostics = Assert.Single(
             reporter.LoggedMessages,
             log => log.StepTitle == WellKnownPipelineSteps.Diagnostics).Message;
+        var fullAnalysisEnd = diagnostics.IndexOf("EXECUTION SIMULATION", StringComparison.Ordinal);
+        Assert.NotEqual(-1, fullAnalysisEnd);
+        var normalWorkStart = diagnostics.IndexOf("Step: normal-work", StringComparison.Ordinal);
+        Assert.InRange(normalWorkStart, 0, fullAnalysisEnd);
+        var normalWorkEnd = diagnostics.IndexOf(
+            Environment.NewLine + Environment.NewLine,
+            normalWorkStart,
+            StringComparison.Ordinal);
+        Assert.InRange(normalWorkEnd, normalWorkStart + 1, fullAnalysisEnd);
+        var normalWorkAnalysis = diagnostics[normalWorkStart..normalWorkEnd];
+        Assert.Contains($"✓ {WellKnownPipelineSteps.PublishPrereq}", normalWorkAnalysis);
+        Assert.Contains($"✓ {WellKnownPipelineSteps.DeployPrereq}", normalWorkAnalysis);
+
         var simulationStart = diagnostics.IndexOf($"If targeting '{targetStep}':", StringComparison.Ordinal);
         Assert.NotEqual(-1, simulationStart);
         var simulationEnd = diagnostics.IndexOf("If targeting '", simulationStart + 1, StringComparison.Ordinal);
@@ -1712,6 +1725,33 @@ public class DistributedApplicationPipelineTests(ITestOutputHelper testOutputHel
     }
 
     [Fact]
+    public async Task ResolveStepsAsync_ConfigurationCallbackCanMutateRegisteredStep()
+    {
+        using var builder = CreatePipelineTestBuilder(step: WellKnownPipelineSteps.Publish);
+        var pipeline = new DistributedApplicationPipeline();
+        var registeredStep = new PipelineStep
+        {
+            Name = "registered-step",
+            Action = _ => Task.CompletedTask,
+        };
+        pipeline.AddStep(registeredStep);
+        pipeline.AddPipelineConfiguration(_ =>
+        {
+            registeredStep.RequiredBy(WellKnownPipelineSteps.PublishFinalize);
+            return Task.CompletedTask;
+        });
+
+        var context = CreateDeployingContext(builder.Build());
+        var resolvedSteps = await pipeline.ResolveStepsAsync(context).DefaultTimeout();
+        var resolvedStep = resolvedSteps.Single(step => step.Name == registeredStep.Name);
+
+        Assert.Contains(
+            registeredStep.Name,
+            resolvedSteps.Single(step => step.Name == WellKnownPipelineSteps.PublishFinalize).DependsOnSteps);
+        Assert.Contains(WellKnownPipelineSteps.PublishPrereq, resolvedStep.DependsOnSteps);
+    }
+
+    [Fact]
     public async Task PipelineConfigurationContext_GetStepsByTag_ReturnsCorrectSteps()
     {
         using var builder = CreatePipelineTestBuilder();
@@ -2646,9 +2686,36 @@ public class DistributedApplicationPipelineTests(ITestOutputHelper testOutputHel
         Assert.Contains(closure, s => s.Name == WellKnownPipelineSteps.PublishFinalize);
         Assert.Contains(closure, s => s.Name == WellKnownPipelineSteps.DeployFinalize);
         Assert.Contains(WellKnownPipelineSteps.PublishPrereq, publishWork.DependsOnSteps);
-        Assert.DoesNotContain(WellKnownPipelineSteps.DeployPrereq, publishWork.DependsOnSteps);
+        Assert.Contains(WellKnownPipelineSteps.DeployPrereq, publishWork.DependsOnSteps);
         Assert.Contains(WellKnownPipelineSteps.DeployPrereq, deployWork.DependsOnSteps);
         Assert.DoesNotContain(WellKnownPipelineSteps.PublishPrereq, deployWork.DependsOnSteps);
+    }
+
+    [Fact]
+    public async Task ResolveStepsAsync_DeployFinalizerGatesNestedPublishWorkWithoutPublishAggregate()
+    {
+        using var builder = CreatePipelineTestBuilder(step: WellKnownPipelineSteps.Deploy);
+        var pipeline = new DistributedApplicationPipeline();
+        pipeline.AddStep(new PipelineStep
+        {
+            Name = "publish-normal-work",
+            Action = _ => Task.CompletedTask,
+            RequiredBySteps = [WellKnownPipelineSteps.PublishFinalize],
+        });
+        pipeline.AddStep(new PipelineStep
+        {
+            Name = "deploy-normal-work",
+            Action = _ => Task.CompletedTask,
+            DependsOnSteps = ["publish-normal-work"],
+            RequiredBySteps = [WellKnownPipelineSteps.DeployFinalize],
+        });
+
+        var context = CreateDeployingContext(builder.Build());
+        var resolvedSteps = await pipeline.ResolveStepsAsync(context).DefaultTimeout();
+        var publishWork = resolvedSteps.Single(step => step.Name == "publish-normal-work");
+
+        Assert.Contains(WellKnownPipelineSteps.DeployPrereq, publishWork.DependsOnSteps);
+        Assert.DoesNotContain(WellKnownPipelineSteps.PublishPrereq, publishWork.DependsOnSteps);
     }
 
     [Theory]

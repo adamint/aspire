@@ -20,12 +20,12 @@ Steps with no dependencies run first, followed by steps that depend on them.
   4. validate-azure-app-service
   5. before-start
   6. process-parameters
-  7. build-prereq
-  8. check-container-runtime
-  9. build-api
- 10. build
- 11. validate-build-only-container-references
- 12. deploy-prereq
+  7. validate-build-only-container-references
+  8. deploy-prereq
+  9. build-prereq
+ 10. check-container-runtime
+ 11. build-api
+ 12. build
  13. validate-azure-login
  14. create-provisioning-context
  15. provision-api-identity
@@ -82,17 +82,17 @@ Step: build
 
 Step: build-api
     Description: Builds the container image for the api project.
-    Dependencies: ✓ build-prereq, ✓ check-container-runtime
+    Dependencies: ✓ build-prereq, ✓ check-container-runtime, ✓ deploy-prereq
     Resource: api (ProjectResource)
     Tags: build-compute
 
 Step: build-prereq
     Description: Prerequisite step that runs before any build operations.
-    Dependencies: ✓ process-parameters
+    Dependencies: ✓ deploy-prereq, ✓ process-parameters
 
 Step: check-container-runtime
     Description: Checks whether the container runtime (Docker/Podman) is running.
-    Dependencies: none
+    Dependencies: ✓ deploy-prereq
 
 Step: create-provisioning-context
     Description: Creates the Azure provisioning context for infrastructure deployment.
@@ -135,7 +135,7 @@ Step: diagnostics
     Dependencies: none
 
 Step: login-to-acr-env-acr
-    Dependencies: ✓ provision-env-acr
+    Dependencies: ✓ deploy-prereq, ✓ provision-env-acr
     Resource: env-acr (AzureContainerRegistryResource)
     Tags: acr-login
 
@@ -146,13 +146,13 @@ Step: prepare-azure-app-service-env
 
 Step: print-api-summary
     Description: Prints the deployment summary and URL for api.
-    Dependencies: ✓ provision-api-website
+    Dependencies: ✓ deploy-prereq, ✓ provision-api-website
     Resource: api-website (AzureAppServiceWebSiteResource)
     Tags: print-summary
 
 Step: print-dashboard-url-env
     Description: Prints the deployment summary and dashboard URL for env.
-    Dependencies: ✓ provision-azure-bicep-resources, ✓ provision-env
+    Dependencies: ✓ deploy-prereq, ✓ provision-azure-bicep-resources, ✓ provision-env
     Resource: env (AzureAppServiceEnvironmentResource)
     Tags: print-summary
 
@@ -162,31 +162,31 @@ Step: process-parameters
 
 Step: provision-api-identity
     Description: Provisions the Azure Bicep resource api-identity using Azure infrastructure.
-    Dependencies: ✓ create-provisioning-context
+    Dependencies: ✓ create-provisioning-context, ✓ deploy-prereq
     Resource: api-identity (AzureUserAssignedIdentityResource)
     Tags: provision-infra
 
 Step: provision-api-roles-cache-kv
     Description: Provisions the Azure Bicep resource api-roles-cache-kv using Azure infrastructure.
-    Dependencies: ✓ create-provisioning-context, ✓ provision-api-identity, ✓ provision-cache-kv
+    Dependencies: ✓ create-provisioning-context, ✓ deploy-prereq, ✓ provision-api-identity, ✓ provision-cache-kv
     Resource: api-roles-cache-kv (AzureRoleAssignmentResource)
     Tags: provision-infra
 
 Step: provision-api-roles-cosmos-kv
     Description: Provisions the Azure Bicep resource api-roles-cosmos-kv using Azure infrastructure.
-    Dependencies: ✓ create-provisioning-context, ✓ provision-api-identity, ✓ provision-cosmos-kv
+    Dependencies: ✓ create-provisioning-context, ✓ deploy-prereq, ✓ provision-api-identity, ✓ provision-cosmos-kv
     Resource: api-roles-cosmos-kv (AzureRoleAssignmentResource)
     Tags: provision-infra
 
 Step: provision-api-roles-pg-kv
     Description: Provisions the Azure Bicep resource api-roles-pg-kv using Azure infrastructure.
-    Dependencies: ✓ create-provisioning-context, ✓ provision-api-identity, ✓ provision-pg-kv
+    Dependencies: ✓ create-provisioning-context, ✓ deploy-prereq, ✓ provision-api-identity, ✓ provision-pg-kv
     Resource: api-roles-pg-kv (AzureRoleAssignmentResource)
     Tags: provision-infra
 
 Step: provision-api-website
     Description: Provisions the Azure Bicep resource api-website using Azure infrastructure.
-    Dependencies: ✓ create-provisioning-context, ✓ provision-api-identity, ✓ provision-api-roles-cache-kv, ✓ provision-api-roles-cosmos-kv, ✓ provision-api-roles-pg-kv, ✓ provision-cache, ✓ provision-cache-kv, ✓ provision-cosmos, ✓ provision-cosmos-kv, ✓ provision-env, ✓ provision-pg, ✓ provision-pg-kv, ✓ push-api
+    Dependencies: ✓ create-provisioning-context, ✓ deploy-prereq, ✓ provision-api-identity, ✓ provision-api-roles-cache-kv, ✓ provision-api-roles-cosmos-kv, ✓ provision-api-roles-pg-kv, ✓ provision-cache, ✓ provision-cache-kv, ✓ provision-cosmos, ✓ provision-cosmos-kv, ✓ provision-env, ✓ provision-pg, ✓ provision-pg-kv, ✓ push-api
     Resource: api-website (AzureAppServiceWebSiteResource)
     Tags: provision-infra
 
@@ -198,49 +198,49 @@ Step: provision-azure-bicep-resources
 
 Step: provision-cache
     Description: Provisions the Azure Bicep resource cache using Azure infrastructure.
-    Dependencies: ✓ create-provisioning-context, ✓ provision-cache-kv
+    Dependencies: ✓ create-provisioning-context, ✓ deploy-prereq, ✓ provision-cache-kv
     Resource: cache (AzureManagedRedisResource)
     Tags: provision-infra
 
 Step: provision-cache-kv
     Description: Provisions the Azure Bicep resource cache-kv using Azure infrastructure.
-    Dependencies: ✓ create-provisioning-context
+    Dependencies: ✓ create-provisioning-context, ✓ deploy-prereq
     Resource: cache-kv (AzureKeyVaultResource)
     Tags: provision-infra
 
 Step: provision-cosmos
     Description: Provisions the Azure Bicep resource cosmos using Azure infrastructure.
-    Dependencies: ✓ create-provisioning-context, ✓ provision-cosmos-kv
+    Dependencies: ✓ create-provisioning-context, ✓ deploy-prereq, ✓ provision-cosmos-kv
     Resource: cosmos (AzureCosmosDBResource)
     Tags: provision-infra
 
 Step: provision-cosmos-kv
     Description: Provisions the Azure Bicep resource cosmos-kv using Azure infrastructure.
-    Dependencies: ✓ create-provisioning-context
+    Dependencies: ✓ create-provisioning-context, ✓ deploy-prereq
     Resource: cosmos-kv (AzureKeyVaultResource)
     Tags: provision-infra
 
 Step: provision-env
     Description: Provisions the Azure Bicep resource env using Azure infrastructure.
-    Dependencies: ✓ create-provisioning-context, ✓ provision-env-acr
+    Dependencies: ✓ create-provisioning-context, ✓ deploy-prereq, ✓ provision-env-acr
     Resource: env (AzureAppServiceEnvironmentResource)
     Tags: provision-infra
 
 Step: provision-env-acr
     Description: Provisions the Azure Bicep resource env-acr using Azure infrastructure.
-    Dependencies: ✓ create-provisioning-context
+    Dependencies: ✓ create-provisioning-context, ✓ deploy-prereq
     Resource: env-acr (AzureContainerRegistryResource)
     Tags: provision-infra
 
 Step: provision-pg
     Description: Provisions the Azure Bicep resource pg using Azure infrastructure.
-    Dependencies: ✓ create-provisioning-context, ✓ provision-pg-kv
+    Dependencies: ✓ create-provisioning-context, ✓ deploy-prereq, ✓ provision-pg-kv
     Resource: pg (AzurePostgresFlexibleServerResource)
     Tags: provision-infra
 
 Step: provision-pg-kv
     Description: Provisions the Azure Bicep resource pg-kv using Azure infrastructure.
-    Dependencies: ✓ create-provisioning-context
+    Dependencies: ✓ create-provisioning-context, ✓ deploy-prereq
     Resource: pg-kv (AzureKeyVaultResource)
     Tags: provision-infra
 
@@ -270,13 +270,13 @@ Step: push
     Dependencies: ✓ push-api, ✓ push-prereq
 
 Step: push-api
-    Dependencies: ✓ build-api, ✓ push-prereq
+    Dependencies: ✓ build-api, ✓ deploy-prereq, ✓ push-prereq
     Resource: api (ProjectResource)
     Tags: push-container-image
 
 Step: push-prereq
     Description: Prerequisite step that runs before any push operations.
-    Dependencies: ✓ login-to-acr-env-acr
+    Dependencies: ✓ deploy-prereq, ✓ login-to-acr-env-acr
 
 Step: validate-appservice-config-env
     Description: Validates Azure App Service configuration for env.
@@ -367,10 +367,10 @@ If targeting 'deploy':
   Direct dependencies: deploy-finalize
   Total steps: 29
   Execution order:
-    [0] check-container-runtime | process-parameters | validate-build-only-container-references (parallel)
-    [1] build-prereq | deploy-prereq (parallel)
-    [2] build-api | validate-azure-login (parallel)
-    [3] create-provisioning-context
+    [0] process-parameters | validate-build-only-container-references (parallel)
+    [1] deploy-prereq
+    [2] build-prereq | check-container-runtime | validate-azure-login (parallel)
+    [3] build-api | create-provisioning-context (parallel)
     [4] provision-api-identity | provision-cache-kv | provision-cosmos-kv | provision-env-acr | provision-pg-kv (parallel)
     [5] login-to-acr-env-acr | provision-api-roles-cache-kv | provision-api-roles-cosmos-kv | provision-api-roles-pg-kv | provision-cache | provision-cosmos | provision-env | provision-pg (parallel)
     [6] push-prereq
@@ -401,10 +401,10 @@ If targeting 'deploy-finalize':
   Direct dependencies: build-api, create-provisioning-context, deploy-prereq, print-api-summary, print-dashboard-url-env, provision-azure-bicep-resources, validate-azure-login
   Total steps: 28
   Execution order:
-    [0] check-container-runtime | process-parameters | validate-build-only-container-references (parallel)
-    [1] build-prereq | deploy-prereq (parallel)
-    [2] build-api | validate-azure-login (parallel)
-    [3] create-provisioning-context
+    [0] process-parameters | validate-build-only-container-references (parallel)
+    [1] deploy-prereq
+    [2] build-prereq | check-container-runtime | validate-azure-login (parallel)
+    [3] build-api | create-provisioning-context (parallel)
     [4] provision-api-identity | provision-cache-kv | provision-cosmos-kv | provision-env-acr | provision-pg-kv (parallel)
     [5] login-to-acr-env-acr | provision-api-roles-cache-kv | provision-api-roles-cosmos-kv | provision-api-roles-pg-kv | provision-cache | provision-cosmos | provision-env | provision-pg (parallel)
     [6] push-prereq

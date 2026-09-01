@@ -28,9 +28,8 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
     private readonly List<PipelineStep> _steps = [];
     private readonly List<Func<PipelineConfigurationContext, Task>> _configurationCallbacks = [];
 
-    // Store resolved pipeline data for diagnostics
-    private List<PipelineStep>? _lastResolvedSteps;
-    private List<PipelineStep>? _lastDiagnosticsSimulationSteps;
+    // Store the graph before command-specific finalization gates are applied.
+    private List<PipelineStep>? _lastDiagnosticsSteps;
 
     public DistributedApplicationPipeline()
     {
@@ -349,14 +348,10 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
             Description = "Dumps dependency graph information for troubleshooting pipeline execution.",
             Action = async context =>
             {
-                // Use the resolved pipeline data from the last ExecuteAsync call
-                var stepsToAnalyze = _lastResolvedSteps ?? throw new InvalidOperationException(
+                var simulationSteps = _lastDiagnosticsSteps ?? throw new InvalidOperationException(
                     "No resolved pipeline data available for diagnostics. Ensure that the pipeline has been executed before running diagnostics.");
-                var simulationSteps = _lastDiagnosticsSimulationSteps ?? throw new InvalidOperationException(
-                    "No pipeline simulation data available for diagnostics. Ensure that the pipeline has been executed before running diagnostics.");
 
-                // Generate the diagnostic output using the resolved data
-                DumpDependencyGraphDiagnostics(stepsToAnalyze, simulationSteps, context);
+                DumpDependencyGraphDiagnostics(simulationSteps, context);
             }
         });
 
@@ -651,25 +646,27 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
         string? selectedStepNameOverride)
     {
         var annotationSteps = await CollectStepsFromAnnotationsAsync(context).ConfigureAwait(false);
-        // Configuration callbacks and graph normalization both mutate PipelineStep lists.
-        // Resolve against fresh instances so command-specific edges cannot leak into later resolutions.
-        var allSteps = _steps.Concat(annotationSteps).Select(step => step.Clone()).ToList();
+        var collectedSteps = _steps.Concat(annotationSteps).ToList();
 
         // Execute configuration callbacks even if there are no steps
         // This allows callbacks to run validation or other logic
-        await ExecuteConfigurationCallbacksAsync(context, allSteps).ConfigureAwait(false);
+        await ExecuteConfigurationCallbacksAsync(context, collectedSteps).ConfigureAwait(false);
 
-        if (allSteps.Count == 0)
+        if (collectedSteps.Count == 0)
         {
-            return allSteps;
+            return collectedSteps;
         }
 
+        // Configuration callbacks have historically received the PipelineStep instances
+        // registered through AddStep. Clone after those callbacks so their mutations remain
+        // observable while command-specific graph normalization stays isolated per resolution.
+        var allSteps = collectedSteps.Select(step => step.Clone()).ToList();
         ValidateSteps(allSteps);
 
         // Convert RequiredBy relationships to DependsOn relationships before filtering
         var allStepsByName = allSteps.ToDictionary(s => s.Name, StringComparer.Ordinal);
         NormalizeRequiredByToDependsOn(allSteps, allStepsByName);
-        _lastDiagnosticsSimulationSteps = allSteps.Select(step => step.Clone()).ToList();
+        _lastDiagnosticsSteps = allSteps.Select(step => step.Clone()).ToList();
 
         var selectedStepName = selectedStepNameOverride;
         if (selectedStepName is null)
@@ -679,9 +676,6 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
         }
 
         NormalizeFinalizationPrerequisites(allSteps, allStepsByName, selectedStepName);
-
-        // Capture resolved pipeline data for diagnostics (before filtering)
-        _lastResolvedSteps = allSteps;
 
         return allSteps;
     }
@@ -742,11 +736,13 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
 
         AddFinalizationPrerequisite(
             steps,
+            stepsByName,
             activeFinalizers,
             WellKnownPipelineSteps.PublishFinalize,
             WellKnownPipelineSteps.PublishPrereq);
         AddFinalizationPrerequisite(
             steps,
+            stepsByName,
             activeFinalizers,
             WellKnownPipelineSteps.DeployFinalize,
             WellKnownPipelineSteps.DeployPrereq);
@@ -754,6 +750,7 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
 
     private static void AddFinalizationPrerequisite(
         List<PipelineStep> steps,
+        Dictionary<string, PipelineStep> stepsByName,
         HashSet<string> activeFinalizers,
         string finalizeStep,
         string prerequisiteStep)
@@ -763,12 +760,22 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
             return;
         }
 
+        var prerequisiteClosure = ComputeTransitiveDependencies(stepsByName[prerequisiteStep], stepsByName)
+            .Select(step => step.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
         // A step can participate in Build and both command finalizers. Only add the selected
         // command's gate so Publish cannot pull in DeployPrereq and Build-only execution
-        // cannot pull in either command-specific prerequisite.
-        foreach (var step in steps)
+        // cannot pull in either command-specific prerequisite. Finalizer roots may depend on
+        // nested work that is not itself RequiredBy the finalizer, so gate the complete workload
+        // closure. Excluding the prerequisite's own closure prevents introducing a cycle.
+        var finalizerWorkload = steps
+            .Where(step => step.RequiredBySteps.Contains(finalizeStep, StringComparer.Ordinal))
+            .SelectMany(step => ComputeTransitiveDependencies(step, stepsByName))
+            .DistinctBy(step => step.Name);
+        foreach (var step in finalizerWorkload)
         {
-            if (step.RequiredBySteps.Contains(finalizeStep, StringComparer.Ordinal)
+            if (!prerequisiteClosure.Contains(step.Name)
                 && !step.DependsOnSteps.Contains(prerequisiteStep, StringComparer.Ordinal))
             {
                 step.DependsOnSteps.Add(prerequisiteStep);
@@ -1255,10 +1262,15 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
     /// reasons why certain steps may not be executed.
     /// </summary>
     private static void DumpDependencyGraphDiagnostics(
-        List<PipelineStep> allSteps,
         List<PipelineStep> simulationSteps,
         PipelineStepContext context)
     {
+        // Diagnostics itself is a targeted command, but the first section describes an
+        // unfiltered execution. Apply both command finalization gates to that view.
+        var allSteps = simulationSteps.Select(step => step.Clone()).ToList();
+        var allStepsByName = allSteps.ToDictionary(s => s.Name, StringComparer.Ordinal);
+        NormalizeFinalizationPrerequisites(allSteps, allStepsByName, selectedStepName: null);
+
         var sb = new StringBuilder();
 
         sb.AppendLine();
@@ -1276,8 +1288,6 @@ internal sealed class DistributedApplicationPipeline : IDistributedApplicationPi
         // Always show full pipeline analysis for diagnostics
         sb.AppendLine("Analysis for full pipeline execution (showing all steps and their relationships)");
         sb.AppendLine();
-
-        var allStepsByName = allSteps.ToDictionary(s => s.Name, StringComparer.Ordinal);
 
         // Build execution order (topological sort)
         var executionOrder = GetTopologicalOrder(allSteps);
