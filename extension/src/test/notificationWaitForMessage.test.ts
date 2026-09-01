@@ -29,7 +29,7 @@ interface VscodeHelpersModule {
 
 const extensionRoot = path.resolve(__dirname, '..', '..');
 const extesterStubModulePath = path.join(extensionRoot, 'out', 'test', 'fixtures', 'e2e-notification-extester-stub.js');
-const compiledE2eHelpersPath = path.join(extensionRoot, 'out', 'test-e2e', 'test-e2e', 'helpers');
+const compiledE2eHelpersPath = path.join(extensionRoot, 'out', 'test-e2e', 'helpers');
 const compiledExtesterModulePath = path.join(compiledE2eHelpersPath, 'extester.js');
 const compiledVscodeHelpersModulePath = path.join(compiledE2eHelpersPath, 'vscode.js');
 
