@@ -890,19 +890,19 @@ function resolveAzureFunctionsVsixPaths() {
   return [
     {
       displayName: '.NET Install Tool',
-      path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_DOTNET_RUNTIME_VSIX'),
+      path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_DOTNET_RUNTIME_VSIX', 'ASPIRE_EXTENSION_E2E_ENABLE_AZURE_FUNCTIONS'),
     },
     {
       displayName: 'C#',
-      path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_CSHARP_VSIX'),
+      path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_CSHARP_VSIX', 'ASPIRE_EXTENSION_E2E_ENABLE_AZURE_FUNCTIONS'),
     },
     {
       displayName: 'Azure Resource Groups',
-      path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_AZURE_RESOURCE_GROUPS_VSIX'),
+      path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_AZURE_RESOURCE_GROUPS_VSIX', 'ASPIRE_EXTENSION_E2E_ENABLE_AZURE_FUNCTIONS'),
     },
     {
       displayName: 'Azure Functions',
-      path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_AZURE_FUNCTIONS_VSIX'),
+      path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_AZURE_FUNCTIONS_VSIX', 'ASPIRE_EXTENSION_E2E_ENABLE_AZURE_FUNCTIONS'),
     },
   ];
 }
@@ -917,15 +917,15 @@ function resolveResourceDebugVsixPaths() {
   return [
     {
       displayName: '.NET Install Tool',
-      path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_DOTNET_RUNTIME_VSIX'),
+      path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_DOTNET_RUNTIME_VSIX', 'ASPIRE_EXTENSION_E2E_ENABLE_RESOURCE_DEBUG'),
     },
     {
       displayName: 'C#',
-      path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_CSHARP_VSIX'),
+      path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_CSHARP_VSIX', 'ASPIRE_EXTENSION_E2E_ENABLE_RESOURCE_DEBUG'),
     },
     {
       displayName: 'Go',
-      path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_GO_VSIX'),
+      path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_GO_VSIX', 'ASPIRE_EXTENSION_E2E_ENABLE_RESOURCE_DEBUG'),
     },
   ];
 }
@@ -1333,14 +1333,15 @@ function assertExtensionSupportsVsCodeVersion(extensionDirectory, directoryName)
   }
 }
 
-function resolveRequiredVsixPath(environmentVariable) {  const configuredPath = process.env[environmentVariable];
+function resolveRequiredVsixPath(environmentVariable, selectingFeatureFlag) {
+  const configuredPath = process.env[environmentVariable];
   if (!configuredPath) {
-    throw new Error(`${environmentVariable} is required when ASPIRE_EXTENSION_E2E_ENABLE_AZURE_FUNCTIONS=true.`);
+    throw new Error(`${environmentVariable} is required when ${selectingFeatureFlag}=true.`);
   }
 
   const resolvedPath = path.resolve(configuredPath);
   if (!fs.existsSync(resolvedPath)) {
-    throw new Error(`${environmentVariable} points to a missing file: ${resolvedPath}`);
+    throw new Error(`${environmentVariable} points to a missing file: ${resolvedPath}. It is required when ${selectingFeatureFlag}=true.`);
   }
 
   validateVsix(resolvedPath);

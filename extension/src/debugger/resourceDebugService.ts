@@ -1,8 +1,10 @@
 import * as vscode from 'vscode';
 import type { AppHostDisplayInfo, ResourceJson } from '../data/AppHostDataRepository';
+import type { AspireExtendedDebugConfiguration } from '../dcp/types';
 import { compareAppHostIdentity, type AppHostIdentityRelation } from '../utils/appHostIdentity';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { isCommandCancellation } from '../utils/telemetry';
+import { applyDebuggerConfigurationOverrides } from './debuggerExtensions';
 import {
     ResourceAttachConfigurationError,
     type ResourceAttachProvider,
@@ -46,6 +48,7 @@ export interface ResourceDebugServiceDependencies {
     readonly startDebugging: ResourceDebugStartDebugging;
     readonly compareAppHostIdentity?: ResourceDebugAppHostIdentityComparer;
     readonly isProcessAlreadyDebugged?: (processId: number) => boolean;
+    readonly getDebugSessionConfiguration?: (appHost: ResourceDebugAppHostTarget) => AspireExtendedDebugConfiguration | undefined;
     readonly telemetry?: ResourceDebugTelemetry;
     readonly clock?: ResourceDebugClock;
 }
@@ -115,6 +118,7 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
                 absolutePath: resolvedAppHost.appHostPath,
                 displayPath: request.appHost.displayPath,
                 appHostPid: resolvedAppHost.appHostPid,
+                cliPid: resolvedAppHost.cliPid ?? undefined,
             };
             result = await this._dependencies.sessionRegistry.runSerialized(
                 resolvedTarget,
@@ -293,6 +297,22 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
         let configuration: vscode.DebugConfiguration;
         try {
             configuration = await provider.createDebugConfiguration(resource, request.cancellationToken);
+            const attachIdentityProperties = ['type', 'request', 'processId', 'mode', 'debugAdapter']
+                .filter(property => Object.prototype.hasOwnProperty.call(configuration, property))
+                .map(property => [property, configuration[property]]);
+            const launchConfigurationType = resource.properties?.['resource.launchConfigurationType'];
+            if (typeof launchConfigurationType === 'string') {
+                applyDebuggerConfigurationOverrides(
+                    configuration,
+                    this._dependencies.getDebugSessionConfiguration?.(appHost),
+                    launchConfigurationType,
+                    false);
+
+                // The provider owns the attach target and adapter contract. User settings can add
+                // debugger-specific options, but cannot retarget this operation to another process.
+                Object.assign(configuration, Object.fromEntries(attachIdentityProperties));
+                configuration.noDebug = false;
+            }
         }
         catch (error) {
             if (isCommandCancellation(error) || request.cancellationToken?.isCancellationRequested) {

@@ -44,6 +44,7 @@ import { ResourceDebugService } from './debugger/resourceDebugService';
 import { ResourceDebugSessionRegistry } from './debugger/resourceDebugSessionRegistry';
 import { ExtensionResourceDebugTelemetry, monotonicResourceDebugClock } from './debugger/resourceDebugTelemetry';
 import { initializeHotReloadAdvisory } from './debugger/hotReload';
+import { compareAppHostIdentity } from './utils/appHostIdentity';
 
 let aspireExtensionContext = new AspireExtensionContext();
 
@@ -140,6 +141,19 @@ export async function activate(context: vscode.ExtensionContext) {
       vscode.debug.startDebugging(workspaceFolder, configuration),
     isProcessAlreadyDebugged: processId =>
       aspireExtensionContext.aspireDebugSessions.some(session => session.hasResourceDebugSessionProcess(processId)),
+    getDebugSessionConfiguration: appHost => {
+      const matchingSessions = aspireExtensionContext.aspireDebugSessions.filter(session => {
+        if (compareAppHostIdentity(session.resolvedAppHostPath ?? session.appHostPath, appHost.absolutePath) !== 'same') {
+          return false;
+        }
+
+        return appHost.cliPid !== undefined
+          ? session.cliProcessId === appHost.cliPid
+          : session.operationKind === 'run';
+      });
+
+      return matchingSessions.length === 1 ? matchingSessions[0].configuration : undefined;
+    },
     telemetry: resourceDebugTelemetry,
     clock: resourceDebugClock,
   });

@@ -170,6 +170,90 @@ public class ResourceSnapshotBuilderTests
         Assert.False(GetProperty(snapshot, KnownProperties.Project.TargetFramework).IsSensitive);
     }
 
+    [Fact]
+    public void ProjectSnapshotOmitsSensitiveHiddenLaunchToolMetadata()
+    {
+        var project = new ProjectResource("project");
+        project.Annotations.Add(new TestProjectMetadata());
+
+        var effectiveArgs = new List<string>
+        {
+            "run",
+            "--project",
+            "/app/project.csproj",
+            "--configuration",
+            "resolved-configuration-secret",
+            "--framework=resolved-framework-secret",
+        };
+        var executable = Executable.Create("project", "dotnet");
+        executable.Annotate(DcpCustomResource.ResourceNameAnnotation, project.Name);
+        executable.Status = new ExecutableStatus
+        {
+            EffectiveArgs = effectiveArgs,
+            ProcessId = 1234
+        };
+        executable.SetAnnotationAsObjectList(DcpCustomResource.ResourceAppArgsAnnotation, Array.Empty<AppLaunchArgumentAnnotation>());
+        executable.SetAnnotationAsObjectList(Executable.SensitiveEffectiveArgumentIndexesAnnotation, [4, 5]);
+
+        var previousSnapshot = CreatePreviousSnapshot() with
+        {
+            Properties =
+            [
+                new(KnownProperties.Project.Configuration, "stale-configuration"),
+                new(KnownProperties.Project.TargetFramework, "stale-framework"),
+            ]
+        };
+        var snapshot = CreateSnapshotBuilder(new Dictionary<string, IResource>
+        {
+            [project.Name] = project
+        }).ToSnapshot(executable, previousSnapshot);
+
+        Assert.Equal("run", GetProperty(snapshot, KnownProperties.Project.LaunchCommand).Value);
+        Assert.Empty(snapshot.Properties.Where(property => property.Name == KnownProperties.Project.Configuration));
+        Assert.Empty(snapshot.Properties.Where(property => property.Name == KnownProperties.Project.TargetFramework));
+    }
+
+    [Fact]
+    public void ProjectSnapshotDoesNotPublishDotNetLaunchMetadataBeforeSensitiveOverride()
+    {
+        var project = new ProjectResource("project");
+        project.Annotations.Add(new TestProjectMetadata());
+
+        var effectiveArgs = new List<string>
+        {
+            "run",
+            "--configuration",
+            "Release",
+            "--configuration",
+            "resolved-configuration-secret",
+        };
+        var executable = Executable.Create("project", "dotnet");
+        executable.Annotate(DcpCustomResource.ResourceNameAnnotation, project.Name);
+        executable.Status = new ExecutableStatus
+        {
+            EffectiveArgs = effectiveArgs,
+            ProcessId = 1234
+        };
+        executable.SetAnnotationAsObjectList(
+            DcpCustomResource.ResourceAppArgsAnnotation,
+            effectiveArgs.Select((argument, index) => new AppLaunchArgumentAnnotation(
+                argument,
+                isSensitive: false,
+                effectiveArgumentIndex: index)));
+        executable.SetAnnotationAsObjectList(Executable.SensitiveEffectiveArgumentIndexesAnnotation, [4]);
+
+        var previousSnapshot = CreatePreviousSnapshot() with
+        {
+            Properties = [new(KnownProperties.Project.Configuration, "stale-configuration")]
+        };
+        var snapshot = CreateSnapshotBuilder(new Dictionary<string, IResource>
+        {
+            [project.Name] = project
+        }).ToSnapshot(executable, previousSnapshot);
+
+        Assert.Empty(snapshot.Properties.Where(property => property.Name == KnownProperties.Project.Configuration));
+    }
+
     [Theory]
     [InlineData("run", "[env:ASPNETCORE_ENVIRONMENT=Development]", "--diagnostics")]
     [InlineData("watch", "-d")]

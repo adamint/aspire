@@ -173,7 +173,11 @@ internal class ResourceSnapshotBuilder
         var properties = GetLaunchConfigurationType(appModelResource) is { } launchConfigurationType
             ? previous.Properties.SetResourceProperty(KnownProperties.Resource.LaunchConfigurationType, launchConfigurationType)
             : previous.Properties.RemoveResourceProperty(KnownProperties.Resource.LaunchConfigurationType);
-        var dotNetLaunchProperties = GetDotNetLaunchProperties(executable.Spec.ExecutablePath, effectiveArgs);
+        properties = properties
+            .RemoveResourceProperty(KnownProperties.Project.LaunchCommand)
+            .RemoveResourceProperty(KnownProperties.Project.Configuration)
+            .RemoveResourceProperty(KnownProperties.Project.TargetFramework);
+        var dotNetLaunchProperties = GetDotNetLaunchProperties(executable, executable.Spec.ExecutablePath, effectiveArgs);
 
         if (projectPath is not null)
         {
@@ -244,7 +248,10 @@ internal class ResourceSnapshotBuilder
         return string.IsNullOrEmpty(state) || state == ExecutableState.Unknown;
     }
 
-    private static ImmutableArray<ResourcePropertySnapshot> GetDotNetLaunchProperties(string? executablePath, IReadOnlyList<string>? effectiveArgs)
+    private static ImmutableArray<ResourcePropertySnapshot> GetDotNetLaunchProperties(
+        CustomResource resource,
+        string? executablePath,
+        IReadOnlyList<string>? effectiveArgs)
     {
         var executableName = Path.GetFileName(executablePath);
         if (!string.Equals(executableName, "dotnet", StringComparison.OrdinalIgnoreCase) &&
@@ -260,6 +267,12 @@ internal class ResourceSnapshotBuilder
         }
 
         var (command, commandIndex) = commandInfo;
+        var sensitiveArgumentIndexes = GetSensitiveEffectiveArgumentIndexes(resource);
+        if (sensitiveArgumentIndexes.Contains(commandIndex))
+        {
+            return [new(KnownProperties.Project.LaunchCommand, null)];
+        }
+
         string? configuration = null;
         string? targetFramework = null;
 
@@ -281,25 +294,25 @@ internal class ResourceSnapshotBuilder
 
             if (TryReadOptionValue(argument, "--configuration", "-c", out var inlineConfiguration))
             {
-                configuration = inlineConfiguration;
+                configuration = sensitiveArgumentIndexes.Contains(index) ? null : inlineConfiguration;
                 continue;
             }
 
             if (TryReadOptionValue(argument, "--framework", "-f", out var inlineTargetFramework))
             {
-                targetFramework = inlineTargetFramework;
+                targetFramework = sensitiveArgumentIndexes.Contains(index) ? null : inlineTargetFramework;
                 continue;
             }
 
             if (argument is "--configuration" or "-c")
             {
-                configuration = ReadNextValue(effectiveArgs, ref index);
+                configuration = ReadNextValue(effectiveArgs, sensitiveArgumentIndexes, ref index);
                 continue;
             }
 
             if (argument is "--framework" or "-f")
             {
-                targetFramework = ReadNextValue(effectiveArgs, ref index);
+                targetFramework = ReadNextValue(effectiveArgs, sensitiveArgumentIndexes, ref index);
             }
         }
 
@@ -365,15 +378,18 @@ internal class ResourceSnapshotBuilder
             return false;
         }
 
-        static string? ReadNextValue(IReadOnlyList<string> arguments, ref int index)
+        static string? ReadNextValue(IReadOnlyList<string> arguments, HashSet<int> sensitiveArgumentIndexes, ref int index)
         {
+            var optionIsSensitive = sensitiveArgumentIndexes.Contains(index);
             if (index + 1 >= arguments.Count || arguments[index + 1] == "--")
             {
                 return null;
             }
 
             index++;
-            return NormalizeValue(arguments[index]);
+            return optionIsSensitive || sensitiveArgumentIndexes.Contains(index)
+                ? null
+                : NormalizeValue(arguments[index]);
         }
 
         static string? NormalizeValue(string value)
@@ -381,6 +397,28 @@ internal class ResourceSnapshotBuilder
             var normalized = value.Trim();
             return normalized.Length > 0 ? normalized : null;
         }
+    }
+
+    private static HashSet<int> GetSensitiveEffectiveArgumentIndexes(CustomResource resource)
+    {
+        if (resource.TryGetAnnotationAsObjectList(
+            Executable.SensitiveEffectiveArgumentIndexesAnnotation,
+            out List<int>? sensitiveEffectiveArgumentIndexes))
+        {
+            return sensitiveEffectiveArgumentIndexes.ToHashSet();
+        }
+
+        if (!resource.TryGetAnnotationAsObjectList(
+            CustomResource.ResourceAppArgsAnnotation,
+            out List<AppLaunchArgumentAnnotation>? launchArgumentAnnotations))
+        {
+            return [];
+        }
+
+        return launchArgumentAnnotations
+            .Where(static annotation => annotation.IsSensitive && annotation.EffectiveArgumentIndex is not null)
+            .Select(static annotation => annotation.EffectiveArgumentIndex!.Value)
+            .ToHashSet();
     }
 
     private static (ImmutableArray<string> Args, ImmutableArray<int>? ArgsAreSensitive, bool IsSensitive)? GetLaunchArgs(CustomResource resource, IReadOnlyList<string>? effectiveArgs)

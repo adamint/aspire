@@ -8,6 +8,7 @@ import { ResourceAttachProviderRegistry } from '../debugger/resourceAttachProvid
 import { ResourceDebugAppHostIdentityComparer, ResourceDebugAppHostRepository, ResourceDebugService, ResourceDebugServiceDependencies } from '../debugger/resourceDebugService';
 import { ResourceDebugSessionEvents, ResourceDebugSessionRegistry, ResourceDebugSessionRegistryOptions } from '../debugger/resourceDebugSessionRegistry';
 import { ResourceAttachConfigurationError, type ResourceAttachProvider, type ResourceDebugAppHostTarget, type ResourceDebugRequest, type ResourceDebugResourceSnapshot, type ResourceDebugResult } from '../debugger/resourceDebugContracts';
+import type { AspireExtendedDebugConfiguration } from '../dcp/types';
 import { extensionLogOutputChannel } from '../utils/logging';
 
 const target: ResourceDebugAppHostTarget = {
@@ -185,6 +186,7 @@ function createService(options: {
     clock?: { now(): number };
     pendingStartTimeoutMs?: number;
     isProcessAlreadyDebugged?: (processId: number) => boolean;
+    getDebugSessionConfiguration?: (appHost: ResourceDebugAppHostTarget) => AspireExtendedDebugConfiguration | undefined;
 } = {}): {
     service: ResourceDebugService;
     repository: ResourceDebugAppHostRepository;
@@ -219,6 +221,7 @@ function createService(options: {
         telemetry,
         clock,
         isProcessAlreadyDebugged: options.isProcessAlreadyDebugged,
+        getDebugSessionConfiguration: options.getDebugSessionConfiguration,
     } as unknown as ResourceDebugServiceDependencies);
 
     return { service, repository, sessions, events, telemetry };
@@ -258,6 +261,7 @@ suite('Resource debug service', () => {
             canAttachToResource: sinon.stub().returns(false),
             createDebugConfiguration: sinon.stub().rejects(new Error('first provider should not configure')),
         });
+
         const secondProvider = createProvider({
             canAttachToResource: sinon.stub().returns(true),
             createDebugConfiguration: sinon.stub().resolves({
@@ -280,6 +284,61 @@ suite('Resource debug service', () => {
             assert.strictEqual((secondProvider.canAttachToResource as sinon.SinonStub).callCount, 0);
             assert.strictEqual((secondProvider.createDebugConfiguration as sinon.SinonStub).callCount, 0);
             assert.strictEqual(startDebugging.callCount, 0);
+        }
+        finally {
+            sessions.dispose();
+        }
+    });
+
+    test('merges Go debugger overrides while preserving the resolved attach identity', async () => {
+        let startedConfiguration: vscode.DebugConfiguration | undefined;
+        const appHosts = [createAppHost({ cliPid: 84, resources: [createGoResource()] })];
+        const provider = createGoResourceAttachProvider({
+            resolveApplicationPid: async () => 4567,
+        });
+        const { service, sessions } = createService({
+            appHosts,
+            provider,
+            getDebugSessionConfiguration: appHost => {
+                assert.deepStrictEqual(appHost, { ...resolvedTarget, cliPid: 84 });
+                return {
+                    type: 'aspire',
+                    name: 'AppHost',
+                    request: 'launch',
+                    program: target.absolutePath,
+                    debuggers: {
+                        go: {
+                            name: 'Custom Go attach',
+                            substitutePath: [{ from: '/workspace', to: '/repo' }],
+                            trace: 'verbose',
+                            type: 'node',
+                            request: 'launch',
+                            mode: 'remote',
+                            debugAdapter: 'legacy',
+                            processId: 9999,
+                            noDebug: true,
+                        },
+                    },
+                };
+            },
+            startDebugging: async (_folder, configuration) => {
+                startedConfiguration = configuration;
+                return true;
+            },
+        });
+
+        try {
+            assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'started', providerId: 'go' });
+            assert.ok(startedConfiguration);
+            assert.strictEqual(startedConfiguration.type, 'go');
+            assert.strictEqual(startedConfiguration.request, 'attach');
+            assert.strictEqual(startedConfiguration.mode, 'local');
+            assert.strictEqual(startedConfiguration.debugAdapter, 'dlv-dap');
+            assert.strictEqual(startedConfiguration.name, 'Custom Go attach');
+            assert.strictEqual(startedConfiguration.processId, 4567);
+            assert.strictEqual(startedConfiguration.noDebug, false);
+            assert.deepStrictEqual(startedConfiguration.substitutePath, [{ from: '/workspace', to: '/repo' }]);
+            assert.strictEqual(startedConfiguration.trace, 'verbose');
         }
         finally {
             sessions.dispose();

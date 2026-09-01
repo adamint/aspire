@@ -272,19 +272,23 @@ suite('Aspire resource debug language model tool E2E', function () {
             noExtensionVariables: true,
         }, { timeoutMs: 210000 })).result as { exitCode: number | null; stdout: string; stderr: string };
         assert.strictEqual(start.exitCode, 0, `aspire start failed.\nstdout:\n${start.stdout}\nstderr:\n${start.stderr}`);
-        await waitForResourceState('e2e-worker', ['Running'], 180000);
-        await waitForResourceState('e2e-go', ['Running'], 180000);
+        const workerRunning = await waitForResourceState('e2e-worker', ['Running'], 180000);
+        const worker = findResource(workerRunning.state, 'e2e-worker');
+        assert.ok(worker);
+        const goRunning = await waitForResourceState('e2e-go', ['Running'], 180000);
+        const go = findResource(goRunning.state, 'e2e-go');
+        assert.ok(go);
 
         const scenarios = [
             {
-                resourceName: 'e2e-worker',
+                resourceName: worker.name,
                 debugType: 'coreclr' as const,
                 sourcePath: path.join(getWorkspaceRoot(), 'AspireE2E.Worker', 'Program.cs'),
                 marker: 'app.MapGet("/", () => "ok");',
                 expectedResponse: 'ok',
             },
             {
-                resourceName: 'e2e-go',
+                resourceName: go.name,
                 debugType: 'go' as const,
                 sourcePath: path.join(getWorkspaceRoot(), 'AspireE2E.Go', 'main.go'),
                 marker: 'message := "go-ok"',
