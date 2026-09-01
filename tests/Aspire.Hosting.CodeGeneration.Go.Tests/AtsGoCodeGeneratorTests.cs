@@ -368,19 +368,51 @@ public class AtsGoCodeGeneratorTests
     }
 
     [Fact]
-    public void GeneratedCode_RequiredNullableSetterSendsNullValue()
+    public void GeneratedCode_RequiredNullablePrimitiveAndEnumSettersSendNullValues()
     {
         var atsContext = CreateContextFromBothAssemblies();
         var aspireGo = _generator.GenerateDistributedApplication(atsContext)["aspire.go"].ReplaceLineEndings("\n");
-        const string signature = "func (s *endpointUpdateContext) SetPort(value *float64)";
-        var methodStart = aspireGo.IndexOf(signature, StringComparison.Ordinal);
-        Assert.True(methodStart >= 0);
-        var methodEnd = aspireGo.IndexOf("\n}\n", methodStart, StringComparison.Ordinal);
-        Assert.True(methodEnd >= 0);
-        var method = aspireGo[methodStart..methodEnd];
+        var primitiveSetter = ExtractGeneratedMethod(
+            aspireGo,
+            "func (s *endpointUpdateContext) SetPort(value *float64)");
+        var enumSetter = ExtractGeneratedMethod(
+            aspireGo,
+            "func (s *containerBuildOptionsCallbackContext) SetDestination(value *ContainerImageDestination)");
 
-        Assert.Contains("reqArgs[\"value\"] = serializeValue(value)", method, StringComparison.Ordinal);
-        Assert.DoesNotContain("if value != nil", method, StringComparison.Ordinal);
+        Assert.Contains("reqArgs[\"value\"] = serializeValue(value)", primitiveSetter, StringComparison.Ordinal);
+        Assert.DoesNotContain("if value != nil", primitiveSetter, StringComparison.Ordinal);
+        Assert.Contains("reqArgs[\"value\"] = serializeValue(value)", enumSetter, StringComparison.Ordinal);
+        Assert.DoesNotContain("if value != nil", enumSetter, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(
+        "func (s *aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource) WithConfig(config *TestConfigDto)",
+        "config",
+        "config != nil")]
+    [InlineData(
+        "func (s *testRedisResource) WithConnectionString(connectionString *ReferenceExpression)",
+        "connectionString",
+        "connectionString != nil")]
+    [InlineData(
+        "func (s *aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource) WithUrl(url any",
+        "url",
+        "!isNil(url)")]
+    public void GeneratedCode_RequiredNonNullableNilableArgumentsOmitNilValues(
+        string signature,
+        string parameterName,
+        string nilGuard)
+    {
+        var atsContext = CreateContextFromBothAssemblies();
+        var files = _generator.GenerateDistributedApplication(atsContext);
+        var aspireGo = files["aspire.go"].ReplaceLineEndings("\n");
+        var method = ExtractGeneratedMethod(aspireGo, signature);
+
+        Assert.Contains(
+            $"if {nilGuard} {{ reqArgs[\"{parameterName}\"] = serializeValue({parameterName}) }}",
+            method,
+            StringComparison.Ordinal);
+        Assert.Contains("func isNil(value any) bool", files["base.go"], StringComparison.Ordinal);
     }
 
     [Fact]
@@ -534,6 +566,16 @@ public class AtsGoCodeGeneratorTests
         var testAssembly = typeof(TestRedisResource).Assembly;
         var hostingAssembly = typeof(DistributedApplication).Assembly;
         return (testAssembly, hostingAssembly);
+    }
+
+    private static string ExtractGeneratedMethod(string generatedCode, string signature)
+    {
+        var methodStart = generatedCode.IndexOf(signature, StringComparison.Ordinal);
+        Assert.True(methodStart >= 0, $"Generated method not found: {signature}");
+        var methodEnd = generatedCode.IndexOf("\n}\n", methodStart, StringComparison.Ordinal);
+        Assert.True(methodEnd >= 0, $"Generated method is incomplete: {signature}");
+
+        return generatedCode[methodStart..methodEnd];
     }
 
 }

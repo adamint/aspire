@@ -912,6 +912,18 @@ public class AddJavaAppPublishTests(ITestOutputHelper outputHelper)
 
     [Theory]
     [InlineData("build.gradle", """
+        java.toolchain {
+            languageVersion = JavaLanguageVersion.of(25)
+        }
+
+        def legacyLauncher = javaToolchains.launcherFor {
+            languageVersion = JavaLanguageVersion.of(17)
+        }
+        tasks.register('legacyJava', JavaExec) {
+            javaLauncher = legacyLauncher
+        }
+        """)]
+    [InlineData("build.gradle", """
         java {
             def ignored = "{ toolchain { languageVersion = JavaLanguageVersion.of(11) } }"
             // This brace does not close the java block: }

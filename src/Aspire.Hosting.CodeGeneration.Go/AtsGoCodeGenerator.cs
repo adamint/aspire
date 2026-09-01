@@ -1440,7 +1440,20 @@ internal sealed class AtsGoCodeGenerator : ICodeGenerator
                 WriteLine($"{indent}}}");
                 continue;
             }
-            WriteLine($"{indent}reqArgs[\"{p.Name}\"] = serializeValue({paramName})");
+
+            var type = MapTypeRefToGo(p.Type, isOptional: false);
+            // A nil DTO or ReferenceExpression must be checked before it is boxed into any; otherwise
+            // serializeValue sees a non-nil interface and dereferences the typed nil. Nullable primitive
+            // and enum pointers intentionally bypass this guard because nil represents an explicit ATS null.
+            if (IsNilableGoType(type) && (p.Type is null || !ShouldApplyNullableType(p.Type)))
+            {
+                var nilGuard = type == "any" ? $"!isNil({paramName})" : $"{paramName} != nil";
+                WriteLine($"{indent}if {nilGuard} {{ reqArgs[\"{p.Name}\"] = serializeValue({paramName}) }}");
+            }
+            else
+            {
+                WriteLine($"{indent}reqArgs[\"{p.Name}\"] = serializeValue({paramName})");
+            }
         }
 
         if (optionalParams.Count > 0)

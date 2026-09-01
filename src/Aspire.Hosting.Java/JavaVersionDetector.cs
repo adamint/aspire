@@ -384,6 +384,25 @@ internal static partial class JavaVersionDetector
         ImmutableArray<GradleBlock> foreignProjectBlocks)
     {
         var lastMatch = LastActiveMatch(DirectToolchainRegex(), script, excludedBlocks: foreignProjectBlocks);
+        // Groovy also accepts a qualified top-level block:
+        //   java.toolchain { languageVersion = JavaLanguageVersion.of(25) }
+        // FindNamedBlocks balances the block and limits this spelling to the script's top level, so a
+        // similarly shaped foreign project or task block cannot override the application toolchain.
+        foreach (var toolchainBlock in FindNamedBlocks(script, "java.toolchain", 0, script.Text.Length))
+        {
+            var match = LastActiveMatch(
+                LanguageVersionRegex(),
+                script,
+                toolchainBlock.ContentStart,
+                toolchainBlock.ContentEnd,
+                foreignProjectBlocks);
+
+            if (match is not null && (lastMatch is null || match.Index > lastMatch.Index))
+            {
+                lastMatch = match;
+            }
+        }
+
         var applicationBlocks = FindNamedBlocks(script, "java", 0, script.Text.Length, directOnly: false)
             .Concat(FindConfiguredJavaBlocks(script, 0, script.Text.Length))
             .Where(block => !IsInsideAnyBlock(block.ContentStart, foreignProjectBlocks))

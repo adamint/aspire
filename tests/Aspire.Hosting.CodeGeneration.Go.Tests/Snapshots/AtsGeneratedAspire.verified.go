@@ -263,7 +263,7 @@ func (s *aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource) WithConfig(con
 	reqArgs := map[string]any{
 		"builder": s.handle.ToJSON(),
 	}
-	reqArgs["config"] = serializeValue(config)
+	if config != nil { reqArgs["config"] = serializeValue(config) }
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.CodeGeneration.Go.Tests/withConfig", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
@@ -312,7 +312,7 @@ func (s *aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource) WithEndpoints(
 	reqArgs := map[string]any{
 		"builder": s.handle.ToJSON(),
 	}
-	reqArgs["endpoints"] = serializeValue(endpoints)
+	if endpoints != nil { reqArgs["endpoints"] = serializeValue(endpoints) }
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.CodeGeneration.Go.Tests/withEndpoints", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
@@ -324,7 +324,7 @@ func (s *aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource) WithEnvironmen
 	reqArgs := map[string]any{
 		"builder": s.handle.ToJSON(),
 	}
-	reqArgs["variables"] = serializeValue(variables)
+	if variables != nil { reqArgs["variables"] = serializeValue(variables) }
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.CodeGeneration.Go.Tests/withEnvironmentVariables", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
@@ -470,7 +470,7 @@ func (s *aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource) WithNestedConf
 	reqArgs := map[string]any{
 		"builder": s.handle.ToJSON(),
 	}
-	reqArgs["config"] = serializeValue(config)
+	if config != nil { reqArgs["config"] = serializeValue(config) }
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.CodeGeneration.Go.Tests/withNestedConfig", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
@@ -545,7 +545,7 @@ func (s *aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource) WithUnionDepen
 	reqArgs := map[string]any{
 		"builder": s.handle.ToJSON(),
 	}
-	reqArgs["dependency"] = serializeValue(dependency)
+	if !isNil(dependency) { reqArgs["dependency"] = serializeValue(dependency) }
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.CodeGeneration.Go.Tests/withUnionDependency", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
@@ -910,7 +910,7 @@ func (s *testDatabaseResource) WithConfig(config *TestConfigDto) TestDatabaseRes
 	reqArgs := map[string]any{
 		"builder": s.handle.ToJSON(),
 	}
-	reqArgs["config"] = serializeValue(config)
+	if config != nil { reqArgs["config"] = serializeValue(config) }
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.CodeGeneration.Go.Tests/withConfig", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
@@ -977,7 +977,7 @@ func (s *testDatabaseResource) WithEndpoints(endpoints []string) TestDatabaseRes
 	reqArgs := map[string]any{
 		"builder": s.handle.ToJSON(),
 	}
-	reqArgs["endpoints"] = serializeValue(endpoints)
+	if endpoints != nil { reqArgs["endpoints"] = serializeValue(endpoints) }
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.CodeGeneration.Go.Tests/withEndpoints", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
@@ -989,7 +989,7 @@ func (s *testDatabaseResource) WithEnvironmentVariables(variables map[string]str
 	reqArgs := map[string]any{
 		"builder": s.handle.ToJSON(),
 	}
-	reqArgs["variables"] = serializeValue(variables)
+	if variables != nil { reqArgs["variables"] = serializeValue(variables) }
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.CodeGeneration.Go.Tests/withEnvironmentVariables", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
@@ -1135,7 +1135,7 @@ func (s *testDatabaseResource) WithNestedConfig(config *TestNestedDto) TestDatab
 	reqArgs := map[string]any{
 		"builder": s.handle.ToJSON(),
 	}
-	reqArgs["config"] = serializeValue(config)
+	if config != nil { reqArgs["config"] = serializeValue(config) }
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.CodeGeneration.Go.Tests/withNestedConfig", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
@@ -1210,7 +1210,7 @@ func (s *testDatabaseResource) WithUnionDependency(dependency any) TestDatabaseR
 	reqArgs := map[string]any{
 		"builder": s.handle.ToJSON(),
 	}
-	reqArgs["dependency"] = serializeValue(dependency)
+	if !isNil(dependency) { reqArgs["dependency"] = serializeValue(dependency) }
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.CodeGeneration.Go.Tests/withUnionDependency", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
@@ -1373,7 +1373,7 @@ func (s *testMutableCollectionContext) SetCounts(value *Dict[string, float64]) T
 	reqArgs := map[string]any{
 		"context": s.handle.ToJSON(),
 	}
-	reqArgs["value"] = serializeValue(value)
+	if value != nil { reqArgs["value"] = serializeValue(value) }
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes/TestMutableCollectionContext.setCounts", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
@@ -1385,7 +1385,7 @@ func (s *testMutableCollectionContext) SetTags(value *List[string]) TestMutableC
 	reqArgs := map[string]any{
 		"context": s.handle.ToJSON(),
 	}
-	reqArgs["value"] = serializeValue(value)
+	if value != nil { reqArgs["value"] = serializeValue(value) }
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes/TestMutableCollectionContext.setTags", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
@@ -1686,7 +1686,7 @@ func (s *testRedisResource) WithConfig(config *TestConfigDto) TestRedisResource 
 	reqArgs := map[string]any{
 		"builder": s.handle.ToJSON(),
 	}
-	reqArgs["config"] = serializeValue(config)
+	if config != nil { reqArgs["config"] = serializeValue(config) }
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.CodeGeneration.Go.Tests/withConfig", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
@@ -1699,7 +1699,7 @@ func (s *testRedisResource) WithConnectionString(connectionString *ReferenceExpr
 	reqArgs := map[string]any{
 		"builder": s.handle.ToJSON(),
 	}
-	reqArgs["connectionString"] = serializeValue(connectionString)
+	if connectionString != nil { reqArgs["connectionString"] = serializeValue(connectionString) }
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.CodeGeneration.Go.Tests/withConnectionString", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
@@ -1778,7 +1778,7 @@ func (s *testRedisResource) WithEndpoints(endpoints []string) TestRedisResource 
 	reqArgs := map[string]any{
 		"builder": s.handle.ToJSON(),
 	}
-	reqArgs["endpoints"] = serializeValue(endpoints)
+	if endpoints != nil { reqArgs["endpoints"] = serializeValue(endpoints) }
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.CodeGeneration.Go.Tests/withEndpoints", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
@@ -1790,7 +1790,7 @@ func (s *testRedisResource) WithEnvironmentVariables(variables map[string]string
 	reqArgs := map[string]any{
 		"builder": s.handle.ToJSON(),
 	}
-	reqArgs["variables"] = serializeValue(variables)
+	if variables != nil { reqArgs["variables"] = serializeValue(variables) }
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.CodeGeneration.Go.Tests/withEnvironmentVariables", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
@@ -1970,7 +1970,7 @@ func (s *testRedisResource) WithNestedConfig(config *TestNestedDto) TestRedisRes
 	reqArgs := map[string]any{
 		"builder": s.handle.ToJSON(),
 	}
-	reqArgs["config"] = serializeValue(config)
+	if config != nil { reqArgs["config"] = serializeValue(config) }
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.CodeGeneration.Go.Tests/withNestedConfig", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
@@ -2090,7 +2090,7 @@ func (s *testRedisResource) WithUnionDependency(dependency any) TestRedisResourc
 	reqArgs := map[string]any{
 		"builder": s.handle.ToJSON(),
 	}
-	reqArgs["dependency"] = serializeValue(dependency)
+	if !isNil(dependency) { reqArgs["dependency"] = serializeValue(dependency) }
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.CodeGeneration.Go.Tests/withUnionDependency", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
