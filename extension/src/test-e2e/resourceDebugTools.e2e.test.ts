@@ -43,6 +43,7 @@ interface AttachedResourceDebugProof {
 
 const resourceDebugToolName = 'aspire_resource_debug';
 const resourceDebugPrerequisitesInstalled = process.env.ASPIRE_EXTENSION_E2E_ENABLE_RESOURCE_DEBUG === 'true';
+const negativePathTest = resourceDebugPrerequisitesInstalled ? test.skip : test;
 
 // VS Code does not expose its telemetry transport to an Extension Host test, and the E2E bridge
 // intentionally persists only bounded tool results. resourceDebugService.test.ts asserts the exact
@@ -58,11 +59,7 @@ suite('Aspire resource debug language model tool E2E', function () {
         ], 'Resource debug language model tool E2E teardown failed.');
     });
 
-    test('returns bounded results for invalid, additional, and unknown selectors after generic confirmation', async function () {
-        if (resourceDebugPrerequisitesInstalled) {
-            this.skip();
-        }
-
+    negativePathTest('returns bounded results for invalid, additional, and unknown selectors after generic confirmation', async () => {
         await openAspireView();
         await waitForRepositoryIdle();
         const discovered = await waitForWorkspaceAppHost();
@@ -120,11 +117,7 @@ suite('Aspire resource debug language model tool E2E', function () {
         }
     });
 
-    test('requires explicit confirmation and returns safe running-resource outcomes', async function () {
-        if (resourceDebugPrerequisitesInstalled) {
-            this.skip();
-        }
-
+    negativePathTest('requires explicit confirmation and returns safe running-resource outcomes', async () => {
         await openAspireView();
         await waitForRepositoryIdle();
         const discovered = await waitForWorkspaceAppHost();
@@ -214,11 +207,7 @@ suite('Aspire resource debug language model tool E2E', function () {
         assertSafeResourceDebugResult(unsupportedResource.results[0]);
     });
 
-    test('cancels through the VS Code invocation token and reports a stopped resource without invoking a debugger', async function () {
-        if (resourceDebugPrerequisitesInstalled) {
-            this.skip();
-        }
-
+    negativePathTest('cancels through the VS Code invocation token and reports a stopped resource without invoking a debugger', async () => {
         await openAspireView();
         await waitForRepositoryIdle();
         const discovered = await waitForWorkspaceAppHost();
