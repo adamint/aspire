@@ -148,6 +148,30 @@ internal static class McpToolHelpers
             : exceptionType;
     }
 
+    /// <summary>
+    /// Maps a runtime resource state to the finite vocabulary exposed through MCP tools.
+    /// </summary>
+    internal static string? MapResourceState(string? state)
+    {
+        return state switch
+        {
+            null => null,
+            "Active" or
+            "Building" or
+            "Exited" or
+            "FailedToStart" or
+            "Finished" or
+            "NotStarted" or
+            "Running" or
+            "RuntimeUnhealthy" or
+            "Starting" or
+            "Stopping" or
+            "ValueMissing" or
+            "Waiting" => state,
+            _ => "unknown"
+        };
+    }
+
     private static string? SanitizeUrl(
         string? url,
         bool stripLoginPath,

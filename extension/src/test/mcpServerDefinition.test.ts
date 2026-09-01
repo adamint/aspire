@@ -100,16 +100,55 @@ suite('AspireMcpServerDefinitionProvider definition tests', () => {
         assert.deepStrictEqual(definition.env, { AspireCliPath: cliPath });
     });
 
-    test('bounds AppHost canonicalization', async () => {
-        const realpath = sinon.stub(fs.promises, 'realpath').returns(new Promise(() => { }));
+    test('coalesces bounded AppHost canonicalization by normalized path and retries after settlement', async () => {
+        const clock = sinon.useFakeTimers({
+            shouldClearNativeTimers: true,
+            toFake: ['setTimeout', 'clearTimeout'],
+        });
+        const primaryPath = path.join(path.sep, 'repo', 'AppHost.csproj');
+        const equivalentPrimaryPath = path.join(path.sep, 'repo', 'nested', '..', 'AppHost.csproj');
+        const otherPath = path.join(path.sep, 'repo', 'Other.csproj');
+        let resolvePrimary!: (value: string) => void;
+        let resolveOther!: (value: string) => void;
+        const primaryLookup = new Promise<string>(resolve => resolvePrimary = resolve);
+        const otherLookup = new Promise<string>(resolve => resolveOther = resolve);
+        let returnRecoveredResult = false;
+        const recoveredPath = path.join(path.sep, 'repo', 'physical', 'AppHost.csproj');
+        const realpath = sinon.stub(fs.promises, 'realpath').callsFake(appHostPath => {
+            if (returnRecoveredResult) {
+                return Promise.resolve(recoveredPath);
+            }
+
+            return path.resolve(appHostPath.toString()) === primaryPath ? primaryLookup : otherLookup;
+        });
 
         try {
-            await assert.rejects(
-                canonicalizeMcpAppHostPath('/repo/AppHost.csproj', 1),
-                /AppHost canonicalization did not complete within 1ms/);
+            const primaryRequest = canonicalizeMcpAppHostPath(primaryPath, 1_000);
+            const equivalentRequest = canonicalizeMcpAppHostPath(equivalentPrimaryPath, 1_000);
+            const otherRequest = canonicalizeMcpAppHostPath(otherPath, 1_000);
+
+            await clock.tickAsync(1_000);
+            await Promise.all([
+                assert.rejects(primaryRequest, /AppHost canonicalization did not complete within 1000ms/),
+                assert.rejects(equivalentRequest, /AppHost canonicalization did not complete within 1000ms/),
+                assert.rejects(otherRequest, /AppHost canonicalization did not complete within 1000ms/),
+            ]);
+            assert.strictEqual(realpath.callCount, 2, 'equivalent paths must share one bounded lookup while distinct paths remain independent');
+
+            returnRecoveredResult = true;
+            resolvePrimary(primaryPath);
+            resolveOther(otherPath);
+            await clock.tickAsync(0);
+
+            assert.strictEqual(await canonicalizeMcpAppHostPath(primaryPath, 1_000), recoveredPath);
+            assert.strictEqual(realpath.callCount, 3, 'a settled lookup must be removed so a later refresh can retry');
         }
         finally {
+            resolvePrimary(primaryPath);
+            resolveOther(otherPath);
+            await clock.tickAsync(0);
             realpath.restore();
+            clock.restore();
         }
     });
 

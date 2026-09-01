@@ -209,7 +209,7 @@ internal sealed class WaitForResourcesTool(
     {
         return new WaitForResourceResultJson(
             result.ResourceName,
-            MapResourceState(result.State),
+            McpToolHelpers.MapResourceState(result.State),
             result.Health,
             GetOutcomeValue(result.Outcome),
             GetError(result));
@@ -289,27 +289,6 @@ internal sealed class WaitForResourcesTool(
         }
 
         return new WaitForResourcesArguments(resourceNames, targetState, timeoutSeconds);
-    }
-
-    private static string? MapResourceState(string? state)
-    {
-        return state switch
-        {
-            null => null,
-            "Active" or
-            "Building" or
-            "Exited" or
-            "FailedToStart" or
-            "Finished" or
-            "NotStarted" or
-            "Running" or
-            "RuntimeUnhealthy" or
-            "Starting" or
-            "Stopping" or
-            "ValueMissing" or
-            "Waiting" => state,
-            _ => "unknown"
-        };
     }
 
     private static string GetOverallOutcome(IReadOnlyList<WaitForResourceResultJson> resources)

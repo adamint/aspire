@@ -173,7 +173,7 @@ internal sealed class ListResourcesTool(IAuxiliaryBackchannelMonitor auxiliaryBa
                 Name = GetBoundedText(snapshot.Name),
                 DisplayName = GetBoundedText(snapshot.DisplayName),
                 ResourceType = GetBoundedText(snapshot.ResourceType),
-                State = GetBoundedText(snapshot.State),
+                State = McpToolHelpers.MapResourceState(snapshot.State),
                 WaitingFor = GetBoundedWaitingFor(snapshot, resourceIdentities),
                 StateStyle = GetBoundedText(snapshot.StateStyle),
                 Source = GetBoundedSource(snapshot),

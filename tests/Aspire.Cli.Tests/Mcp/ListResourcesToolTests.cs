@@ -337,6 +337,51 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
         Assert.Equal(["api-service", "redis", "postgres"], resources.EnumerateArray().Select(r => r.GetProperty("name").GetString()));
     }
 
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("Active", "Active")]
+    [InlineData("Building", "Building")]
+    [InlineData("Exited", "Exited")]
+    [InlineData("FailedToStart", "FailedToStart")]
+    [InlineData("Finished", "Finished")]
+    [InlineData("NotStarted", "NotStarted")]
+    [InlineData("Running", "Running")]
+    [InlineData("RuntimeUnhealthy", "RuntimeUnhealthy")]
+    [InlineData("Starting", "Starting")]
+    [InlineData("Stopping", "Stopping")]
+    [InlineData("ValueMissing", "ValueMissing")]
+    [InlineData("Waiting", "Waiting")]
+    [InlineData("Unknown", "unknown")]
+    [InlineData("Downloading model ghcr.io/private/repository:latest", "unknown")]
+    [InlineData("running", "unknown")]
+    public async Task ListResourcesTool_ProjectsOnlySupportedResourceStates(string? state, string? expectedState)
+    {
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+        monitor.AddConnection(
+            "hash1",
+            "socket.hash1",
+            CreateConnection(new ResourceSnapshot
+            {
+                Name = "model",
+                ResourceType = "Custom",
+                State = state
+            }));
+        var tool = new ListResourcesTool(monitor, NullLogger<ListResourcesTool>.Instance);
+
+        var result = await tool.CallToolAsync(CallToolContextTestHelper.Create(), CancellationToken.None).DefaultTimeout();
+
+        using var json = GetResourceData(result);
+        var resource = json.RootElement[0];
+        if (expectedState is null)
+        {
+            Assert.False(resource.TryGetProperty("state", out _));
+        }
+        else
+        {
+            Assert.Equal(expectedState, resource.GetProperty("state").GetString());
+        }
+    }
+
     [Fact]
     public async Task ListResourcesTool_BoundsModelFacingCollectionsAndText()
     {
@@ -383,12 +428,13 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
             GetResultText(result),
             StringComparison.Ordinal);
         var firstResource = json.RootElement[0];
-        foreach (var propertyName in new[] { "display_name", "resource_type", "state", "state_style", "health_status" })
+        foreach (var propertyName in new[] { "display_name", "resource_type", "state_style", "health_status" })
         {
             var value = Assert.IsType<string>(firstResource.GetProperty(propertyName).GetString());
             Assert.Equal(256, value.Length);
             Assert.All(value, character => Assert.False(char.IsControl(character)));
         }
+        Assert.Equal("unknown", firstResource.GetProperty("state").GetString());
         Assert.Equal(32, firstResource.GetProperty("waiting_for").GetArrayLength());
         Assert.Equal(16, firstResource.GetProperty("urls").GetArrayLength());
         Assert.Equal(32, firstResource.GetProperty("relationships").GetArrayLength());

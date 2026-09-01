@@ -19,6 +19,7 @@ const mcpServerArgs = ['agent', 'mcp'];
 const appHostOption = '--apphost';
 const aspireCliExecutablePathSetting = 'aspire.aspireCliExecutablePath';
 const appHostCanonicalizationTimeoutMs = 5000;
+const inFlightAppHostCanonicalizations = new Map<string, Promise<string>>();
 
 export interface AspireMcpServerDefinitionOptions {
     label?: string;
@@ -105,10 +106,11 @@ export interface AspireMcpServerDefinitionProviderDependencies {
 export async function canonicalizeMcpAppHostPath(
     appHostPath: string,
     timeoutMs = appHostCanonicalizationTimeoutMs): Promise<string> {
+    const canonicalization = getInFlightAppHostCanonicalization(appHostPath);
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
         return await Promise.race([
-            fs.promises.realpath(appHostPath),
+            canonicalization,
             new Promise<never>((_, reject) => {
                 timeout = setTimeout(
                     () => reject(new Error(`AppHost canonicalization did not complete within ${timeoutMs}ms.`)),
@@ -121,6 +123,28 @@ export async function canonicalizeMcpAppHostPath(
             clearTimeout(timeout);
         }
     }
+}
+
+function getInFlightAppHostCanonicalization(appHostPath: string): Promise<string> {
+    const key = path.resolve(appHostPath);
+    const existing = inFlightAppHostCanonicalizations.get(key);
+    if (existing !== undefined) {
+        return existing;
+    }
+
+    // Node cannot cancel a realpath call. Keep one operation per normalized lexical path even
+    // after callers time out, otherwise every discovery refresh can add another blocked worker.
+    // Settlement removes only this exact operation so a later refresh can retry.
+    const canonicalization = fs.promises.realpath(appHostPath);
+    inFlightAppHostCanonicalizations.set(key, canonicalization);
+    const clearCanonicalization = () => {
+        if (inFlightAppHostCanonicalizations.get(key) === canonicalization) {
+            inFlightAppHostCanonicalizations.delete(key);
+        }
+    };
+    void canonicalization.then(clearCanonicalization, clearCanonicalization);
+
+    return canonicalization;
 }
 
 interface PinnedAppHost {
