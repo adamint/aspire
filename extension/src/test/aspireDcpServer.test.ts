@@ -758,6 +758,39 @@ suite('Aspire DCP run session lifecycle', () => {
         assert.deepStrictEqual(client.notifications, [terminal]);
     });
 
+    test('browser DELETE times out while startup remains pending and can retry after startup completes', async () => {
+        await stopHarness(harness);
+        harness = await startHarness({ debuggerStopTimeoutMs: 25 });
+        const startCompleted = createDeferred<AspireResourceDebugSession>();
+        const startInvoked = createDeferred<string>();
+        const stopSession = sinon.stub().resolves();
+        harness.startDebugSession.resetBehavior();
+        harness.startDebugSession.callsFake((configuration: { runId: string }) => {
+            startInvoked.resolve(configuration.runId);
+            return startCompleted.promise;
+        });
+        const client = await openNotificationClient(harness);
+        const createPromise = createRunResponse(harness, 'browser', stopSession);
+        const runId = await startInvoked.promise;
+
+        const timedOutResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+
+        assert.strictEqual(timedOutResponse.statusCode, 500);
+        assert.match(timedOutResponse.body, /Timed out after 25 ms\./);
+        assert.strictEqual(stopSession.notCalled, true);
+
+        startCompleted.resolve(createResourceSession('late-browser-session', stopSession));
+        const createResponse = await createPromise;
+        assert.strictEqual(createResponse.statusCode, 201);
+
+        const retryResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+        const terminal = await client.waitForNotification();
+
+        assert.strictEqual(retryResponse.statusCode, 200);
+        assert.strictEqual(stopSession.calledOnce, true);
+        assert.deepStrictEqual(client.notifications, [terminal]);
+    });
+
     test('browser DELETE waits for confirmed stop before terminating', async () => {
         const stopCompleted = createDeferred<void>();
         const stopSession = sinon.stub().returns(stopCompleted.promise);

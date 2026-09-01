@@ -244,11 +244,35 @@ export default class AspireDcpServer {
                 }
             }
         };
+        const awaitDebuggerStopDeadline = async (
+            operation: Promise<void>,
+            deadline: number,
+            onTimeout?: () => void): Promise<void> => {
+            let timeout: NodeJS.Timeout | undefined;
+            try {
+                await Promise.race([
+                    operation,
+                    new Promise<never>((_, rejectTimeout) => {
+                        timeout = setTimeout(
+                            () => {
+                                onTimeout?.();
+                                rejectTimeout(new Error(`Timed out after ${debuggerStopTimeoutMs} ms.`));
+                            },
+                            Math.max(0, deadline - Date.now()));
+                    }),
+                ]);
+            } finally {
+                if (timeout) {
+                    clearTimeout(timeout);
+                }
+            }
+        };
         const stopDebuggerForDelete = async (run: RunSessionRecord): Promise<void> => {
             // A browser can finish starting after DELETE observes the run but before its session is
             // handed off. The Aspire session's pending-start handle resolves only after that handoff
             // or a definitive startup failure, so the confirmed response cannot miss a late stop.
-            await run.startupCompletion;
+            const deadline = Date.now() + debuggerStopTimeoutMs;
+            await awaitDebuggerStopDeadline(run.startupCompletion, deadline);
             if (runSessions.get(run.runId) !== run) {
                 return;
             }
@@ -279,24 +303,10 @@ export default class AspireDcpServer {
             }
 
             const teardown = run.teardownPromise;
-            let timeout: NodeJS.Timeout | undefined;
-            try {
-                await Promise.race([
-                    teardown,
-                    new Promise<never>((_, rejectTimeout) => {
-                        timeout = setTimeout(
-                            () => {
-                                resetDebuggerStopAttempt(run, teardown);
-                                rejectTimeout(new Error(`Timed out after ${debuggerStopTimeoutMs} ms.`));
-                            },
-                            debuggerStopTimeoutMs);
-                    }),
-                ]);
-            } finally {
-                if (timeout) {
-                    clearTimeout(timeout);
-                }
-            }
+            await awaitDebuggerStopDeadline(
+                teardown,
+                deadline,
+                () => resetDebuggerStopAttempt(run, teardown));
         };
 
         return new Promise(async (resolve, reject) => {
