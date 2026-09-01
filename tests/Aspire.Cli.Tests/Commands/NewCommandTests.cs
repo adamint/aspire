@@ -734,6 +734,15 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal([PackageMapping.AllPackages], GetPackagePatternsForSource(doc, PackageSources.NuGetOrg));
     }
 
+    private static string[] GetPackageSources(string outputPath)
+    {
+        var doc = XDocument.Load(Path.Combine(outputPath, "nuget.config"));
+        return doc.Root!.Element("packageSources")!
+            .Elements("add")
+            .Select(element => (string)element.Attribute("value")!)
+            .ToArray();
+    }
+
     private static string[] GetPackagePatternsForSource(XDocument doc, string source)
     {
         var packageSourceMapping = doc.Root!.Element("packageSourceMapping");
@@ -1188,7 +1197,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
     [Theory]
     [InlineData(null, "https://configured.example/v3/index.json")]
     [InlineData("https://explicit.example/v3/index.json", "https://explicit.example/v3/index.json")]
-    public async Task NewCommandUsesConfiguredSourceUnlessExplicitSourceIsProvided(string? explicitSource, string expectedSource)
+    public async Task NewCommandUsesConfiguredSourceForDiscoveryButPersistsOnlyExplicitSource(string? explicitSource, string expectedSource)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         const string configuredSource = "https://configured.example/v3/index.json";
@@ -1249,7 +1258,17 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal(CliExitCodes.Success, exitCode);
         Assert.Equal(expectedSource, discoveryAspireSource);
         Assert.Equal(expectedSource, discoveryFallbackSource);
-        AssertSourceOverrideNuGetConfig(Path.Combine(workspace.WorkspaceRoot.FullName, "output"), expectedSource);
+        var outputPath = Path.Combine(workspace.WorkspaceRoot.FullName, "output");
+        if (explicitSource is null)
+        {
+            Assert.Equal(
+                [PackageSources.NuGetOrg, "https://channel.example/v3/index.json"],
+                GetPackageSources(outputPath).Order(StringComparer.Ordinal));
+        }
+        else
+        {
+            AssertSourceOverrideNuGetConfig(outputPath, expectedSource);
+        }
     }
 
     [Fact]
@@ -1301,7 +1320,9 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
         Assert.Equal(CliExitCodes.Success, exitCode);
-        AssertSourceOverrideNuGetConfig(Path.Combine(workspace.WorkspaceRoot.FullName, "output"), expectedSource);
+        Assert.Equal(
+            [PackageSources.NuGetOrg],
+            GetPackageSources(Path.Combine(workspace.WorkspaceRoot.FullName, "output")));
     }
 
     [Fact]

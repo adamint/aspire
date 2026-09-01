@@ -141,12 +141,13 @@ internal sealed class NewCommand : BaseCommand
         return configuredSource;
     }
 
-    private async Task<string?> GetResolvedEffectiveSourceAsync(ParseResult parseResult, CancellationToken cancellationToken)
+    private async Task<(string? EffectiveSource, string? PersistenceSource)> GetResolvedSourcesAsync(ParseResult parseResult, CancellationToken cancellationToken)
     {
         var explicitSource = parseResult.GetValue(s_sourceOption);
         if (!string.IsNullOrWhiteSpace(explicitSource))
         {
-            return PackageSourceOverrideMappings.ResolveForWorkingDirectory(explicitSource, ExecutionContext.WorkingDirectory);
+            var resolvedSource = PackageSourceOverrideMappings.ResolveForWorkingDirectory(explicitSource, ExecutionContext.WorkingDirectory);
+            return (resolvedSource, resolvedSource);
         }
 
         var configuredSource = await _configurationService.GetConfigurationFromDirectoryWithOriginAsync(
@@ -156,12 +157,14 @@ internal sealed class NewCommand : BaseCommand
         var source = configuredSource?.Value ?? _configuration[AspireConfigFile.NuGetSourceKey];
         if (string.IsNullOrWhiteSpace(source))
         {
-            return null;
+            return (null, null);
         }
 
-        return PackageSourceOverrideMappings.ResolveForWorkingDirectory(
-            source,
-            configuredSource?.BaseDirectory ?? ExecutionContext.WorkingDirectory);
+        return (
+            PackageSourceOverrideMappings.ResolveForWorkingDirectory(
+                source,
+                configuredSource?.BaseDirectory ?? ExecutionContext.WorkingDirectory),
+            null);
     }
 
     private string? ParseExplicitLanguageId(ParseResult parseResult)
@@ -535,8 +538,8 @@ internal sealed class NewCommand : BaseCommand
     {
         using var activity = Telemetry.StartDiagnosticActivity(this.Name);
 
-        var source = await GetResolvedEffectiveSourceAsync(parseResult, cancellationToken);
-        if (!string.IsNullOrWhiteSpace(source) && PackageSourceOverrideMappings.HasCredentialMaterial(source))
+        var (source, persistenceSource) = await GetResolvedSourcesAsync(parseResult, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(persistenceSource) && PackageSourceOverrideMappings.HasCredentialMaterial(persistenceSource))
         {
             InteractionService.DisplayError(NewCommandStrings.SourceWithCredentialsCannotBePersisted);
             return CommandResult.Failure(CliExitCodes.InvalidCommand);
@@ -596,7 +599,8 @@ internal sealed class NewCommand : BaseCommand
             resolvedChannelName = resolveResult.ChannelName;
         }
 
-        // An explicit source owns package resolution and must not inherit the CLI identity channel.
+        // An effective source (explicit or configured) owns package resolution and must not
+        // inherit the CLI identity channel.
         // Unqualified local DotNet templates and explicit versions similarly defer local channel
         // selection. Forwarding "local" would persist mappings to a directory that may not contain
         // the requested version; callers that need those mappings can pass `--channel local`.
@@ -621,6 +625,7 @@ internal sealed class NewCommand : BaseCommand
             Name = parseResult.GetValue(s_nameOption),
             Output = parseResult.GetValue(s_outputOption),
             Source = source,
+            PersistenceSource = persistenceSource,
             Version = version,
             Channel = resolvedChannelName,
             Language = selectedLanguageId
