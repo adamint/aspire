@@ -4,6 +4,7 @@
 using Microsoft.AspNetCore.InternalTesting;
 using System.Text.Json;
 using System.Xml.Linq;
+using Aspire.Cli.Backchannel;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Mcp.Tools;
 using Aspire.Cli.Packaging;
@@ -179,7 +180,7 @@ public class ListIntegrationsToolTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var selectedAppHostDirectory = workspace.CreateDirectory("selected");
         var selectedAppHostPath = Path.Combine(selectedAppHostDirectory.FullName, "apphost.ts");
-        string? configurationDirectory = null;
+        var configurationDirectories = new List<string>();
         FileInfo? searchConfig = null;
         var cache = new FakeNuGetPackageCache
         {
@@ -198,15 +199,34 @@ public class ListIntegrationsToolTests(ITestOutputHelper outputHelper)
         {
             OnGetConfigurationFromDirectoryWithOrigin = (_, directory) =>
             {
-                configurationDirectory = directory.FullName;
-                return null;
+                configurationDirectories.Add(directory.FullName);
+                return directory.FullName == workspace.WorkspaceRoot.FullName
+                    ? new ConfigurationValueWithOrigin(
+                        "https://invocation.example/v3/index.json",
+                        workspace.WorkspaceRoot,
+                        IsGlobal: false)
+                    : null;
             },
             OnGetConfiguration = _ => "https://invocation.example/v3/index.json"
         };
-        var monitor = new MockAuxiliaryBackchannelMonitor
+        var monitor = new TestAuxiliaryBackchannelMonitor
         {
             SelectedAppHostPath = selectedAppHostPath
         };
+        monitor.AddConnection(
+            "selected",
+            "selected.socket",
+            new TestAppHostAuxiliaryBackchannel
+            {
+                Hash = "selected",
+                SocketPath = "selected.socket",
+                IsInScope = false,
+                AppHostInfo = new AppHostInformation
+                {
+                    AppHostPath = selectedAppHostPath,
+                    ProcessId = 1234
+                }
+            });
         var tool = new ListIntegrationsTool(
             packagingService,
             configurationService,
@@ -218,7 +238,73 @@ public class ListIntegrationsToolTests(ITestOutputHelper outputHelper)
             CancellationToken.None).DefaultTimeout();
 
         Assert.True(result.IsError is null or false);
-        Assert.Equal(selectedAppHostDirectory.FullName, configurationDirectory);
+        Assert.Collection(
+            configurationDirectories,
+            directory => Assert.Equal(selectedAppHostDirectory.FullName, directory),
+            directory => Assert.Equal(workspace.WorkspaceRoot.FullName, directory));
         Assert.Null(searchConfig);
+    }
+
+    [Fact]
+    public async Task ListIntegrationsTool_SelectedAppHostUsesAmbientProviderSource()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var selectedAppHostDirectory = workspace.CreateDirectory("selected");
+        var selectedAppHostPath = Path.Combine(selectedAppHostDirectory.FullName, "apphost.ts");
+        const string ambientSource = "https://ambient.example/v3/index.json";
+        string? searchSource = null;
+        var cache = new FakeNuGetPackageCache
+        {
+            GetIntegrationPackagesAsyncCallback = (_, _, nugetConfig, _) =>
+            {
+                Assert.NotNull(nugetConfig);
+                searchSource = (string?)XDocument.Load(nugetConfig.FullName).Root!
+                    .Element("packageSources")!
+                    .Elements("add")
+                    .Single()
+                    .Attribute("value");
+                return Task.FromResult<IEnumerable<NuGetPackage>>([]);
+            }
+        };
+        var packagingService = new TestPackagingService
+        {
+            GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>(
+                [PackageChannel.CreateImplicitChannel(cache, new TestFeatures(), NullLogger.Instance)])
+        };
+        var configurationService = new TestConfigurationService
+        {
+            OnGetConfigurationFromDirectoryWithOrigin = (_, _) => null,
+            OnGetConfiguration = _ => ambientSource
+        };
+        var monitor = new TestAuxiliaryBackchannelMonitor
+        {
+            SelectedAppHostPath = selectedAppHostPath
+        };
+        monitor.AddConnection(
+            "selected",
+            "selected.socket",
+            new TestAppHostAuxiliaryBackchannel
+            {
+                Hash = "selected",
+                SocketPath = "selected.socket",
+                IsInScope = false,
+                AppHostInfo = new AppHostInformation
+                {
+                    AppHostPath = selectedAppHostPath,
+                    ProcessId = 1234
+                }
+            });
+        var tool = new ListIntegrationsTool(
+            packagingService,
+            configurationService,
+            TestExecutionContextHelper.CreateExecutionContext(workspace.WorkspaceRoot),
+            monitor);
+
+        var result = await tool.CallToolAsync(
+            CallToolContextTestHelper.Create(),
+            CancellationToken.None).DefaultTimeout();
+
+        Assert.True(result.IsError is null or false);
+        Assert.Equal(ambientSource, searchSource);
     }
 }

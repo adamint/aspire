@@ -138,7 +138,7 @@ internal sealed class NewCommand : BaseCommand
         }
 
         var configuredSource = configuration[AspireConfigFile.NuGetSourceKey];
-        return string.IsNullOrWhiteSpace(configuredSource) ? null : configuredSource;
+        return configuredSource;
     }
 
     private async Task<string?> GetResolvedEffectiveSourceAsync(ParseResult parseResult, CancellationToken cancellationToken)

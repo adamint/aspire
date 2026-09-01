@@ -98,9 +98,26 @@ internal sealed class ListIntegrationsTool(
                 workingDirectory,
                 cancellationToken: cancellationToken);
             var source = configuredSource?.Value;
-            if (source is null && !appHostWasExplicitlySelected)
+            if (source is null)
             {
-                source = await configurationService.GetConfigurationAsync(AspireConfigFile.NuGetSourceKey, cancellationToken);
+                var invocationSource = await configurationService.GetConfigurationAsync(
+                    AspireConfigFile.NuGetSourceKey,
+                    cancellationToken);
+                if (appHostWasExplicitlySelected)
+                {
+                    var selectingSource = await configurationService.GetConfigurationFromDirectoryWithOriginAsync(
+                        AspireConfigFile.NuGetSourceKey,
+                        executionContext.WorkingDirectory,
+                        cancellationToken: cancellationToken);
+                    if (selectingSource is null)
+                    {
+                        source = invocationSource;
+                    }
+                }
+                else
+                {
+                    source = invocationSource;
+                }
             }
             if (!string.IsNullOrWhiteSpace(source))
             {
@@ -170,7 +187,9 @@ internal sealed class ListIntegrationsTool(
     /// </summary>
     private DirectoryInfo GetWorkingDirectory(out bool appHostWasExplicitlySelected)
     {
-        if (auxiliaryBackchannelMonitor.SelectedAppHostPath is { Length: > 0 } selectedAppHostPath &&
+        var selectedConnection = auxiliaryBackchannelMonitor.SelectedConnection;
+        if (auxiliaryBackchannelMonitor.SelectedAppHostPath is { Length: > 0 } &&
+            selectedConnection?.AppHostInfo?.AppHostPath is { Length: > 0 } selectedAppHostPath &&
             Path.GetDirectoryName(selectedAppHostPath) is { Length: > 0 } selectedAppHostDirectory)
         {
             appHostWasExplicitlySelected = true;

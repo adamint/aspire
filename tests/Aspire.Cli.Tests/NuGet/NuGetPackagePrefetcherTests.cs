@@ -301,14 +301,16 @@ public class NuGetPackagePrefetcherTests(ITestOutputHelper outputHelper)
             parseResult: parseResult);
     }
 
-    [Fact]
-    public async Task ConfiguredNewSourceSkipsTemplateSubcommandPackageMetadataPrefetching()
+    [Theory]
+    [InlineData("https://configured.example/v3/index.json")]
+    [InlineData("   ")]
+    public async Task ConfiguredNewSourceValueSkipsTemplateSubcommandPackageMetadataPrefetching(string configuredSource)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
         {
             options.ConfigurationCallback += configuration =>
-                configuration[AspireConfigFile.NuGetSourceKey] = "https://configured.example/v3/index.json";
+                configuration[AspireConfigFile.NuGetSourceKey] = configuredSource;
         });
         using var provider = services.BuildServiceProvider();
 
