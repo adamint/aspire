@@ -108,6 +108,10 @@ export function getLoggableDebugConfiguration(debugConfig: AspireResourceExtende
 function redactedJavaLaunchFields(debugConfig: AspireResourceExtendedDebugConfiguration): Record<string, unknown> {
   const redacted: Record<string, unknown> = {};
 
+  if (debugConfig.javaExec !== undefined) {
+    redacted.javaExec = '<redacted>';
+  }
+
   if (debugConfig.vmArgs !== undefined) {
     redacted.vmArgs = '<redacted>';
   }
@@ -1348,6 +1352,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
           main_class: javaCommand!.mainClass,
           class_paths: resolveJavaClassPaths(javaCommand!.classPaths, path.dirname(projectFile)),
           working_directory: path.dirname(projectFile),
+          ...(javaCommand!.javaExec ? { java_exec: javaCommand!.javaExec } : {}),
           // build_tool is deliberately absent: it only drives a language server project reimport,
           // and the classpath is sent explicitly here, so the launch never depends on one.
           ...(javaCommand!.vmArgs.length > 0 ? { vm_args: javaCommand!.vmArgs } : {})
