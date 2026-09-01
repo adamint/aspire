@@ -2697,6 +2697,108 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         await assert.rejects(shutdown, error => error === lateStopFailure);
     });
 
+    test('a browser session that starts during shutdown remains reachable until its stop is confirmed', async () => {
+        let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        const firstBrowserStop = createDeferred<void>();
+        const secondBrowserStop = createDeferred<void>();
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const debugConfig = {
+            runId: 'browser-run',
+            debugSessionId: 'debug-1',
+            resourceType: 'browser',
+            type: 'pwa-chrome',
+            name: 'Late browser',
+            request: 'launch',
+            url: 'https://localhost:5001',
+        } as AspireResourceExtendedDebugConfiguration;
+        const browserDebugSession = {
+            id: 'browser-session',
+            type: 'pwa-chrome',
+            name: 'Late browser',
+            configuration: debugConfig,
+        } as unknown as vscode.DebugSession;
+        const terminationListenerDisposals: sinon.SinonStub[] = [];
+        const sendNotification = sinon.stub();
+        const terminalProvider = { isDebugConfigEnvironmentLoggingEnabled: () => false };
+        sinon.stub(vscode.workspace, 'getWorkspaceFolder').returns(undefined);
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            startSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(() => {
+            const dispose = sinon.stub();
+            terminationListenerDisposals.push(dispose);
+            return { dispose };
+        });
+        sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').callsFake(session => {
+            if (session?.id !== browserDebugSession.id) {
+                return Promise.resolve();
+            }
+
+            return stopDebugging.withArgs(browserDebugSession).callCount === 1
+                ? firstBrowserStop.promise
+                : secondBrowserStop.promise;
+        });
+        const aspireDebugSession = new AspireDebugSession(
+            parentDebugSession as unknown as vscode.DebugSession,
+            {} as any,
+            { sendNotification } as any,
+            terminalProvider as any,
+            () => { });
+
+        const browserStart = aspireDebugSession.startAndGetDebugSession(debugConfig);
+        await Promise.resolve();
+        const shutdown = aspireDebugSession.stopDebugging();
+        startSessionCallback!(browserDebugSession);
+
+        const startedSession = await browserStart;
+        assert.notStrictEqual(startedSession, undefined, 'DCP must retain the late browser session while its stop is pending');
+        assert.strictEqual(stopDebugging.withArgs(browserDebugSession).callCount, 1);
+        assert.strictEqual(sendNotification.notCalled, true);
+        assert.strictEqual(terminationListenerDisposals.length, 2);
+        assert.strictEqual(terminationListenerDisposals.every(dispose => dispose.notCalled), true);
+
+        const lateStopFailure = new Error('Late browser stop failed');
+        firstBrowserStop.reject(lateStopFailure);
+        await assert.rejects(shutdown, error => error === lateStopFailure);
+
+        assert.strictEqual(sendNotification.notCalled, true, 'A failed browser stop must not report termination');
+        const retry = startedSession!.stopSession();
+        await Promise.resolve();
+        assert.strictEqual(stopDebugging.withArgs(browserDebugSession).callCount, 2);
+        assert.strictEqual(sendNotification.notCalled, true, 'A pending browser retry must not report termination');
+
+        secondBrowserStop.resolve();
+        await retry;
+
+        sinon.assert.calledOnceWithExactly(sendNotification, {
+            notification_type: 'sessionTerminated',
+            session_id: debugConfig.runId,
+            dcp_id: debugConfig.debugSessionId,
+        });
+        sinon.assert.calledOnce(terminationListenerDisposals[0]);
+
+        await aspireDebugSession.stopDebugging();
+
+        sinon.assert.calledOnce(terminationListenerDisposals[1]);
+        assert.strictEqual(sendNotification.calledOnce, true, 'Aspire cleanup must not duplicate DCP termination');
+    });
+
     test('stopDebugging bounds a wedged resource start and stops the session if it later starts', async () => {
         let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
         let resolveStart: ((started: boolean) => void) | undefined;

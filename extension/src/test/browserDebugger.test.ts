@@ -353,22 +353,31 @@ suite('Browser Debugger Tests', () => {
         assert.strictEqual(terminateListener, undefined);
     });
 
-    test('returns undefined when a late browser stop succeeds after Aspire disposal', async () => {
+    test('returns the late browser session when its stop succeeds after Aspire disposal', async () => {
         sinon.stub(vscode.debug, 'stopDebugging').resolves();
-        const { result } = await startBrowserAfterAspireDisposal();
+        const { result, browserSession, sendNotification } = await startBrowserAfterAspireDisposal();
+        const startedSession = await result;
+        await Promise.resolve();
 
-        assert.strictEqual(await result, undefined);
+        assert.strictEqual(startedSession?.session, browserSession);
+        sinon.assert.calledOnceWithExactly(sendNotification, {
+            notification_type: 'sessionTerminated',
+            session_id: 'run-1',
+            dcp_id: 'dcp-1',
+        });
     });
 
-    test('times out when a late browser stop never settles after Aspire disposal', async () => {
+    test('keeps the late browser session reachable while its stop remains pending after Aspire disposal', async () => {
         const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
         sinon.stub(vscode.debug, 'stopDebugging').callsFake(debugSession =>
             debugSession?.id === 'browser-root' ? new Promise<void>(() => { }) : Promise.resolve());
-        const { result } = await startBrowserAfterAspireDisposal();
+        const { result, browserSession, sendNotification } = await startBrowserAfterAspireDisposal();
+        const startedSession = await result;
 
         await clock.tickAsync(10_000);
 
-        assert.strictEqual(await result, undefined);
+        assert.strictEqual(startedSession?.session, browserSession);
+        assert.strictEqual(sendNotification.notCalled, true);
     });
 });
 
@@ -421,6 +430,7 @@ function createDebugSession(id: string, parentSession?: vscode.DebugSession, con
 async function startBrowserAfterAspireDisposal(): Promise<{
     result: Promise<AspireResourceDebugSession | undefined>;
     browserSession: vscode.DebugSession;
+    sendNotification: sinon.SinonStub;
 }> {
     let startListener: ((session: vscode.DebugSession) => void) | undefined;
     sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(listener => {
@@ -437,11 +447,12 @@ async function startBrowserAfterAspireDisposal(): Promise<{
         request: 'launch',
         program: '/workspace/apphost.cs'
     });
+    const sendNotification = sinon.stub();
     const aspireSession = new AspireDebugSession(
         parent,
         {} as never,
         {
-            sendNotification: sinon.stub(),
+            sendNotification,
             takeDebugSessionAggregateStats: sinon.stub().returns(undefined)
         } as never,
         { isDebugConfigEnvironmentLoggingEnabled: () => false } as never,
@@ -458,7 +469,7 @@ async function startBrowserAfterAspireDisposal(): Promise<{
     start.resolve(true);
     await Promise.resolve();
 
-    return { result, browserSession };
+    return { result, browserSession, sendNotification };
 }
 
 function deferred<T>(): { promise: Promise<T>; reject(reason?: unknown): void; resolve(value: T): void } {

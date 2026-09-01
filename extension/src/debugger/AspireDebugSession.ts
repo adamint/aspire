@@ -1646,21 +1646,24 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
             stopSession: disposalFunction,
             resetStopSessionAttempt,
           };
-
-          if (this.isShuttingDown) {
-            extensionLogOutputChannel.info(`Stopping debug session that started after Aspire session shutdown began: ${session.name} (run id: ${session.configuration.runId})`);
-            this.stopLateResourceSession(vsCodeDebugSession);
-            resolved = true;
-            resolve(undefined);
-            return;
-          }
-
-          this._resourceDebugSessions.push(vsCodeDebugSession);
           if (browserTermination) {
             this._disposables.push({
               dispose: () => browserTermination.stopAndDisposeOnFailure()
             });
           }
+
+          if (this.isShuttingDown) {
+            extensionLogOutputChannel.info(`Stopping debug session that started after Aspire session shutdown began: ${session.name} (run id: ${session.configuration.runId})`);
+            this.stopLateResourceSession(vsCodeDebugSession);
+            resolved = true;
+            // DCP owns the confirmed-stop contract for browser runs. Keep this session reachable
+            // while the ordered Aspire shutdown waits on the same single-flight stop so DCP cannot
+            // mistake a pending or failed stop for a debugger that never started.
+            resolve(browserTermination ? vsCodeDebugSession : undefined);
+            return;
+          }
+
+          this._resourceDebugSessions.push(vsCodeDebugSession);
 
           resolved = true;
           resolve(vsCodeDebugSession);
