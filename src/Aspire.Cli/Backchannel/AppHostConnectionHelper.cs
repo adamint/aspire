@@ -18,7 +18,7 @@ internal static class AppHostConnectionHelper
         IEnumerable<IAppHostAuxiliaryBackchannel> connections,
         string appHostPath)
     {
-        return connections.FirstOrDefault(connection =>
+        return connections.SingleOrDefault(connection =>
             connection.AppHostInfo?.AppHostPath is { } candidatePath &&
             AppHostPathComparer.PathsEqual(candidatePath, appHostPath));
     }
@@ -49,7 +49,7 @@ internal static class AppHostConnectionHelper
         var selectedPath = auxiliaryBackchannelMonitor.SelectedAppHostPath;
         if (!string.IsNullOrEmpty(selectedPath))
         {
-            var selectedConnection = FindConnectionByAppHostPath(connections, selectedPath);
+            var selectedConnection = FindSelectedConnection(connections, selectedPath, logger);
 
             if (selectedConnection is null && !scannedConnections)
             {
@@ -58,17 +58,18 @@ internal static class AppHostConnectionHelper
                 // AppHost until the next background scan.
                 await auxiliaryBackchannelMonitor.ScanAsync(cancellationToken).ConfigureAwait(false);
                 connections = auxiliaryBackchannelMonitor.Connections.ToList();
-                selectedConnection = FindConnectionByAppHostPath(connections, selectedPath);
+                selectedConnection = FindSelectedConnection(connections, selectedPath, logger);
             }
 
-            if (selectedConnection != null)
+            if (selectedConnection is not null)
             {
                 logger.LogDebug("Using explicitly selected AppHost: {AppHostPath}", selectedPath);
                 return selectedConnection;
             }
 
+            logger.LogWarning("The explicitly selected AppHost is unavailable: {AppHostPath}", selectedPath);
             throw new McpProtocolException(
-                $"The selected AppHost '{selectedPath}' is not available. Start that AppHost and retry.",
+                "The selected AppHost is not available. Start that AppHost and retry.",
                 McpErrorCode.InternalError);
         }
 
@@ -98,5 +99,23 @@ internal static class AppHostConnectionHelper
             "Running Aspire AppHosts were found outside the MCP server's working directory scope. " +
             "Use 'list_apphosts' to discover available AppHosts, then 'select_apphost' to choose one.",
             McpErrorCode.InternalError);
+    }
+
+    private static IAppHostAuxiliaryBackchannel? FindSelectedConnection(
+        IEnumerable<IAppHostAuxiliaryBackchannel> connections,
+        string selectedPath,
+        ILogger logger)
+    {
+        try
+        {
+            return FindConnectionByAppHostPath(connections, selectedPath);
+        }
+        catch (InvalidOperationException)
+        {
+            logger.LogWarning("Multiple running AppHost instances match the selected path: {AppHostPath}", selectedPath);
+            throw new McpProtocolException(
+                "Multiple running AppHost instances match the selected path. Stop the extra instance and retry.",
+                McpErrorCode.InternalError);
+        }
     }
 }

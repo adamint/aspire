@@ -136,9 +136,9 @@ suite('AspireMcpServerDefinitionProvider definition tests', () => {
 
         assert.strictEqual(definition.command, cliPath);
         assert.deepStrictEqual(definition.args, ['agent', 'mcp', '--apphost', appHostPath]);
-        // VS Code normalizes an omitted env to an empty record, so asserting the whole value both
-        // proves AspireCliPath is absent and pins that nothing else is forwarded in its place.
-        assert.deepStrictEqual(definition.env, {});
+        // VS Code overlays this record on the parent environment. Null removes an ambient value;
+        // omitting the key would let a stale AspireCliPath leak into the MCP child process.
+        assert.deepStrictEqual(definition.env, { AspireCliPath: null });
     });
 });
 
@@ -472,8 +472,7 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
         }
     });
 
-    // Windows paths are case-insensitive, so two candidates differing only in case name one file.
-    test('deduplicates case-variant AppHost paths on Windows', async () => {
+    test('retains case-distinct canonical AppHost paths on Windows', async () => {
         const platformStub = sinon.stub(process, 'platform').value('win32');
         const folder = workspaceFolder('app', '/repo/app', 0);
         const harness = new ProviderHarness({
@@ -489,6 +488,7 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
 
             assert.deepStrictEqual(harness.definitions().map(definition => definition.args), [
                 ['agent', 'mcp', '--apphost', path.resolve(folder.uri.fsPath, 'AppHost', 'AppHost.csproj')],
+                ['agent', 'mcp', '--apphost', path.resolve(folder.uri.fsPath, 'apphost', 'apphost.csproj')],
             ]);
         }
         finally {

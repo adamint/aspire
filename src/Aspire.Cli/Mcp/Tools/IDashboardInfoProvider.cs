@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Aspire.Cli.Backchannel;
+using Aspire.Cli.Commands;
 using Aspire.Dashboard.Utils;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol;
@@ -43,16 +44,17 @@ internal sealed class BackchannelDashboardInfoProvider(
 /// <summary>
 /// Returns dashboard info from statically-provided URL and optional API key (for standalone dashboards).
 /// </summary>
-internal sealed class StaticDashboardInfoProvider(string dashboardUrl, string? apiKey) : IDashboardInfoProvider
+internal sealed class StaticDashboardInfoProvider(
+    string dashboardUrl,
+    string? apiKey,
+    IHttpClientFactory? httpClientFactory = null,
+    ILogger? logger = null) : IDashboardInfoProvider
 {
     public bool IsDirectConnection => true;
 
-    public Task<(string apiToken, string apiBaseUrl, string? dashboardBaseUrl)> GetDashboardInfoAsync(CancellationToken cancellationToken)
+    public async Task<(string apiToken, string apiBaseUrl, string? dashboardBaseUrl)> GetDashboardInfoAsync(CancellationToken cancellationToken)
     {
-        // For unsecured dashboards, apiToken is empty string (no X-API-Key header will be sent)
-        var apiToken = apiKey ?? string.Empty;
-        // Build the request URL from the original value so query-based authentication remains
-        // available to HttpClient. The display URL is sanitized independently for MCP output.
+        var loginToken = DashboardUrls.ExtractDashboardLoginToken(dashboardUrl);
         var apiBaseUrl = DashboardUrls.NormalizeDashboardRequestUrl(dashboardUrl, stripLoginPath: true);
         if (apiBaseUrl is null)
         {
@@ -61,7 +63,38 @@ internal sealed class StaticDashboardInfoProvider(string dashboardUrl, string? a
                 McpErrorCode.InvalidParams);
         }
 
+        if (loginToken is not null)
+        {
+            apiBaseUrl = DashboardUrls.RemoveDashboardLoginToken(apiBaseUrl) ?? apiBaseUrl;
+        }
+
+        var apiToken = apiKey;
+        if (apiToken is null && loginToken is not null)
+        {
+            if (httpClientFactory is null || logger is null)
+            {
+                throw new McpProtocolException(
+                    "The configured dashboard login token could not be exchanged for an API key.",
+                    McpErrorCode.InternalError);
+            }
+
+            var exchange = await TelemetryCommandHelpers.ExchangeLoginTokenForApiKeyAsync(
+                httpClientFactory,
+                apiBaseUrl,
+                loginToken,
+                logger,
+                cancellationToken).ConfigureAwait(false);
+            if (!exchange.Success)
+            {
+                throw new McpProtocolException(
+                    "The configured dashboard login token could not be exchanged for an API key.",
+                    McpErrorCode.InternalError);
+            }
+
+            apiToken = exchange.ApiKey;
+        }
+
         var dashboardBaseUrl = McpToolHelpers.StripLoginPath(dashboardUrl);
-        return Task.FromResult((apiToken, apiBaseUrl, dashboardBaseUrl));
+        return (apiToken ?? string.Empty, apiBaseUrl, dashboardBaseUrl);
     }
 }

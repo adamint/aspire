@@ -20,6 +20,7 @@ import {
     isValidEmptyObjectInput,
     isValidDebugSessionStatusInput,
     isValidHotReloadStatusInput,
+    isValidResourceName,
     type DebugSessionStatusFailureResult,
     type DebugSessionStatusResourceFailureResult,
     type DebugSessionStatusResult,
@@ -460,7 +461,9 @@ export class EditorAssistanceToolService {
                 return createHotReloadFailure('noEditorControlledResource');
             }
 
-            return createHotReloadReport(candidate, this._dependencies.readHotReloadDiagnostics());
+            return isValidResourceName(candidate.resource.name)
+                ? createHotReloadReport(candidate, this._dependencies.readHotReloadDiagnostics())
+                : createHotReloadFailure('error');
         }
         catch (error) {
             if (isCommandCancellation(error) || token.isCancellationRequested) {
@@ -920,6 +923,7 @@ function isModeMeaningful(outcome: DebugSessionStatusResult['outcome']): boolean
 }
 
 const maxModelSafeResourceSourceLength = 256;
+const maxModelSafeResourceMetadataLength = 128;
 
 // Model-facing results need a smaller privacy boundary than the tree view. Rebuild source values
 // from properties tied to known resource kinds so a custom resource cannot place arbitrary text in
@@ -963,12 +967,23 @@ function getPortableFileName(value: string): string | undefined {
 
 function createBoundedResource(resource: ResourceJson): EditorAssistanceResource {
     return {
-        resourceType: resource.resourceType,
+        resourceType: getModelSafeResourceMetadata(resource.resourceType) ?? 'unknown',
         state: getModelSafeResourceState(resource.state),
-        healthStatus: resource.healthStatus,
+        healthStatus: getModelSafeResourceMetadata(resource.healthStatus),
         exitCode: resource.exitCode,
         source: getModelSafeResourceSource(resource),
     };
+}
+
+function getModelSafeResourceMetadata(value: string | null): string | null {
+    if (typeof value !== 'string' ||
+        value.length === 0 ||
+        value.length > maxModelSafeResourceMetadataLength ||
+        /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}]/u.test(value)) {
+        return null;
+    }
+
+    return value;
 }
 
 function getModelSafeResourceState(state: string | null): EditorAssistanceResourceState {

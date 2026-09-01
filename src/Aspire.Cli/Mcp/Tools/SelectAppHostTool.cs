@@ -73,9 +73,21 @@ internal sealed class SelectAppHostTool(IAuxiliaryBackchannelMonitor auxiliaryBa
         }
 
         // Check if there's a running AppHost with this path
-        var matchingConnection = AppHostConnectionHelper.FindConnectionByAppHostPath(
-            auxiliaryBackchannelMonitor.Connections,
-            resolvedPath);
+        IAppHostAuxiliaryBackchannel? matchingConnection;
+        try
+        {
+            matchingConnection = AppHostConnectionHelper.FindConnectionByAppHostPath(
+                auxiliaryBackchannelMonitor.Connections,
+                resolvedPath);
+        }
+        catch (InvalidOperationException)
+        {
+            return ValueTask.FromResult(new CallToolResult
+            {
+                IsError = true,
+                Content = [new TextContentBlock { Text = "Multiple running AppHost instances match that path. Stop the extra instance and retry." }]
+            });
+        }
 
         if (matchingConnection == null)
         {
@@ -102,8 +114,10 @@ internal sealed class SelectAppHostTool(IAuxiliaryBackchannelMonitor auxiliaryBa
             });
         }
 
-        // Set the selected AppHost path
-        auxiliaryBackchannelMonitor.SelectedAppHostPath = resolvedPath;
+        // Pin the connection's physical identity rather than the caller's spelling. A selected
+        // symlink can be retargeted after this call, but it must not redirect later MCP operations
+        // to a different running AppHost.
+        auxiliaryBackchannelMonitor.SelectedAppHostPath = matchingConnection.AppHostInfo!.AppHostPath;
 
         return ValueTask.FromResult(new CallToolResult
         {

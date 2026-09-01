@@ -429,7 +429,11 @@ export interface EditorUiHandoffDebugSession {
     readonly cliProcessId: number | undefined;
     readonly configuration: { readonly dashboardBrowser?: unknown };
     readonly isShuttingDown: boolean;
-    openDashboard(url: string, browserType: DashboardBrowserType, waitForDebugBrowserStart?: boolean): Promise<DashboardPresentation | undefined>;
+    openDashboard(
+        url: string,
+        browserType: DashboardBrowserType,
+        waitForDebugBrowserStart?: boolean,
+        token?: vscode.CancellationToken): Promise<DashboardPresentation | undefined>;
 }
 
 export type EditorUiHandoffDashboardResult =
@@ -518,7 +522,7 @@ export function isValidEmptyObjectInput(value: unknown): value is OpenOutputTool
     return isPlainObject(value) && Object.keys(value).length === 0;
 }
 
-function isValidResourceName(value: unknown): value is string {
+export function isValidResourceName(value: unknown): value is string {
     return typeof value === 'string' &&
         value.trim().length > 0 &&
         value.length <= maxResourceNameLength &&

@@ -132,6 +132,8 @@ export class AppHostLaunchService implements vscode.Disposable {
     private _disposed = false;
     private readonly _activeRunLaunchBySessionId = new Map<string, TrackedRunLaunch>();
     private readonly _pendingRunLaunchByToken = new Map<number, TrackedRunLaunch>();
+    private readonly _debugSessionByLaunchToken = new Map<number, vscode.DebugSession>();
+    private readonly _canceledDebugStartTokens = new Set<number>();
     // Attempt correlation stays process-local. These tokens must never be projected into
     // the launch failure journal, telemetry, logs, tool results, or E2E state.
     private readonly _appHostPathAwaitingDebugStartByToken = new Map<number, string>();
@@ -218,6 +220,12 @@ export class AppHostLaunchService implements vscode.Disposable {
                 getAspireDebugConfigurationCommand(session.configuration) === 'run') {
                 this._activeRunLaunchBySessionId.set(session.id, createTrackedRunLaunch(appHostPath, pendingLaunch));
             }
+            if (typeof launchToken === 'number') {
+                this._debugSessionByLaunchToken.set(launchToken, session);
+                if (this._canceledDebugStartTokens.delete(launchToken)) {
+                    this.stopCanceledDebugStart(session);
+                }
+            }
         });
 
         // When a debug session terminates, clear launching state for that AppHost
@@ -225,6 +233,10 @@ export class AppHostLaunchService implements vscode.Disposable {
         const terminateSubscription = vscode.debug.onDidTerminateDebugSession(session => {
             this._activeRunLaunchBySessionId.delete(session.id);
             const launchToken = session.configuration?.[appHostLaunchTokenConfigKey];
+            if (typeof launchToken === 'number') {
+                this._debugSessionByLaunchToken.delete(launchToken);
+                this._canceledDebugStartTokens.delete(launchToken);
+            }
             const restartSourceSessionId = session.configuration?.[appHostRestartSourceSessionIdConfigKey];
             const isToolbarRestart = typeof restartSourceSessionId === 'string' &&
                 restartSourceSessionId === session.id;
@@ -276,6 +288,8 @@ export class AppHostLaunchService implements vscode.Disposable {
         this._reservations.dispose();
         this._activeRunLaunchBySessionId.clear();
         this._pendingRunLaunchByToken.clear();
+        this._debugSessionByLaunchToken.clear();
+        this._canceledDebugStartTokens.clear();
         this._appHostPathAwaitingDebugStartByToken.clear();
         this._launchTokensWithSpecificFailure.clear();
         this._pendingOperationByToken.clear();
@@ -1303,7 +1317,34 @@ export class AppHostLaunchService implements vscode.Disposable {
             this.assertAppHostLaunchTargetCurrent(launchTarget);
 
             this._appHostPathAwaitingDebugStartByToken.set(launchToken, canonicalAppHostPath);
-            const started = await vscode.debug.startDebugging(undefined, config);
+            throwIfCancelled(token);
+            const start = Promise.resolve(vscode.debug.startDebugging(undefined, config));
+            void start.then(
+                started => {
+                    if (!started) {
+                        this._canceledDebugStartTokens.delete(launchToken);
+                    }
+                },
+                () => this._canceledDebugStartTokens.delete(launchToken));
+            let cancellationDisposable: vscode.Disposable | undefined;
+            const cancellation = new Promise<never>((_, reject) => {
+                cancellationDisposable = token.onCancellationRequested(() => {
+                    this._canceledDebugStartTokens.add(launchToken);
+                    const startedSession = this._debugSessionByLaunchToken.get(launchToken);
+                    if (startedSession) {
+                        this._canceledDebugStartTokens.delete(launchToken);
+                        this.stopCanceledDebugStart(startedSession);
+                    }
+                    reject(new vscode.CancellationError());
+                });
+            });
+            let started: boolean;
+            try {
+                started = await Promise.race([start, cancellation]);
+            }
+            finally {
+                cancellationDisposable?.dispose();
+            }
             if (!started) {
                 // A false result means VS Code declined the launch before the
                 // debug session started (for example, no provider matched or
@@ -1349,6 +1390,14 @@ export class AppHostLaunchService implements vscode.Disposable {
             });
             throw err;
         }
+    }
+
+    private stopCanceledDebugStart(session: vscode.DebugSession): void {
+        // This session carries the unique launch token of the canceled request. Stop that session
+        // directly rather than using path-wide lifecycle cleanup, which could target a newer launch.
+        void Promise.resolve(vscode.debug.stopDebugging(session)).catch(() => {
+            extensionLogOutputChannel.warn('Failed to stop an Aspire debug session that started after its launch was canceled.');
+        });
     }
 
     private clearLaunchAttemptFailureCorrelation(launchToken: number): void {

@@ -11,6 +11,7 @@ using Aspire.Cli.Mcp.Tools;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
 using Aspire.Dashboard.Otlp.Model;
+using Aspire.Dashboard.Utils;
 using Aspire.Otlp.Serialization;
 using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.Logging.Testing;
@@ -92,7 +93,7 @@ public class ListStructuredLogsToolTests
         var tool = new ListStructuredLogsTool(
             new StaticDashboardInfoProvider(
                 "https://user:password@example.com:5000/login?t=actual-login-token&view=resources",
-                apiKey: null),
+                apiKey: "api-key"),
             auxiliaryBackchannelMonitor: null,
             new MockHttpClientFactory(handler),
             logger);
@@ -101,7 +102,7 @@ public class ListStructuredLogsToolTests
             CallToolContextTestHelper.Create(),
             CancellationToken.None).DefaultTimeout();
 
-        Assert.Equal(
+        AssertDashboardRequestUrlEqual(
             $"https://user:password@example.com:5000/api/telemetry/logs?t=actual-login-token&view=resources&limit={TelemetryCommandHelpers.MaxTelemetryLimit}",
             outboundLogsUrl);
         var write = Assert.Single(
@@ -146,7 +147,7 @@ public class ListStructuredLogsToolTests
             new StaticDashboardInfoProvider(
                 "https://" + "request-user" + ":" + "request-password" + "@example.com:5000/login" +
                 "?t=actual-login-token&accessKey=request-secret&view=resources#request-fragment",
-                apiKey: null),
+                apiKey: "api-key"),
             auxiliaryBackchannelMonitor: null,
             new MockHttpClientFactory(handler),
             logger);
@@ -601,8 +602,9 @@ public class ListStructuredLogsToolTests
     {
         Assert.NotNull(requestUri);
         Assert.Equal("request-user:request-password", requestUri.UserInfo);
-        Assert.Contains("t=actual-login-token", requestUri.Query, StringComparison.Ordinal);
-        Assert.Contains("accessKey=request-secret", requestUri.Query, StringComparison.Ordinal);
+        Assert.Equal(
+            $"?accessKey=request-secret&view=resources&limit={TelemetryCommandHelpers.MaxTelemetryLimit}",
+            requestUri.Query);
     }
 
     private static void AssertDiagnosticsAreSanitized(
@@ -622,5 +624,12 @@ public class ListStructuredLogsToolTests
             Assert.DoesNotContain("exception-user", diagnostic, StringComparison.Ordinal);
             Assert.DoesNotContain("exception-password", diagnostic, StringComparison.Ordinal);
         }
+    }
+
+    private static void AssertDashboardRequestUrlEqual(string? expected, string? actual)
+    {
+        Assert.Equal(
+            DashboardUrls.RemoveDashboardLoginToken(expected),
+            DashboardUrls.RemoveDashboardLoginToken(actual));
     }
 }

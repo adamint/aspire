@@ -420,6 +420,19 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         tool: PreparedLifecycleAction['tool'],
         inputKey: string): PreparedLifecycleAction | undefined {
         this.prunePreparedActions();
+        const matchingActions = this._preparedActions.filter(
+            action => action.tool === tool && action.inputKey === inputKey);
+        if (matchingActions.length > 1 &&
+            matchingActions.some(action =>
+                action.identity !== matchingActions[0].identity ||
+                action.isolated !== matchingActions[0].isolated)) {
+            // VS Code supplies no preparation token to correlate identical invocations. If the
+            // same model input resolved to different physical AppHosts or isolation choices, no
+            // record can prove which confirmation belongs to this invocation, so fail closed.
+            this.removePreparedActions(tool, inputKey);
+            return undefined;
+        }
+
         for (let index = this._preparedActions.length - 1; index >= 0; index--) {
             const action = this._preparedActions[index];
             if (action.tool === tool && action.inputKey === inputKey) {
@@ -600,7 +613,7 @@ function getSessionMode(session: AppHostLifecycleEditorSession): AppHostLifecycl
 }
 
 function getStartInputKey(input: AppHostStartToolInput): string {
-    return JSON.stringify([input.appHostPath, input.mode, input.isolated ?? null]);
+    return JSON.stringify([input.appHostPath, input.mode, input.isolated ?? null, input.launchProfile ?? null]);
 }
 
 function getStopInputKey(input: AppHostStopToolInput): string {

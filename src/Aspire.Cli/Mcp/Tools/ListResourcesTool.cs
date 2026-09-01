@@ -14,8 +14,6 @@ using ModelContextProtocol.Protocol;
 
 namespace Aspire.Cli.Mcp.Tools;
 
-internal sealed record ListResourcesResult(McpResourceJson[] Resources);
-
 internal sealed class McpResourceUrlJson
 {
     public string? Name { get; init; }
@@ -46,7 +44,6 @@ internal sealed class McpResourceJson
     public McpResourceRelationshipJson[] Relationships { get; init; } = [];
 }
 
-[JsonSerializable(typeof(ListResourcesResult))]
 [JsonSerializable(typeof(McpResourceJson[]))]
 [JsonSerializable(typeof(McpResourceUrlJson[]))]
 [JsonSerializable(typeof(McpResourceRelationshipJson[]))]
@@ -76,6 +73,13 @@ internal sealed partial class ListResourcesToolJsonContext : JsonSerializerConte
 /// </summary>
 internal sealed class ListResourcesTool(IAuxiliaryBackchannelMonitor auxiliaryBackchannelMonitor, ILogger<ListResourcesTool> logger) : CliMcpTool
 {
+    private const int MaxResources = 64;
+    private const int MaxIdentityResources = 256;
+    private const int MaxUrlsPerResource = 16;
+    private const int MaxRelationshipsPerResource = 32;
+    private const int MaxWaitingForPerResource = 32;
+    private const int MaxTextLength = 256;
+
     public override string Name => KnownMcpTools.ListResources;
 
     public override string Description => "List the application resources for the selected AppHost. Includes bounded runtime information such as resource type, state, source, endpoints, health status, and relationships.";
@@ -138,12 +142,24 @@ internal sealed class ListResourcesTool(IAuxiliaryBackchannelMonitor auxiliaryBa
 
             // Hidden snapshots still participate in display-name identity so a dependency on
             // two runtime resources cannot collapse merely because one target is hidden.
-            var identitySnapshots = allSnapshots
+            var eligibleSnapshots = allSnapshots
                 .Where(snapshot => !McpToolHelpers.IsExcludedFromMcp(snapshot))
                 .ToList();
-            var visibleSnapshots = identitySnapshots
-                .Where(snapshot => !ResourceSnapshotMapper.IsHiddenResource(snapshot))
+            var identitySnapshots = eligibleSnapshots
+                .Take(MaxIdentityResources)
                 .ToList();
+            var visibleSnapshots = eligibleSnapshots
+                .Where(snapshot => !ResourceSnapshotMapper.IsHiddenResource(snapshot))
+                .Take(MaxResources)
+                .ToList();
+            var visibleResourceCount = eligibleSnapshots.Count(snapshot => !ResourceSnapshotMapper.IsHiddenResource(snapshot));
+            foreach (var visibleSnapshot in visibleSnapshots)
+            {
+                if (!identitySnapshots.Contains(visibleSnapshot))
+                {
+                    identitySnapshots.Add(visibleSnapshot);
+                }
+            }
 
             // Use the dashboard base URL if available
             var dashboardBaseUrl = McpToolHelpers.StripLoginPath(dashboardUrls?.BaseUrlWithLoginToken);
@@ -154,31 +170,34 @@ internal sealed class ListResourcesTool(IAuxiliaryBackchannelMonitor auxiliaryBa
             // environment values, and health details never enter the MCP serialization boundary.
             var boundedResources = visibleSnapshots.Select(snapshot => new McpResourceJson
             {
-                Name = snapshot.Name,
-                DisplayName = snapshot.DisplayName,
-                ResourceType = snapshot.ResourceType,
-                State = snapshot.State,
+                Name = GetBoundedText(snapshot.Name),
+                DisplayName = GetBoundedText(snapshot.DisplayName),
+                ResourceType = GetBoundedText(snapshot.ResourceType),
+                State = GetBoundedText(snapshot.State),
                 WaitingFor = GetBoundedWaitingFor(snapshot, resourceIdentities),
-                StateStyle = snapshot.StateStyle,
+                StateStyle = GetBoundedText(snapshot.StateStyle),
                 Source = GetBoundedSource(snapshot),
                 ExitCode = snapshot.ExitCode,
-                HealthStatus = snapshot.HealthStatus,
+                HealthStatus = GetBoundedText(snapshot.HealthStatus),
                 DashboardUrl = GetDashboardUrl(snapshot, dashboardBaseUrl),
-                Urls = snapshot.Urls.Select(url => new McpResourceUrlJson
+                Urls = snapshot.Urls.Take(MaxUrlsPerResource).Select(url => new McpResourceUrlJson
                 {
-                    Name = url.Name,
-                    DisplayName = url.DisplayProperties?.DisplayName,
-                    Url = McpToolHelpers.SanitizeResourceUrl(url.Url),
+                    Name = GetBoundedText(url.Name),
+                    DisplayName = GetBoundedText(url.DisplayProperties?.DisplayName),
+                    Url = GetBoundedText(McpToolHelpers.SanitizeResourceUrl(url.Url)),
                     IsInternal = url.IsInternal
                 }).ToArray(),
                 Relationships = GetBoundedRelationships(snapshot, relationshipTargets)
             }).ToArray();
-            var responseData = new ListResourcesResult(boundedResources);
-            var resourceGraphData = JsonSerializer.Serialize(responseData, ListResourcesToolJsonContext.RelaxedEscaping.ListResourcesResult);
+            var resourceGraphData = JsonSerializer.Serialize(boundedResources, ListResourcesToolJsonContext.RelaxedEscaping.McpResourceJsonArray);
+            var truncationNotice = visibleResourceCount > boundedResources.Length
+                ? $"Resource data is truncated to {boundedResources.Length} of {visibleResourceCount} visible resources."
+                : null;
 
             var response = $"""
             resource_name is the identifier of resources.
             Console logs for a resource can provide more information about why a resource is not in a running state.
+            {truncationNotice}
 
             # RESOURCE DATA
 
@@ -301,10 +320,19 @@ internal sealed class ListResourcesTool(IAuxiliaryBackchannelMonitor auxiliaryBa
 
         foreach (var reference in references)
         {
-            if (resourceIdentities.TryGetValue(reference, out var identity) &&
-                seenReferences.Add(identity.WaitingForName))
+            if (resourceIdentities.TryGetValue(reference, out var identity))
             {
-                boundedReferences.Add(identity.WaitingForName);
+                var boundedName = GetBoundedText(identity.WaitingForName)!;
+                if (!seenReferences.Add(boundedName))
+                {
+                    continue;
+                }
+
+                boundedReferences.Add(boundedName);
+                if (boundedReferences.Count == MaxWaitingForPerResource)
+                {
+                    break;
+                }
             }
         }
 
@@ -327,13 +355,19 @@ internal sealed class ListResourcesTool(IAuxiliaryBackchannelMonitor auxiliaryBa
 
             foreach (var target in targets)
             {
-                if (seenRelationships.Add($"{relationship.Type}\0{target}"))
+                var boundedType = GetBoundedText(relationship.Type);
+                var boundedTarget = GetBoundedText(target);
+                if (seenRelationships.Add($"{boundedType}\0{boundedTarget}"))
                 {
                     relationships.Add(new McpResourceRelationshipJson
                     {
-                        Type = relationship.Type,
-                        ResourceName = target
+                        Type = boundedType,
+                        ResourceName = boundedTarget
                     });
+                    if (relationships.Count == MaxRelationshipsPerResource)
+                    {
+                        return [.. relationships];
+                    }
                 }
             }
         }
@@ -349,7 +383,7 @@ internal sealed class ListResourcesTool(IAuxiliaryBackchannelMonitor auxiliaryBa
         }
 
         var dashboardUrl = DashboardUrls.CombineUrl(dashboardBaseUrl, DashboardUrls.ResourcesUrl(snapshot.Name));
-        return McpToolHelpers.SanitizeUrl(dashboardUrl);
+        return GetBoundedText(McpToolHelpers.SanitizeUrl(dashboardUrl));
     }
 
     private static string? GetBoundedSource(ResourceSnapshot snapshot)
@@ -357,18 +391,18 @@ internal sealed class ListResourcesTool(IAuxiliaryBackchannelMonitor auxiliaryBa
         if (string.Equals(snapshot.ResourceType, KnownResourceTypes.Project, StringComparisons.ResourceType))
         {
             var projectPath = GetStringProperty(snapshot, KnownProperties.Project.Path);
-            return projectPath is null ? null : GetCrossPlatformFileName(projectPath);
+            return projectPath is null ? null : GetBoundedText(GetCrossPlatformFileName(projectPath));
         }
 
         if (string.Equals(snapshot.ResourceType, KnownResourceTypes.Executable, StringComparisons.ResourceType))
         {
             var executablePath = GetStringProperty(snapshot, KnownProperties.Executable.Path);
-            return executablePath is null ? null : GetCrossPlatformFileName(executablePath);
+            return executablePath is null ? null : GetBoundedText(GetCrossPlatformFileName(executablePath));
         }
 
         if (string.Equals(snapshot.ResourceType, KnownResourceTypes.Container, StringComparisons.ResourceType))
         {
-            return GetStringProperty(snapshot, KnownProperties.Container.Image);
+            return GetBoundedText(GetStringProperty(snapshot, KnownProperties.Container.Image));
         }
 
         return null;
@@ -391,5 +425,26 @@ internal sealed class ListResourcesTool(IAuxiliaryBackchannelMonitor auxiliaryBa
         }
 
         return null;
+    }
+
+    private static string? GetBoundedText(string? value)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+
+        var sanitized = string.Create(
+            Math.Min(value.Length, MaxTextLength),
+            value,
+            static (destination, source) =>
+            {
+                for (var index = 0; index < destination.Length; index++)
+                {
+                    var character = source[index];
+                    destination[index] = char.IsControl(character) ? ' ' : character;
+                }
+            });
+        return sanitized;
     }
 }

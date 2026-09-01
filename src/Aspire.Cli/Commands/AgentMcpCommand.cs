@@ -13,6 +13,7 @@ using Aspire.Cli.Projects;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Utils;
 using Aspire.Cli.Utils.EnvironmentChecker;
+using Aspire.Hosting.Utils;
 using Aspire.Shared.Mcp;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol;
@@ -102,7 +103,8 @@ internal sealed class AgentMcpCommand : BaseCommand
         // System.CommandLine parses `--apphost --dashboard-url http://localhost:18888` as though
         // "--dashboard-url" were the AppHost value, so inspect raw token spellings before reading values.
         var appHostOptionSpecified = parseResult.Tokens.Any(token =>
-            string.Equals(token.Value, s_appHostOption.Name, StringComparison.Ordinal));
+            string.Equals(token.Value, s_appHostOption.Name, StringComparison.Ordinal) ||
+            string.Equals(token.Value, s_appHostOption.LegacyOption.Name, StringComparison.Ordinal));
         var dashboardUrlOptionSpecified = parseResult.Tokens.Any(token =>
             string.Equals(token.Value, s_dashboardUrlOption.Name, StringComparison.Ordinal));
 
@@ -139,7 +141,14 @@ internal sealed class AgentMcpCommand : BaseCommand
                             : InteractionServiceStrings.ProjectOptionDoesntExist);
                 }
 
-                _pinnedAppHostPath = Path.GetFullPath(selectedProjectFile.FullName);
+                var selectedPath = Path.GetFullPath(selectedProjectFile.FullName);
+                if (!PathNormalizer.TryResolveSymlinks(selectedPath, out var symlinkResolvedPath))
+                {
+                    return CommandResult.Failure(
+                        CliExitCodes.FailedToFindProject,
+                        InteractionServiceStrings.ProjectOptionDoesntExist);
+                }
+                _pinnedAppHostPath = PathNormalizer.ResolveToFilesystemPath(symlinkResolvedPath);
             }
             catch (ProjectLocatorException ex)
             {
@@ -172,7 +181,7 @@ internal sealed class AgentMcpCommand : BaseCommand
             }
 
             _dashboardOnlyMode = true;
-            var staticProvider = new StaticDashboardInfoProvider(dashboardUrl, apiKey);
+            var staticProvider = new StaticDashboardInfoProvider(dashboardUrl, apiKey, _httpClientFactory, _logger);
 
             _knownTools[KnownMcpTools.ListStructuredLogs] = new ListStructuredLogsTool(staticProvider, null, _httpClientFactory, _loggerFactory.CreateLogger<ListStructuredLogsTool>());
             _knownTools[KnownMcpTools.ListTraces] = new ListTracesTool(staticProvider, null, _httpClientFactory, _loggerFactory.CreateLogger<ListTracesTool>());

@@ -230,8 +230,14 @@ internal static class TelemetryCommandHelpers
 
             // If no explicit --api-key was provided but a login token was found in the URL,
             // exchange the login token for an API key via the dashboard.
+            if (loginToken is not null)
+            {
+                dashboardUrl = DashboardUrls.RemoveDashboardLoginToken(dashboardUrl) ?? dashboardUrl;
+            }
             if (apiKey is null && loginToken is not null)
             {
+                // The browser login token is sent in the request body below. Do not carry the same
+                // one-time secret onto the validation endpoint or later telemetry requests.
                 var exchangeResult = await ExchangeLoginTokenForApiKeyAsync(httpClientFactory, dashboardUrl, loginToken, logger, cancellationToken).ConfigureAwait(false);
 
                 if (!exchangeResult.Success)

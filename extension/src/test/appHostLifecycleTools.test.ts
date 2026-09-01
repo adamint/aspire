@@ -1972,6 +1972,70 @@ suite('AppHost lifecycle language model tools', () => {
             assert.strictEqual(launchService.launchCalls.length, 0);
         });
 
+        test('rejects a start whose launch profile changes after preparation', async () => {
+            const tool = new AppHostStartLanguageModelTool(service);
+            const token = new vscode.CancellationTokenSource().token;
+
+            for (const launchProfile of ['Profile B', undefined]) {
+                await tool.prepareInvocation({
+                    input: {
+                        appHostPath: 'AppHost/AppHost.csproj',
+                        mode: 'run',
+                        launchProfile: 'Profile A',
+                    },
+                }, token);
+                const result = readToolResultPayload(await tool.invoke({
+                    input: {
+                        appHostPath: 'AppHost/AppHost.csproj',
+                        mode: 'run',
+                        ...(launchProfile === undefined ? {} : { launchProfile }),
+                    },
+                    toolInvocationToken: undefined,
+                }, token));
+
+                assert.strictEqual(result.outcome, 'failed');
+            }
+
+            assert.strictEqual(launchService.launchCalls.length, 0);
+        });
+
+        test('rejects indistinguishable preparations that resolved to different AppHosts', async () => {
+            const input = { appHostPath: 'AppHost/AppHost.csproj', mode: 'run' } as const;
+            const inputKey = JSON.stringify([input.appHostPath, input.mode, null, null]);
+            const preparedActions = (service as unknown as {
+                _preparedActions: Array<{
+                    tool: string;
+                    inputKey: string;
+                    identity: string;
+                    isolated: boolean;
+                    expiresAt: number;
+                }>;
+            })._preparedActions;
+            preparedActions.push(
+                {
+                    tool: aspireAppHostStartToolName,
+                    inputKey,
+                    identity: 'apphost-a',
+                    isolated: false,
+                    expiresAt: Date.now() + 60_000,
+                },
+                {
+                    tool: aspireAppHostStartToolName,
+                    inputKey,
+                    identity: 'apphost-b',
+                    isolated: false,
+                    expiresAt: Date.now() + 60_000,
+                });
+            const tool = new AppHostStartLanguageModelTool(service);
+
+            const result = readToolResultPayload(await tool.invoke(
+                { input, toolInvocationToken: undefined },
+                new vscode.CancellationTokenSource().token));
+
+            assert.strictEqual(result.outcome, 'failed');
+            assert.strictEqual(launchService.launchCalls.length, 0);
+        });
+
         test('rejects a start when inferred isolation changes after preparation', async () => {
             const tool = new AppHostStartLanguageModelTool(service);
             const token = new vscode.CancellationTokenSource().token;

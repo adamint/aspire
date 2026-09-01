@@ -39,7 +39,6 @@ internal static class DashboardUrls
                 : uri.Host,
             Path = path
         };
-
         var normalizedUri = builder.Uri;
         if (normalizedUri.AbsolutePath == "/")
         {
@@ -47,6 +46,29 @@ internal static class DashboardUrls
         }
 
         return normalizedUri.AbsoluteUri;
+    }
+
+    /// <summary>
+    /// Removes the browser login token from an HTTP or HTTPS dashboard URL while preserving every
+    /// other query value.
+    /// </summary>
+    public static string? RemoveDashboardLoginToken(string? url)
+    {
+        if (!TryCreateHttpUri(url, out var uri))
+        {
+            return null;
+        }
+
+        var query = HttpUtility.ParseQueryString(uri.Query);
+        query.Remove("t");
+        var builder = new UriBuilder(uri)
+        {
+            Query = query.ToString()
+        };
+        var normalizedUri = builder.Uri;
+        return normalizedUri.AbsolutePath == "/"
+            ? normalizedUri.GetLeftPart(UriPartial.Authority) + normalizedUri.Query + normalizedUri.Fragment
+            : normalizedUri.AbsoluteUri;
     }
 
     /// <summary>

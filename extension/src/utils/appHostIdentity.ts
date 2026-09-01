@@ -211,10 +211,14 @@ export function bindCurrentAppHostTarget(appHostPath: string): CurrentAppHostTar
 }
 
 function getCurrentTargetIdentityKeyInfo(appHostPath: string): CurrentTargetIdentityKeyInfo {
-    const keyInfo = getAppHostIdentityKeyInfo(appHostPath);
+    // Capture a mutable selector once. Deriving the alias key and exact key from separate
+    // realpath samples could combine one target's aliases with another target's exact key when a
+    // symlink is retargeted between the two calls.
+    const resolvedPath = canonicalize(path.normalize(path.resolve(appHostPath)));
+    const keyInfo = getAppHostIdentityKeyInfoFromCanonicalPath(resolvedPath);
     return {
         ...keyInfo,
-        exactPathKey: getAppHostPathComparisonKey(appHostPath),
+        exactPathKey: getCapturedAppHostPathKey(resolvedPath),
     };
 }
 
@@ -252,8 +256,12 @@ export function __resetAppHostIdentityRegistryForTests(): void {
 
 export function getAppHostIdentityKeyInfo(appHostPath: string): AppHostIdentityKeyInfo {
     const resolvedPath = canonicalize(path.normalize(path.resolve(appHostPath)));
+    return getAppHostIdentityKeyInfoFromCanonicalPath(resolvedPath);
+}
+
+function getAppHostIdentityKeyInfoFromCanonicalPath(resolvedPath: string): AppHostIdentityKeyInfo {
     if (!isAppHostProjectFile(resolvedPath) && !isAppHostSourceFile(resolvedPath)) {
-        const key = getAppHostPathComparisonKey(resolvedPath);
+        const key = getCapturedAppHostPathKey(resolvedPath);
         return { key, pathKeys: [key] };
     }
 
@@ -266,16 +274,20 @@ export function getAppHostIdentityKeyInfo(appHostPath: string): AppHostIdentityK
 
     if (isAliasedPair) {
         return {
-            key: `${getAppHostPathComparisonKey(directory)}${appHostAliasKeySuffix}`,
+            key: `${getCapturedAppHostPathKey(directory)}${appHostAliasKeySuffix}`,
             pathKeys: [
-                getAppHostPathComparisonKey(shapes.projectFiles[0]),
-                getAppHostPathComparisonKey(shapes.sourceFiles[0]),
+                getCapturedAppHostPathKey(shapes.projectFiles[0]),
+                getCapturedAppHostPathKey(shapes.sourceFiles[0]),
             ],
         };
     }
 
-    const key = getAppHostPathComparisonKey(resolvedPath);
+    const key = getCapturedAppHostPathKey(resolvedPath);
     return { key, pathKeys: [key] };
+}
+
+function getCapturedAppHostPathKey(value: string): string {
+    return path.normalize(path.resolve(value));
 }
 
 export function isAppHostProjectFile(value: string): boolean {

@@ -13,6 +13,7 @@ using Aspire.Cli.Resources;
 using Aspire.Cli.Tests.Mcp;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
+using Aspire.Hosting.Utils;
 using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -887,16 +888,14 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
         using var firstListJson = GetMarkedJson(firstList, "# RESOURCE DATA");
         using var waitJson = GetMarkedJson(wait, "# WAIT RESULT");
         using var secondListJson = GetMarkedJson(secondList, "# RESOURCE DATA");
-        Assert.False(firstListJson.RootElement.TryGetProperty("app_host_path", out _));
         Assert.False(waitJson.RootElement.TryGetProperty("app_host_path", out _));
-        Assert.False(secondListJson.RootElement.TryGetProperty("app_host_path", out _));
         Assert.Equal(
             "Starting",
-            firstListJson.RootElement.GetProperty("resources")[0].GetProperty("state").GetString());
+            firstListJson.RootElement[0].GetProperty("state").GetString());
         Assert.Equal("success", waitJson.RootElement.GetProperty("outcome").GetString());
         Assert.Equal(
             "Running",
-            secondListJson.RootElement.GetProperty("resources")[0].GetProperty("state").GetString());
+            secondListJson.RootElement[0].GetProperty("state").GetString());
         Assert.Equal(3, pinnedConnection.GetResourceSnapshotsCallCount);
         Assert.Equal(1, pinnedWaitCalls);
         Assert.Equal(0, unrelatedSnapshotCalls);
@@ -971,7 +970,9 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
                 cancellationToken: ctx.Cts.Token).DefaultTimeout());
 
         Assert.Equal(McpErrorCode.InternalError, exception.ErrorCode);
-        Assert.Contains(appHostPath, exception.Message);
+        Assert.Equal(
+            "Request failed (remote): The selected AppHost is not available. Start that AppHost and retry.",
+            exception.Message);
         Assert.Equal(1, snapshotCalls);
     }
 
@@ -1153,8 +1154,9 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
                 cancellationToken: ctx.Cts.Token).DefaultTimeout());
 
         Assert.Equal(McpErrorCode.InternalError, exception.ErrorCode);
-        Assert.Contains(appHostPath, exception.Message);
-        Assert.Contains("not available", exception.Message);
+        Assert.Equal(
+            "Request failed (remote): The selected AppHost is not available. Start that AppHost and retry.",
+            exception.Message);
     }
 
     [Fact]
@@ -1526,6 +1528,8 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
     [Theory]
     [InlineData("agent mcp --apphost Pinned.AppHost.csproj --dashboard-url http://localhost:18888")]
     [InlineData("agent mcp --apphost --dashboard-url http://localhost:18888")]
+    [InlineData("agent mcp --project Pinned.AppHost.csproj --dashboard-url http://localhost:18888")]
+    [InlineData("agent mcp --project --dashboard-url http://localhost:18888")]
     public async Task McpServer_WithAppHostAndDashboardUrl_ReturnsInvalidCommandBeforeResolutionOrServerStart(
         string commandLine)
     {
@@ -1592,7 +1596,9 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
             () => command.ExecuteCommandAsync(parseResult, TestContext.Current.CancellationToken)).DefaultTimeout();
 
         Assert.Same(serverStartException, exception);
-        Assert.Equal(appHostProjectFile.FullName, monitor.SelectedAppHostPath);
+        Assert.Equal(
+            PathNormalizer.ResolveToFilesystemPath(PathNormalizer.ResolveSymlinks(appHostProjectFile.FullName)),
+            monitor.SelectedAppHostPath);
     }
 
     [Fact]
@@ -1623,7 +1629,9 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
             () => command.ExecuteCommandAsync(parseResult, TestContext.Current.CancellationToken)).DefaultTimeout();
 
         Assert.Same(serverStartException, exception);
-        Assert.Equal(appHostProjectFile.FullName, monitor.SelectedAppHostPath);
+        Assert.Equal(
+            PathNormalizer.ResolveToFilesystemPath(PathNormalizer.ResolveSymlinks(appHostProjectFile.FullName)),
+            monitor.SelectedAppHostPath);
     }
 
     [Fact]

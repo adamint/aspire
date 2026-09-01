@@ -146,7 +146,7 @@ public class ExcludeFromMcpTests
         Assert.True(markerIndex >= 0, "Response should contain the resource data marker.");
         var jsonText = textContent.Text[(markerIndex + marker.Length)..].Trim();
         using var json = JsonDocument.Parse(jsonText);
-        var resource = json.RootElement.GetProperty("resources")[0];
+        var resource = json.RootElement[0];
 
         Assert.Equal(ApiServiceName, resource.GetProperty("name").GetString());
         Assert.Equal("[]", resource.GetProperty("waiting_for").GetRawText());
@@ -187,11 +187,10 @@ public class ExcludeFromMcpTests
         var markerIndex = textContent.Text.IndexOf(marker, StringComparison.Ordinal);
         Assert.True(markerIndex >= 0, "Response should contain the resource data marker.");
         var jsonText = textContent.Text[(markerIndex + marker.Length)..].Trim();
-        Assert.StartsWith("{", jsonText, StringComparison.Ordinal);
+        Assert.StartsWith("[", jsonText, StringComparison.Ordinal);
         using var json = JsonDocument.Parse(jsonText);
 
-        Assert.False(json.RootElement.TryGetProperty("app_host_path", out _));
-        Assert.Empty(json.RootElement.GetProperty("resources").EnumerateArray());
+        Assert.Empty(json.RootElement.EnumerateArray());
     }
 
     private static AppHostInformation CreateAppHostInfo()

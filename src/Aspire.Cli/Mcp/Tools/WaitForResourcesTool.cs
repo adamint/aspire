@@ -136,6 +136,23 @@ internal sealed class WaitForResourcesTool(
         }
 
         var requestedNames = arguments.ResourceNames;
+        if (requestedNames is not { Count: > 0 })
+        {
+            var eligibleNames = snapshots
+                .Where(static snapshot => !ResourceSnapshotMapper.IsHiddenResource(snapshot))
+                .Where(static snapshot => !McpToolHelpers.IsExcludedFromMcp(snapshot))
+                .Select(static snapshot => snapshot.Name)
+                .Distinct(StringComparers.ResourceName)
+                .ToArray();
+            if (eligibleNames.Length > MaximumResourceNameCount ||
+                eligibleNames.Any(static name => name.Length > MaximumResourceNameLength))
+            {
+                throw new McpProtocolException(
+                    $"The selected AppHost has too many resources to wait for implicitly. Specify resourceNames in batches of at most {MaximumResourceNameCount}.",
+                    McpErrorCode.InvalidParams);
+            }
+        }
+
         var targets = requestedNames is { Count: > 0 }
             ? requestedNames.Select(name => ResolveNamedResource(name, snapshots)).ToArray()
             : snapshots

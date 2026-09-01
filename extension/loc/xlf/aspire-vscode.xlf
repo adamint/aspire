@@ -688,11 +688,11 @@
     <trans-unit id="command.openResourceTerminal">
       <source xml:lang="en">Open terminal</source>
     </trans-unit>
-    <trans-unit id="languageModelTool.aspireOpenDashboard.userDescription">
-      <source xml:lang="en">Open the Aspire Dashboard for a running AppHost.</source>
-    </trans-unit>
     <trans-unit id="languageModelTool.aspireOpenDashboard.modelDescription">
-      <source xml:lang="en">Open the Aspire Dashboard for a running discovered AppHost using any explicitly configured browser or notification presentation, or the external browser by default when none is configured. This changes editor or browser UI. The result reports only whether it opened and the bounded presentation; it never returns the Dashboard URL.</source>
+      <source xml:lang="en">Open the Aspire Dashboard for a running discovered AppHost controlled by this editor using any explicitly configured browser or notification presentation, or the external browser by default when none is configured. This changes editor or browser UI. The result reports only whether it opened and the bounded presentation; it never returns the Dashboard URL.</source>
+    </trans-unit>
+    <trans-unit id="languageModelTool.aspireOpenDashboard.userDescription">
+      <source xml:lang="en">Open the Aspire Dashboard for an AppHost controlled by this editor.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.editorAssistanceOpenOutputConfirmationTitle">
       <source xml:lang="en">Open the VS Code Output panel and select the Aspire Extension output channel</source>
@@ -1151,7 +1151,7 @@
       <source xml:lang="en">When true, start with randomized ports and isolated user secrets. When false, do not isolate. When omitted, linked git worktrees start isolated automatically.</source>
     </trans-unit>
     <trans-unit id="configuration.aspire.registerMcpServerInWorkspace">
-      <source xml:lang="en">Whether to register the Aspire MCP server when a workspace is open.</source>
+      <source xml:lang="en">Whether to register the Aspire MCP server when a workspace is open. Enabled by default; set this to false to opt out.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.workspaceAppHostLabel">
       <source xml:lang="en">Workspace AppHost</source>

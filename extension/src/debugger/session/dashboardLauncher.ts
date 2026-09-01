@@ -425,14 +425,18 @@ export class DashboardLauncher implements vscode.Disposable {
    * Explicit editor handoffs use this path so their model-facing result reports what was
    * actually opened without making automatic startup wait on browser debugger activation.
    */
-  async openDashboardAndWait(url: string, browserType: DashboardBrowserType): Promise<DashboardPresentation | undefined> {
-    return this.openDashboardInternal(url, browserType, true);
+  async openDashboardAndWait(
+    url: string,
+    browserType: DashboardBrowserType,
+    token?: vscode.CancellationToken): Promise<DashboardPresentation | undefined> {
+    return this.openDashboardInternal(url, browserType, true, token);
   }
 
   private async openDashboardInternal(
     url: string,
     browserType: DashboardBrowserType,
-    waitForDebugBrowserStart: boolean): Promise<DashboardPresentation | undefined> {
+    waitForDebugBrowserStart: boolean,
+    token?: vscode.CancellationToken): Promise<DashboardPresentation | undefined> {
     extensionLogOutputChannel.info(`Opening dashboard in browser: ${browserType}.`);
 
     if (this._host.isDisposed
@@ -453,7 +457,7 @@ export class DashboardLauncher implements vscode.Disposable {
         () => vscode.env.openExternal(vscode.Uri.parse(url))),
       openDebug: debugType => {
         if (waitForDebugBrowserStart) {
-          return this.launchDebugBrowser(url, debugType);
+          return this.launchDebugBrowser(url, debugType, token);
         }
 
         this.launchDebugBrowserInBackground(url, debugType);
@@ -479,10 +483,17 @@ export class DashboardLauncher implements vscode.Disposable {
    */
   private async launchDebugBrowser(
     url: string,
-    debugType: DashboardDebugType): Promise<DashboardPresentation | undefined> {
+    debugType: DashboardDebugType,
+    token?: vscode.CancellationToken): Promise<DashboardPresentation | undefined> {
+    if (token?.isCancellationRequested) {
+      throw new vscode.CancellationError();
+    }
+
     const debugConfig = createDashboardDebugConfiguration(url, debugType);
     const launchId = ++this._nextDashboardLaunchId;
     debugConfig[dashboardLaunchIdConfigKey] = launchId;
+    let cancellationRequested = false;
+    let startedSession: vscode.DebugSession | undefined;
 
     // Register listener before starting so we don't miss the event.
     // The started session must be matched to *this* Aspire session: concurrent Aspire
@@ -500,6 +511,12 @@ export class DashboardLauncher implements vscode.Disposable {
         }
 
         this.disposeDashboardStartListener(disposable);
+        startedSession = session;
+        if (cancellationRequested) {
+          this.stopCanceledDashboardDebugSession(session);
+          return;
+        }
+
         this.trackDashboardDebugSession(session);
         if (this._host.isShuttingDown) {
           this.closeDashboardInBackground();
@@ -515,17 +532,58 @@ export class DashboardLauncher implements vscode.Disposable {
       this._host.parentSession));
     const completion = start.then(() => undefined, () => undefined);
     this._pendingDashboardDebugSessionStarts.add(completion);
+    start.then(
+      didStart => {
+        if (cancellationRequested) {
+          if (!didStart) {
+            this.disposeDashboardStartListener(disposable);
+          }
+          else if (!startedSession) {
+            // VS Code normally raises the start event before this promise settles. Keep a bounded
+            // late-event window for adapters that reverse that order.
+            this.scheduleDashboardStartListenerCleanup();
+          }
+        }
+      },
+      () => {
+        if (cancellationRequested) {
+          this.disposeDashboardStartListener(disposable);
+        }
+      });
+
+    let cancellationDisposable: vscode.Disposable | undefined;
+    const cancellation = token && new Promise<never>((_, reject) => {
+      cancellationDisposable = token.onCancellationRequested(() => {
+        cancellationRequested = true;
+        if (startedSession) {
+          this.stopCanceledDashboardDebugSession(startedSession);
+        }
+        // The debug API cannot cancel a start request. Keep its listener while the request is
+        // pending so a late child can be identified and stopped, but let the tool return now.
+        reject(new vscode.CancellationError());
+      });
+    });
     try {
       // Start as a child debug session so it is stopped alongside this session in `dispose`.
-      didStart = await start;
+      didStart = cancellation ? await Promise.race([start, cancellation]) : await start;
     }
     catch (error) {
+      if (cancellationRequested || error instanceof vscode.CancellationError) {
+        throw error;
+      }
+
       this.disposeDashboardStartListener(disposable);
       this.recordDashboardLaunchFailure(error);
       throw error;
     }
     finally {
-      this._pendingDashboardDebugSessionStarts.delete(completion);
+      cancellationDisposable?.dispose();
+      if (cancellationRequested) {
+        void completion.then(() => this._pendingDashboardDebugSessionStarts.delete(completion));
+      }
+      else {
+        this._pendingDashboardDebugSessionStarts.delete(completion);
+      }
     }
 
     if (!didStart) {
@@ -537,13 +595,29 @@ export class DashboardLauncher implements vscode.Disposable {
       if (this._host.isShuttingDown) {
         return undefined;
       }
+      if (token?.isCancellationRequested) {
+        throw new vscode.CancellationError();
+      }
 
       return await this.openDashboardCore(() => vscode.env.openExternal(vscode.Uri.parse(url)))
         ? 'externalBrowser'
         : undefined;
     }
 
+    if (token?.isCancellationRequested) {
+      throw new vscode.CancellationError();
+    }
+
     return 'debugBrowser';
+  }
+
+  private stopCanceledDashboardDebugSession(session: vscode.DebugSession): void {
+    // Cancellation is invocation-scoped. Ignore the close-on-debug-end preference and stop only
+    // the child created by this launch; path-wide cleanup could close an unrelated dashboard.
+    this.clearDashboardDebugSession(session);
+    stopSessionInBackground(
+      () => vscode.debug.stopDebugging(session),
+      'dashboard debug session that started after its launch was canceled');
   }
 
   private async openDashboardCore(operation: () => Thenable<unknown>): Promise<boolean> {

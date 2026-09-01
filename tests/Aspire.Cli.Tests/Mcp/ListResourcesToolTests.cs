@@ -62,9 +62,8 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
         Assert.True(result.IsError is null or false);
         using var json = GetResourceData(result);
 
-        Assert.Equal(["resources"], json.RootElement.EnumerateObject().Select(p => p.Name));
-        Assert.False(json.RootElement.TryGetProperty("app_host_path", out _));
-        Assert.Empty(json.RootElement.GetProperty("resources").EnumerateArray());
+        Assert.Equal(JsonValueKind.Array, json.RootElement.ValueKind);
+        Assert.Empty(json.RootElement.EnumerateArray());
     }
 
     [Fact]
@@ -85,7 +84,7 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
         var result = await tool.CallToolAsync(CallToolContextTestHelper.Create(), CancellationToken.None).DefaultTimeout();
 
         using var json = GetResourceData(result);
-        var resource = json.RootElement.GetProperty("resources")[0];
+        var resource = json.RootElement[0];
         Assert.Equal("[]", resource.GetProperty("waiting_for").GetRawText());
         Assert.Equal("[]", resource.GetProperty("urls").GetRawText());
         Assert.Equal("[]", resource.GetProperty("relationships").GetRawText());
@@ -148,7 +147,7 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
 
         using var json = GetResourceData(result);
         var relationships = json.RootElement
-            .GetProperty("resources")[0]
+            [0]
             .GetProperty("relationships")
             .EnumerateArray()
             .ToArray();
@@ -207,13 +206,13 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
         using var json = GetResourceData(result);
         Assert.Equal(
             ["redis-visible"],
-            json.RootElement.GetProperty("resources")[0]
+            json.RootElement[0]
                 .GetProperty("relationships")
                 .EnumerateArray()
                 .Select(relationship => relationship.GetProperty("resource_name").GetString()));
         Assert.Equal(
             ["api", "redis-visible"],
-            json.RootElement.GetProperty("resources")
+            json.RootElement
                 .EnumerateArray()
                 .Select(resource => resource.GetProperty("name").GetString()));
     }
@@ -257,13 +256,13 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
         using var json = GetResourceData(result);
         Assert.Equal(
             ["redis-visible", "redis-hidden"],
-            json.RootElement.GetProperty("resources")[0]
+            json.RootElement[0]
                 .GetProperty("waiting_for")
                 .EnumerateArray()
                 .Select(value => value.GetString()));
         Assert.Equal(
             ["api", "redis-visible"],
-            json.RootElement.GetProperty("resources")
+            json.RootElement
                 .EnumerateArray()
                 .Select(resource => resource.GetProperty("name").GetString()));
     }
@@ -298,7 +297,7 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
         var result = await tool.CallToolAsync(CallToolContextTestHelper.Create(), CancellationToken.None).DefaultTimeout();
 
         using var json = GetResourceData(result);
-        Assert.False(json.RootElement.TryGetProperty("app_host_path", out _));
+        Assert.Equal(JsonValueKind.Array, json.RootElement.ValueKind);
     }
 
     [Fact]
@@ -333,10 +332,66 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
         var result = await tool.CallToolAsync(CallToolContextTestHelper.Create(), CancellationToken.None).DefaultTimeout();
 
         using var json = GetResourceData(result);
-        var resources = json.RootElement.GetProperty("resources");
+        var resources = json.RootElement;
 
-        Assert.False(json.RootElement.TryGetProperty("app_host_path", out _));
         Assert.Equal(["api-service", "redis", "postgres"], resources.EnumerateArray().Select(r => r.GetProperty("name").GetString()));
+    }
+
+    [Fact]
+    public async Task ListResourcesTool_BoundsModelFacingCollectionsAndText()
+    {
+        var resourceNames = Enumerable.Range(0, 70).Select(index => $"resource-{index}").ToArray();
+        var longText = new string('x', 300) + "\ncontrol";
+        var snapshots = resourceNames.Select((name, index) => new ResourceSnapshot
+        {
+            Name = name,
+            DisplayName = index == 0 ? longText : name,
+            ResourceType = index == 0 ? longText : "Custom",
+            State = index == 0 ? longText : "Running",
+            StateStyle = index == 0 ? longText : null,
+            HealthStatus = index == 0 ? longText : null,
+            WaitingFor = index == 0 ? resourceNames[1..41] : [],
+            Urls = index == 0
+                ? Enumerable.Range(0, 20)
+                    .Select(urlIndex => new ResourceSnapshotUrl
+                    {
+                        Name = longText,
+                        Url = $"https://example.com/{urlIndex}/{longText}"
+                    })
+                    .ToArray()
+                : [],
+            Relationships = index == 0
+                ? resourceNames[1..41]
+                    .Select(target => new ResourceSnapshotRelationship
+                    {
+                        Type = longText,
+                        ResourceName = target
+                    })
+                    .ToArray()
+                : []
+        }).ToArray();
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+        monitor.AddConnection("hash1", "socket.hash1", CreateConnection(snapshots));
+        var tool = new ListResourcesTool(monitor, NullLogger<ListResourcesTool>.Instance);
+
+        var result = await tool.CallToolAsync(CallToolContextTestHelper.Create(), CancellationToken.None).DefaultTimeout();
+
+        using var json = GetResourceData(result);
+        Assert.Equal(64, json.RootElement.GetArrayLength());
+        Assert.Contains(
+            "Resource data is truncated to 64 of 70 visible resources.",
+            GetResultText(result),
+            StringComparison.Ordinal);
+        var firstResource = json.RootElement[0];
+        foreach (var propertyName in new[] { "display_name", "resource_type", "state", "state_style", "health_status" })
+        {
+            var value = Assert.IsType<string>(firstResource.GetProperty(propertyName).GetString());
+            Assert.Equal(256, value.Length);
+            Assert.All(value, character => Assert.False(char.IsControl(character)));
+        }
+        Assert.Equal(32, firstResource.GetProperty("waiting_for").GetArrayLength());
+        Assert.Equal(16, firstResource.GetProperty("urls").GetArrayLength());
+        Assert.Equal(32, firstResource.GetProperty("relationships").GetArrayLength());
     }
 
     [Fact]
@@ -372,7 +427,7 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
         var result = await tool.CallToolAsync(CallToolContextTestHelper.Create(), CancellationToken.None).DefaultTimeout();
 
         using var json = GetResourceData(result);
-        var resources = json.RootElement.GetProperty("resources");
+        var resources = json.RootElement;
         Assert.Equal("Api.csproj", resources[0].GetProperty("source").GetString());
         Assert.Equal("worker.exe", resources[1].GetProperty("source").GetString());
     }
@@ -407,7 +462,7 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
             CancellationToken.None).DefaultTimeout();
 
         using var json = GetResourceData(result);
-        var urls = json.RootElement.GetProperty("resources")[0].GetProperty("urls");
+        var urls = json.RootElement[0].GetProperty("urls");
         Assert.Equal(
             [
                 "tcp://cache.example.com:6379",
@@ -560,7 +615,7 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
         var result = await tool.CallToolAsync(CallToolContextTestHelper.Create(), CancellationToken.None).DefaultTimeout();
 
         using var json = GetResourceData(result);
-        var resources = json.RootElement.GetProperty("resources");
+        var resources = json.RootElement;
         var resource = resources[0];
 
         Assert.Equal(
@@ -613,7 +668,7 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
         using var json = GetResourceData(result);
         Assert.Equal(
             ["name", "resource_type", "state", "waiting_for", "dashboard_url", "urls", "relationships"],
-            json.RootElement.GetProperty("resources")[0].EnumerateObject().Select(property => property.Name));
+            json.RootElement[0].EnumerateObject().Select(property => property.Name));
     }
 
     [Fact]
@@ -741,8 +796,14 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
         var markerIndex = textContent.Text.IndexOf(marker, StringComparison.Ordinal);
         Assert.True(markerIndex >= 0, "Response should contain the resource data marker.");
         var jsonText = textContent.Text[(markerIndex + marker.Length)..].Trim();
-        Assert.StartsWith("{", jsonText, StringComparison.Ordinal);
+        Assert.StartsWith("[", jsonText, StringComparison.Ordinal);
 
         return JsonDocument.Parse(jsonText);
+    }
+
+    private static string GetResultText(CallToolResult result)
+    {
+        Assert.NotNull(result.Content);
+        return Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;
     }
 }

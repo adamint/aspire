@@ -147,6 +147,33 @@ public class WaitForResourcesToolTests
         Assert.Equal("success", resource.GetProperty("outcome").GetString());
     }
 
+    [Fact]
+    public async Task WaitForResourcesTool_RejectsUnboundedImplicitResourceSet()
+    {
+        var snapshots = Enumerable.Range(0, WaitForResourcesTool.MaximumResourceNameCount + 1)
+            .Select(index => new ResourceSnapshot
+            {
+                Name = $"resource-{index}",
+                ResourceType = "Project",
+                State = "Running"
+            })
+            .ToArray();
+        var connection = CreateConnection(snapshots);
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+        monitor.AddConnection(connection.Hash, connection.SocketPath, connection);
+        var tool = CreateTool(monitor);
+
+        var exception = await Assert.ThrowsAsync<McpProtocolException>(() =>
+            tool.CallToolAsync(
+                CallToolContextTestHelper.Create(),
+                TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Equal(McpErrorCode.InvalidParams, exception.ErrorCode);
+        Assert.Equal(
+            $"The selected AppHost has too many resources to wait for implicitly. Specify resourceNames in batches of at most {WaitForResourcesTool.MaximumResourceNameCount}.",
+            exception.Message);
+    }
+
     [Theory]
     [InlineData(null, false)]
     [InlineData("""{"resourceNames":[]}""", false)]

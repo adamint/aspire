@@ -5,6 +5,7 @@ using System.Net;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Aspire.Cli.Backchannel;
+using Aspire.Cli.Commands;
 using Aspire.Cli.Mcp.Tools;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
@@ -52,7 +53,7 @@ public class ListTracesToolTests
             new StaticDashboardInfoProvider(
                 "https://" + "request-user" + ":" + "request-password" + "@example.com:5000/login" +
                 "?t=actual-login-token&accessKey=request-secret&view=resources#request-fragment",
-                apiKey: null),
+                apiKey: "api-key"),
             auxiliaryBackchannelMonitor: null,
             new MockHttpClientFactory(handler),
             logger);
@@ -64,8 +65,9 @@ public class ListTracesToolTests
 
         Assert.True(tracesRequestUri is not null, exception.ToString());
         Assert.Equal("request-user:request-password", tracesRequestUri.UserInfo);
-        Assert.Contains("t=actual-login-token", tracesRequestUri.Query, StringComparison.Ordinal);
-        Assert.Contains("accessKey=request-secret", tracesRequestUri.Query, StringComparison.Ordinal);
+        Assert.Equal(
+            $"?accessKey=request-secret&view=resources&limit={TelemetryCommandHelpers.MaxTelemetryLimit}",
+            tracesRequestUri.Query);
         foreach (var diagnostic in new[] { exception.Message }.Concat(
             sink.Writes.Select(write => $"{write.Message} {write.Exception}")))
         {

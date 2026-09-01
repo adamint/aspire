@@ -2964,6 +2964,48 @@ suite('AppHostLaunchService', () => {
         });
     });
 
+    test('cancels a pending debug start and stops the matching session if it starts late', async () => {
+        const appHostPath = '/repo/AppHost.csproj';
+        let resolveStart!: (started: boolean) => void;
+        let observeStart!: () => void;
+        const startObserved = new Promise<void>(resolve => {
+            observeStart = resolve;
+        });
+        startDebuggingStub.callsFake(() => {
+            observeStart();
+            return new Promise<boolean>(resolve => {
+                resolveStart = resolve;
+            });
+        });
+        const cancellation = new vscode.CancellationTokenSource();
+        assert.strictEqual(service.tryReserveLaunch(appHostPath), true);
+
+        const launch = service.launchFromLifecycleOwner(
+            bindAppHostLaunchTarget(appHostPath),
+            'run',
+            true,
+            undefined,
+            cancellation.token);
+        await startObserved;
+        cancellation.cancel();
+
+        await assert.rejects(launch, error => error instanceof vscode.CancellationError);
+
+        const configuration = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
+        const lateSession = {
+            id: 'late-canceled-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration,
+        } as unknown as vscode.DebugSession;
+        assert.ok(onDidStartDebugSessionCallback);
+        onDidStartDebugSessionCallback(lateSession);
+        resolveStart(true);
+        await Promise.resolve();
+
+        sinon.assert.calledOnceWithExactly(stopDebuggingStub, lateSession);
+    });
+
     test('launch emits one bounded result telemetry event', async () => {
         const fake = new FakeTelemetryReporter();
         const restore = __setReporterForTests(fake as unknown as Parameters<typeof __setReporterForTests>[0]);

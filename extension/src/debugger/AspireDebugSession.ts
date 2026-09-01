@@ -319,9 +319,10 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
   openDashboard(
     url: string,
     browserType: DashboardBrowserType,
-    waitForDebugBrowserStart = false): Promise<DashboardPresentation | undefined> {
+    waitForDebugBrowserStart = false,
+    token?: vscode.CancellationToken): Promise<DashboardPresentation | undefined> {
     return waitForDebugBrowserStart
-      ? this._dashboardLauncher.openDashboardAndWait(url, browserType)
+      ? this._dashboardLauncher.openDashboardAndWait(url, browserType, token)
       : this._dashboardLauncher.openDashboard(url, browserType);
   }
 

@@ -45,7 +45,7 @@ public class SelectAppHostToolTests(ITestOutputHelper outputHelper)
             TestContext.Current.CancellationToken).DefaultTimeout();
 
         Assert.True(result.IsError is null or false, $"Tool returned error: {GetResultText(result)}");
-        Assert.Equal(Path.GetFullPath(symlinkedAppHostPath), monitor.SelectedAppHostPath);
+        Assert.Equal(realAppHostPath, monitor.SelectedAppHostPath);
     }
 
     [Fact]
@@ -70,7 +70,7 @@ public class SelectAppHostToolTests(ITestOutputHelper outputHelper)
         if (volumeResolvesCaseVariant)
         {
             Assert.True(result.IsError is null or false, $"Tool returned error: {GetResultText(result)}");
-            Assert.Equal(resolvedSelectedAppHostPath, monitor.SelectedAppHostPath);
+            Assert.Equal(actualAppHostPath, monitor.SelectedAppHostPath);
         }
         else
         {

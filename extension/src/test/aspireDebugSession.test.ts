@@ -1658,6 +1658,51 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         sinon.assert.calledOnce(startDebugging);
     });
 
+    test('canceling an explicit dashboard handoff stops a browser that starts late', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            startSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        let resolveStartDebugging!: (didStart: boolean) => void;
+        const startDebugging = sinon.stub(vscode.debug, 'startDebugging').returns(
+            new Promise<boolean>(resolve => {
+                resolveStartDebugging = resolve;
+            }));
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+        const cancellation = new vscode.CancellationTokenSource();
+
+        const openPromise = aspireDebugSession.openDashboard(
+            'https://localhost:1234',
+            'debugEdge',
+            true,
+            cancellation.token);
+        await Promise.resolve();
+        cancellation.cancel();
+
+        await assert.rejects(openPromise, error => error instanceof vscode.CancellationError);
+
+        const dashboardDebugSession = {
+            id: 'dashboard-session',
+            type: 'pwa-msedge',
+            name: aspireDashboard,
+            configuration: startDebugging.firstCall.args[1],
+            parentSession: parentDebugSession,
+        } as unknown as vscode.DebugSession;
+        startSessionCallback?.(dashboardDebugSession);
+        resolveStartDebugging(true);
+        await new Promise(resolve => setImmediate(resolve));
+
+        sinon.assert.calledOnceWithExactly(stopDebugging, dashboardDebugSession);
+    });
+
     test('a pending dashboard debug launch disposes its start listener after shutdown', async () => {
         const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
         const parentDebugSession = {

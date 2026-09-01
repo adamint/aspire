@@ -3,7 +3,9 @@
 
 using System.Net;
 using Aspire.Cli.Mcp.Tools;
+using Aspire.Cli.Tests.Utils;
 using Aspire.Dashboard.Utils;
+using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol;
 
 namespace Aspire.Cli.Tests.Mcp;
@@ -27,16 +29,16 @@ public class McpToolHelpersTests
     }
 
     [Fact]
-    public async Task StaticDashboardInfoProvider_PreservesRequestAuthenticationAndSanitizesDisplayUrl()
+    public async Task StaticDashboardInfoProvider_PreservesExplicitRequestAuthenticationAndSanitizesDisplayUrl()
     {
         var provider = new StaticDashboardInfoProvider(
             "https://request-user:request-password@example.localhost:8443/base/login" +
             "?t=dashboard-secret&accessKey=request-secret&view=resources#request-fragment",
-            apiKey: null);
+            apiKey: "api-key");
 
         var (_, apiBaseUrl, dashboardBaseUrl) = await provider.GetDashboardInfoAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(
+        AssertDashboardRequestUrlEqual(
             "https://request-user:request-password@localhost:8443/base" +
             "?t=dashboard-secret&accessKey=request-secret&view=resources#request-fragment",
             apiBaseUrl);
@@ -199,18 +201,18 @@ public class McpToolHelpersTests
     {
         var provider = new StaticDashboardInfoProvider(
             "https://dashboard-user:dashboard-password@example.com:8443/login?t=dashboard-secret&view=resources",
-            apiKey: null);
+            apiKey: "api-key");
 
         var (_, apiBaseUrl, dashboardBaseUrl) = await provider.GetDashboardInfoAsync(TestContext.Current.CancellationToken);
 
         var apiBaseUri = new Uri(apiBaseUrl);
         Assert.Equal("example.com", apiBaseUri.Host);
         Assert.NotEmpty(apiBaseUri.UserInfo);
-        Assert.Equal("?t=dashboard-secret&view=resources", apiBaseUri.Query);
+        Assert.Equal("?view=resources", apiBaseUri.Query);
         Assert.Equal("https://example.com:8443?view=resources", dashboardBaseUrl);
         var resourcesUri = new Uri(DashboardUrls.TelemetryResourcesApiUrl(apiBaseUrl));
         Assert.Equal("/api/telemetry/resources", resourcesUri.AbsolutePath);
-        Assert.Equal("?t=dashboard-secret&view=resources", resourcesUri.Query);
+        Assert.Equal("?view=resources", resourcesUri.Query);
     }
 
     [Fact]
@@ -223,6 +225,39 @@ public class McpToolHelpersTests
 
         Assert.Equal(McpErrorCode.InvalidParams, exception.ErrorCode);
         Assert.Equal("The dashboard URL must be an absolute HTTP or HTTPS URL.", exception.Message);
+    }
+
+    [Fact]
+    public async Task StaticDashboardInfoProvider_ExchangesBrowserTokenForApiKey()
+    {
+        using var handler = new MockHttpMessageHandler(request =>
+        {
+            Assert.Equal(
+                "https://localhost:18888/api/telemetry/validateToken?view=resources",
+                request.RequestUri?.AbsoluteUri);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"apiKey":"exchanged-api-key"}""", System.Text.Encoding.UTF8, "application/json")
+            };
+        });
+        var provider = new StaticDashboardInfoProvider(
+            "https://localhost:18888/login?t=browser-token&view=resources",
+            apiKey: null,
+            new MockHttpClientFactory(handler),
+            NullLogger.Instance);
+
+        var (apiToken, apiBaseUrl, dashboardBaseUrl) = await provider.GetDashboardInfoAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("exchanged-api-key", apiToken);
+        Assert.Equal("https://localhost:18888?view=resources", apiBaseUrl);
+        Assert.Equal("https://localhost:18888?view=resources", dashboardBaseUrl);
+    }
+
+    private static void AssertDashboardRequestUrlEqual(string? expected, string? actual)
+    {
+        Assert.Equal(
+            DashboardUrls.RemoveDashboardLoginToken(expected),
+            DashboardUrls.RemoveDashboardLoginToken(actual));
     }
 
 }

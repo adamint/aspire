@@ -11,7 +11,6 @@ import { agentMcpCapability } from '../types/configInfo';
 import type { CapabilityStatus } from '../types/configInfo';
 import type { ConfigInfoOptions } from '../utils/configInfoProvider';
 import type { CandidateAppHostDisplayInfo } from '../utils/appHostCandidateTypes';
-import { getLexicalAppHostPathKey } from '../utils/paths/comparison';
 import { isBuildableAppHostCandidate } from '../utils/appHostCandidateSelection';
 import { isCapturedAppHostPathWithinDirectory } from '../utils/appHostIdentity';
 
@@ -56,12 +55,12 @@ export function createAspireMcpServerDefinition(
     // `aspire agent mcp` can build an AppHost, and that build inherits this environment. An
     // unbundled framework-dependent CLI path makes MSBuild's ResolveAspireCliBundle bind bundle
     // assets to a CLI that has no bundle layout (ASPIRE009), so it must not be forwarded. Every
-    // other AspireCliPath producer applies the same guard; omitting the variable lets the build
-    // fall back to PATH probing, exactly as those sites do.
+    // other AspireCliPath producer applies the same guard. VS Code overlays this map on the parent
+    // environment, so null is required to remove an ambient value and restore PATH probing.
     const forwardableCliPath = options.deps === undefined
         ? getForwardableResolvedAspireCliPath(cliPath)
         : getForwardableResolvedAspireCliPath(cliPath, options.deps);
-    const env = forwardableCliPath === undefined ? undefined : { [ASPIRE_CLI_PATH_ENV_VAR]: forwardableCliPath };
+    const env = { [ASPIRE_CLI_PATH_ENV_VAR]: forwardableCliPath ?? null };
     const args = [...mcpServerArgs, appHostOption, appHostPath];
     let definition: vscode.McpStdioServerDefinition;
     if (!shouldWrapWithCmd(cliPath) || canVsCodeQuoteCommandShimLaunch(cliPath, args)) {
@@ -474,7 +473,11 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
                 continue;
             }
 
-            const comparisonKey = getLexicalAppHostPathKey(appHostPath);
+            // realpath has already produced the filesystem's exact canonical spelling. Key that
+            // result ordinally so a Windows directory with case sensitivity enabled can retain
+            // two distinct AppHosts; ordinary case-insensitive aliases already canonicalize to
+            // the same spelling and still deduplicate here.
+            const comparisonKey = path.normalize(appHostPath);
             if (!pinsByKey.has(comparisonKey)) {
                 pinsByKey.set(comparisonKey, {
                     cliPath: cliResult.cliPath,

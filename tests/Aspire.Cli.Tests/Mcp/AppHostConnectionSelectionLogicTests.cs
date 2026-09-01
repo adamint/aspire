@@ -191,9 +191,30 @@ public class AppHostConnectionSelectionLogicTests(ITestOutputHelper outputHelper
 
         Assert.Equal(McpErrorCode.InternalError, exception.ErrorCode);
         Assert.Equal(selectedAppHostPath, monitor.SelectedAppHostPath);
-        Assert.Contains(selectedAppHostPath, exception.Message);
-        Assert.False(exception.Message.Contains("C:/repo/AppHost1", StringComparison.OrdinalIgnoreCase));
-        Assert.False(exception.Message.Contains("42", StringComparison.Ordinal));
+        Assert.Equal(
+            "The selected AppHost is not available. Start that AppHost and retry.",
+            exception.Message);
+    }
+
+    [Fact]
+    public async Task GetSelectedConnectionAsync_WithMultipleInstancesAtSelectedPath_ThrowsWithoutChoosingOne()
+    {
+        var monitor = new TestAuxiliaryBackchannelMonitor
+        {
+            SelectedAppHostPath = "C:/repo/AppHost"
+        };
+        monitor.AddConnection("hash1", "socket.hash1", CreateConnection("C:/repo/AppHost", isInScope: true, processId: 41));
+        monitor.AddConnection("hash2", "socket.hash2", CreateConnection("C:/repo/AppHost", isInScope: true, processId: 42));
+
+        var exception = await Assert.ThrowsAsync<McpProtocolException>(() =>
+            AppHostConnectionHelper.GetSelectedConnectionAsync(
+                monitor,
+                NullLogger.Instance,
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal(
+            "Multiple running AppHost instances match the selected path. Stop the extra instance and retry.",
+            exception.Message);
     }
 
     [Fact]

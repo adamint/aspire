@@ -1242,9 +1242,9 @@
         },
         "aspire.registerMcpServerInWorkspace": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "description": "%configuration.aspire.registerMcpServerInWorkspace%",
-          "scope": "window",
+          "scope": "resource",
           "restricted": true
         },
         "aspire.appHostsPollingInterval": {
