@@ -142,10 +142,18 @@ internal sealed class IntegrationPackageSearchService(
 
         if (appHostProjectFile is null)
         {
+            var sourceWithOrigin = await configurationService.GetConfigurationFromDirectoryWithOriginAsync(
+                AspireConfigFile.NuGetSourceKey,
+                executionContext.WorkingDirectory,
+                cancellationToken: cancellationToken);
+            var source = sourceWithOrigin is null
+                ? NormalizeSource(invocationConfiguredSource)
+                : ResolveSource(sourceWithOrigin.Value, sourceWithOrigin.BaseDirectory);
+
             return (
                 executionContext.WorkingDirectory,
                 ConfiguredChannel: null,
-                ConfiguredSource: NormalizeSource(invocationConfiguredSource),
+                ConfiguredSource: source,
                 LanguageId: null,
                 ExitCode: null);
         }

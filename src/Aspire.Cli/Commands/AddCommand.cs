@@ -623,7 +623,8 @@ internal class AddCommandPrompter(IInteractionService interactionService) : IAdd
         // Helper to keep labels consistently formatted: "Version (source)"
         static string FormatVersionLabel((string FriendlyName, NuGetPackage Package, PackageChannel Channel) item)
         {
-            return $"{item.Package.Version.EscapeMarkup()} ({item.Channel.SourceDetails.EscapeMarkup()})";
+            var source = PackageSourceRedactor.RedactForDisplay(item.Channel.SourceDetails);
+            return $"{item.Package.Version.EscapeMarkup()} ({source.EscapeMarkup()})";
         }
 
         async Task<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)> PromptForChannelPackagesAsync(

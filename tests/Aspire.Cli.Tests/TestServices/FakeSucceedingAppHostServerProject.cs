@@ -23,6 +23,7 @@ internal sealed class FakeSucceedingAppHostServerProject(string appDirectoryPath
         IEnumerable<IntegrationReference> integrations,
         string? requestedChannel = null,
         string? packageSourceOverride = null,
+        bool useAmbientNuGetConfiguration = false,
         CancellationToken cancellationToken = default) =>
         Task.FromResult(new AppHostServerPrepareResult(Success: true, Output: null));
 

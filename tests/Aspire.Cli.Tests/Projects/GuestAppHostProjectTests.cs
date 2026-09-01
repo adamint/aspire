@@ -46,6 +46,118 @@ public class GuestAppHostProjectTests : IDisposable
     }
 
     [Fact]
+    public async Task PruneObsoleteGeneratedFilesAsync_RemovesFilesTheGeneratorNoLongerProduces()
+    {
+        var outputPath = Path.Combine(_workspace.WorkspaceRoot.FullName, ".aspire", "modules");
+        Directory.CreateDirectory(Path.Combine(outputPath, "aspire"));
+        var kept = Path.Combine(outputPath, "aspire", "Kept.java");
+        var obsolete = Path.Combine(outputPath, "aspire", "RemovedResource.java");
+        await File.WriteAllTextAsync(kept, "class Kept { }");
+        await File.WriteAllTextAsync(obsolete, "class RemovedResource { }");
+
+        // The first generation records what it wrote.
+        await GuestAppHostProject.PruneObsoleteGeneratedFilesAsync(
+            outputPath,
+            [Path.Combine("aspire", "Kept.java"), Path.Combine("aspire", "RemovedResource.java")],
+            CancellationToken.None);
+
+        // Dropping the package that produced RemovedResource.java means the generator stops emitting it.
+        // javac compiles everything under the source root, so leaving it behind fails the build with a
+        // reference to a type that no longer exists.
+        await GuestAppHostProject.PruneObsoleteGeneratedFilesAsync(
+            outputPath,
+            [Path.Combine("aspire", "Kept.java")],
+            CancellationToken.None);
+
+        Assert.True(File.Exists(kept));
+        Assert.False(File.Exists(obsolete));
+    }
+
+    [Fact]
+    public async Task PruneObsoleteGeneratedFilesAsync_LeavesFilesTheGeneratorNeverWrote()
+    {
+        var outputPath = Path.Combine(_workspace.WorkspaceRoot.FullName, ".aspire", "modules");
+        Directory.CreateDirectory(outputPath);
+        var handWritten = Path.Combine(outputPath, "HandWritten.java");
+        await File.WriteAllTextAsync(handWritten, "class HandWritten { }");
+
+        // Only files a previous generation recorded are eligible, so nothing Aspire did not write is
+        // ever deleted - including on the very first run, where there is no manifest at all.
+        await GuestAppHostProject.PruneObsoleteGeneratedFilesAsync(outputPath, ["Generated.java"], CancellationToken.None);
+        await GuestAppHostProject.PruneObsoleteGeneratedFilesAsync(outputPath, ["Generated.java"], CancellationToken.None);
+
+        Assert.True(File.Exists(handWritten));
+    }
+
+    [Fact]
+    public async Task WriteGeneratedFileAsync_WhenContentIsUnchanged_LeavesTimestampAlone()
+    {
+        var filePath = Path.Combine(_workspace.WorkspaceRoot.FullName, "Generated.java");
+        await File.WriteAllTextAsync(filePath, "class Generated { }");
+        var originalWriteTime = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(filePath, originalWriteTime);
+
+        var written = await GuestAppHostProject.WriteGeneratedFileAsync(filePath, "class Generated { }", preserveUnchangedFiles: true, CancellationToken.None);
+
+        Assert.False(written);
+        // The timestamp is the contract: every downstream incremental build decides what to recompile
+        // from it, so regenerating identical content must not look like a change.
+        Assert.Equal(originalWriteTime, File.GetLastWriteTimeUtc(filePath));
+    }
+
+    [Fact]
+    public async Task WriteGeneratedFileAsync_WhenContentDiffers_WritesFile()
+    {
+        var filePath = Path.Combine(_workspace.WorkspaceRoot.FullName, "Generated.java");
+        await File.WriteAllTextAsync(filePath, "class Generated { }");
+        File.SetLastWriteTimeUtc(filePath, new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+
+        var written = await GuestAppHostProject.WriteGeneratedFileAsync(filePath, "class Generated { int x; }", preserveUnchangedFiles: true, CancellationToken.None);
+
+        Assert.True(written);
+        Assert.Equal("class Generated { int x; }", await File.ReadAllTextAsync(filePath));
+        Assert.True(File.GetLastWriteTimeUtc(filePath) > new DateTime(2020, 1, 2, 0, 0, 0, DateTimeKind.Utc));
+    }
+
+    [Fact]
+    public async Task WriteGeneratedFileAsync_WhenFileIsMissing_WritesFile()
+    {
+        var filePath = Path.Combine(_workspace.WorkspaceRoot.FullName, "New.java");
+
+        var written = await GuestAppHostProject.WriteGeneratedFileAsync(filePath, "class New { }", preserveUnchangedFiles: true, CancellationToken.None);
+
+        Assert.True(written);
+        Assert.Equal("class New { }", await File.ReadAllTextAsync(filePath));
+    }
+
+    [Fact]
+    public async Task WriteGeneratedFileAsync_WhenNotPreservingUnchangedFiles_RewritesIdenticalContent()
+    {
+        var filePath = Path.Combine(_workspace.WorkspaceRoot.FullName, "aspire_app.py");
+        await File.WriteAllTextAsync(filePath, "def add_redis(): ...");
+        var originalWriteTime = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(filePath, originalWriteTime);
+
+        var written = await GuestAppHostProject.WriteGeneratedFileAsync(filePath, "def add_redis(): ...", preserveUnchangedFiles: false, CancellationToken.None);
+
+        // Languages that install the generated sources into an environment (uv/pip for Python)
+        // rebuild off the source timestamp, so an unchanged file must still be rewritten or the
+        // stale install is silently reused.
+        Assert.True(written);
+        Assert.True(File.GetLastWriteTimeUtc(filePath) > originalWriteTime);
+    }
+
+    [Fact]
+    public void JavaIsTheOnlyLanguageThatPreservesUnchangedGeneratedFiles()
+    {
+        var languages = DefaultLanguageDiscovery.AllLanguages;
+
+        Assert.Equal(
+            ["Java"],
+            languages.Where(language => language.PreserveUnchangedGeneratedFiles).Select(language => language.CodeGenerator));
+    }
+
+    [Fact]
     public void AspireJsonConfiguration_LoadOrCreate_SetsDefaultSdkVersion()
     {
         // Arrange
@@ -483,6 +595,32 @@ public class GuestAppHostProjectTests : IDisposable
     }
 
     [Fact]
+    public void CreateGuestEnvironmentVariables_ForwardsAppHostArgumentsForGuestsThatCannotReadArgv()
+    {
+        var envVars = GuestAppHostProject.CreateGuestEnvironmentVariables(
+            contextEnvironmentVariables: new Dictionary<string, string>(),
+            launchProfileEnvironmentVariables: null,
+            inheritedEnvironmentVariables: new Dictionary<string, string?>(),
+            args: ["--operation", "publish", "--step", "publish", "--output-path", "/tmp/out dir"]);
+
+        Assert.Equal(
+            "--operation\npublish\n--step\npublish\n--output-path\n/tmp/out dir",
+            envVars["ASPIRE_APPHOST_ARGS"]);
+    }
+
+    [Fact]
+    public void CreateGuestEnvironmentVariables_DoesNotForwardAppHostArgumentsWhenThereAreNone()
+    {
+        var envVars = GuestAppHostProject.CreateGuestEnvironmentVariables(
+            contextEnvironmentVariables: new Dictionary<string, string>(),
+            launchProfileEnvironmentVariables: null,
+            inheritedEnvironmentVariables: new Dictionary<string, string?>(),
+            args: []);
+
+        Assert.False(envVars.ContainsKey("ASPIRE_APPHOST_ARGS"));
+    }
+
+    [Fact]
     public void CreateGuestEnvironmentVariables_EnvironmentArgumentTakesPrecedenceOverLaunchProfileEnvironmentVariables()
     {
         var envVars = GuestAppHostProject.CreateGuestEnvironmentVariables(
@@ -676,6 +814,81 @@ public class GuestAppHostProjectTests : IDisposable
         Assert.NotNull(reloaded.Packages);
         Assert.Equal("1.0.0", reloaded.Packages["Aspire.Hosting"]);
         Assert.False(reloaded.Packages.ContainsKey("Aspire.Hosting.Redis"));
+    }
+
+    [Theory]
+    [InlineData(false, true, true, false, false)]
+    [InlineData(false, true, false, false, true)]
+    [InlineData(false, false, false, false, true)]
+    [InlineData(true, true, true, false, true)]
+    [InlineData(false, false, false, true, true)]
+    public async Task AddPackageAsync_UsesConfiguredAndExplicitSourcesWithExpectedOverrideSemantics(
+        bool isSourceExplicit,
+        bool isSourceEnabled,
+        bool isSourceMapped,
+        bool sourceInspectionFails,
+        bool expectSourceOverride)
+    {
+        const string source = "https://configured.example/v3/index.json";
+        var configPath = Path.Combine(_workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
+        await File.WriteAllTextAsync(configPath, """
+            {
+              "sdk": { "version": "1.0.0" },
+              "channel": "daily",
+              "packages": { "Aspire.Hosting": "1.0.0" }
+            }
+            """);
+        var nugetConfigPath = Path.Combine(_workspace.WorkspaceRoot.FullName, "NuGet.Config");
+        await File.WriteAllTextAsync(nugetConfigPath, $$"""
+            <configuration>
+              <packageSources>
+                <clear />
+                <add key="configured" value="{{(isSourceEnabled ? source : "https://other.example/v3/index.json")}}" />
+              </packageSources>
+              <packageSourceMapping>
+                <packageSource key="configured">
+                  <package pattern="{{(isSourceMapped ? "Aspire*" : "Other*")}}" />
+                </packageSource>
+              </packageSourceMapping>
+            </configuration>
+            """);
+
+        var appHostPath = Path.Combine(_workspace.WorkspaceRoot.FullName, "apphost.ts");
+        await File.WriteAllTextAsync(appHostPath, "// test apphost");
+
+        var appHostServerProject = new FakeFailingAppHostServerProject(_workspace.WorkspaceRoot.FullName);
+        var factory = new TestAppHostServerProjectFactory
+        {
+            CreateAsyncCallback = (_, _) =>
+                Task.FromResult<IAppHostServerProject>(appHostServerProject)
+        };
+        var runner = new TestDotNetCliRunner
+        {
+            GetNuGetSourcesAsyncCallback = (_, _, _) =>
+                sourceInspectionFails
+                    ? throw new FileNotFoundException("dotnet")
+                    : (0, isSourceEnabled ? [source] : ["https://other.example/v3/index.json"]),
+            GetNuGetConfigPathsAsyncCallback = (_, _, _) => (0, [nugetConfigPath])
+        };
+        var project = CreateGuestAppHostProject(
+            appHostServerProjectFactory: factory,
+            runner: runner);
+
+        var result = await project.AddPackageAsync(
+            new AddPackageContext
+            {
+                AppHostFile = new FileInfo(appHostPath),
+                PackageId = "Aspire.Hosting.Redis",
+                PackageVersion = "2.0.0",
+                Source = source,
+                IsSourceExplicit = isSourceExplicit
+            },
+            CancellationToken.None);
+
+        Assert.False(result);
+        Assert.Equal(expectSourceOverride ? source : null, appHostServerProject.LastPackageSourceOverride);
+        Assert.Equal("daily", appHostServerProject.LastRequestedChannel);
+        Assert.Equal(!expectSourceOverride, appHostServerProject.LastUseAmbientNuGetConfiguration);
     }
 
     [Fact]
@@ -960,6 +1173,41 @@ public class GuestAppHostProjectTests : IDisposable
         var exception = await Assert.ThrowsAsync<FailedToConnectBackchannelConnection>(
             () => backchannelCompletionSource.Task).DefaultTimeout();
         Assert.Equal(expectedMessage, exception.Message);
+    }
+
+    [Fact]
+    public async Task StartBackchannelConnectionAsync_UsesConfiguredBackchannelTimeout()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [KnownConfigNames.CliBackchannelConnectTimeoutSeconds] = "0"
+            })
+            .Build();
+        var backchannel = new TestAppHostBackchannel
+        {
+            ConnectAsyncCallback = (_, _) => throw new SocketException((int)SocketError.ConnectionRefused)
+        };
+        var project = CreateGuestAppHostProject(backchannel: backchannel, configuration: configuration);
+        var serverSession = new FakeAppHostServerSession();
+        var backchannelCompletionSource = new TaskCompletionSource<IAppHostCliBackchannel>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellationSource = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+
+        try
+        {
+            await InvokeStartBackchannelConnectionAsync(
+                project,
+                serverSession,
+                backchannelCompletionSource,
+                cancellationSource.Token);
+        }
+        catch (OperationCanceledException) when (cancellationSource.IsCancellationRequested)
+        {
+        }
+
+        Assert.True(backchannelCompletionSource.Task.IsFaulted, "The configured immediate timeout should fault the guest backchannel wait before test cancellation.");
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() => backchannelCompletionSource.Task);
+        Assert.Contains("after 0 seconds", exception.Message);
     }
 
     [Fact]
@@ -1286,8 +1534,12 @@ public class GuestAppHostProjectTests : IDisposable
         bool identityOverridden = false,
         string languageId = "typescript/nodejs",
         IEnvironment? environment = null,
-        DirectoryInfo? homeDirectory = null)
+        DirectoryInfo? homeDirectory = null,
+        IConfiguration? configuration = null,
+        TestDotNetCliRunner? runner = null)
     {
+        var effectiveConfiguration = configuration ?? _configuration;
+
         var language = new LanguageInfo(
             LanguageId: languageId,
             DisplayName: "TypeScript (Node.js)",
@@ -1317,10 +1569,10 @@ public class GuestAppHostProjectTests : IDisposable
             backchannel: backchannel ?? new TestAppHostBackchannel(),
             appHostServerProjectFactory: appHostServerProjectFactory ?? new TestAppHostServerProjectFactory(),
             certificateService: new TestCertificateService(),
-            runner: new TestDotNetCliRunner(),
+            runner: runner ?? new TestDotNetCliRunner(),
             packagingService: new TestPackagingService(),
-            configuration: _configuration,
-            features: new Features(_configuration, NullLogger<Features>.Instance),
+            configuration: effectiveConfiguration,
+            features: new Features(effectiveConfiguration, NullLogger<Features>.Instance),
             languageDiscovery: new TestLanguageDiscovery(),
             executionContext: executionContext,
             environment: environment ?? new TestEnvironment(),
@@ -1555,7 +1807,8 @@ public class GuestAppHostProjectTests : IDisposable
     private static async Task InvokeStartBackchannelConnectionAsync(
         GuestAppHostProject project,
         IAppHostServerSession serverSession,
-        TaskCompletionSource<IAppHostCliBackchannel> backchannelCompletionSource)
+        TaskCompletionSource<IAppHostCliBackchannel> backchannelCompletionSource,
+        CancellationToken cancellationToken = default)
     {
         var method = typeof(GuestAppHostProject).GetMethod(
             "StartBackchannelConnectionAsync",
@@ -1568,7 +1821,7 @@ public class GuestAppHostProjectTests : IDisposable
             backchannelCompletionSource,
             false,
             default(System.Diagnostics.ActivityContext),
-            CancellationToken.None
+            cancellationToken
         ]));
         await task.DefaultTimeout();
     }

@@ -5,6 +5,7 @@ using System.CommandLine;
 using System.Globalization;
 using System.Text.Json;
 using Aspire.Cli.Backchannel;
+using Aspire.Cli.Configuration;
 using Aspire.Cli.Documentation.Docs;
 using Aspire.Cli.Mcp;
 using Aspire.Cli.Mcp.Tools;
@@ -35,6 +36,7 @@ internal sealed class AgentMcpCommand : BaseCommand
     private readonly ILogger<AgentMcpCommand> _logger;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IPackagingService _packagingService;
+    private readonly IConfigurationService _configurationService;
     private readonly IEnvironmentChecker _environmentChecker;
     private readonly IDocsSearchService _docsSearchService;
     private readonly IDocsIndexService _docsIndexService;
@@ -55,6 +57,7 @@ internal sealed class AgentMcpCommand : BaseCommand
         ILoggerFactory loggerFactory,
         ILogger<AgentMcpCommand> logger,
         IPackagingService packagingService,
+        IConfigurationService configurationService,
         IEnvironmentChecker environmentChecker,
         IDocsSearchService docsSearchService,
         IDocsIndexService docsIndexService,
@@ -68,6 +71,7 @@ internal sealed class AgentMcpCommand : BaseCommand
         _logger = logger;
         _httpClientFactory = httpClientFactory;
         _packagingService = packagingService;
+        _configurationService = configurationService;
         _environmentChecker = environmentChecker;
         _docsSearchService = docsSearchService;
         _docsIndexService = docsIndexService;
@@ -119,7 +123,7 @@ internal sealed class AgentMcpCommand : BaseCommand
             _knownTools[KnownMcpTools.ListTraceStructuredLogs] = new ListTraceStructuredLogsTool(dashboardInfoProvider, _auxiliaryBackchannelMonitor, _httpClientFactory, _loggerFactory.CreateLogger<ListTraceStructuredLogsTool>());
             _knownTools[KnownMcpTools.SelectAppHost] = new SelectAppHostTool(_auxiliaryBackchannelMonitor, _executionContext);
             _knownTools[KnownMcpTools.ListAppHosts] = new ListAppHostsTool(_auxiliaryBackchannelMonitor, _executionContext);
-            _knownTools[KnownMcpTools.ListIntegrations] = new ListIntegrationsTool(_packagingService, _executionContext, _auxiliaryBackchannelMonitor);
+            _knownTools[KnownMcpTools.ListIntegrations] = new ListIntegrationsTool(_packagingService, _configurationService, _executionContext, _auxiliaryBackchannelMonitor);
             _knownTools[KnownMcpTools.Doctor] = new DoctorTool(_environmentChecker);
             _knownTools[KnownMcpTools.RefreshTools] = new RefreshToolsTool(_resourceToolRefreshService);
             _knownTools[KnownMcpTools.ListDocs] = new ListDocsTool(_docsIndexService);

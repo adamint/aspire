@@ -17,6 +17,7 @@ using Aspire.Cli.Utils;
 using Aspire.Hosting;
 using Aspire.Shared;
 using Aspire.Tests;
+using Aspire.TestUtilities;
 using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -123,6 +124,7 @@ public class AppHostServerSessionTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    [QuarantinedTest("https://github.com/microsoft/aspire/issues/19150")]
     public async Task GetRpcClientAsync_WhenServerExitsBeforeSocketIsAvailable_FailsWithoutWaitingForConnectionTimeout()
     {
         // RecordingAppHostServerProject spawns `dotnet --version`, which exits almost immediately
@@ -596,6 +598,7 @@ public class AppHostServerSessionTests(ITestOutputHelper outputHelper)
             IEnumerable<IntegrationReference> integrations,
             string? requestedChannel = null,
             string? packageSourceOverride = null,
+            bool useAmbientNuGetConfiguration = false,
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
@@ -640,6 +643,7 @@ public class AppHostServerSessionTests(ITestOutputHelper outputHelper)
             IEnumerable<IntegrationReference> integrations,
             string? requestedChannel = null,
             string? packageSourceOverride = null,
+            bool useAmbientNuGetConfiguration = false,
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
@@ -690,6 +694,7 @@ public class AppHostServerSessionTests(ITestOutputHelper outputHelper)
             IEnumerable<IntegrationReference> integrations,
             string? requestedChannel = null,
             string? packageSourceOverride = null,
+            bool useAmbientNuGetConfiguration = false,
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
