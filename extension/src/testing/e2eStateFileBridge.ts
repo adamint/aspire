@@ -939,7 +939,7 @@ export async function executeE2eControlCommand(
         [...command.args],
         workingDirectory,
         timeoutMs,
-        terminalProvider.createEnvironment());
+        terminalProvider.createEnvironment(undefined, undefined, command.noExtensionVariables));
       markStarted();
       return await commandPromise;
     }

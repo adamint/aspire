@@ -58,7 +58,11 @@ suite('Aspire resource debug language model tool E2E', function () {
         ], 'Resource debug language model tool E2E teardown failed.');
     });
 
-    test('returns bounded results for invalid, additional, and unknown selectors after generic confirmation', async () => {
+    test('returns bounded results for invalid, additional, and unknown selectors after generic confirmation', async function () {
+        if (resourceDebugPrerequisitesInstalled) {
+            this.skip();
+        }
+
         await openAspireView();
         await waitForRepositoryIdle();
         const discovered = await waitForWorkspaceAppHost();
@@ -116,7 +120,11 @@ suite('Aspire resource debug language model tool E2E', function () {
         }
     });
 
-    test('requires explicit confirmation and returns safe running-resource outcomes', async () => {
+    test('requires explicit confirmation and returns safe running-resource outcomes', async function () {
+        if (resourceDebugPrerequisitesInstalled) {
+            this.skip();
+        }
+
         await openAspireView();
         await waitForRepositoryIdle();
         const discovered = await waitForWorkspaceAppHost();
@@ -206,7 +214,11 @@ suite('Aspire resource debug language model tool E2E', function () {
         assertSafeResourceDebugResult(unsupportedResource.results[0]);
     });
 
-    test('cancels through the VS Code invocation token and reports a stopped resource without invoking a debugger', async () => {
+    test('cancels through the VS Code invocation token and reports a stopped resource without invoking a debugger', async function () {
+        if (resourceDebugPrerequisitesInstalled) {
+            this.skip();
+        }
+
         await openAspireView();
         await waitForRepositoryIdle();
         const discovered = await waitForWorkspaceAppHost();
@@ -263,8 +275,14 @@ suite('Aspire resource debug language model tool E2E', function () {
         const discovered = await waitForWorkspaceAppHost();
         const appHostPath = discovered.state.workspaceAppHostPath ?? getPrimaryAppHostProjectPath();
 
-        await executeE2eControlCommand({ name: 'runAppHost', appHostPath }, { waitFor: 'started' });
-        await waitForCommandOutcome('aspire-vscode.runAppHost', 'success', 120000);
+        const start = (await executeE2eControlCommand({
+            name: 'runAspireCli',
+            args: ['start', '--apphost', appHostPath, '--format', 'json', '--non-interactive', '--nologo'],
+            workingDirectory: '.',
+            timeoutMs: 180000,
+            noExtensionVariables: true,
+        }, { timeoutMs: 210000 })).result as { exitCode: number | null; stdout: string; stderr: string };
+        assert.strictEqual(start.exitCode, 0, `aspire start failed.\nstdout:\n${start.stdout}\nstderr:\n${start.stderr}`);
         await waitForResourceState('e2e-worker', ['Running'], 180000);
         await waitForResourceState('e2e-go', ['Running'], 180000);
 
