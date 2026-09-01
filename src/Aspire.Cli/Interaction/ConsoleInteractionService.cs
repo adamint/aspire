@@ -641,8 +641,9 @@ internal class ConsoleInteractionService : IInteractionService
 
     public async Task DisplayLiveAsync(IRenderable initialRenderable, Func<Action<IRenderable>, Task> callback)
     {
-        // Spectre live rendering requires a usable terminal. Write each update once when output
-        // is redirected so callers can keep processing updates without cursor manipulation.
+        // Spectre live rendering requires a usable terminal. For non-interactive output, append
+        // the initial snapshot and every update so long-running callers still report progress and
+        // leave their final state in logs without cursor manipulation.
         // See https://github.com/microsoft/aspire/issues/19290.
         if (!_hostEnvironment.SupportsInteractiveOutput)
         {

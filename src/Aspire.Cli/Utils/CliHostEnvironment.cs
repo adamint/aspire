@@ -83,11 +83,12 @@ internal sealed class CliHostEnvironment : ICliHostEnvironment
             SupportsInteractiveOutput = false;
             SupportsAnsi = DetectAnsiSupport(configuration);
         }
-        // Check if ASPIRE_PLAYGROUND is set to force interactive mode
+        // Playground mode can force interactive input and ANSI output, but a redirected stdout
+        // still cannot support the cursor manipulation required by Spectre live rendering.
         else if (IsPlaygroundMode(configuration))
         {
             SupportsInteractiveInput = true;
-            SupportsInteractiveOutput = true;
+            SupportsInteractiveOutput = !isOutputRedirected;
             SupportsAnsi = true;
         }
         else
