@@ -273,7 +273,6 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
         IEnumerable<IntegrationReference> integrations,
         string? requestedChannel = null,
         string? packageSourceOverride = null,
-        bool useAmbientNuGetConfiguration = false,
         CancellationToken cancellationToken = default)
     {
         // Create Program.cs
@@ -323,21 +322,15 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
             ? File.ReadAllText(userNugetConfig)
             : null;
 
-        var configuredChannelName = useAmbientNuGetConfiguration
-            ? null
-            : requestedChannel
-                ?? AspireConfigFile.Load(_appPath)?.Channel
-                ?? AspireJsonConfiguration.Load(_appPath)?.Channel;
-        var channels = useAmbientNuGetConfiguration
-            ? []
-            : await _packagingService.GetChannelsAsync(cancellationToken, configuredChannelName);
+        var configuredChannelName = requestedChannel
+            ?? AspireConfigFile.Load(_appPath)?.Channel
+            ?? AspireJsonConfiguration.Load(_appPath)?.Channel;
+        var channels = await _packagingService.GetChannelsAsync(cancellationToken, configuredChannelName);
 
         // Resolve channel sources and add them via RestoreAdditionalProjectSources
         // This is additive — it preserves the user's nuget.config and adds channel-specific sources
         var channelSources = new List<string>();
-        var matchedChannels = useAmbientNuGetConfiguration
-            ? []
-            : !string.IsNullOrEmpty(configuredChannelName)
+        var matchedChannels = !string.IsNullOrEmpty(configuredChannelName)
             ? channels.Where(c => string.Equals(c.Name, configuredChannelName, StringComparison.OrdinalIgnoreCase))
             : channels.Where(c => c.Type == PackageChannelType.Explicit);
 
@@ -364,8 +357,7 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
         // may still consult other sources if the override does not satisfy a request — the
         // override is best-effort here, sufficient for the in-repo developer scenario where
         // most Aspire.* dependencies come from ProjectReference, not PackageReference.
-        if (!useAmbientNuGetConfiguration &&
-            !string.IsNullOrWhiteSpace(packageSourceOverride) &&
+        if (!string.IsNullOrWhiteSpace(packageSourceOverride) &&
             !channelSources.Contains(packageSourceOverride, StringComparer.OrdinalIgnoreCase))
         {
             channelSources.Insert(0, packageSourceOverride);
@@ -570,15 +562,9 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
         IEnumerable<IntegrationReference> integrations,
         string? requestedChannel = null,
         string? packageSourceOverride = null,
-        bool useAmbientNuGetConfiguration = false,
         CancellationToken cancellationToken = default)
     {
-        var (_, channelName) = await CreateProjectFilesAsync(
-            integrations,
-            requestedChannel,
-            packageSourceOverride,
-            useAmbientNuGetConfiguration,
-            cancellationToken);
+        var (_, channelName) = await CreateProjectFilesAsync(integrations, requestedChannel, packageSourceOverride, cancellationToken);
         var (buildSuccess, buildOutput) = await BuildAsync(cancellationToken);
 
         if (!buildSuccess)

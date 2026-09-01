@@ -1550,59 +1550,6 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
         }
     }
 
-    [Fact]
-    public async Task PrepareAsync_WithAmbientNuGetConfiguration_DoesNotReloadProjectChannel()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        await File.WriteAllTextAsync(
-            Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName),
-            """
-            {
-              "channel": "daily"
-            }
-            """);
-        var channel = PackageChannel.CreateExplicitChannel(
-            "daily",
-            PackageChannelQuality.Prerelease,
-            [new PackageMapping("Aspire*", "https://daily.example/v3/index.json")],
-            new FakeNuGetPackageCache(),
-            new TestFeatures(),
-            NullLogger.Instance);
-        var packagingService = new TestPackagingService
-        {
-            GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>([channel])
-        };
-        var (server, executionFactory) = CreatePackageReferenceServer(workspace, packagingService);
-        List<string>? restoreArgs = null;
-        executionFactory.AssertionCallback = (args, _, _, _) =>
-        {
-            if (args is ["nuget", "restore", ..])
-            {
-                restoreArgs = [.. args];
-            }
-        };
-        var workingDirectory = GetWorkingDirectory(server);
-
-        try
-        {
-            var result = await server.PrepareAsync(
-                "13.6.0-preview.1",
-                [IntegrationReference.FromPackage("Aspire.Hosting.Redis", "13.6.0-preview.1")],
-                requestedChannel: "daily",
-                packageSourceOverride: null,
-                useAmbientNuGetConfiguration: true);
-
-            Assert.True(result.Success);
-            Assert.NotNull(restoreArgs);
-            Assert.Empty(GetSourceArguments(restoreArgs));
-            Assert.Equal([], restoreArgs.Where(arg => arg is "--source" or "--nuget-config"));
-        }
-        finally
-        {
-            DeleteWorkingDirectory(workingDirectory);
-        }
-    }
-
     [Theory]
     [InlineData("pr-12345")]
     [InlineData("local")]

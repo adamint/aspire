@@ -816,81 +816,6 @@ public class GuestAppHostProjectTests : IDisposable
         Assert.False(reloaded.Packages.ContainsKey("Aspire.Hosting.Redis"));
     }
 
-    [Theory]
-    [InlineData(false, true, true, false, false)]
-    [InlineData(false, true, false, false, true)]
-    [InlineData(false, false, false, false, true)]
-    [InlineData(true, true, true, false, true)]
-    [InlineData(false, false, false, true, true)]
-    public async Task AddPackageAsync_UsesConfiguredAndExplicitSourcesWithExpectedOverrideSemantics(
-        bool isSourceExplicit,
-        bool isSourceEnabled,
-        bool isSourceMapped,
-        bool sourceInspectionFails,
-        bool expectSourceOverride)
-    {
-        const string source = "https://configured.example/v3/index.json";
-        var configPath = Path.Combine(_workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
-        await File.WriteAllTextAsync(configPath, """
-            {
-              "sdk": { "version": "1.0.0" },
-              "channel": "daily",
-              "packages": { "Aspire.Hosting": "1.0.0" }
-            }
-            """);
-        var nugetConfigPath = Path.Combine(_workspace.WorkspaceRoot.FullName, "NuGet.Config");
-        await File.WriteAllTextAsync(nugetConfigPath, $$"""
-            <configuration>
-              <packageSources>
-                <clear />
-                <add key="configured" value="{{(isSourceEnabled ? source : "https://other.example/v3/index.json")}}" />
-              </packageSources>
-              <packageSourceMapping>
-                <packageSource key="configured">
-                  <package pattern="{{(isSourceMapped ? "Aspire*" : "Other*")}}" />
-                </packageSource>
-              </packageSourceMapping>
-            </configuration>
-            """);
-
-        var appHostPath = Path.Combine(_workspace.WorkspaceRoot.FullName, "apphost.ts");
-        await File.WriteAllTextAsync(appHostPath, "// test apphost");
-
-        var appHostServerProject = new FakeFailingAppHostServerProject(_workspace.WorkspaceRoot.FullName);
-        var factory = new TestAppHostServerProjectFactory
-        {
-            CreateAsyncCallback = (_, _) =>
-                Task.FromResult<IAppHostServerProject>(appHostServerProject)
-        };
-        var runner = new TestDotNetCliRunner
-        {
-            GetNuGetSourcesAsyncCallback = (_, _, _) =>
-                sourceInspectionFails
-                    ? throw new FileNotFoundException("dotnet")
-                    : (0, isSourceEnabled ? [source] : ["https://other.example/v3/index.json"]),
-            GetNuGetConfigPathsAsyncCallback = (_, _, _) => (0, [nugetConfigPath])
-        };
-        var project = CreateGuestAppHostProject(
-            appHostServerProjectFactory: factory,
-            runner: runner);
-
-        var result = await project.AddPackageAsync(
-            new AddPackageContext
-            {
-                AppHostFile = new FileInfo(appHostPath),
-                PackageId = "Aspire.Hosting.Redis",
-                PackageVersion = "2.0.0",
-                Source = source,
-                IsSourceExplicit = isSourceExplicit
-            },
-            CancellationToken.None);
-
-        Assert.False(result);
-        Assert.Equal(expectSourceOverride ? source : null, appHostServerProject.LastPackageSourceOverride);
-        Assert.Equal("daily", appHostServerProject.LastRequestedChannel);
-        Assert.Equal(!expectSourceOverride, appHostServerProject.LastUseAmbientNuGetConfiguration);
-    }
-
     [Fact]
     public async Task FindAndStopRunningInstanceAsync_CleansUpDeadPidSocketAndReturnsNoRunningInstance()
     {
@@ -1535,8 +1460,7 @@ public class GuestAppHostProjectTests : IDisposable
         string languageId = "typescript/nodejs",
         IEnvironment? environment = null,
         DirectoryInfo? homeDirectory = null,
-        IConfiguration? configuration = null,
-        TestDotNetCliRunner? runner = null)
+        IConfiguration? configuration = null)
     {
         var effectiveConfiguration = configuration ?? _configuration;
 
@@ -1569,7 +1493,7 @@ public class GuestAppHostProjectTests : IDisposable
             backchannel: backchannel ?? new TestAppHostBackchannel(),
             appHostServerProjectFactory: appHostServerProjectFactory ?? new TestAppHostServerProjectFactory(),
             certificateService: new TestCertificateService(),
-            runner: runner ?? new TestDotNetCliRunner(),
+            runner: new TestDotNetCliRunner(),
             packagingService: new TestPackagingService(),
             configuration: effectiveConfiguration,
             features: new Features(effectiveConfiguration, NullLogger<Features>.Instance),

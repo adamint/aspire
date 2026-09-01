@@ -146,7 +146,6 @@ internal sealed partial class PrebuiltAppHostServer : IAppHostServerProject, IDi
         IEnumerable<IntegrationReference> integrations,
         string? requestedChannel = null,
         string? packageSourceOverride = null,
-        bool useAmbientNuGetConfiguration = false,
         CancellationToken cancellationToken = default)
     {
         var integrationList = integrations.ToList();
@@ -156,7 +155,7 @@ internal sealed partial class PrebuiltAppHostServer : IAppHostServerProject, IDi
         // restore — including the auto-discovered local hive resolved by
         // ResolveLocalPackageSourceOverrideAsync — rather than the unset --source the user
         // originally passed in.
-        var effectivePackageSourceOverride = useAmbientNuGetConfiguration ? null : packageSourceOverride;
+        var effectivePackageSourceOverride = packageSourceOverride;
 
         try
         {
@@ -168,17 +167,10 @@ internal sealed partial class PrebuiltAppHostServer : IAppHostServerProject, IDi
             // Resolve the channel the project requests for restore (aspire.config.json#channel,
             // with a legacy .aspire/settings.json#channel fallback). This is independent of the
             // running CLI's identity hive (CliExecutionContext.IdentityChannel).
-            if (useAmbientNuGetConfiguration)
+            requestedChannel ??= ResolveRequestedChannel();
+            if (string.IsNullOrWhiteSpace(effectivePackageSourceOverride))
             {
-                requestedChannel = null;
-            }
-            else
-            {
-                requestedChannel ??= ResolveRequestedChannel();
-                if (string.IsNullOrWhiteSpace(effectivePackageSourceOverride))
-                {
-                    effectivePackageSourceOverride = await ResolveLocalPackageSourceOverrideAsync(requestedChannel, cancellationToken).ConfigureAwait(false);
-                }
+                effectivePackageSourceOverride = await ResolveLocalPackageSourceOverrideAsync(requestedChannel, cancellationToken).ConfigureAwait(false);
             }
 
             if (projectRefs.Count > 0)
@@ -200,7 +192,6 @@ internal sealed partial class PrebuiltAppHostServer : IAppHostServerProject, IDi
                     projectRefs,
                     requestedChannel,
                     effectivePackageSourceOverride,
-                    useAmbientNuGetConfiguration,
                     cancellationToken).ConfigureAwait(false);
 
                 if (closureManifest.Entries.Any(static entry => entry.IsPackageBacked))
@@ -226,11 +217,7 @@ internal sealed partial class PrebuiltAppHostServer : IAppHostServerProject, IDi
                 {
                     // NuGet-only — use the bundled NuGet service (no SDK required)
                     _integrationProbeManifestPath = await RestoreNuGetPackagesAsync(
-                        packageRefs,
-                        requestedChannel,
-                        effectivePackageSourceOverride,
-                        useAmbientNuGetConfiguration,
-                        cancellationToken);
+                        packageRefs, requestedChannel, effectivePackageSourceOverride, cancellationToken);
                 }
 
                 var appSettingsContent = CreateAppSettingsContent(packageRefs, []);
@@ -316,7 +303,6 @@ internal sealed partial class PrebuiltAppHostServer : IAppHostServerProject, IDi
         List<IntegrationReference> packageRefs,
         string? requestedChannel,
         string? packageSourceOverride,
-        bool useAmbientNuGetConfiguration,
         CancellationToken cancellationToken)
     {
         _logger.LogDebug("Restoring {Count} integration packages via bundled NuGet", packageRefs.Count);
@@ -325,12 +311,8 @@ internal sealed partial class PrebuiltAppHostServer : IAppHostServerProject, IDi
         var packages = packageRefs
             .Select(r => (r.Name, Version: GetRestoreVersion(r.Name, r.Version!, useExactPackageVersions)))
             .ToList();
-        using var temporaryNuGetConfig = useAmbientNuGetConfiguration
-            ? null
-            : await TryCreateTemporaryNuGetConfigAsync(requestedChannel, packageSourceOverride, cancellationToken);
-        var sources = useAmbientNuGetConfiguration
-            ? null
-            : await GetNuGetSourcesAsync(requestedChannel, packageSourceOverride, cancellationToken);
+        using var temporaryNuGetConfig = await TryCreateTemporaryNuGetConfigAsync(requestedChannel, packageSourceOverride, cancellationToken);
+        var sources = await GetNuGetSourcesAsync(requestedChannel, packageSourceOverride, cancellationToken);
 
         return await _nugetService.RestorePackagesAsync(
             packages,
@@ -753,7 +735,6 @@ internal sealed partial class PrebuiltAppHostServer : IAppHostServerProject, IDi
         List<IntegrationReference> projectRefs,
         string? requestedChannel,
         string? packageSourceOverride,
-        bool useAmbientNuGetConfiguration,
         CancellationToken cancellationToken)
     {
         var restoreDir = Path.Combine(_workingDirectory, "integration-restore");
@@ -765,10 +746,10 @@ internal sealed partial class PrebuiltAppHostServer : IAppHostServerProject, IDi
         // nuget.config in place and contributes channel mappings additively via
         // RestoreAdditionalProjectSources so private/internal feeds the user has configured
         // remain reachable for non-Aspire transitives during project-ref restore.
-        using var temporaryNuGetConfig = !useAmbientNuGetConfiguration && !string.IsNullOrWhiteSpace(packageSourceOverride)
+        using var temporaryNuGetConfig = !string.IsNullOrWhiteSpace(packageSourceOverride)
             ? await TryCreateTemporaryNuGetConfigAsync(requestedChannel, packageSourceOverride, cancellationToken)
             : null;
-        var channelSources = !useAmbientNuGetConfiguration && temporaryNuGetConfig is null
+        var channelSources = temporaryNuGetConfig is null
             ? await GetNuGetSourcesAsync(requestedChannel, packageSourceOverride: null, cancellationToken)
             : null;
         var projectContent = GenerateIntegrationProjectFile(

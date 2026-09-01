@@ -518,51 +518,6 @@ public class AppHostServerProjectTests(ITestOutputHelper outputHelper) : IDispos
         Assert.Equal(channelFeed, restoreSources);
     }
 
-    [Fact]
-    public async Task CreateProjectFiles_WithAmbientNuGetConfiguration_DoesNotInjectConfiguredChannelSource()
-    {
-        var appPath = _workspace.WorkspaceRoot.FullName;
-        await File.WriteAllTextAsync(
-            Path.Combine(appPath, AspireConfigFile.FileName),
-            """
-            {
-              "channel": "daily"
-            }
-            """);
-        var dailyChannel = PackageChannel.CreateExplicitChannel(
-            "daily",
-            PackageChannelQuality.Prerelease,
-            [new PackageMapping("Aspire*", "https://daily.example/v3/index.json")],
-            new FakeNuGetPackageCache(),
-            new TestFeatures(),
-            NullLogger.Instance);
-        var packagingService = new TestPackagingService
-        {
-            GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>([dailyChannel])
-        };
-        var project = new DotNetBasedAppHostServerProject(
-            appPath,
-            "test.sock",
-            appPath,
-            new TestDotNetCliRunner(),
-            packagingService,
-            new TestProcessExecutionFactory(),
-            new TestEnvironment(),
-            NullLogger<DotNetBasedAppHostServerProject>.Instance,
-            Path.Combine(appPath, ".aspire_server"));
-
-        var (projectFilePath, channelName) = await project.CreateProjectFilesAsync(
-            [IntegrationReference.FromPackage("Aspire.Hosting", "13.1.0")],
-            requestedChannel: "daily",
-            packageSourceOverride: null,
-            useAmbientNuGetConfiguration: true,
-            cancellationToken: CancellationToken.None).DefaultTimeout();
-
-        var projectDocument = XDocument.Load(projectFilePath);
-        Assert.Null(projectDocument.Descendants("RestoreAdditionalProjectSources").SingleOrDefault());
-        Assert.Null(channelName);
-    }
-
     private static void DumpDirectoryTree(string path, ITestOutputHelper output, string indent = "")
     {
         var dirInfo = new DirectoryInfo(path);

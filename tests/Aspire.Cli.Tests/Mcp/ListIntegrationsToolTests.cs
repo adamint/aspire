@@ -3,32 +3,24 @@
 
 using Microsoft.AspNetCore.InternalTesting;
 using System.Text.Json;
-using System.Xml.Linq;
-using Aspire.Cli.Backchannel;
-using Aspire.Cli.Configuration;
 using Aspire.Cli.Mcp.Tools;
-using Aspire.Cli.Packaging;
 using Aspire.Cli.Tests.TestServices;
-using Aspire.Cli.Tests.Utils;
-using Microsoft.Extensions.Logging.Abstractions;
-using NuGetPackage = Aspire.Shared.NuGetPackageCli;
 
 namespace Aspire.Cli.Tests.Mcp;
 
-public class ListIntegrationsToolTests(ITestOutputHelper outputHelper)
+public class ListIntegrationsToolTests
 {
     [Fact]
     public void ListIntegrationsTool_HasCorrectName()
     {
-        var tool = new ListIntegrationsTool(MockPackagingServiceFactory.Create(), new TestConfigurationService(), TestExecutionContextFactory.CreateTestContext(), new MockAuxiliaryBackchannelMonitor());
+        var tool = new ListIntegrationsTool(MockPackagingServiceFactory.Create(), TestExecutionContextFactory.CreateTestContext(), new MockAuxiliaryBackchannelMonitor());
 
         Assert.Equal("list_integrations", tool.Name);
     }
-
     [Fact]
     public void ListIntegrationsTool_HasCorrectDescription()
     {
-        var tool = new ListIntegrationsTool(MockPackagingServiceFactory.Create(), new TestConfigurationService(), TestExecutionContextFactory.CreateTestContext(), new MockAuxiliaryBackchannelMonitor());
+        var tool = new ListIntegrationsTool(MockPackagingServiceFactory.Create(), TestExecutionContextFactory.CreateTestContext(), new MockAuxiliaryBackchannelMonitor());
 
         Assert.Contains("List available Aspire hosting integrations", tool.Description);
         Assert.Contains("This tool does not require a running AppHost", tool.Description);
@@ -37,7 +29,7 @@ public class ListIntegrationsToolTests(ITestOutputHelper outputHelper)
     [Fact]
     public void ListIntegrationsTool_GetInputSchema_ReturnsValidSchema()
     {
-        var tool = new ListIntegrationsTool(MockPackagingServiceFactory.Create(), new TestConfigurationService(), TestExecutionContextFactory.CreateTestContext(), new MockAuxiliaryBackchannelMonitor());
+        var tool = new ListIntegrationsTool(MockPackagingServiceFactory.Create(), TestExecutionContextFactory.CreateTestContext(), new MockAuxiliaryBackchannelMonitor());
         var schema = tool.GetInputSchema();
 
         Assert.Equal(JsonValueKind.Object, schema.ValueKind);
@@ -55,7 +47,7 @@ public class ListIntegrationsToolTests(ITestOutputHelper outputHelper)
     public async Task ListIntegrationsTool_CallToolAsync_ReturnsEmptyJsonArray_WhenNoPackagesFound()
     {
         var mockPackagingService = MockPackagingServiceFactory.Create();
-        var tool = new ListIntegrationsTool(mockPackagingService, new TestConfigurationService(), TestExecutionContextFactory.CreateTestContext(), new MockAuxiliaryBackchannelMonitor());
+        var tool = new ListIntegrationsTool(mockPackagingService, TestExecutionContextFactory.CreateTestContext(), new MockAuxiliaryBackchannelMonitor());
 
         var result = await tool.CallToolAsync(CallToolContextTestHelper.Create(), CancellationToken.None).DefaultTimeout();
 
@@ -80,7 +72,7 @@ public class ListIntegrationsToolTests(ITestOutputHelper outputHelper)
             new Aspire.Shared.NuGetPackageCli { Id = "Aspire.Hosting.Redis", Version = "9.0.0" },
             new Aspire.Shared.NuGetPackageCli { Id = "Aspire.Hosting.PostgreSQL", Version = "9.0.0" }
         });
-        var tool = new ListIntegrationsTool(mockPackagingService, new TestConfigurationService(), TestExecutionContextFactory.CreateTestContext(), new MockAuxiliaryBackchannelMonitor());
+        var tool = new ListIntegrationsTool(mockPackagingService, TestExecutionContextFactory.CreateTestContext(), new MockAuxiliaryBackchannelMonitor());
 
         var result = await tool.CallToolAsync(CallToolContextTestHelper.Create(), CancellationToken.None).DefaultTimeout();
 
@@ -118,7 +110,7 @@ public class ListIntegrationsToolTests(ITestOutputHelper outputHelper)
         {
             new Aspire.Shared.NuGetPackageCli { Id = "Aspire.Hosting.Redis", Version = "9.0.0" }
         });
-        var tool = new ListIntegrationsTool(mockPackagingService, new TestConfigurationService(), TestExecutionContextFactory.CreateTestContext(), new MockAuxiliaryBackchannelMonitor());
+        var tool = new ListIntegrationsTool(mockPackagingService, TestExecutionContextFactory.CreateTestContext(), new MockAuxiliaryBackchannelMonitor());
 
         var result = await tool.CallToolAsync(CallToolContextTestHelper.Create(), CancellationToken.None).DefaultTimeout();
 
@@ -128,183 +120,5 @@ public class ListIntegrationsToolTests(ITestOutputHelper outputHelper)
         using var json = JsonDocument.Parse(((ModelContextProtocol.Protocol.TextContentBlock)result.Content![0]).Text);
         Assert.True(json.RootElement.TryGetProperty("integrations", out var integrations));
         Assert.Equal(1, integrations.GetArrayLength());
-    }
-
-    [Fact]
-    public async Task ListIntegrationsTool_UsesConfiguredNuGetSource()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        const string configuredSource = "feeds/configured";
-        string? searchSource = null;
-        var cache = new FakeNuGetPackageCache
-        {
-            GetIntegrationPackagesAsyncCallback = (_, _, nugetConfig, _) =>
-            {
-                Assert.NotNull(nugetConfig);
-                searchSource = (string?)XDocument.Load(nugetConfig.FullName).Root!
-                    .Element("packageSources")!
-                    .Elements("add")
-                    .Single()
-                    .Attribute("value");
-                return Task.FromResult<IEnumerable<NuGetPackage>>(
-                    [new NuGetPackage { Id = "Aspire.Hosting.Redis", Version = "9.0.0" }]);
-            }
-        };
-        var packagingService = new TestPackagingService
-        {
-            GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>(
-                [PackageChannel.CreateImplicitChannel(cache, new TestFeatures(), NullLogger.Instance)])
-        };
-        var configurationService = new TestConfigurationService
-        {
-            OnGetConfigurationFromDirectoryWithOrigin = (_, _) =>
-                new ConfigurationValueWithOrigin(configuredSource, workspace.WorkspaceRoot, IsGlobal: false)
-        };
-        var tool = new ListIntegrationsTool(
-            packagingService,
-            configurationService,
-            TestExecutionContextHelper.CreateExecutionContext(workspace.WorkspaceRoot),
-            new MockAuxiliaryBackchannelMonitor());
-
-        var result = await tool.CallToolAsync(
-            CallToolContextTestHelper.Create(),
-            CancellationToken.None).DefaultTimeout();
-
-        Assert.True(result.IsError is null or false);
-        Assert.Equal(Path.Combine(workspace.WorkspaceRoot.FullName, "feeds", "configured"), searchSource);
-    }
-
-    [Fact]
-    public async Task ListIntegrationsTool_UsesSelectedAppHostConfiguration()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var selectedAppHostDirectory = workspace.CreateDirectory("selected");
-        var selectedAppHostPath = Path.Combine(selectedAppHostDirectory.FullName, "apphost.ts");
-        var configurationDirectories = new List<string>();
-        FileInfo? searchConfig = null;
-        var cache = new FakeNuGetPackageCache
-        {
-            GetIntegrationPackagesAsyncCallback = (_, _, nugetConfig, _) =>
-            {
-                searchConfig = nugetConfig;
-                return Task.FromResult<IEnumerable<NuGetPackage>>([]);
-            }
-        };
-        var packagingService = new TestPackagingService
-        {
-            GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>(
-                [PackageChannel.CreateImplicitChannel(cache, new TestFeatures(), NullLogger.Instance)])
-        };
-        var configurationService = new TestConfigurationService
-        {
-            OnGetConfigurationFromDirectoryWithOrigin = (_, directory) =>
-            {
-                configurationDirectories.Add(directory.FullName);
-                return directory.FullName == workspace.WorkspaceRoot.FullName
-                    ? new ConfigurationValueWithOrigin(
-                        "https://invocation.example/v3/index.json",
-                        workspace.WorkspaceRoot,
-                        IsGlobal: false)
-                    : null;
-            },
-            OnGetConfiguration = _ => "https://invocation.example/v3/index.json"
-        };
-        var monitor = new TestAuxiliaryBackchannelMonitor
-        {
-            SelectedAppHostPath = selectedAppHostPath
-        };
-        monitor.AddConnection(
-            "selected",
-            "selected.socket",
-            new TestAppHostAuxiliaryBackchannel
-            {
-                Hash = "selected",
-                SocketPath = "selected.socket",
-                IsInScope = false,
-                AppHostInfo = new AppHostInformation
-                {
-                    AppHostPath = selectedAppHostPath,
-                    ProcessId = 1234
-                }
-            });
-        var tool = new ListIntegrationsTool(
-            packagingService,
-            configurationService,
-            TestExecutionContextHelper.CreateExecutionContext(workspace.WorkspaceRoot),
-            monitor);
-
-        var result = await tool.CallToolAsync(
-            CallToolContextTestHelper.Create(),
-            CancellationToken.None).DefaultTimeout();
-
-        Assert.True(result.IsError is null or false);
-        Assert.Collection(
-            configurationDirectories,
-            directory => Assert.Equal(selectedAppHostDirectory.FullName, directory),
-            directory => Assert.Equal(workspace.WorkspaceRoot.FullName, directory));
-        Assert.Null(searchConfig);
-    }
-
-    [Fact]
-    public async Task ListIntegrationsTool_SelectedAppHostResolvesAmbientProviderSourceFromInvocationDirectory()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var selectedAppHostDirectory = workspace.CreateDirectory("selected");
-        var selectedAppHostPath = Path.Combine(selectedAppHostDirectory.FullName, "apphost.ts");
-        const string ambientSource = "feeds/ambient";
-        string? searchSource = null;
-        var cache = new FakeNuGetPackageCache
-        {
-            GetIntegrationPackagesAsyncCallback = (_, _, nugetConfig, _) =>
-            {
-                Assert.NotNull(nugetConfig);
-                searchSource = (string?)XDocument.Load(nugetConfig.FullName).Root!
-                    .Element("packageSources")!
-                    .Elements("add")
-                    .Single()
-                    .Attribute("value");
-                return Task.FromResult<IEnumerable<NuGetPackage>>([]);
-            }
-        };
-        var packagingService = new TestPackagingService
-        {
-            GetChannelsAsyncCallback = _ => Task.FromResult<IEnumerable<PackageChannel>>(
-                [PackageChannel.CreateImplicitChannel(cache, new TestFeatures(), NullLogger.Instance)])
-        };
-        var configurationService = new TestConfigurationService
-        {
-            OnGetConfigurationFromDirectoryWithOrigin = (_, _) => null,
-            OnGetConfiguration = _ => ambientSource
-        };
-        var monitor = new TestAuxiliaryBackchannelMonitor
-        {
-            SelectedAppHostPath = selectedAppHostPath
-        };
-        monitor.AddConnection(
-            "selected",
-            "selected.socket",
-            new TestAppHostAuxiliaryBackchannel
-            {
-                Hash = "selected",
-                SocketPath = "selected.socket",
-                IsInScope = false,
-                AppHostInfo = new AppHostInformation
-                {
-                    AppHostPath = selectedAppHostPath,
-                    ProcessId = 1234
-                }
-            });
-        var tool = new ListIntegrationsTool(
-            packagingService,
-            configurationService,
-            TestExecutionContextHelper.CreateExecutionContext(workspace.WorkspaceRoot),
-            monitor);
-
-        var result = await tool.CallToolAsync(
-            CallToolContextTestHelper.Create(),
-            CancellationToken.None).DefaultTimeout();
-
-        Assert.True(result.IsError is null or false);
-        Assert.Equal(Path.Combine(workspace.WorkspaceRoot.FullName, "feeds", "ambient"), searchSource);
     }
 }

@@ -140,7 +140,6 @@ public class ChannelReseedTests(ITestOutputHelper outputHelper)
             IEnumerable<IntegrationReference> integrations,
             string? requestedChannel = null,
             string? packageSourceOverride = null,
-            bool useAmbientNuGetConfiguration = false,
             CancellationToken cancellationToken = default)
         {
             PackageSourceOverride = packageSourceOverride;

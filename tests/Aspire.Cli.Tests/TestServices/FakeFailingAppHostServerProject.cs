@@ -21,10 +21,6 @@ internal sealed class FakeFailingAppHostServerProject(string appDirectoryPath) :
 
     public string? LastPackageSourceOverride { get; private set; }
 
-    public string? LastRequestedChannel { get; private set; }
-
-    public bool LastUseAmbientNuGetConfiguration { get; private set; }
-
     public string GetInstanceIdentifier() => AppDirectoryPath;
 
     public Task<AppHostServerPrepareResult> PrepareAsync(
@@ -32,12 +28,9 @@ internal sealed class FakeFailingAppHostServerProject(string appDirectoryPath) :
         IEnumerable<IntegrationReference> integrations,
         string? requestedChannel = null,
         string? packageSourceOverride = null,
-        bool useAmbientNuGetConfiguration = false,
         CancellationToken cancellationToken = default)
     {
-        LastRequestedChannel = requestedChannel;
-        LastPackageSourceOverride = useAmbientNuGetConfiguration ? null : packageSourceOverride;
-        LastUseAmbientNuGetConfiguration = useAmbientNuGetConfiguration;
+        LastPackageSourceOverride = packageSourceOverride;
         return Task.FromResult(new AppHostServerPrepareResult(Success: false, Output: null));
     }
 

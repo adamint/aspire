@@ -278,17 +278,10 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         string sdkVersion,
         List<IntegrationReference> integrations,
         string? requestedChannel,
-        string? packageSourceOverride,
-        bool useAmbientNuGetConfiguration,
-        CancellationToken cancellationToken)
+        string? packageSourceOverride = null,
+        CancellationToken cancellationToken = default)
     {
-        var result = await appHostServerProject.PrepareAsync(
-            sdkVersion,
-            integrations,
-            requestedChannel,
-            packageSourceOverride,
-            useAmbientNuGetConfiguration,
-            cancellationToken);
+        var result = await appHostServerProject.PrepareAsync(sdkVersion, integrations, requestedChannel, packageSourceOverride, cancellationToken);
         return (result.Success, result.Output, result.ChannelName, result.NeedsCodeGeneration);
     }
 
@@ -299,22 +292,10 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
     internal async Task<bool> BuildAndGenerateSdkAsync(DirectoryInfo directory, string? packageSourceOverride = null, CancellationToken cancellationToken = default)
     {
         var config = LoadConfiguration(directory);
-        return await BuildAndGenerateSdkAsync(
-            directory,
-            config,
-            config.Channel,
-            packageSourceOverride,
-            useAmbientNuGetConfiguration: false,
-            cancellationToken);
+        return await BuildAndGenerateSdkAsync(directory, config, packageSourceOverride, cancellationToken);
     }
 
-    private async Task<bool> BuildAndGenerateSdkAsync(
-        DirectoryInfo directory,
-        AspireConfigFile config,
-        string? requestedChannel,
-        string? packageSourceOverride,
-        bool useAmbientNuGetConfiguration,
-        CancellationToken cancellationToken)
+    private async Task<bool> BuildAndGenerateSdkAsync(DirectoryInfo directory, AspireConfigFile config, string? packageSourceOverride = null, CancellationToken cancellationToken = default)
     {
         var appHostServerProject = await _appHostServerProjectFactory.CreateAsync(directory.FullName, cancellationToken);
 
@@ -323,21 +304,8 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         // aspire.config.json pinned to versions the current CLI cannot run.
         var integrations = await GetIntegrationReferencesAsync(config, directory, cancellationToken);
         var sdkVersion = GetPrepareSdkVersion(config);
-        if (useAmbientNuGetConfiguration && integrations.Any(static integration => integration.IsProjectReference))
-        {
-            // Project-reference restore uses a generated project outside the AppHost hierarchy.
-            // Keep the source override so that restore does not depend on configs it cannot discover.
-            useAmbientNuGetConfiguration = false;
-        }
 
-        var (buildSuccess, buildOutput, _, _) = await PrepareAppHostServerAsync(
-            appHostServerProject,
-            sdkVersion,
-            integrations,
-            requestedChannel,
-            packageSourceOverride,
-            useAmbientNuGetConfiguration,
-            cancellationToken);
+        var (buildSuccess, buildOutput, _, _) = await PrepareAppHostServerAsync(appHostServerProject, sdkVersion, integrations, config.Channel, packageSourceOverride, cancellationToken);
         if (!buildSuccess)
         {
             if (buildOutput is not null)
@@ -459,14 +427,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
                 async () =>
                 {
                     // Prepare the AppHost server (build for dev mode, restore for prebuilt)
-                    var (prepareSuccess, prepareOutput, channelName, needsCodeGen) = await PrepareAppHostServerAsync(
-                        appHostServerProject,
-                        sdkVersion,
-                        integrations,
-                        config.Channel,
-                        packageSourceOverride: null,
-                        useAmbientNuGetConfiguration: false,
-                        cancellationToken);
+                    var (prepareSuccess, prepareOutput, channelName, needsCodeGen) = await PrepareAppHostServerAsync(appHostServerProject, sdkVersion, integrations, config.Channel, cancellationToken: cancellationToken);
                     if (!prepareSuccess)
                     {
                         return (Success: false, Output: prepareOutput, Error: "Failed to prepare app host.", ChannelName: (string?)null, NeedsCodeGen: false);
@@ -1100,14 +1061,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
             var sdkVersion = GetPrepareSdkVersion(config);
 
             // Prepare the AppHost server (build for dev mode, restore for prebuilt)
-            var (prepareSuccess, prepareOutput, _, needsCodeGen) = await PrepareAppHostServerAsync(
-                appHostServerProject,
-                sdkVersion,
-                integrations,
-                config.Channel,
-                packageSourceOverride: null,
-                useAmbientNuGetConfiguration: false,
-                cancellationToken);
+            var (prepareSuccess, prepareOutput, _, needsCodeGen) = await PrepareAppHostServerAsync(appHostServerProject, sdkVersion, integrations, config.Channel, cancellationToken: cancellationToken);
             if (!prepareSuccess)
             {
                 // Set OutputCollector so PipelineCommandBase can display errors
@@ -1467,60 +1421,8 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         // Update configuration with the new package
         config.AddOrUpdatePackage(context.PackageId, context.PackageVersion);
 
-        var packageInstallSource = context.Source;
-        var requestedChannel = config.Channel;
-        var useAmbientNuGetConfiguration = false;
-        if (!context.IsSourceExplicit && packageInstallSource is not null)
-        {
-            try
-            {
-                var (exitCode, enabledSources) = await _runner.GetNuGetSourcesAsync(
-                    directory,
-                    new ProcessInvocationOptions(),
-                    cancellationToken);
-                if (exitCode == 0 &&
-                    enabledSources.Any(source => PackageSourceOverrideMappings.SourcesMatch(source, packageInstallSource, _environment)))
-                {
-                    var (configExitCode, configPaths) = await _runner.GetNuGetConfigPathsAsync(
-                        directory,
-                        new ProcessInvocationOptions(),
-                        cancellationToken);
-                    if (configExitCode == 0 &&
-                        PackageSourceOverrideMappings.IsSourceMappedForPackage(
-                            packageInstallSource,
-                            context.PackageId,
-                            configPaths,
-                            directory,
-                            configWillBeRelocated: true,
-                            _environment))
-                    {
-                        // The configured source is already part of the effective NuGet hierarchy.
-                        // Avoid generating a channel-only config that clears that hierarchy for the
-                        // guest SDK restore while keeping the persisted channel unchanged.
-                        useAmbientNuGetConfiguration = true;
-                    }
-                }
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                // Guest AppHosts can use the bundled restore path without a .NET SDK. If source
-                // inspection cannot run, keep the configured source as an explicit restore input.
-                _logger.LogDebug(ex, "Failed to inspect effective NuGet sources for guest AppHost package installation.");
-            }
-        }
-
         // Build and regenerate SDK code with the new package
-        var regenerateSuccess = await BuildAndGenerateSdkAsync(
-            directory,
-            config,
-            requestedChannel,
-            packageInstallSource,
-            useAmbientNuGetConfiguration,
-            cancellationToken);
+        var regenerateSuccess = await BuildAndGenerateSdkAsync(directory, config, context.Source, cancellationToken);
         if (!regenerateSuccess)
         {
             return false;
@@ -1650,13 +1552,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
             UpdateCommandStrings.RegeneratingSdkCode,
             async () =>
             {
-                var regenerateSuccess = await BuildAndGenerateSdkAsync(
-                    directory,
-                    config,
-                    config.Channel,
-                    packageSourceOverride: null,
-                    useAmbientNuGetConfiguration: false,
-                    cancellationToken);
+                var regenerateSuccess = await BuildAndGenerateSdkAsync(directory, config, cancellationToken: cancellationToken);
 
                 if (!regenerateSuccess)
                 {

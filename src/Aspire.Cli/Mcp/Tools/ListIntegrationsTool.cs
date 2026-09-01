@@ -4,7 +4,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aspire.Cli.Backchannel;
-using Aspire.Cli.Configuration;
 using Aspire.Cli.Packaging;
 using ModelContextProtocol.Protocol;
 using Semver;
@@ -50,11 +49,7 @@ internal sealed class ListIntegrationsResponse
 /// <summary>
 /// MCP tool for listing available Aspire hosting integrations.
 /// </summary>
-internal sealed class ListIntegrationsTool(
-    IPackagingService packagingService,
-    IConfigurationService configurationService,
-    CliExecutionContext executionContext,
-    IAuxiliaryBackchannelMonitor auxiliaryBackchannelMonitor) : CliMcpTool
+internal sealed class ListIntegrationsTool(IPackagingService packagingService, CliExecutionContext executionContext, IAuxiliaryBackchannelMonitor auxiliaryBackchannelMonitor) : CliMcpTool
 {
     public override string Name => KnownMcpTools.ListIntegrations;
 
@@ -76,9 +71,6 @@ internal sealed class ListIntegrationsTool(
     {
         try
         {
-            // If there's an in-scope AppHost, use its directory; otherwise use the MCP's working directory.
-            var workingDirectory = GetWorkingDirectory(out var appHostWasExplicitlySelected);
-
             // Get all channels
             var packageChannels = await packagingService.GetChannelsAsync(cancellationToken);
 
@@ -93,43 +85,9 @@ internal sealed class ListIntegrationsTool(
                 };
             }
 
-            var configuredSource = await configurationService.GetConfigurationFromDirectoryWithOriginAsync(
-                AspireConfigFile.NuGetSourceKey,
-                workingDirectory,
-                cancellationToken: cancellationToken);
-            var source = configuredSource?.Value;
-            var sourceBaseDirectory = configuredSource?.BaseDirectory;
-            if (source is null)
-            {
-                var invocationSource = await configurationService.GetConfigurationAsync(
-                    AspireConfigFile.NuGetSourceKey,
-                    cancellationToken);
-                if (appHostWasExplicitlySelected)
-                {
-                    var selectingSource = await configurationService.GetConfigurationFromDirectoryWithOriginAsync(
-                        AspireConfigFile.NuGetSourceKey,
-                        executionContext.WorkingDirectory,
-                        cancellationToken: cancellationToken);
-                    if (selectingSource is null)
-                    {
-                        source = invocationSource;
-                        sourceBaseDirectory = executionContext.WorkingDirectory;
-                    }
-                }
-                else
-                {
-                    source = invocationSource;
-                    sourceBaseDirectory = executionContext.WorkingDirectory;
-                }
-            }
-            if (!string.IsNullOrWhiteSpace(source))
-            {
-                source = PackageSourceOverrideMappings.ResolveForWorkingDirectory(
-                    source,
-                    sourceBaseDirectory ?? workingDirectory);
-                defaultChannel = defaultChannel.WithMappings(
-                    PackageSourceOverrideMappings.CreateForTemplateOperations(source));
-            }
+            // Determine the working directory to use
+            // If there's an in-scope AppHost, use its directory; otherwise use the MCP's working directory
+            var workingDirectory = GetWorkingDirectory();
 
             // Get integration packages from the default channel
             var integrationPackages = await defaultChannel.GetIntegrationPackagesAsync(workingDirectory, cancellationToken);
@@ -188,19 +146,8 @@ internal sealed class ListIntegrationsTool(
     /// Gets the appropriate working directory for package resolution.
     /// Uses the AppHost directory if an in-scope AppHost exists, otherwise uses the MCP's working directory.
     /// </summary>
-    private DirectoryInfo GetWorkingDirectory(out bool appHostWasExplicitlySelected)
+    private DirectoryInfo GetWorkingDirectory()
     {
-        var selectedConnection = auxiliaryBackchannelMonitor.SelectedConnection;
-        if (auxiliaryBackchannelMonitor.SelectedAppHostPath is { Length: > 0 } &&
-            selectedConnection?.AppHostInfo?.AppHostPath is { Length: > 0 } selectedAppHostPath &&
-            Path.GetDirectoryName(selectedAppHostPath) is { Length: > 0 } selectedAppHostDirectory)
-        {
-            appHostWasExplicitlySelected = true;
-            return new DirectoryInfo(selectedAppHostDirectory);
-        }
-
-        appHostWasExplicitlySelected = false;
-
         // Get in-scope connections
         var inScopeConnections = auxiliaryBackchannelMonitor.GetConnectionsForWorkingDirectory(executionContext.WorkingDirectory);
 
