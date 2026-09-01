@@ -241,6 +241,8 @@ export type AspireExtensionE2EControlCommand =
     | { name: 'getExtensionPackageJson' }
     | { name: 'getExtensionFileStatus'; relativePaths: readonly string[] }
     | { name: 'getDiagnostics'; filePath: string }
+    | { name: 'getDefinitions'; filePath: string; line: number; character: number }
+    | { name: 'getJavaProjects' }
     | { name: 'getCodeLenses'; filePath: string }
     | { name: 'snapshotClipboard' }
     | { name: 'restoreClipboardSnapshot' }
@@ -255,7 +257,8 @@ export type AspireExtensionE2EControlCommand =
     | { name: 'getWorkspaceFolders' }
     | { name: 'addWorkspaceFolder'; folderPath: string }
     | { name: 'getActiveEditor' }
-    | { name: 'runAspireCli'; args: readonly string[]; workingDirectory: string; timeoutMs?: number; noExtensionVariables?: boolean }
+    | { name: 'getOpenEditors' }
+    | { name: 'runAspireCli'; args: readonly string[]; workingDirectory: string; timeoutMs?: number; noExtensionVariables?: boolean; allowNonZeroExit?: boolean }
     | { name: 'getResourceDebuggerExtensions' }
     | { name: 'getSupportedCapabilities' }
     | { name: 'getVisibleExtensionIds' }
