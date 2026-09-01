@@ -231,7 +231,7 @@ suite('AspireEditorCommandProvider', () => {
             await provider.tryExecuteRunAppHost(true, vscode.Uri.file(appHostBPath));
 
             const launchConfiguration = startDebuggingStub.firstCall.args[1] as vscode.DebugConfiguration;
-            assert.strictEqual(launchConfiguration.program, appHostBPath);
+            assert.strictEqual(launchConfiguration.program, fs.realpathSync.native(appHostBPath));
         }
         finally {
             provider.dispose();
@@ -261,7 +261,7 @@ suite('AspireEditorCommandProvider', () => {
 
             assert.ok(startDebuggingStub.calledOnce);
             const launchConfiguration = startDebuggingStub.firstCall.args[1] as vscode.DebugConfiguration;
-            assert.strictEqual(launchConfiguration.program, workspaceAppHostPath);
+            assert.strictEqual(launchConfiguration.program, fs.realpathSync.native(workspaceAppHostPath));
         }
         finally {
             provider.dispose();

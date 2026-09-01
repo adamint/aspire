@@ -74,6 +74,14 @@ export function createDebugAdapterTracker(dcpServer: AspireDcpServer, debugAdapt
                     }
                 },
                 onDidSendMessage: message => {
+                    if (message.type === 'event' && message.event === 'process') {
+                        // A new debuggee process invalidates exit state captured from a prior run.
+                        // Reset before the DCP-session guard: AppHost child sessions do not have a
+                        // DCP run session, but a restarted child must accept later user termination.
+                        debuggeeExitCode = undefined;
+                        appHostExitObserved = false;
+                    }
+
                     if (configuration.isApphost &&
                         message.type === 'event' &&
                         (message.event === 'terminated' || message.event === 'exited')) {
@@ -117,12 +125,6 @@ export function createDebugAdapterTracker(dcpServer: AspireDcpServer, debugAdapt
 
                     // Listen for process event with isRestart (if supported by adapter)
                     if (message.type === 'event' && message.event === 'process') {
-                        // A new debuggee process invalidates exit state captured from a prior run.
-                        // Reset before the PID guard: `systemProcessId` is optional in DAP, so a
-                        // restart reported without it must still clear the stale state.
-                        debuggeeExitCode = undefined;
-                        appHostExitObserved = false;
-
                         if (typeof message.body?.systemProcessId !== 'number') {
                             extensionLogOutputChannel.warn(`Debug session ${session.id} does not have a valid system process ID.`);
                             return;
