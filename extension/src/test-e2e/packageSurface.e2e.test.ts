@@ -607,7 +607,7 @@ const expectedInstalledLanguageModelTools = createExpectedLanguageModelTools({
     explainUserDescription: 'Explain the latest safely recorded launch failure for an Aspire AppHost.',
     dashboardDisplayName: 'Open Aspire Dashboard',
     dashboardModelDescription: 'Open the Aspire Dashboard for a running discovered AppHost using any explicitly configured browser or notification presentation, or the external browser by default when none is configured. This changes editor or browser UI. The result reports only whether it opened and the bounded presentation; it never returns the Dashboard URL.',
-    dashboardUserDescription: 'Open the Aspire Dashboard for a running AppHost.',
+    dashboardUserDescription: 'Open the Aspire Dashboard for an AppHost controlled by this editor.',
     outputDisplayName: 'Open Aspire Output',
     outputModelDescription: 'Open the VS Code Output panel and select the Aspire Extension output channel in Visual Studio Code after confirmation, without reading or returning its content.',
     outputUserDescription: 'Open the VS Code Output panel and select the Aspire Extension output channel, without returning its content.',
