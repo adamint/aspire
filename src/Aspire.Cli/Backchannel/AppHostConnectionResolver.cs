@@ -9,6 +9,7 @@ using Aspire.Cli.Projects;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Telemetry;
 using Aspire.Cli.Utils;
+using Aspire.Hosting.Backchannel;
 using Aspire.Hosting.Utils;
 using Microsoft.Extensions.Logging;
 using Spectre.Console;
@@ -146,28 +147,27 @@ internal sealed class AppHostConnectionResolver(
                 };
             }
 
-            var matchingSockets = AppHostHelper.FindMatchingNonOrphanedSockets(
+            var matchingSockets = AppHostSocketManager.FindSockets(
                 projectFile.FullName,
                 executionContext.HomeDirectory.FullName,
                 Environment.ProcessId,
-                logger,
-                appHostPid);
+                logger);
 
             // Try each matching socket until we get a connection
-            foreach (var socketPath in matchingSockets)
+            foreach (var appHostSocket in matchingSockets)
             {
                 try
                 {
                     var connection = await AppHostAuxiliaryBackchannel.ConnectAsync(
-                        socketPath, logger, profilingTelemetry, cancellationToken).ConfigureAwait(false);
-                    if (appHostPid is not null && connection.AppHostInfo?.ProcessId != appHostPid)
-                    {
-                        connection.Dispose();
-                        continue;
-                    }
-
+                        appHostSocket, logger, profilingTelemetry, cancellationToken).ConfigureAwait(false);
                     if (connection is not null)
                     {
+                        if (appHostPid is not null && connection.AppHostInfo?.ProcessId != appHostPid)
+                        {
+                            connection.Dispose();
+                            continue;
+                        }
+
                         var result = new AppHostConnectionResult { Connection = connection };
                         StoreAppHostCliLogFilePath(result);
                         return result;
@@ -175,7 +175,7 @@ internal sealed class AppHostConnectionResolver(
                 }
                 catch (Exception ex)
                 {
-                    logger.LogDebug(ex, "Failed to connect to socket at {SocketPath}", socketPath);
+                    logger.LogDebug(ex, "Failed to connect to socket at {SocketPath}", appHostSocket.SocketPath);
                 }
             }
 

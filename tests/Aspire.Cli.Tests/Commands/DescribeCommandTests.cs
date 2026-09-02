@@ -1059,7 +1059,7 @@ public class DescribeCommandTests(ITestOutputHelper outputHelper)
             DashboardUrlsState = dashboardUrlsState
         };
         configureConnection?.Invoke(connection);
-        monitor.AddConnection("hash1", "socket.hash1", connection);
+        monitor.AddConnection("socket.hash1", connection);
 
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
         {
