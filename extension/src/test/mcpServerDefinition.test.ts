@@ -511,6 +511,112 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
         }
     });
 
+    test('rejects labels with identity-changing characters from folder names or AppHost paths', async () => {
+        const unsafeCharacters = [
+            { name: 'control', value: '\n' },
+            { name: 'bidi', value: '\u202e' },
+            { name: 'zero-width', value: '\u200b' },
+        ];
+
+        for (const unsafeCharacter of unsafeCharacters) {
+            for (const source of ['folder', 'path'] as const) {
+                const root = `/repo/${unsafeCharacter.name}-${source}`;
+                const folder = workspaceFolder(
+                    source === 'folder' ? `repo${unsafeCharacter.value}name` : 'repo',
+                    root,
+                    0);
+                const candidate = appHostCandidate(
+                    folder,
+                    source === 'path' ? `App${unsafeCharacter.value}Host.csproj` : 'AppHost.csproj');
+                const harness = new ProviderHarness({
+                    folders: [folder],
+                    candidatesFor: async () => [candidate],
+                });
+
+                try {
+                    await harness.provider.refresh();
+
+                    assert.deepStrictEqual(
+                        harness.definitions(),
+                        [],
+                        `${unsafeCharacter.name} characters from the ${source} must reject the pin`);
+                }
+                finally {
+                    harness.dispose();
+                }
+            }
+        }
+    });
+
+    test('publishes normal Unicode in a bounded server label', async () => {
+        const folder = workspaceFolder('répō-应用', '/repo/unicode', 0);
+        const candidate = appHostCandidate(folder, '服务', 'AppHost-🚀.csproj');
+        const harness = new ProviderHarness({
+            folders: [folder],
+            candidatesFor: async () => [candidate],
+        });
+
+        try {
+            await harness.provider.refresh();
+
+            assert.strictEqual(
+                harness.definitions()[0].label,
+                'Aspire (répō-应用: 服务/AppHost-🚀.csproj)');
+        }
+        finally {
+            harness.dispose();
+        }
+    });
+
+    test('rejects overlong folder and AppHost path labels without truncating either identity', async () => {
+        const folders = [
+            workspaceFolder('f'.repeat(600), '/repo/long-folder', 0),
+            workspaceFolder('repo', '/repo/long-path', 1),
+        ];
+        const candidates = [
+            appHostCandidate(folders[0], 'AppHost.csproj'),
+            appHostCandidate(folders[1], `${'p'.repeat(600)}.csproj`),
+        ];
+        const harness = new ProviderHarness({
+            folders,
+            candidatesFor: async folder => [candidates[folder.index]],
+        });
+
+        try {
+            await harness.provider.refresh();
+
+            assert.deepStrictEqual(harness.definitions(), []);
+        }
+        finally {
+            harness.dispose();
+        }
+    });
+
+    test('rejects a collision suffix that would exceed the label bound instead of truncating', async () => {
+        const maximumLabelLength = 512;
+        const fixedLabel = 'Aspire (: AppHost.csproj)';
+        const folderName = 'r'.repeat(maximumLabelLength - fixedLabel.length);
+        const firstFolder = workspaceFolder(folderName, '/checkout/one', 0);
+        const secondFolder = workspaceFolder(folderName, '/checkout/two', 1);
+        const expectedLabel = `Aspire (${folderName}: AppHost.csproj)`;
+        assert.strictEqual(expectedLabel.length, maximumLabelLength);
+        const harness = new ProviderHarness({
+            folders: [firstFolder, secondFolder],
+            candidatesFor: async folder => [appHostCandidate(folder, 'AppHost.csproj')],
+        });
+
+        try {
+            await harness.provider.refresh();
+
+            assert.deepStrictEqual(
+                harness.definitions().map(definition => definition.label),
+                [expectedLabel]);
+        }
+        finally {
+            harness.dispose();
+        }
+    });
+
     test('retains case-distinct canonical AppHost paths on Windows', async () => {
         const platformStub = sinon.stub(process, 'platform').value('win32');
         const folder = workspaceFolder('app', '/repo/app', 0);

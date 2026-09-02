@@ -13,6 +13,7 @@ import {
 } from '../utils/appHostIdentity';
 import { isCommandCancellation } from '../utils/telemetry';
 import { type AppHostLaunchTarget } from '../services/appHostLaunchContracts';
+import { isSafeModelFacingIdentity } from '../utils/modelFacingIdentity';
 import { type AppHostLifecycleDiscoveryService } from './appHostLifecycleToolContracts';
 
 /**
@@ -30,20 +31,6 @@ const maxAppHostSelectorLength = 4096;
 
 /** Cap on how many AppHost paths a failed resolution lists back to the model. */
 const maxReportedKnownAppHosts = 32;
-
-/**
- * Characters that change what a path *is* without changing, or while changing, how it
- * looks: C0/C1 controls and DEL, plus every Unicode format character (`\p{Cf}`).
- *
- * Bidi controls (U+202A-U+202E, U+2066-U+2069) reorder the run that follows them, so a
- * path can render as a completely different one. Zero-width characters (U+200B-U+200D)
- * are invisible, so two distinct files can produce identical-looking prompts. A registry
- * entry carrying one of these is dropped rather than shown with the characters deleted,
- * because deleting them would break the one-to-one relationship between the identity the
- * user confirms and the file that runs.
- * See https://unicode.org/reports/tr9/ and https://unicode.org/reports/tr36/#Bidirectional_Text_Spoofing
- */
-const identityChangingCharacters = /[\u0000-\u001F\u007F-\u009F]|\p{Cf}/u;
 
 export type AppHostTargetIdentity = OpaqueAppHostIdentity;
 
@@ -344,8 +331,7 @@ export class SafeAppHostTargetResolver {
         // A real file or folder name can itself carry invisible or bidi characters, and
         // the confirmation must never show an identity it cannot render faithfully.
         return [...targets.values()].filter(target =>
-            !identityChangingCharacters.test(target.displayPath) &&
-            target.displayPath.length <= maxConfirmationPathLength);
+            isSafeModelFacingIdentity(target.displayPath, maxConfirmationPathLength));
     }
 
 }

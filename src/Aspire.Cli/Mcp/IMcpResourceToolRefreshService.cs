@@ -52,7 +52,22 @@ internal interface IMcpResourceToolRefreshService
 /// </summary>
 /// <param name="ResourceName">The name of the resource that exposes the tool.</param>
 /// <param name="Tool">The MCP tool definition.</param>
-internal sealed record ResourceToolEntry(string ResourceName, Tool Tool);
+internal sealed record ResourceToolEntry(string ResourceName, Tool Tool)
+{
+    /// <summary>
+    /// Projects the resource tool into the exact contract returned by <c>tools/list</c>.
+    /// </summary>
+    public Tool ToProtocolTool(string exposedName)
+    {
+        return new Tool
+        {
+            Name = exposedName,
+            Description = Tool.Description,
+            InputSchema = Tool.InputSchema,
+            Annotations = Tool.Annotations
+        };
+    }
+}
 
 /// <summary>
 /// Represents a resource tool map bound to the exact AppHost connection that produced it.

@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Diagnostics;
+using System.Text.Json;
 using Aspire.Cli.Backchannel;
 using Aspire.Cli.Mcp.Tools;
 using Microsoft.Extensions.Logging;
@@ -130,32 +131,7 @@ internal sealed class McpResourceToolRefreshService : IMcpResourceToolRefreshSer
 
         lock (_lock)
         {
-            var changed = _snapshot.ToolMap.Count != refreshedMap.Count;
-            if (!changed)
-            {
-                // Check for deleted tools (in old but not in new).
-                foreach (var key in _snapshot.ToolMap.Keys)
-                {
-                    if (!refreshedMap.ContainsKey(key))
-                    {
-                        changed = true;
-                        break;
-                    }
-                }
-
-                // Check for new tools (in new but not in old).
-                if (!changed)
-                {
-                    foreach (var key in refreshedMap.Keys)
-                    {
-                        if (!_snapshot.ToolMap.ContainsKey(key))
-                        {
-                            changed = true;
-                            break;
-                        }
-                    }
-                }
-            }
+            var changed = !ToolMapsHaveEquivalentContracts(_snapshot.ToolMap, refreshedMap);
 
             _snapshot = new ResourceToolMapSnapshot(connection, refreshedMap);
             _invalidated = false;
@@ -163,4 +139,50 @@ internal sealed class McpResourceToolRefreshService : IMcpResourceToolRefreshSer
         }
     }
 
+    private static bool ToolMapsHaveEquivalentContracts(
+        IReadOnlyDictionary<string, ResourceToolEntry> previous,
+        IReadOnlyDictionary<string, ResourceToolEntry> current)
+    {
+        if (previous.Count != current.Count)
+        {
+            return false;
+        }
+
+        foreach (var (exposedName, previousEntry) in previous)
+        {
+            if (!current.TryGetValue(exposedName, out var currentEntry) ||
+                !ToolContractsAreEquivalent(
+                    previousEntry.ToProtocolTool(exposedName),
+                    currentEntry.ToProtocolTool(exposedName)))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ToolContractsAreEquivalent(Tool previous, Tool current)
+    {
+        return string.Equals(previous.Name, current.Name, StringComparison.Ordinal) &&
+            string.Equals(previous.Description, current.Description, StringComparison.Ordinal) &&
+            JsonElement.DeepEquals(previous.InputSchema, current.InputSchema) &&
+            ToolAnnotationsAreEquivalent(previous.Annotations, current.Annotations);
+    }
+
+    private static bool ToolAnnotationsAreEquivalent(ToolAnnotations? previous, ToolAnnotations? current)
+    {
+        if (ReferenceEquals(previous, current))
+        {
+            return true;
+        }
+
+        return previous is not null &&
+            current is not null &&
+            string.Equals(previous.Title, current.Title, StringComparison.Ordinal) &&
+            previous.DestructiveHint == current.DestructiveHint &&
+            previous.IdempotentHint == current.IdempotentHint &&
+            previous.OpenWorldHint == current.OpenWorldHint &&
+            previous.ReadOnlyHint == current.ReadOnlyHint;
+    }
 }

@@ -13,12 +13,14 @@ import type { ConfigInfoOptions } from '../utils/configInfoProvider';
 import type { CandidateAppHostDisplayInfo } from '../utils/appHostCandidateTypes';
 import { isBuildableAppHostCandidate } from '../utils/appHostCandidateSelection';
 import { isCapturedAppHostPathWithinDirectory } from '../utils/appHostIdentity';
+import { isSafeModelFacingIdentity } from '../utils/modelFacingIdentity';
 
 const mcpServerLabel = 'Aspire';
 const mcpServerArgs = ['agent', 'mcp'];
 const appHostOption = '--apphost';
 const aspireCliExecutablePathSetting = 'aspire.aspireCliExecutablePath';
 const appHostCanonicalizationTimeoutMs = 5000;
+const maxMcpServerLabelLength = 512;
 const inFlightAppHostCanonicalizations = new Map<string, Promise<string>>();
 
 export interface AspireMcpServerDefinitionOptions {
@@ -302,6 +304,13 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
         const labels = createPinnedServerLabels(pins, this._definitionsByPin);
         for (const [index, pin] of pins.entries()) {
             const label = labels[index];
+            if (!isSafeModelFacingIdentity(label, maxMcpServerLabelLength)) {
+                // The label is VS Code's server identity. Reject it intact: removing or truncating
+                // characters could make two different AppHosts publish the same visible identity.
+                extensionLogOutputChannel.warn(
+                    `Skipping Aspire MCP server registration because its label is unsafe or exceeds ${maxMcpServerLabelLength} characters.`);
+                continue;
+            }
 
             // The pin key is the AppHost identity, so reusing an existing definition can only ever
             // keep serving the same AppHost. Reuse it when nothing else about the launch changed

@@ -1265,6 +1265,112 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal(0, notificationCount);
     }
 
+    [Theory]
+    [InlineData(ResourceToolContractMutation.Description)]
+    [InlineData(ResourceToolContractMutation.InputSchema)]
+    [InlineData(ResourceToolContractMutation.AnnotationTitle)]
+    [InlineData(ResourceToolContractMutation.DestructiveHint)]
+    [InlineData(ResourceToolContractMutation.IdempotentHint)]
+    [InlineData(ResourceToolContractMutation.OpenWorldHint)]
+    [InlineData(ResourceToolContractMutation.ReadOnlyHint)]
+    public async Task McpServer_UnknownTool_SendsToolsListChangedWhenResourceToolContractChanges(
+        ResourceToolContractMutation mutation)
+    {
+        await using var ctx = await CreateMcpClientAsync();
+        var connection = CreateResourceToolConnection(
+            ctx.Workspace,
+            hash: "contract-apphost",
+            socketPath: "socket.contract",
+            displayName: "contract-resource",
+            toolName: "contract_tool");
+        SetResourceToolContract(connection, CreateResourceToolContract());
+        ctx.BackchannelMonitor!.AddConnection(connection.Hash, connection.SocketPath, connection);
+
+        var initialTools = await ctx.Client.ListToolsAsync(cancellationToken: ctx.Cts.Token).DefaultTimeout();
+        Assert.Contains(initialTools, tool => tool.Name == "contract_resource_contract_tool");
+
+        var notificationChannel = Channel.CreateUnbounded<JsonRpcNotification>();
+        await using var notificationHandler = ctx.Client.RegisterNotificationHandler(
+            NotificationMethods.ToolListChangedNotification,
+            (notification, _) =>
+            {
+                notificationChannel.Writer.TryWrite(notification);
+                return default;
+            });
+
+        var changedTool = CreateResourceToolContract();
+        ApplyResourceToolContractMutation(changedTool, mutation);
+        SetResourceToolContract(connection, changedTool);
+
+        var exception = await Assert.ThrowsAsync<McpProtocolException>(async () =>
+            await ctx.Client.CallToolAsync(
+                "force_resource_tool_contract_refresh",
+                cancellationToken: ctx.Cts.Token).DefaultTimeout());
+        Assert.Equal(McpErrorCode.MethodNotFound, exception.ErrorCode);
+
+        var notification = await notificationChannel.Reader.ReadAsync(ctx.Cts.Token).AsTask().DefaultTimeout();
+        Assert.Equal(NotificationMethods.ToolListChangedNotification, notification.Method);
+    }
+
+    [Fact]
+    public async Task McpServer_UnknownTool_DoesNotSendToolsListChangedForEquivalentReorderedSchema()
+    {
+        await using var ctx = await CreateMcpClientAsync();
+        var connection = CreateResourceToolConnection(
+            ctx.Workspace,
+            hash: "contract-apphost",
+            socketPath: "socket.contract",
+            displayName: "contract-resource",
+            toolName: "contract_tool");
+        SetResourceToolContract(connection, CreateResourceToolContract());
+        ctx.BackchannelMonitor!.AddConnection(connection.Hash, connection.SocketPath, connection);
+
+        var initialTools = await ctx.Client.ListToolsAsync(cancellationToken: ctx.Cts.Token).DefaultTimeout();
+        Assert.Contains(initialTools, tool => tool.Name == "contract_resource_contract_tool");
+
+        var notificationChannel = Channel.CreateUnbounded<JsonRpcNotification>();
+        await using var notificationHandler = ctx.Client.RegisterNotificationHandler(
+            NotificationMethods.ToolListChangedNotification,
+            (notification, _) =>
+            {
+                notificationChannel.Writer.TryWrite(notification);
+                return default;
+            });
+
+        var equivalentTool = CreateResourceToolContract();
+        equivalentTool.InputSchema = ParseJsonElement(
+            """
+            {
+              "properties": {
+                "second": { "type": "integer" },
+                "first": { "type": "string" }
+              },
+              "type": "object"
+            }
+            """);
+        SetResourceToolContract(connection, equivalentTool);
+
+        var exception = await Assert.ThrowsAsync<McpProtocolException>(async () =>
+            await ctx.Client.CallToolAsync(
+                "force_equivalent_resource_tool_contract_refresh",
+                cancellationToken: ctx.Cts.Token).DefaultTimeout());
+        Assert.Equal(McpErrorCode.MethodNotFound, exception.ErrorCode);
+
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        var received = false;
+        try
+        {
+            await notificationChannel.Reader.ReadAsync(timeoutCts.Token);
+            received = true;
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected because an equivalent JSON object does not change the listed tool contract.
+        }
+
+        Assert.False(received);
+    }
+
     [Fact]
     public async Task McpServer_ListTools_CachesResourceToolMap_WhenConnectionUnchanged()
     {
@@ -1736,6 +1842,98 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
         };
     }
 
+    private static Tool CreateResourceToolContract()
+    {
+        return new Tool
+        {
+            Name = "contract_tool",
+            Description = "Initial description",
+            InputSchema = ParseJsonElement(
+                """
+                {
+                  "type": "object",
+                  "properties": {
+                    "first": { "type": "string" },
+                    "second": { "type": "integer" }
+                  }
+                }
+                """),
+            Annotations = new ToolAnnotations
+            {
+                Title = "Initial title",
+                DestructiveHint = false,
+                IdempotentHint = true,
+                OpenWorldHint = false,
+                ReadOnlyHint = true
+            }
+        };
+    }
+
+    private static void ApplyResourceToolContractMutation(Tool tool, ResourceToolContractMutation mutation)
+    {
+        switch (mutation)
+        {
+            case ResourceToolContractMutation.Description:
+                tool.Description = "Changed description";
+                break;
+            case ResourceToolContractMutation.InputSchema:
+                tool.InputSchema = ParseJsonElement(
+                    """
+                    {
+                      "type": "object",
+                      "properties": {
+                        "first": { "type": "string" },
+                        "second": { "type": "integer" },
+                        "third": { "type": "boolean" }
+                      }
+                    }
+                    """);
+                break;
+            case ResourceToolContractMutation.AnnotationTitle:
+                tool.Annotations!.Title = "Changed title";
+                break;
+            case ResourceToolContractMutation.DestructiveHint:
+                tool.Annotations!.DestructiveHint = true;
+                break;
+            case ResourceToolContractMutation.IdempotentHint:
+                tool.Annotations!.IdempotentHint = false;
+                break;
+            case ResourceToolContractMutation.OpenWorldHint:
+                tool.Annotations!.OpenWorldHint = true;
+                break;
+            case ResourceToolContractMutation.ReadOnlyHint:
+                tool.Annotations!.ReadOnlyHint = false;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(mutation));
+        }
+    }
+
+    private static void SetResourceToolContract(TestAppHostAuxiliaryBackchannel connection, Tool tool)
+    {
+        connection.ResourceSnapshots =
+        [
+            new ResourceSnapshot
+            {
+                Name = "contract-resource-runtime",
+                DisplayName = "contract-resource",
+                ResourceType = "Container",
+                State = "Running",
+                McpServer = new ResourceSnapshotMcpServer
+                {
+                    EndpointUrl = "http://localhost:8080/mcp",
+                    Tools = [tool]
+                }
+            }
+        ];
+    }
+
+    private static JsonElement ParseJsonElement(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.Clone();
+    }
+
     private static void AssertFixedToolAnnotations(IList<McpClientTool> tools, params string[] excludedToolNames)
     {
         var expectedToolNames = KnownMcpTools.All
@@ -1777,6 +1975,17 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
         var markerIndex = text.IndexOf(marker, StringComparison.Ordinal);
         Assert.True(markerIndex >= 0, $"Result should contain the '{marker}' marker.");
         return JsonDocument.Parse(text[(markerIndex + marker.Length)..].Trim());
+    }
+
+    public enum ResourceToolContractMutation
+    {
+        Description,
+        InputSchema,
+        AnnotationTitle,
+        DestructiveHint,
+        IdempotentHint,
+        OpenWorldHint,
+        ReadOnlyHint
     }
 }
 

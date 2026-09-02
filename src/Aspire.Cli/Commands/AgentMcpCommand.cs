@@ -286,13 +286,7 @@ internal sealed class AgentMcpCommand : BaseCommand
                     (snapshot, _) = await _resourceToolRefreshService.RefreshResourceToolMapAsync(cancellationToken);
                 }
 
-                tools.AddRange(snapshot.ToolMap.Select(x => new Tool
-                {
-                    Name = x.Key,
-                    Description = x.Value.Tool.Description,
-                    InputSchema = x.Value.Tool.InputSchema,
-                    Annotations = x.Value.Tool.Annotations
-                }));
+                tools.AddRange(snapshot.ToolMap.Select(x => x.Value.ToProtocolTool(x.Key)));
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
