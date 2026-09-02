@@ -1554,7 +1554,7 @@ ${azureFunctionsPackageReference}${goPackageReference}  </ItemGroup>
     ? `builder.AddAzureFunctionsProject("e2e-functions", "../AspireE2E.Functions/AspireE2E.Functions.csproj");\n\n`
     : '';
   const goResource = includeResourceDebug
-    ? `builder.AddGoApp("e2e-go", "../AspireE2E.Go")
+    ? `builder.AddGoApp("e2e-go", "../AspireE2E.Go", gcFlags: "all=-N -l")
     .WithHttpEndpoint(name: "http", env: "PORT");
 
 `
