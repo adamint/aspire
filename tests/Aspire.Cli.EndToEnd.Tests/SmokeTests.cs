@@ -86,12 +86,13 @@ public sealed class SmokeTests(ITestOutputHelper output)
         await auto.AspireNewAsync(projectName, counter, useRedisCache: false);
         await auto.RunCommandAsync($"cd {projectName}", counter);
 
+        // Playground mode normally forces interactive output and takes precedence over ambient CI
+        // markers. Keeping it enabled makes redirected stdout the condition that selects static
+        // rendering, so this test cannot silently pass because a new CI marker was inherited.
         var runCommand =
             "env " +
-            "-u CI -u GITHUB_ACTIONS -u AZURE_PIPELINES -u TF_BUILD -u JENKINS_URL -u GITLAB_CI " +
-            "-u CIRCLECI -u TRAVIS -u BUILDKITE -u APPVEYOR -u TEAMCITY_VERSION " +
-            "-u BITBUCKET_BUILD_NUMBER -u CODEBUILD_BUILD_ID -u ASPIRE_NON_INTERACTIVE " +
-            "-u ASPIRE_PLAYGROUND -u ASPIRE_ANSI_PASS_THRU " +
+            "-u ASPIRE_NON_INTERACTIVE -u ASPIRE_ANSI_PASS_THRU " +
+            "ASPIRE_PLAYGROUND=true " +
             "TERM=dumb LINES=0 COLUMNS=80 " +
             "VSCODE_IPC_HOOK_CLI=/tmp/vscode-ipc-remote-ssh " +
             "SSH_CONNECTION='127.0.0.1 12345 127.0.0.1 22' " +
@@ -99,19 +100,21 @@ public sealed class SmokeTests(ITestOutputHelper output)
             "aspire run > remote-ssh.stdout 2> remote-ssh.stderr & echo $! > remote-ssh.pid";
         await auto.RunCommandAsync(runCommand, counter);
 
-        // Static resource updates are emitted as lines such as:
-        //   worker has endpoint http://localhost:5830
+        // Static resource updates are emitted once as lines such as:
+        //   Endpoints: worker has endpoint http://localhost:5830
+        // Wait for multiple updates so a cumulative-snapshot fallback would be observable.
         await auto.RunCommandAsync(
-            $"endpoint_seen=0; cli_alive=1; " +
+            $"endpoint_count=0; cli_alive=1; " +
             $"for attempt in $(seq 1 {CliE2EAutomatorHelpers.AspireRunReadyTimeout.TotalSeconds}); do " +
-            "if grep -Fq 'has endpoint' remote-ssh.stdout; then endpoint_seen=1; break; fi; " +
+            "endpoint_count=$(grep -Fc 'has endpoint' remote-ssh.stdout || true); " +
+            "if [ \"$endpoint_count\" -ge 2 ]; then break; fi; " +
             "if ! kill -0 \"$(cat remote-ssh.pid)\" 2>/dev/null; then cli_alive=0; break; fi; " +
             "sleep 1; " +
             "done; " +
-            "if [ \"$endpoint_seen\" -eq 1 ]; then true; " +
+            "if [ \"$endpoint_count\" -ge 2 ]; then true; " +
             "else " +
-            "if [ \"$cli_alive\" -eq 0 ]; then echo 'aspire run exited before an endpoint update' >&2; " +
-            "else echo 'timed out waiting for an endpoint update' >&2; fi; " +
+            "if [ \"$cli_alive\" -eq 0 ]; then echo 'aspire run exited before two endpoint updates' >&2; " +
+            "else echo 'timed out waiting for two endpoint updates' >&2; fi; " +
             "echo '--- remote-ssh.stdout ---' >&2; cat remote-ssh.stdout >&2; " +
             "echo '--- remote-ssh.stderr ---' >&2; cat remote-ssh.stderr >&2; false; " +
             "fi",
@@ -129,7 +132,11 @@ public sealed class SmokeTests(ITestOutputHelper output)
             "-e 'An unexpected error occurred' remote-ssh.stdout remote-ssh.stderr",
             counter);
         await auto.RunCommandAsync(
-            "test \"$(tr -cd '\\033\\r' < remote-ssh.stdout | wc -c)\" -eq 0",
+            "test \"$(tr -cd '\\r' < remote-ssh.stdout | wc -c)\" -eq 0",
+            counter);
+        await auto.RunCommandAsync(
+            "test -z \"$(grep -F 'has endpoint' remote-ssh.stdout | sort | uniq -d)\" && " +
+            "test \"$(grep -Foc 'CTRL+C' remote-ssh.stdout)\" -eq 1",
             counter);
         await auto.RunCommandAsync(
             "cli_pid=$(cat remote-ssh.pid); kill -INT \"$cli_pid\"; wait \"$cli_pid\"; " +

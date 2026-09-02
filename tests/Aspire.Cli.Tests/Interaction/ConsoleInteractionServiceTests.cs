@@ -34,27 +34,20 @@ public class ConsoleInteractionServiceTests
     }
 
     [Fact]
-    public async Task DisplayLiveAsync_WhenNonInteractive_WritesRenderablesStatically()
+    public async Task DisplayLiveAsync_WhenNonInteractive_ThrowsInvalidOperationException()
     {
-        var output = new StringBuilder();
-        var console = AnsiConsole.Create(new AnsiConsoleSettings
-        {
-            Ansi = AnsiSupport.Yes,
-            ColorSystem = ColorSystemSupport.NoColors,
-            Out = new AnsiConsoleOutput(new StringWriter(output)),
-            Enrichment = new ProfileEnrichment { UseDefaultEnrichers = false }
-        });
-        console.Profile.Width = int.MaxValue;
-        var interactionService = CreateInteractionService(console, hostEnvironment: TestHelpers.CreateNonInteractiveHostEnvironment());
+        var callbackInvoked = false;
+        var interactionService = CreateInteractionService(AnsiConsole.Console, hostEnvironment: TestHelpers.CreateNonInteractiveHostEnvironment());
 
-        await interactionService.DisplayLiveAsync(new Text("Initial\n"), update =>
-        {
-            update(new Text("Updated once\n"));
-            update(new Text("Updated twice\n"));
-            return Task.CompletedTask;
-        });
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            interactionService.DisplayLiveAsync(Text.Empty, _ =>
+            {
+                callbackInvoked = true;
+                return Task.CompletedTask;
+            }));
 
-        Assert.Equal("Initial\nUpdated once\nUpdated twice\n", output.ToString(), ignoreLineEndingDifferences: true);
+        Assert.Equal("Live rendering requires interactive output.", exception.Message);
+        Assert.False(callbackInvoked);
     }
 
     [Fact]
