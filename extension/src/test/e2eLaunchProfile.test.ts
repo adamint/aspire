@@ -663,6 +663,20 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes('`${environmentVariable} points to a missing file: ${resolvedPath}. It is required when ${selectingFeatureFlag}=true.`'));
     });
 
+    test('configures Linux ptrace access for packaged Go resource attach', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
+        const resourceDebugPrerequisites = workflow.slice(
+            workflow.indexOf('- name: Install resource debug E2E prerequisites'),
+            workflow.indexOf('- name: Set up the JDK for the Java E2E specs'));
+
+        assert.ok(resourceDebugPrerequisites.includes('sudo sysctl --write kernel.yama.ptrace_scope=0'));
+        assert.ok(resourceDebugPrerequisites.includes('test "$(cat /proc/sys/kernel/yama/ptrace_scope)" = "0"'));
+        assert.ok(runner.includes("const ptraceScopePath = '/proc/sys/kernel/yama/ptrace_scope';"));
+        assert.ok(runner.includes('The resource debug E2E shard requires kernel.yama.ptrace_scope=0'));
+    });
+
     test('wires structured E2E harness failures into advisory handling', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');

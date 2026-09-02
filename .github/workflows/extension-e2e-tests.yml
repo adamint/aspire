@@ -577,6 +577,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Ubuntu's Yama default allows ptrace only when the debugger is an ancestor of the target.
+          # DCP launches the Go resource independently from Delve, so packaged attach needs this test-only policy.
+          sudo sysctl --write kernel.yama.ptrace_scope=0
+          test "$(cat /proc/sys/kernel/yama/ptrace_scope)" = "0"
+
           debugger_bin="$RUNNER_TEMP/resource-debug-bin"
           mkdir -p "$debugger_bin"
           GOBIN="$debugger_bin" GOTOOLCHAIN=local go install github.com/go-delve/delve/cmd/dlv@v1.25.2

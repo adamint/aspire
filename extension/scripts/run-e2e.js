@@ -941,6 +941,16 @@ function validateResourceDebugTools() {
   if (result.error || result.status !== 0) {
     throw new Error(`The resource debug E2E shard requires dlv on PATH. ${result.error?.message ?? result.stderr ?? `exit code ${result.status}`}`);
   }
+
+  if (process.platform === 'linux') {
+    const ptraceScopePath = '/proc/sys/kernel/yama/ptrace_scope';
+    if (fs.existsSync(ptraceScopePath)) {
+      const ptraceScope = fs.readFileSync(ptraceScopePath, 'utf8').trim();
+      if (ptraceScope !== '0') {
+        throw new Error(`The resource debug E2E shard requires kernel.yama.ptrace_scope=0 so Delve can attach to DCP-launched Go processes, but ${ptraceScopePath} contains '${ptraceScope}'.`);
+      }
+    }
+  }
 }
 
 /**
