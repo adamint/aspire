@@ -671,6 +671,7 @@ suite('E2E launch profile', () => {
             workflow.indexOf('- name: Install resource debug E2E prerequisites'),
             workflow.indexOf('- name: Set up the JDK for the Java E2E specs'));
 
+        assert.ok(resourceDebugPrerequisites.includes('go install github.com/go-delve/delve/cmd/dlv@v1.27.1'));
         assert.ok(resourceDebugPrerequisites.includes('sudo sysctl --write kernel.yama.ptrace_scope=0'));
         assert.ok(resourceDebugPrerequisites.includes('test "$(cat /proc/sys/kernel/yama/ptrace_scope)" = "0"'));
         assert.ok(runner.includes("const ptraceScopePath = '/proc/sys/kernel/yama/ptrace_scope';"));

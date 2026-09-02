@@ -584,7 +584,8 @@ jobs:
 
           debugger_bin="$RUNNER_TEMP/resource-debug-bin"
           mkdir -p "$debugger_bin"
-          GOBIN="$debugger_bin" GOTOOLCHAIN=local go install github.com/go-delve/delve/cmd/dlv@v1.25.2
+          # The hosted runner uses Go 1.26; Delve 1.25.x supports debug targets only through Go 1.25.
+          GOBIN="$debugger_bin" GOTOOLCHAIN=local go install github.com/go-delve/delve/cmd/dlv@v1.27.1
           echo "$debugger_bin" >> "$GITHUB_PATH"
           export PATH="$debugger_bin:$PATH"
           dlv version
