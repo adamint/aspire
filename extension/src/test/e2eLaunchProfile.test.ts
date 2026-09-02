@@ -683,6 +683,9 @@ suite('E2E launch profile', () => {
         const resourceDebugSpec = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'resourceDebugTools.e2e.test.ts'), 'utf8');
 
         assert.ok(runner.includes('builder.AddGoApp("e2e-go", "../AspireE2E.Go", gcFlags: "all=-N -l")'));
+        assert.ok(runner.includes('.WithCommand("./test-tools/go")'));
+        assert.ok(runner.includes("['build', '-gcflags=all=-N -l', '-o', debugExecutable, '.']"));
+        assert.ok(runner.includes("'go-build-debug', 'exe'"));
         assert.ok(resourceDebugSpec.includes("marker: 'message := \"go-ok\"'"));
         assert.ok(resourceDebugSpec.includes("proof.proof, 'aspire-resource-attach-breakpoint-detach'"));
     });
