@@ -336,6 +336,7 @@
   "aspire-vscode.strings.attachDebuggerCsharpExtensionRequired": "Install the C# extension to attach the debugger to .NET project resources.",
   "aspire-vscode.strings.attachDebuggerExtensionsRequired": "Install {0} to attach the debugger to this resource.",
   "aspire-vscode.strings.attachDebuggerDeclined": "VS Code did not start the debugger attach session for {0}.",
+  "aspire-vscode.strings.attachDebuggerWorkspaceNotTrusted": "Trust this workspace before attaching a debugger to an Aspire resource.",
   "aspire-vscode.strings.appHostDeployingDescription": "Deploying...",
   "aspire-vscode.strings.appHostPublishingDescription": "Publishing...",
   "aspire-vscode.strings.appHostRunningPipelineStepDescription": "Running pipeline step...",

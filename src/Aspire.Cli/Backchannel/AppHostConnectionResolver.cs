@@ -48,8 +48,12 @@ internal sealed class AppHostConnectionResolver(
     CliExecutionContext executionContext,
     ICliHostEnvironment hostEnvironment,
     ILogger<AppHostConnectionResolver> logger,
-    ProfilingTelemetry profilingTelemetry)
+    ProfilingTelemetry profilingTelemetry,
+    Func<string, string, int, ILogger, IReadOnlyList<IAppHostSocket>>? findSockets = null)
 {
+    private readonly Func<string, string, int, ILogger, IReadOnlyList<IAppHostSocket>> _findSockets =
+        findSockets ?? AppHostSocketManager.FindSockets;
+
     /// <summary>
     /// Resolves all running AppHost connections using socket-first discovery.
     /// Used when stopping all running AppHosts (e.g., via --all flag).
@@ -147,7 +151,7 @@ internal sealed class AppHostConnectionResolver(
                 };
             }
 
-            var matchingSockets = AppHostSocketManager.FindSockets(
+            var matchingSockets = _findSockets(
                 projectFile.FullName,
                 executionContext.HomeDirectory.FullName,
                 Environment.ProcessId,

@@ -3136,6 +3136,39 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         provider.dispose();
     });
 
+    test('attachDebuggerToResource rejects Restricted Mode before shared debugger work', async () => {
+        sandbox.stub(vscode.workspace, 'isTrusted').value(false);
+        const debug = sinon.stub().rejects(new Error('restricted workspaces must not invoke the shared debugger'));
+        const withProgress = sandbox.stub(vscode.window, 'withProgress');
+        const warning = sandbox.stub(vscode.window, 'showWarningMessage');
+        const resourceDebugger: ResourceDebugger = {
+            debug,
+            canAttachToResource: () => true,
+        };
+        const provider = makeTreeProvider([
+            makeAppHost({
+                resources: [
+                    makeResource({
+                        name: 'api',
+                        displayName: 'API',
+                        resourceType: 'Project',
+                        state: ResourceState.Running,
+                        properties: makeAttachableProjectProperties(),
+                    }),
+                ],
+            }),
+        ], 'global', undefined, resourceDebugger);
+
+        const result = await provider.attachDebuggerToResource(getFirstResourceItem(provider));
+
+        assert.deepStrictEqual(result, { success: false, errorKind: 'ResourceNotAttachable' });
+        assert.ok(debug.notCalled);
+        assert.ok(withProgress.notCalled);
+        assert.ok(warning.calledOnce);
+        assert.strictEqual(warning.firstCall.args[0], 'Trust this workspace before attaching a debugger to an Aspire resource.');
+        provider.dispose();
+    });
+
     test('attachDebuggerToResource passes the workspace AppHost path to the debug service', async () => {
         let request: ResourceDebugRequest | undefined;
         const appHostPath = '/workspace/apps/Store/AppHost.csproj';

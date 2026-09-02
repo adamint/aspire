@@ -24,6 +24,7 @@ import {
     attachDebuggerAlreadyDebugging,
     attachDebuggerUnavailable,
     attachDebuggerResourceNotFound,
+    attachDebuggerWorkspaceNotTrusted,
     attachDebuggerExtensionsRequired,
     attachDebuggerDeclined,
     dashboardUrlNotFound,
@@ -1515,6 +1516,11 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
     }
 
     async attachDebuggerToResource(element: ResourceItem): Promise<AttachDebuggerHandledFailure | void> {
+        if (!vscode.workspace.isTrusted) {
+            vscode.window.showWarningMessage(attachDebuggerWorkspaceNotTrusted);
+            return { success: false, errorKind: 'ResourceNotAttachable' };
+        }
+
         return await vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
             title: attachingDebugger(element.resource.displayName ?? element.resource.name),

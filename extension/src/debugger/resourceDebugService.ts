@@ -4,7 +4,6 @@ import type { AspireExtendedDebugConfiguration } from '../dcp/types';
 import { compareAppHostIdentity, type AppHostIdentityRelation } from '../utils/appHostIdentity';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { isCommandCancellation } from '../utils/telemetry';
-import { applyDebuggerConfigurationOverrides } from './debuggerExtensions';
 import {
     ResourceAttachConfigurationError,
     type ResourceAttachProvider,
@@ -29,6 +28,35 @@ import {
     type ResourceDebugTelemetry,
     monotonicResourceDebugClock,
 } from './resourceDebugTelemetry';
+
+const safeAttachDebuggerOverrideProperties = {
+    dotnet: [
+        'name',
+        'justMyCode',
+        'requireExactSource',
+        'suppressJITOptimizations',
+        'enableStepFiltering',
+        'sourceFileMap',
+        'sourceLinkOptions',
+        'symbolOptions',
+        'logging',
+        'stopAtEntry',
+    ],
+    go: [
+        'name',
+        'stopOnEntry',
+        'substitutePath',
+        'showRegisters',
+        'showGlobalVariables',
+        'showLog',
+        'logOutput',
+        'hideSystemGoroutines',
+        'stackTraceDepth',
+        'showPprofLabels',
+        'trace',
+        'cwd',
+    ],
+} as const;
 
 export interface ResourceDebugAppHostRepository {
     fetchRunningAppHostsOnce(cancellationToken?: vscode.CancellationToken): Promise<readonly AppHostDisplayInfo[]>;
@@ -297,20 +325,13 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
         let configuration: vscode.DebugConfiguration;
         try {
             configuration = await provider.createDebugConfiguration(resource, request.cancellationToken);
-            const attachIdentityProperties = ['type', 'request', 'processId', 'mode', 'debugAdapter']
-                .filter(property => Object.prototype.hasOwnProperty.call(configuration, property))
-                .map(property => [property, configuration[property]]);
             const launchConfigurationType = resource.properties?.['resource.launchConfigurationType'];
             if (typeof launchConfigurationType === 'string') {
-                applyDebuggerConfigurationOverrides(
+                applySafeAttachDebuggerOverrides(
                     configuration,
                     this._dependencies.getDebugSessionConfiguration?.(appHost),
                     launchConfigurationType,
-                    false);
-
-                // The provider owns the attach target and adapter contract. User settings can add
-                // debugger-specific options, but cannot retarget this operation to another process.
-                Object.assign(configuration, Object.fromEntries(attachIdentityProperties));
+                    provider.id);
                 configuration.noDebug = false;
             }
         }
@@ -368,6 +389,27 @@ export class ResourceDebugService implements vscode.Disposable, ResourceDebugger
 
     private _logFailure(operation: string, error: unknown): void {
         extensionLogOutputChannel.error(`Resource debugger failed while ${operation}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+    }
+}
+
+function applySafeAttachDebuggerOverrides(
+    configuration: vscode.DebugConfiguration,
+    debugSessionConfiguration: AspireExtendedDebugConfiguration | undefined,
+    launchConfigurationType: string,
+    providerId: ResourceAttachProvider['id'],
+): void {
+    const overrides = debugSessionConfiguration?.debuggers?.[launchConfigurationType];
+    if (!overrides) {
+        return;
+    }
+
+    // A denylist would let a newly supported transport or remote-target property silently retarget
+    // an operation the user confirmed as a local Aspire resource. Copy only options that affect
+    // presentation, source mapping, symbol loading, logging, or debugger runtime behavior.
+    for (const property of safeAttachDebuggerOverrideProperties[providerId]) {
+        if (Object.prototype.hasOwnProperty.call(overrides, property)) {
+            configuration[property] = overrides[property];
+        }
     }
 }
 

@@ -311,12 +311,19 @@ suite('Resource debug service', () => {
                             name: 'Custom Go attach',
                             substitutePath: [{ from: '/workspace', to: '/repo' }],
                             trace: 'verbose',
+                            justMyCode: false,
                             type: 'node',
                             request: 'launch',
                             mode: 'remote',
                             debugAdapter: 'legacy',
                             processId: 9999,
                             noDebug: true,
+                            pipeTransport: { pipeProgram: 'ssh', pipeArgs: ['remote-host'] },
+                            remotePath: '/remote/source',
+                            host: 'remote-host',
+                            port: 2345,
+                            dlvToolPath: '/remote/dlv',
+                            dlvFlags: ['--backend=rr'],
                         },
                     },
                 };
@@ -339,6 +346,85 @@ suite('Resource debug service', () => {
             assert.strictEqual(startedConfiguration.noDebug, false);
             assert.deepStrictEqual(startedConfiguration.substitutePath, [{ from: '/workspace', to: '/repo' }]);
             assert.strictEqual(startedConfiguration.trace, 'verbose');
+            assert.strictEqual(startedConfiguration.justMyCode, undefined);
+            assert.strictEqual(startedConfiguration.pipeTransport, undefined);
+            assert.strictEqual(startedConfiguration.remotePath, undefined);
+            assert.strictEqual(startedConfiguration.host, undefined);
+            assert.strictEqual(startedConfiguration.port, undefined);
+            assert.strictEqual(startedConfiguration.dlvToolPath, undefined);
+            assert.strictEqual(startedConfiguration.dlvFlags, undefined);
+        }
+        finally {
+            sessions.dispose();
+        }
+    });
+
+    test('merges safe CoreCLR overrides without allowing a remote attach target', async () => {
+        let startedConfiguration: vscode.DebugConfiguration | undefined;
+        const provider = createProvider({
+            createDebugConfiguration: async () => ({
+                type: 'coreclr',
+                request: 'attach',
+                name: 'Attach debugger: API',
+                processId: 4321,
+            }),
+        });
+        const appHosts = [createAppHost({
+            resources: [createResource({
+                properties: {
+                    'resource.launchConfigurationType': 'project',
+                    'project.path': '/repo/api/Api.csproj',
+                    'executable.path': 'dotnet',
+                    'executable.pid': '1234',
+                },
+            })],
+        })];
+        const { service, sessions } = createService({
+            appHosts,
+            provider,
+            getDebugSessionConfiguration: () => ({
+                type: 'aspire',
+                name: 'AppHost',
+                request: 'launch',
+                program: target.absolutePath,
+                debuggers: {
+                    project: {
+                        name: 'Custom .NET attach',
+                        justMyCode: false,
+                        sourceFileMap: { '/build': '/repo' },
+                        substitutePath: [{ from: '/workspace', to: '/repo' }],
+                        trace: 'verbose',
+                        type: 'cppdbg',
+                        request: 'launch',
+                        processId: 9999,
+                        noDebug: true,
+                        pipeTransport: { pipeProgram: 'ssh', pipeArgs: ['remote-host'] },
+                        remoteMachineName: 'remote-host',
+                        debugServer: 4711,
+                    },
+                },
+            }),
+            startDebugging: async (_folder, configuration) => {
+                startedConfiguration = configuration;
+                return true;
+            },
+        });
+
+        try {
+            assert.deepStrictEqual(await service.debug(createRequest()), { outcome: 'started', providerId: 'dotnet' });
+            assert.ok(startedConfiguration);
+            assert.strictEqual(startedConfiguration.type, 'coreclr');
+            assert.strictEqual(startedConfiguration.request, 'attach');
+            assert.strictEqual(startedConfiguration.name, 'Custom .NET attach');
+            assert.strictEqual(startedConfiguration.processId, 4321);
+            assert.strictEqual(startedConfiguration.noDebug, false);
+            assert.strictEqual(startedConfiguration.justMyCode, false);
+            assert.deepStrictEqual(startedConfiguration.sourceFileMap, { '/build': '/repo' });
+            assert.strictEqual(startedConfiguration.substitutePath, undefined);
+            assert.strictEqual(startedConfiguration.trace, undefined);
+            assert.strictEqual(startedConfiguration.pipeTransport, undefined);
+            assert.strictEqual(startedConfiguration.remoteMachineName, undefined);
+            assert.strictEqual(startedConfiguration.debugServer, undefined);
         }
         finally {
             sessions.dispose();
