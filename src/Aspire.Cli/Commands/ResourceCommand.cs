@@ -13,6 +13,7 @@ using Aspire.Cli.Backchannel;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Projects;
 using Aspire.Cli.Resources;
+using Aspire.Hosting.Utils;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Cli.Commands;
@@ -703,7 +704,7 @@ internal sealed class ResourceCommand : BaseCommand
                 return null;
             }
 
-            var targetPath = Path.GetFullPath(selectedAppHostProjectFile.FullName);
+            var targetPath = PathNormalizer.ResolveToFilesystemPath(selectedAppHostProjectFile.FullName);
             var matchingConnections = await command.InteractionService.ShowStatusAsync(
                 SharedCommandStrings.ScanningForRunningAppHosts,
                 async () =>

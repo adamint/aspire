@@ -21,6 +21,84 @@ public class AppHostConnectionSelectionLogicTests(ITestOutputHelper outputHelper
                 .Order(StringComparer.Ordinal));
     }
 
+    [Fact]
+    public void SelectedConnectionReturnsNullWhenNoConnections()
+    {
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+
+        Assert.Null(monitor.SelectedConnection);
+    }
+
+    [Fact]
+    public void SelectedConnectionPrefersExplicitSelectionWhenAvailable()
+    {
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+        var inScope = CreateConnection(appHostPath: "C:/repo/AppHost1", isInScope: true, processId: 1);
+        var outOfScope = CreateConnection(appHostPath: "C:/other/AppHost2", isInScope: false, processId: 2);
+        monitor.AddConnection(inScope.Hash, inScope.SocketPath, inScope);
+        monitor.AddConnection(outOfScope.Hash, outOfScope.SocketPath, outOfScope);
+        monitor.SelectedAppHostPath = "C:/other/AppHost2";
+
+        Assert.Same(outOfScope, monitor.SelectedConnection);
+    }
+
+    [Fact]
+    public void SelectedConnectionClearsExplicitSelectionWhenNoLongerAvailable()
+    {
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+        var inScope = CreateConnection(appHostPath: "C:/repo/AppHost1", isInScope: true, processId: 1);
+        monitor.AddConnection(inScope.Hash, inScope.SocketPath, inScope);
+        monitor.SelectedAppHostPath = "C:/missing/AppHost";
+
+        var selected = monitor.SelectedConnection;
+
+        Assert.Same(inScope, selected);
+        Assert.Null(monitor.SelectedAppHostPath);
+    }
+
+    [Fact]
+    public void SelectedConnectionPrefersSingleInScopeConnectionWhenNoExplicitSelection()
+    {
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+        var inScope = CreateConnection(appHostPath: "C:/repo/AppHost1", isInScope: true, processId: 1);
+        var outOfScope = CreateConnection(appHostPath: "C:/other/AppHost2", isInScope: false, processId: 2);
+        monitor.AddConnection(inScope.Hash, inScope.SocketPath, inScope);
+        monitor.AddConnection(outOfScope.Hash, outOfScope.SocketPath, outOfScope);
+
+        Assert.Same(inScope, monitor.SelectedConnection);
+    }
+
+    [Fact]
+    public void SelectedConnectionDistinguishesCaseDistinctAppHosts()
+    {
+        var tempRoot = Directory.CreateTempSubdirectory("aspire-apphost-selection-casing-");
+        try
+        {
+            var firstDirectory = Directory.CreateDirectory(Path.Combine(tempRoot.FullName, "AppHost"));
+            var secondDirectoryPath = Path.Combine(tempRoot.FullName, "apphost");
+            Assert.SkipWhen(Directory.Exists(secondDirectoryPath),
+                "This test requires a case-sensitive filesystem.");
+
+            var secondDirectory = Directory.CreateDirectory(secondDirectoryPath);
+            var firstPath = Path.Combine(firstDirectory.FullName, "AppHost.csproj");
+            var secondPath = Path.Combine(secondDirectory.FullName, "AppHost.csproj");
+            File.WriteAllText(firstPath, "<Project />");
+            File.WriteAllText(secondPath, "<Project />");
+            var firstConnection = CreateConnection(firstPath, isInScope: true, processId: 1);
+            var secondConnection = CreateConnection(secondPath, isInScope: true, processId: 2);
+            var monitor = new TestAuxiliaryBackchannelMonitor();
+            monitor.AddConnection(firstConnection.Hash, firstConnection.SocketPath, firstConnection);
+            monitor.AddConnection(secondConnection.Hash, secondConnection.SocketPath, secondConnection);
+            monitor.SelectedAppHostPath = secondPath;
+
+            Assert.Same(secondConnection, monitor.SelectedConnection);
+        }
+        finally
+        {
+            tempRoot.Delete(recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData(@"c:\Repo\AppHost.csproj", @"C:\Repo\AppHost.csproj")]
     [InlineData("d:/Repo/AppHost.csproj", "D:/Repo/AppHost.csproj")]

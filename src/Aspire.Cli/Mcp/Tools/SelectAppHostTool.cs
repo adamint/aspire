@@ -3,6 +3,7 @@
 
 using System.Text.Json;
 using Aspire.Cli.Backchannel;
+using Aspire.Hosting.Utils;
 using ModelContextProtocol.Protocol;
 
 namespace Aspire.Cli.Mcp.Tools;
@@ -61,16 +62,12 @@ internal sealed class SelectAppHostTool(IAuxiliaryBackchannelMonitor auxiliaryBa
             });
         }
 
-        // Resolve the path to an absolute path
-        string resolvedPath;
-        if (Path.IsPathRooted(appHostPath))
-        {
-            resolvedPath = Path.GetFullPath(appHostPath);
-        }
-        else
-        {
-            resolvedPath = Path.GetFullPath(Path.Combine(executionContext.WorkingDirectory.FullName, appHostPath));
-        }
+        // Preserve the caller's spelling for diagnostics while using a canonical identity for matching.
+        var displayPath = Path.GetFullPath(
+            Path.IsPathRooted(appHostPath)
+                ? appHostPath
+                : Path.Combine(executionContext.WorkingDirectory.FullName, appHostPath));
+        var canonicalPath = PathNormalizer.ResolveToFilesystemPath(displayPath);
 
         // Check if there's a running AppHost with this path
         IAppHostAuxiliaryBackchannel? matchingConnection;
@@ -78,7 +75,7 @@ internal sealed class SelectAppHostTool(IAuxiliaryBackchannelMonitor auxiliaryBa
         {
             matchingConnection = AppHostConnectionHelper.FindConnectionByAppHostPath(
                 auxiliaryBackchannelMonitor.Connections,
-                resolvedPath);
+                canonicalPath);
         }
         catch (InvalidOperationException)
         {
@@ -109,11 +106,12 @@ internal sealed class SelectAppHostTool(IAuxiliaryBackchannelMonitor auxiliaryBa
         // Pin the connection's physical identity rather than the caller's spelling. A selected
         // symlink can be retargeted after this call, but it must not redirect later MCP operations
         // to a different running AppHost.
-        auxiliaryBackchannelMonitor.SelectedAppHostPath = matchingConnection.AppHostInfo!.AppHostPath;
+        auxiliaryBackchannelMonitor.SelectedAppHostPath =
+            PathNormalizer.ResolveToFilesystemPath(matchingConnection.AppHostInfo!.AppHostPath);
 
         return ValueTask.FromResult(new CallToolResult
         {
-            Content = [new TextContentBlock { Text = $"Selected AppHost: {resolvedPath}" }]
+            Content = [new TextContentBlock { Text = $"Selected AppHost: {displayPath}" }]
         });
     }
 }

@@ -226,7 +226,6 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
 
         var mockBackchannel = new TestAppHostAuxiliaryBackchannel
         {
-            Hash = "test-apphost-hash",
             IsInScope = true,
             AppHostInfo = new AppHostInformation
             {
@@ -262,7 +261,7 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
             ]
         };
 
-        ctx.BackchannelMonitor!.AddConnection(mockBackchannel.Hash, mockBackchannel.SocketPath, mockBackchannel);
+        ctx.BackchannelMonitor!.AddConnection(mockBackchannel.SocketPath, mockBackchannel);
 
         await ctx.Client.CallToolAsync(KnownMcpTools.RefreshTools, cancellationToken: ctx.Cts.Token).DefaultTimeout();
 
@@ -368,7 +367,6 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
 
         var mockBackchannel = new TestAppHostAuxiliaryBackchannel
         {
-            Hash = "test-apphost-hash",
             IsInScope = true,
             AppHostInfo = new AppHostInformation
             {
@@ -409,7 +407,7 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
             }
         };
 
-        ctx.BackchannelMonitor!.AddConnection(mockBackchannel.Hash, mockBackchannel.SocketPath, mockBackchannel);
+        ctx.BackchannelMonitor!.AddConnection(mockBackchannel.SocketPath, mockBackchannel);
 
         await ctx.Client.CallToolAsync(KnownMcpTools.RefreshTools, cancellationToken: ctx.Cts.Token).DefaultTimeout();
 
@@ -502,7 +500,6 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
 
         var mockBackchannel = new TestAppHostAuxiliaryBackchannel
         {
-            Hash = "test-apphost-hash",
             IsInScope = true,
             AppHostInfo = new AppHostInformation
             {
@@ -542,7 +539,7 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
             }
         };
 
-        ctx.BackchannelMonitor!.AddConnection(mockBackchannel.Hash, mockBackchannel.SocketPath, mockBackchannel);
+        ctx.BackchannelMonitor!.AddConnection(mockBackchannel.SocketPath, mockBackchannel);
         await ctx.Client.CallToolAsync(KnownMcpTools.RefreshTools, cancellationToken: ctx.Cts.Token).DefaultTimeout();
 
         var result = await ctx.Client.CallToolAsync("db1_mcp_list_schemas", cancellationToken: ctx.Cts.Token).DefaultTimeout();
@@ -1195,7 +1192,6 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
 
         var mockBackchannel = new TestAppHostAuxiliaryBackchannel
         {
-            Hash = "test-apphost-hash",
             IsInScope = true,
             AppHostInfo = new AppHostInformation
             {
@@ -1226,7 +1222,7 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
             ]
         };
 
-        ctx.BackchannelMonitor!.AddConnection(mockBackchannel.Hash, mockBackchannel.SocketPath, mockBackchannel);
+        ctx.BackchannelMonitor!.AddConnection(mockBackchannel.SocketPath, mockBackchannel);
 
         var notificationCount = 0;
         await using var notificationHandler = ctx.Client.RegisterNotificationHandler(
@@ -1277,7 +1273,6 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
         var getResourceSnapshotsCallCount = 0;
         var mockBackchannel = new TestAppHostAuxiliaryBackchannel
         {
-            Hash = "test-apphost-hash",
             IsInScope = true,
             AppHostInfo = new AppHostInformation
             {
@@ -1312,7 +1307,7 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
             }
         };
 
-        ctx.BackchannelMonitor!.AddConnection(mockBackchannel.Hash, mockBackchannel.SocketPath, mockBackchannel);
+        ctx.BackchannelMonitor!.AddConnection(mockBackchannel.SocketPath, mockBackchannel);
 
         var tools1 = await ctx.Client.ListToolsAsync(cancellationToken: ctx.Cts.Token).DefaultTimeout();
         var tools2 = await ctx.Client.ListToolsAsync(cancellationToken: ctx.Cts.Token).DefaultTimeout();

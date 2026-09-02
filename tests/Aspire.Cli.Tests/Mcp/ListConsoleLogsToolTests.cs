@@ -38,7 +38,7 @@ public class ListConsoleLogsToolTests
     {
         var monitor = new TestAuxiliaryBackchannelMonitor();
         var connection = new TestAppHostAuxiliaryBackchannel();
-        monitor.AddConnection("hash1", "socket.hash1", connection);
+        monitor.AddConnection("socket.hash1", connection);
 
         var tool = new ListConsoleLogsTool(monitor, NullLogger<ListConsoleLogsTool>.Instance);
 
@@ -136,7 +136,7 @@ public class ListConsoleLogsToolTests
         {
             LogLines = []
         };
-        monitor.AddConnection("hash1", "socket.hash1", connection);
+        monitor.AddConnection("socket.hash1", connection);
 
         var tool = new ListConsoleLogsTool(monitor, NullLogger<ListConsoleLogsTool>.Instance);
 
@@ -171,7 +171,7 @@ public class ListConsoleLogsToolTests
                 new ResourceLogLine { ResourceName = "other-service", LineNumber = 1, Content = "Different service log", IsError = false }
             ]
         };
-        monitor.AddConnection("hash1", "socket.hash1", connection);
+        monitor.AddConnection("socket.hash1", connection);
 
         var tool = new ListConsoleLogsTool(monitor, NullLogger<ListConsoleLogsTool>.Instance);
 
@@ -205,7 +205,7 @@ public class ListConsoleLogsToolTests
                 new ResourceLogLine { ResourceName = "api-service", LineNumber = 1, Content = "Test log line", IsError = false }
             ]
         };
-        monitor.AddConnection("hash1", "socket.hash1", connection);
+        monitor.AddConnection("socket.hash1", connection);
 
         var tool = new ListConsoleLogsTool(monitor, NullLogger<ListConsoleLogsTool>.Instance);
 
@@ -235,7 +235,7 @@ public class ListConsoleLogsToolTests
                 new ResourceLogLine { ResourceName = "api-service", LineNumber = 1, Content = "2024-01-15T10:30:00.123Z Log message after timestamp", IsError = false }
             ]
         };
-        monitor.AddConnection("hash1", "socket.hash1", connection);
+        monitor.AddConnection("socket.hash1", connection);
 
         var tool = new ListConsoleLogsTool(monitor, NullLogger<ListConsoleLogsTool>.Instance);
 
@@ -264,7 +264,7 @@ public class ListConsoleLogsToolTests
                 new ResourceLogLine { ResourceName = "api-service", LineNumber = 1, Content = "\u001b[32mGreen text\u001b[0m normal text", IsError = false }
             ]
         };
-        monitor.AddConnection("hash1", "socket.hash1", connection);
+        monitor.AddConnection("socket.hash1", connection);
 
         var tool = new ListConsoleLogsTool(monitor, NullLogger<ListConsoleLogsTool>.Instance);
 
@@ -295,7 +295,7 @@ public class ListConsoleLogsToolTests
                 new ResourceLogLine { ResourceName = "api-service", LineNumber = 3, Content = "Request received", IsError = false }
             ]
         };
-        monitor.AddConnection("hash1", "socket.hash1", connection);
+        monitor.AddConnection("socket.hash1", connection);
 
         var tool = new ListConsoleLogsTool(monitor, NullLogger<ListConsoleLogsTool>.Instance);
 
@@ -329,7 +329,7 @@ public class ListConsoleLogsToolTests
                 new ResourceLogLine { ResourceName = "api-service", LineNumber = 2, Content = "Normal operation", IsError = false }
             ]
         };
-        monitor.AddConnection("hash1", "socket.hash1", connection);
+        monitor.AddConnection("socket.hash1", connection);
 
         var tool = new ListConsoleLogsTool(monitor, NullLogger<ListConsoleLogsTool>.Instance);
 
@@ -361,7 +361,7 @@ public class ListConsoleLogsToolTests
                 new ResourceLogLine { ResourceName = "api-service", LineNumber = 1, Content = "Hello world", IsError = false }
             ]
         };
-        monitor.AddConnection("hash1", "socket.hash1", connection);
+        monitor.AddConnection("socket.hash1", connection);
 
         var tool = new ListConsoleLogsTool(monitor, NullLogger<ListConsoleLogsTool>.Instance);
 
@@ -395,7 +395,7 @@ public class ListConsoleLogsToolTests
                 new ResourceLogLine { ResourceName = "api-service", LineNumber = 4, Content = "Connection closed", IsError = false }
             ]
         };
-        monitor.AddConnection("hash1", "socket.hash1", connection);
+        monitor.AddConnection("socket.hash1", connection);
 
         var tool = new ListConsoleLogsTool(monitor, NullLogger<ListConsoleLogsTool>.Instance);
 
@@ -429,7 +429,7 @@ public class ListConsoleLogsToolTests
                 new ResourceLogLine { ResourceName = "api-service", LineNumber = 2, Content = "Goodbye world", IsError = false }
             ]
         };
-        monitor.AddConnection("hash1", "socket.hash1", connection);
+        monitor.AddConnection("socket.hash1", connection);
 
         var tool = new ListConsoleLogsTool(monitor, NullLogger<ListConsoleLogsTool>.Instance);
 
@@ -467,7 +467,7 @@ public class ListConsoleLogsToolTests
                 new ResourceLogLine { ResourceName = "api-service", LineNumber = 4, Content = "Ready to accept connections", IsError = false }
             ]
         };
-        monitor.AddConnection("hash1", "socket.hash1", connection);
+        monitor.AddConnection("socket.hash1", connection);
 
         var tool = new ListConsoleLogsTool(monitor, NullLogger<ListConsoleLogsTool>.Instance);
 
@@ -504,7 +504,7 @@ public class ListConsoleLogsToolTests
                 new ResourceLogLine { ResourceName = "api-service", LineNumber = 2, Content = "Normal operation", IsError = false }
             ]
         };
-        monitor.AddConnection("hash1", "socket.hash1", connection);
+        monitor.AddConnection("socket.hash1", connection);
 
         var tool = new ListConsoleLogsTool(monitor, NullLogger<ListConsoleLogsTool>.Instance);
 

@@ -30,22 +30,104 @@ internal static class PathNormalizer
     }
 
     /// <summary>
-    /// Resolves an existing path to the casing stored by the current filesystem.
+    /// Resolves a path to its filesystem-canonical form by resolving symbolic links and querying
+    /// the OS for the actual casing of each path component on Windows and macOS.
     /// </summary>
     /// <remarks>
-    /// Path APIs preserve caller casing even on case-insensitive filesystems. Each existing
-    /// segment is enumerated to recover its stored spelling, but a case-insensitive match is
-    /// accepted only when the filesystem resolved that candidate. Case-sensitive volumes can
-    /// therefore keep distinct paths whose names differ only by case.
+    /// Use this when aliases on a case-insensitive filesystem must produce the same identity while
+    /// preserving distinct paths on case-sensitive macOS volumes. A user who types
+    /// <c>--apphost c:\FOO\bar.csproj</c> will get back <c>C:\foo\bar.csproj</c>
+    /// if that is the on-disk casing.
     /// </remarks>
-    /// <param name="path">A path to a file or directory.</param>
+    /// <param name="path">An absolute path to canonicalize.</param>
     /// <returns>
-    /// The path with filesystem-canonical casing, or <paramref name="path"/> unchanged if it
-    /// does not exist or cannot be enumerated.
+    /// The filesystem-canonical path. If the path cannot be fully resolved, returns a best-effort
+    /// result containing any canonicalized prefix followed by the remaining unresolved segments.
     /// </returns>
     public static string ResolveToFilesystemPath(string path)
     {
-        return TryResolveToFilesystemPath(path, out var resolvedPath) ? resolvedPath : path;
+        return ResolvePathCasing(ResolveSymlinks(path));
+    }
+
+    /// <summary>
+    /// Resolves the casing of each path component without resolving symbolic links.
+    /// </summary>
+    /// <param name="path">An absolute path whose casing should be resolved.</param>
+    /// <returns>The path with filesystem casing, or <paramref name="path"/> if it cannot be resolved.</returns>
+    public static string ResolvePathCasing(string path)
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS())
+        {
+            return path;
+        }
+
+        var root = Path.GetPathRoot(path);
+        if (string.IsNullOrEmpty(root))
+        {
+            return path;
+        }
+
+        var segments = path[root.Length..].Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries);
+
+        // Windows APIs preserve the caller's drive-letter casing even while directory enumeration
+        // recovers every later component. Normalize the drive root so c:\foo and C:\foo produce
+        // the same canonical path and callers receive the conventional on-disk form.
+        var current = OperatingSystem.IsWindows() && root.Length >= 2 && root[1] == ':'
+            ? $"{char.ToUpperInvariant(root[0])}{root[1..]}"
+            : root;
+        foreach (var segment in segments)
+        {
+            var candidate = Path.Combine(current, segment);
+            if (!File.Exists(candidate) && !Directory.Exists(candidate))
+            {
+                return path;
+            }
+
+            try
+            {
+                string? exactMatch = null;
+                string? caseInsensitiveMatch = null;
+                string? normalizationMatch = null;
+                var normalizedSegment = segment.Normalize(NormalizationForm.FormC);
+                foreach (var entry in Directory.EnumerateFileSystemEntries(current))
+                {
+                    var entryName = Path.GetFileName(entry);
+                    if (entryName.Equals(segment, StringComparison.Ordinal))
+                    {
+                        exactMatch = entry;
+                        break;
+                    }
+
+                    if (caseInsensitiveMatch is null &&
+                        entryName.Equals(segment, StringComparison.OrdinalIgnoreCase))
+                    {
+                        caseInsensitiveMatch = entry;
+                    }
+
+                    if (normalizationMatch is null &&
+                        entryName.Normalize(NormalizationForm.FormC).Equals(
+                            normalizedSegment,
+                            StringComparison.Ordinal))
+                    {
+                        normalizationMatch = entry;
+                    }
+                }
+
+                current = exactMatch ?? caseInsensitiveMatch ?? normalizationMatch ?? candidate;
+            }
+            catch (IOException)
+            {
+                return path;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return path;
+            }
+        }
+
+        return current;
     }
 
     /// <summary>

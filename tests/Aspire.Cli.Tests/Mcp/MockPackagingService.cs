@@ -44,8 +44,6 @@ internal sealed class MockAuxiliaryBackchannelMonitor : IAuxiliaryBackchannelMon
 {
     public IEnumerable<IAppHostAuxiliaryBackchannel> Connections => [];
 
-    public IEnumerable<IAppHostAuxiliaryBackchannel> GetConnectionsByHash(string hash) => [];
-
     public string? SelectedAppHostPath { get; set; }
 
     public Task ScanAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;

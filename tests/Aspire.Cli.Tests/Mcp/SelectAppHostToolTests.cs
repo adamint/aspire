@@ -6,6 +6,7 @@ using Aspire.Cli.Backchannel;
 using Aspire.Cli.Mcp.Tools;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
+using Aspire.Hosting.Utils;
 using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Protocol;
@@ -14,6 +15,58 @@ namespace Aspire.Cli.Tests.Mcp;
 
 public class SelectAppHostToolTests(ITestOutputHelper outputHelper)
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CallToolAsync_PreservesSuppliedPathInResponse(bool hasMatchingConnection)
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(),
+            "Symlink path spelling test only runs on Unix-like platforms.");
+
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var realDirectory = workspace.WorkspaceRoot.CreateSubdirectory("real");
+        var appHostFile = new FileInfo(Path.Combine(realDirectory.FullName, "AppHost.csproj"));
+        File.WriteAllText(appHostFile.FullName, "<Project />");
+
+        var symlinkDirectory = Path.Combine(workspace.WorkspaceRoot.FullName, "link");
+        TestSymlinkHelper.TryCreateSymlink(symlinkDirectory, realDirectory.FullName);
+        var suppliedPath = Path.Combine("link", appHostFile.Name);
+        var displayPath = Path.GetFullPath(Path.Combine(workspace.WorkspaceRoot.FullName, suppliedPath));
+        var canonicalPath = PathNormalizer.ResolveToFilesystemPath(displayPath);
+        Assert.NotEqual(displayPath, canonicalPath);
+
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+        if (hasMatchingConnection)
+        {
+            var connection = CreateConnection(appHostFile.FullName, processId: Environment.ProcessId);
+            monitor.AddConnection(connection.Hash, connection.SocketPath, connection);
+        }
+
+        var tool = new SelectAppHostTool(
+            monitor,
+            TestExecutionContextHelper.CreateExecutionContext(workspace.WorkspaceRoot));
+        var result = await tool.CallToolAsync(
+            CallToolContextTestHelper.Create(CreateArguments(suppliedPath)),
+            TestContext.Current.CancellationToken);
+
+        if (hasMatchingConnection)
+        {
+            Assert.Null(result.IsError);
+            Assert.Equal($"Selected AppHost: {displayPath}", GetResultText(result));
+            Assert.Equal(canonicalPath, monitor.SelectedAppHostPath);
+        }
+        else
+        {
+            Assert.True(result.IsError);
+            AssertPathFreeSelectionError(
+                result,
+                "No running AppHost matched 'appHostPath'. No AppHosts are currently running.",
+                displayPath,
+                canonicalPath);
+            Assert.Null(monitor.SelectedAppHostPath);
+        }
+    }
+
     [Fact]
     public async Task SelectAppHostTool_WithSymlinkedPath_MatchesPhysicalAppHostPath()
     {
@@ -45,7 +98,7 @@ public class SelectAppHostToolTests(ITestOutputHelper outputHelper)
             TestContext.Current.CancellationToken).DefaultTimeout();
 
         Assert.True(result.IsError is null or false, $"Tool returned error: {GetResultText(result)}");
-        Assert.Equal(realAppHostPath, monitor.SelectedAppHostPath);
+        Assert.Equal(PathNormalizer.ResolveToFilesystemPath(realAppHostPath), monitor.SelectedAppHostPath);
     }
 
     [Fact]
@@ -69,7 +122,7 @@ public class SelectAppHostToolTests(ITestOutputHelper outputHelper)
         if (volumeResolvesCaseVariant)
         {
             Assert.True(result.IsError is null or false, $"Tool returned error: {GetResultText(result)}");
-            Assert.Equal(actualAppHostPath, monitor.SelectedAppHostPath);
+            Assert.Equal(PathNormalizer.ResolveToFilesystemPath(actualAppHostPath), monitor.SelectedAppHostPath);
         }
         else
         {

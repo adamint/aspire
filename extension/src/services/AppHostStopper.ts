@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { spawnCliProcess, terminateCliProcess } from '../utils/process/cliProcess';
 import { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
 import { getCliPathTargetForAppHostOperation, type AppHostOperationTarget } from '../utils/appHostOperationTarget';
+import { reportCliResolvedForOperation } from '../utils/cliOperationResolution';
 
 const maxRetainedStderrLength = 16 * 1024;
 
@@ -18,11 +19,12 @@ export async function stopExternalAppHost(
     appHost: AppHostOperationTarget,
     cancellationToken: vscode.CancellationToken,
 ): Promise<void> {
-
-    const cliPath = await terminalProvider.getAspireCliExecutablePath(getCliPathTargetForAppHostOperation(appHost));
+    const target = getCliPathTargetForAppHostOperation(appHost);
+    const cliPath = await terminalProvider.getAspireCliExecutablePath(target);
     if (cancellationToken.isCancellationRequested) {
         throw new vscode.CancellationError();
     }
+    reportCliResolvedForOperation(target, cliPath);
 
     await new Promise<void>((resolve, reject) => {
         let settled = false;
