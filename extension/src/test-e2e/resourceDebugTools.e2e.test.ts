@@ -306,7 +306,7 @@ suite('Aspire resource debug language model tool E2E', function () {
                 expectedDebugType: scenario.debugType,
                 expectedResponse: scenario.expectedResponse,
                 timeoutMs: 300000,
-            }, { timeoutMs: 330000 })).result as AttachedResourceDebugProof;
+            }, { timeoutMs: 360000 })).result as AttachedResourceDebugProof;
 
             assert.strictEqual(proof.proof, 'aspire-resource-attach-breakpoint-detach');
             assert.strictEqual(proof.toolPayload.outcome, 'started');

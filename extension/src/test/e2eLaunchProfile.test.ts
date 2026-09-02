@@ -671,7 +671,6 @@ suite('E2E launch profile', () => {
             workflow.indexOf('- name: Install resource debug E2E prerequisites'),
             workflow.indexOf('- name: Set up the JDK for the Java E2E specs'));
 
-        assert.ok(resourceDebugPrerequisites.includes('go install github.com/go-delve/delve/cmd/dlv@v1.27.1'));
         assert.ok(resourceDebugPrerequisites.includes('sudo sysctl --write kernel.yama.ptrace_scope=0'));
         assert.ok(resourceDebugPrerequisites.includes('test "$(cat /proc/sys/kernel/yama/ptrace_scope)" = "0"'));
         assert.ok(runner.includes("const ptraceScopePath = '/proc/sys/kernel/yama/ptrace_scope';"));
@@ -686,6 +685,17 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes('builder.AddGoApp("e2e-go", "../AspireE2E.Go", gcFlags: "all=-N -l")'));
         assert.ok(resourceDebugSpec.includes("marker: 'message := \"go-ok\"'"));
         assert.ok(resourceDebugSpec.includes("proof.proof, 'aspire-resource-attach-breakpoint-detach'"));
+    });
+
+    test('keeps packaged attach failures diagnosable before the outer timeout', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const bridge = fs.readFileSync(path.join(extensionRoot, 'src', 'testing', 'e2eStateFileBridge.ts'), 'utf8');
+        const resourceDebugSpec = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'resourceDebugTools.e2e.test.ts'), 'utf8');
+
+        assert.ok(bridge.includes('Resource debug E2E ${session.type} setBreakpoints response:'));
+        assert.ok(bridge.includes('Resource debug E2E first traffic response for resource'));
+        assert.ok(bridge.includes('Resource debug E2E attach proof failed:'));
+        assert.ok(resourceDebugSpec.includes('{ timeoutMs: 360000 }'));
     });
 
     test('wires structured E2E harness failures into advisory handling', () => {

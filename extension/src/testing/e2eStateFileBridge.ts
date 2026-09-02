@@ -1167,23 +1167,27 @@ async function proveAttachedResourceDebugging(
             });
           }
           if (message?.type === 'response' && message.command === 'setBreakpoints') {
-            breakpointResponses.push({
+            const breakpointResponse = {
               sessionId: session.id,
               sessionType: session.type,
               sessionName: session.name,
               command: message.command,
               success: message.success,
               body: redactDebugAdapterArguments(message.body),
-            });
+            };
+            breakpointResponses.push(breakpointResponse);
+            extensionLogOutputChannel.info(`Resource debug E2E ${session.type} setBreakpoints response: ${JSON.stringify(breakpointResponse)}`);
           }
           if (message?.type === 'event' && message.event === 'stopped') {
-            stoppedEvents.push({
+            const stoppedEvent = {
               sessionId: session.id,
               sessionType: session.type,
               sessionName: session.name,
               reason: message.body?.reason,
               threadId: message.body?.threadId,
-            });
+            };
+            stoppedEvents.push(stoppedEvent);
+            extensionLogOutputChannel.info(`Resource debug E2E ${session.type} stopped event: ${JSON.stringify(stoppedEvent)}`);
           }
         },
       };
@@ -1337,9 +1341,7 @@ async function proveAttachedResourceDebugging(
     };
   }
   catch (error) {
-    throw new Error(`${error instanceof Error ? error.message : String(error)}
-Diagnostics:
-${JSON.stringify({
+    const diagnostics = {
       debugSessions,
       attachRequests,
       breakpointResponses,
@@ -1347,7 +1349,13 @@ ${JSON.stringify({
       stoppedEvents,
       terminatedSessionIds: [...terminatedSessionIds],
       toolPayload,
-    }, undefined, 2)}`);
+    };
+    extensionLogOutputChannel.error(`Resource debug E2E attach proof failed: ${error instanceof Error ? error.message : String(error)}
+Diagnostics:
+${JSON.stringify(diagnostics, undefined, 2)}`);
+    throw new Error(`${error instanceof Error ? error.message : String(error)}
+Diagnostics:
+${JSON.stringify(diagnostics, undefined, 2)}`);
   }
   finally {
     vscode.debug.removeBreakpoints([breakpoint]);
@@ -1908,14 +1916,24 @@ async function withResourceTraffic<T>(
     resourceName,
     requestPath,
     endpointTimeoutMs);
+  extensionLogOutputChannel.info(`Resource debug E2E traffic target resolved for resource '${resourceName}'.`);
 
   let driving = true;
+  let firstAttempt = true;
   const driver = (async () => {
     while (driving) {
       try {
-        await fetch(requestUrl, { signal: AbortSignal.timeout(2000) });
+        const response = await fetch(requestUrl, { signal: AbortSignal.timeout(2000) });
+        if (firstAttempt) {
+          firstAttempt = false;
+          extensionLogOutputChannel.info(`Resource debug E2E first traffic response for resource '${resourceName}': HTTP ${response.status}.`);
+        }
       }
-      catch {
+      catch (error) {
+        if (firstAttempt) {
+          firstAttempt = false;
+          extensionLogOutputChannel.info(`Resource debug E2E first traffic attempt for resource '${resourceName}' failed: ${error instanceof Error ? error.name : typeof error}.`);
+        }
         // Connection refused until the server is listening, and aborted once a request parks on the
         // breakpoint. Neither says anything about whether the breakpoint bound, so both are ignored
         // and the wait below is left to decide.
