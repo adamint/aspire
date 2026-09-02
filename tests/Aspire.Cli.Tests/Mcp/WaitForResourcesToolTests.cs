@@ -56,7 +56,8 @@ public class WaitForResourcesToolTests
     public async Task WaitForResourcesTool_RejectsResourceNameThatIsTooLong()
     {
         var tool = CreateTool(new TestAuxiliaryBackchannelMonitor());
-        var arguments = ParseArguments(JsonSerializer.Serialize(new { resourceNames = new[] { new string('a', 257) } }));
+        var resourceName = string.Concat(Enumerable.Repeat("\U0001F680", WaitForResourcesTool.MaximumResourceNameLength + 1));
+        var arguments = ParseArguments(JsonSerializer.Serialize(new { resourceNames = new[] { resourceName } }));
 
         var exception = await Assert.ThrowsAsync<McpProtocolException>(
             () => tool.CallToolAsync(CallToolContextTestHelper.Create(arguments), CancellationToken.None).AsTask());
@@ -172,6 +173,69 @@ public class WaitForResourcesToolTests
         Assert.Equal(
             $"The selected AppHost has too many resources to wait for implicitly. Specify resourceNames in batches of at most {WaitForResourcesTool.MaximumResourceNameCount}.",
             exception.Message);
+    }
+
+    [Fact]
+    public async Task WaitForResourcesTool_ImplicitSelectionAcceptsResourceNameAtUnicodeCharacterLimit()
+    {
+        var resourceName = string.Concat(Enumerable.Repeat("\U0001F680", WaitForResourcesTool.MaximumResourceNameLength));
+        var waitedResourceNames = new List<string>();
+        var connection = CreateConnection(new ResourceSnapshot
+        {
+            Name = resourceName,
+            ResourceType = "Project",
+            State = "Running"
+        });
+        connection.WaitForResourceHandler = (name, _, _, _) =>
+        {
+            waitedResourceNames.Add(name);
+            return Task.FromResult(new WaitForResourceResponse
+            {
+                Success = true,
+                State = "Running",
+                HealthStatus = "Healthy"
+            });
+        };
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+        monitor.AddConnection(connection.Hash, connection.SocketPath, connection);
+        var tool = CreateTool(monitor);
+
+        var result = await tool.CallToolAsync(
+            CallToolContextTestHelper.Create(),
+            TestContext.Current.CancellationToken).DefaultTimeout();
+
+        Assert.Equal([resourceName], waitedResourceNames);
+        using var json = GetWaitResult(result);
+        Assert.Equal("success", json.RootElement.GetProperty("outcome").GetString());
+    }
+
+    [Fact]
+    public async Task WaitForResourcesTool_ImplicitSelectionRejectsResourceNameAboveUnicodeCharacterLimit()
+    {
+        var resourceName = string.Concat(Enumerable.Repeat("\U0001F680", WaitForResourcesTool.MaximumResourceNameLength + 1));
+        var waitCallCount = 0;
+        var connection = CreateConnection(new ResourceSnapshot
+        {
+            Name = resourceName,
+            ResourceType = "Project",
+            State = "Running"
+        });
+        connection.WaitForResourceHandler = (_, _, _, _) =>
+        {
+            Interlocked.Increment(ref waitCallCount);
+            return Task.FromResult(new WaitForResourceResponse { Success = true });
+        };
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+        monitor.AddConnection(connection.Hash, connection.SocketPath, connection);
+        var tool = CreateTool(monitor);
+
+        var exception = await Assert.ThrowsAsync<McpProtocolException>(() =>
+            tool.CallToolAsync(
+                CallToolContextTestHelper.Create(),
+                TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Equal(McpErrorCode.InvalidParams, exception.ErrorCode);
+        Assert.Equal(0, waitCallCount);
     }
 
     [Theory]

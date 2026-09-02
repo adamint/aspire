@@ -58,7 +58,6 @@ public class SelectAppHostToolTests(ITestOutputHelper outputHelper)
         var actualAppHostPath = Path.Combine(directory.FullName, "CaseSensitive.AppHost.csproj");
         File.WriteAllText(actualAppHostPath, "<Project />");
         var selectedAppHostPath = Path.Combine(workspace.WorkspaceRoot.FullName, "casesensitiveapphost", "casesensitive.apphost.csproj");
-        var resolvedSelectedAppHostPath = Path.GetFullPath(selectedAppHostPath);
         var volumeResolvesCaseVariant = File.Exists(selectedAppHostPath);
         var connection = CreateConnection(actualAppHostPath, processId: 1);
 
@@ -77,14 +76,50 @@ public class SelectAppHostToolTests(ITestOutputHelper outputHelper)
             Assert.True(result.IsError is true, "Case-variant AppHost selection should fail on a case-sensitive volume.");
             Assert.Null(monitor.SelectedAppHostPath);
 
-            var text = GetResultText(result);
-            Assert.Contains($"No running AppHost found at path '{resolvedSelectedAppHostPath}'.", text);
-            Assert.Contains(actualAppHostPath, text);
+            AssertPathFreeSelectionError(
+                result,
+                "No running AppHost matched 'appHostPath'. Other AppHosts are currently running.",
+                selectedAppHostPath,
+                actualAppHostPath);
         }
 
         var selectedConnection = await AppHostConnectionHelper.GetSelectedConnectionAsync(monitor, NullLogger.Instance, TestContext.Current.CancellationToken);
 
         Assert.Same(connection, selectedConnection);
+    }
+
+    [Fact]
+    public async Task SelectAppHostTool_MissingPathDoesNotExposeRequestedOrAvailableAbsolutePaths()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var firstDirectory = workspace.WorkspaceRoot.CreateSubdirectory("FirstAppHost");
+        var secondDirectory = workspace.WorkspaceRoot.CreateSubdirectory("SecondAppHost");
+        var firstAppHostPath = Path.Combine(firstDirectory.FullName, "First.AppHost.csproj");
+        var secondAppHostPath = Path.Combine(secondDirectory.FullName, "Second.AppHost.csproj");
+        var requestedAppHostPath = Path.Combine(workspace.WorkspaceRoot.FullName, "Missing", "Missing.AppHost.csproj");
+        File.WriteAllText(firstAppHostPath, "<Project />");
+        File.WriteAllText(secondAppHostPath, "<Project />");
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+        var firstConnection = CreateConnection(firstAppHostPath, processId: 1);
+        var secondConnection = CreateConnection(secondAppHostPath, processId: 2);
+        monitor.AddConnection(firstConnection.Hash, firstConnection.SocketPath, firstConnection);
+        monitor.AddConnection(secondConnection.Hash, secondConnection.SocketPath, secondConnection);
+        var tool = new SelectAppHostTool(
+            monitor,
+            TestExecutionContextHelper.CreateExecutionContext(workspace.WorkspaceRoot));
+
+        var result = await tool.CallToolAsync(
+            CallToolContextTestHelper.Create(CreateArguments(requestedAppHostPath)),
+            TestContext.Current.CancellationToken).DefaultTimeout();
+
+        Assert.True(result.IsError is true);
+        Assert.Null(monitor.SelectedAppHostPath);
+        AssertPathFreeSelectionError(
+            result,
+            "No running AppHost matched 'appHostPath'. Other AppHosts are currently running.",
+            requestedAppHostPath,
+            firstAppHostPath,
+            secondAppHostPath);
     }
 
     private static Dictionary<string, JsonElement> CreateArguments(string appHostPath)
@@ -111,4 +146,14 @@ public class SelectAppHostToolTests(ITestOutputHelper outputHelper)
 
     private static string GetResultText(CallToolResult result)
         => result.Content?.OfType<TextContentBlock>().FirstOrDefault()?.Text ?? string.Empty;
+
+    private static void AssertPathFreeSelectionError(
+        CallToolResult result,
+        string expectedMessage,
+        params string[] absolutePaths)
+    {
+        var text = GetResultText(result);
+        Assert.Equal(expectedMessage, text);
+        Assert.All(absolutePaths, path => Assert.DoesNotContain(path, text, StringComparison.Ordinal));
+    }
 }

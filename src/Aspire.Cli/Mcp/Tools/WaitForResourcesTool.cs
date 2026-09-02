@@ -145,7 +145,7 @@ internal sealed class WaitForResourcesTool(
                 .Distinct(StringComparers.ResourceName)
                 .ToArray();
             if (eligibleNames.Length > MaximumResourceNameCount ||
-                eligibleNames.Any(static name => name.Length > MaximumResourceNameLength))
+                eligibleNames.Any(static name => ExceedsMaximumResourceNameLength(name)))
             {
                 throw new McpProtocolException(
                     $"The selected AppHost has too many resources to wait for implicitly. Specify resourceNames in batches of at most {MaximumResourceNameCount}.",
@@ -247,7 +247,7 @@ internal sealed class WaitForResourcesTool(
                 .EnumerateArray()
                 .Select(static item => item.GetString()!)
                 .ToArray();
-            if (resourceNames.Any(static name => name.EnumerateRunes().Count() > MaximumResourceNameLength))
+            if (resourceNames.Any(static name => ExceedsMaximumResourceNameLength(name)))
             {
                 throw new McpProtocolException(
                     $"Each 'resourceNames' item must contain no more than {MaximumResourceNameLength} characters.",
@@ -289,6 +289,11 @@ internal sealed class WaitForResourcesTool(
         }
 
         return new WaitForResourcesArguments(resourceNames, targetState, timeoutSeconds);
+    }
+
+    private static bool ExceedsMaximumResourceNameLength(string resourceName)
+    {
+        return resourceName.EnumerateRunes().Count() > MaximumResourceNameLength;
     }
 
     private static string GetOverallOutcome(IReadOnlyList<WaitForResourceResultJson> resources)

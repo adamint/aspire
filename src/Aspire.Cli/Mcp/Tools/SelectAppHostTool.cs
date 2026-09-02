@@ -91,21 +91,13 @@ internal sealed class SelectAppHostTool(IAuxiliaryBackchannelMonitor auxiliaryBa
 
         if (matchingConnection == null)
         {
-            // List available AppHosts
-            var availableAppHosts = auxiliaryBackchannelMonitor.Connections
-                .Where(c => c.AppHostInfo?.AppHostPath != null)
-                .Select(c => c.AppHostInfo!.AppHostPath)
-                .ToList();
-
-            var message = $"No running AppHost found at path '{resolvedPath}'.";
-            if (availableAppHosts.Count > 0)
-            {
-                message += $" Available AppHosts:\n{string.Join("\n", availableAppHosts.Select(p => $"  - {p}"))}";
-            }
-            else
-            {
-                message += " No AppHosts are currently running.";
-            }
+            // The requested and available paths are local machine details. Keep the model-facing
+            // error useful but path-free even when the caller supplied an absolute path.
+            var hasAvailableAppHosts = auxiliaryBackchannelMonitor.Connections
+                .Any(static connection => connection.AppHostInfo?.AppHostPath is not null);
+            var message = hasAvailableAppHosts
+                ? "No running AppHost matched 'appHostPath'. Other AppHosts are currently running."
+                : "No running AppHost matched 'appHostPath'. No AppHosts are currently running.";
 
             return ValueTask.FromResult(new CallToolResult
             {
