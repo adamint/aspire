@@ -12,6 +12,7 @@ import { azureFunctionsDebuggerExtension } from "./languages/azureFunctions";
 import { goDebuggerExtension } from "./languages/go";
 import { createDefaultRustDebuggerExtension } from "./languages/rust";
 import { bunDebuggerExtension } from "./languages/bun";
+import { denoDebuggerExtension } from "./languages/deno";
 import { javaDebuggerExtension } from "./languages/java";
 import { mauiDebuggerExtension } from "./languages/maui";
 import { isDirectory } from "../utils/io";
@@ -136,6 +137,8 @@ export function getResourceDebuggerExtensions(platform: NodeJS.Platform = proces
     if (isBunInstalled()) {
         extensions.push(bunDebuggerExtension);
     }
+
+    extensions.push(denoDebuggerExtension);
 
     if (isMauiInstalled()) {
         extensions.push(mauiDebuggerExtension);
