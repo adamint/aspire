@@ -93,7 +93,7 @@ export class EditorUiHandoffService implements EditorUiHandoffOperations {
             }
 
             const resolvedBehavior = resolveExplicitDashboardLaunchBehavior(
-                vscode.workspace.getConfiguration('aspire'),
+                vscode.workspace.getConfiguration('aspire', vscode.Uri.file(target.absolutePath)),
                 editorSession.configuration.dashboardBrowser);
             throwIfCanceled(token);
 

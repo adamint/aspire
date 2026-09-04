@@ -2670,6 +2670,65 @@ suite('Editor assistance AppHost services', () => {
             }
         });
 
+        test('uses the selected AppHost workspace folder Dashboard configuration', async () => {
+            const secondAppHostProjectPath = path.join(secondWorkspaceRoot, 'AppHost', 'AppHost.csproj');
+            fs.mkdirSync(path.dirname(secondAppHostProjectPath), { recursive: true });
+            fs.writeFileSync(secondAppHostProjectPath, appHostProjectContents);
+            addCandidate(discoveryService, secondWorkspaceRoot, secondAppHostProjectPath);
+            workspaceFoldersStub.value([
+                createWorkspaceFolder(workspaceRoot, 'workspace', 0),
+                createWorkspaceFolder(secondWorkspaceRoot, 'second', 1),
+            ]);
+
+            const sandbox = sinon.createSandbox();
+            try {
+                const expectedConfigurationScope = vscode.Uri.file(secondAppHostProjectPath);
+                const getConfiguration = sandbox.stub(vscode.workspace, 'getConfiguration').callsFake(
+                    (_section?: string, resource?: vscode.ConfigurationScope | null) => createAspireConfiguration({
+                        dashboardBrowser: resource instanceof vscode.Uri &&
+                            resource.fsPath === expectedConfigurationScope.fsPath
+                            ? 'debugEdge'
+                            : 'openExternalBrowser',
+                    }));
+                const ownedOpenDashboard = sandbox.stub().resolves('debugBrowser');
+                dashboardSessionsByIdentity.set(
+                    resolver.getIdentityForAppHostPath(secondAppHostProjectPath),
+                    [{
+                        cliProcessId: 2002,
+                        configuration: {},
+                        isShuttingDown: false,
+                        openDashboard: ownedOpenDashboard,
+                    }]);
+                uiRepository.appHosts = [{
+                    ...createRunningAppHost(
+                        secondAppHostProjectPath,
+                        'https://dashboard.example.invalid/login?t=private'),
+                    cliPid: 2002,
+                }];
+
+                const result = await service.openDashboard(
+                    { appHostPath: 'second/AppHost/AppHost.csproj' },
+                    new vscode.CancellationTokenSource().token);
+
+                assert.deepStrictEqual(result, {
+                    success: true,
+                    tool: aspireOpenDashboardToolName,
+                    outcome: 'opened',
+                    presentation: 'debugBrowser',
+                });
+                assert.strictEqual(getConfiguration.callCount, 1);
+                assert.strictEqual(getConfiguration.firstCall.args[0], 'aspire');
+                assert.strictEqual(
+                    (getConfiguration.firstCall.args[1] as vscode.Uri).fsPath,
+                    expectedConfigurationScope.fsPath);
+                assert.strictEqual(ownedOpenDashboard.callCount, 1);
+                assert.strictEqual(ownedOpenDashboard.firstCall.args[1], 'debugEdge');
+            }
+            finally {
+                sandbox.restore();
+            }
+        });
+
         test('reuses the exact editor-owned Dashboard launcher and rejects ownerless rows', async () => {
             const sandbox = sinon.createSandbox();
             try {

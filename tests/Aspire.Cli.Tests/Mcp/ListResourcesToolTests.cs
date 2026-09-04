@@ -479,6 +479,35 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task ListResourcesTool_BoundsSourceByUnicodeScalarsAndSanitizesControls()
+    {
+        const string AstralRune = "\U0001F680";
+        var sourceValue = new string('x', 254) + "\n" + AstralRune + "-truncated";
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+        monitor.AddConnection(
+            "hash1",
+            "socket.hash1",
+            CreateConnection(new ResourceSnapshot
+            {
+                Name = "unicode-source",
+                ResourceType = "Container",
+                State = "Running",
+                Properties = new Dictionary<string, JsonNode?>
+                {
+                    [KnownProperties.Container.Image] = JsonValue.Create(sourceValue)
+                }
+            }));
+        var tool = new ListResourcesTool(monitor, NullLogger<ListResourcesTool>.Instance);
+
+        var result = await tool.CallToolAsync(CallToolContextTestHelper.Create(), CancellationToken.None).DefaultTimeout();
+
+        using var json = GetResourceData(result);
+        var source = Assert.IsType<string>(json.RootElement[0].GetProperty("source").GetString());
+        Assert.Equal(new string('x', 254) + " " + AstralRune, source);
+        Assert.Equal(256, source.EnumerateRunes().Count());
+    }
+
+    [Fact]
     public async Task ListResourcesTool_AppliesResourceEndpointUrlPolicy()
     {
         var monitor = new TestAuxiliaryBackchannelMonitor();

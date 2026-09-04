@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -434,17 +435,21 @@ internal sealed class ListResourcesTool(IAuxiliaryBackchannelMonitor auxiliaryBa
             return null;
         }
 
-        var sanitized = string.Create(
-            Math.Min(value.Length, MaxTextLength),
-            value,
-            static (destination, source) =>
+        // The MCP contract bounds model-facing text in Unicode scalar values. Enumerating runes
+        // avoids emitting half of a UTF-16 surrogate pair at the truncation boundary.
+        var result = new StringBuilder(Math.Min(value.Length, MaxTextLength * 2));
+        var runeCount = 0;
+        foreach (var rune in value.EnumerateRunes())
+        {
+            if (runeCount == MaxTextLength)
             {
-                for (var index = 0; index < destination.Length; index++)
-                {
-                    var character = source[index];
-                    destination[index] = char.IsControl(character) ? ' ' : character;
-                }
-            });
-        return sanitized;
+                break;
+            }
+
+            result.Append(Rune.IsControl(rune) ? " " : rune.ToString());
+            runeCount++;
+        }
+
+        return result.ToString();
     }
 }
