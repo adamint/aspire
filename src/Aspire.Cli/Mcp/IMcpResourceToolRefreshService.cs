@@ -64,6 +64,7 @@ internal sealed record ResourceToolEntry(string ResourceName, Tool Tool)
             Name = exposedName,
             Description = Tool.Description,
             InputSchema = Tool.InputSchema,
+            OutputSchema = Tool.OutputSchema,
             Annotations = Tool.Annotations
         };
     }

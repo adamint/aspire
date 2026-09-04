@@ -628,8 +628,9 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
                     cancellationToken: ctx.Cts.Token).DefaultTimeout());
 
             Assert.Equal(McpErrorCode.MethodNotFound, exception.ErrorCode);
-            Assert.Contains(toolName, exception.Message);
-            Assert.Contains(appHostPath, exception.Message);
+            Assert.Equal(
+                $"Request failed (remote): Tool '{toolName}' is not available because this MCP server is pinned to an AppHost. Start an unpinned MCP server to use AppHost selection tools.",
+                exception.Message);
         }
     }
 
@@ -1265,9 +1266,21 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal(0, notificationCount);
     }
 
+    [Fact]
+    public void ResourceToolEntry_ToProtocolTool_PreservesOutputSchema()
+    {
+        var source = CreateResourceToolContract();
+        var projected = new ResourceToolEntry("resource", source).ToProtocolTool("resource_contract_tool");
+
+        Assert.True(source.OutputSchema.HasValue);
+        Assert.True(projected.OutputSchema.HasValue);
+        Assert.True(JsonElement.DeepEquals(source.OutputSchema.Value, projected.OutputSchema.Value));
+    }
+
     [Theory]
     [InlineData(ResourceToolContractMutation.Description)]
     [InlineData(ResourceToolContractMutation.InputSchema)]
+    [InlineData(ResourceToolContractMutation.OutputSchema)]
     [InlineData(ResourceToolContractMutation.AnnotationTitle)]
     [InlineData(ResourceToolContractMutation.DestructiveHint)]
     [InlineData(ResourceToolContractMutation.IdempotentHint)]
@@ -1858,6 +1871,15 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
                   }
                 }
                 """),
+            OutputSchema = ParseJsonElement(
+                """
+                {
+                  "type": "object",
+                  "properties": {
+                    "result": { "type": "string" }
+                  }
+                }
+                """),
             Annotations = new ToolAnnotations
             {
                 Title = "Initial title",
@@ -1885,6 +1907,18 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
                         "first": { "type": "string" },
                         "second": { "type": "integer" },
                         "third": { "type": "boolean" }
+                      }
+                    }
+                    """);
+                break;
+            case ResourceToolContractMutation.OutputSchema:
+                tool.OutputSchema = ParseJsonElement(
+                    """
+                    {
+                      "type": "object",
+                      "properties": {
+                        "result": { "type": "string" },
+                        "metadata": { "type": "object" }
                       }
                     }
                     """);
@@ -1981,6 +2015,7 @@ public class AgentMcpCommandTests(ITestOutputHelper outputHelper)
     {
         Description,
         InputSchema,
+        OutputSchema,
         AnnotationTitle,
         DestructiveHint,
         IdempotentHint,

@@ -167,7 +167,19 @@ internal sealed class McpResourceToolRefreshService : IMcpResourceToolRefreshSer
         return string.Equals(previous.Name, current.Name, StringComparison.Ordinal) &&
             string.Equals(previous.Description, current.Description, StringComparison.Ordinal) &&
             JsonElement.DeepEquals(previous.InputSchema, current.InputSchema) &&
+            JsonSchemasAreEquivalent(previous.OutputSchema, current.OutputSchema) &&
             ToolAnnotationsAreEquivalent(previous.Annotations, current.Annotations);
+    }
+
+    private static bool JsonSchemasAreEquivalent(JsonElement? previous, JsonElement? current)
+    {
+        if (previous is not { } previousValue)
+        {
+            return current is null;
+        }
+
+        return current is { } currentValue &&
+            JsonElement.DeepEquals(previousValue, currentValue);
     }
 
     private static bool ToolAnnotationsAreEquivalent(ToolAnnotations? previous, ToolAnnotations? current)

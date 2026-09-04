@@ -5002,7 +5002,18 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         writeFileSync(appHostPath, '');
         const outputPath = join(dirname(appHostPath), 'bin', 'AppHost.dll');
         const rawBuildOutput = 'raw-build-output';
-        sinon.stub(childProcess, 'execFile').yields(null, { stdout: outputPath, stderr: '' });
+        sinon.stub(childProcess, 'execFile').yields(null, {
+            stdout: JSON.stringify({
+                Properties: {
+                    TargetPath: outputPath,
+                    RunCommand: '',
+                    UseAppHost: 'false',
+                    UseWinUI: 'false',
+                    WindowsPackageType: '',
+                },
+            }),
+            stderr: '',
+        });
         const buildProcess = Object.assign(new EventEmitter(), {
             stdout: new PassThrough(),
             stderr: new PassThrough(),

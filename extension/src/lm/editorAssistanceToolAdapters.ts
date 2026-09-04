@@ -204,5 +204,3 @@ function createToolResult(result: EditorAssistanceToolResult): vscode.LanguageMo
         new vscode.LanguageModelTextPart(JSON.stringify(result)),
     ]);
 }
-
-

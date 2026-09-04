@@ -322,7 +322,7 @@ internal sealed class AgentMcpCommand : BaseCommand
         if (IsToolHiddenByPinnedMode(toolName))
         {
             throw new McpProtocolException(
-                $"Tool '{toolName}' is not available because this MCP server is pinned to --apphost '{_pinnedAppHostPath}'. Start an unpinned MCP server to use AppHost selection tools.",
+                $"Tool '{toolName}' is not available because this MCP server is pinned to an AppHost. Start an unpinned MCP server to use AppHost selection tools.",
                 McpErrorCode.MethodNotFound);
         }
 
