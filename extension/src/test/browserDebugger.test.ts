@@ -1,12 +1,25 @@
 import * as assert from 'assert';
+import * as path from 'path';
+import {
+    getCsharpBlazorWasmDebuggingSupport,
+    minimumCsharpBlazorWasmDebuggingVersion,
+    useCsharpExtensionVersionProviderForTests,
+} from '../capabilities';
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
 import { browserDebuggerExtension } from '../debugger/languages/browser';
 import { AspireResourceExtendedDebugConfiguration, BrowserLaunchConfiguration } from '../dcp/types';
-import { unsupportedBrowserDebugTarget, unsupportedBrowserDebugTargetWithoutUrl } from '../loc/strings';
+import {
+    csharpExtensionMissingForBlazorDebugging,
+    csharpExtensionOutdatedForBlazorDebugging,
+    missingBlazorClientProject,
+    unsupportedBrowserDebugTarget,
+    unsupportedBrowserDebugTargetWithoutUrl,
+} from '../loc/strings';
 
 suite('Browser Debugger Tests', () => {
     const fakeAspireDebugSession = {} as AspireDebugSession;
     const BROWSER_RESOURCE_URL = 'http://localhost:5173';
+    const BLAZOR_PROJECT_PATH = path.resolve(__dirname, '..', '..', '..', 'src', 'Aspire.Cli', 'Aspire.Cli.csproj');
 
     async function createConfiguration(
         launchConfig: BrowserLaunchConfiguration,
@@ -16,6 +29,136 @@ suite('Browser Debugger Tests', () => {
 
         return debugConfig;
     }
+
+    async function createManagedConfiguration(
+        browser: 'msedge' | 'chrome',
+        inheritedConfiguration: Partial<AspireResourceExtendedDebugConfiguration> = {}): Promise<AspireResourceExtendedDebugConfiguration> {
+        const provider = useCsharpExtensionVersionProviderForTests(() => minimumCsharpBlazorWasmDebuggingVersion);
+        try {
+            return await createConfiguration(
+                { type: 'browser', url: BROWSER_RESOURCE_URL, browser, web_root: BLAZOR_PROJECT_PATH },
+                inheritedConfiguration);
+        }
+        finally {
+            provider.dispose();
+        }
+    }
+
+    test('classifies C# extension versions for Blazor WebAssembly debugging', () => {
+        const cases = [
+            { version: undefined, expected: { status: 'missing' } },
+            { version: '2.145.14', expected: { status: 'outdated', installedVersion: '2.145.14' } },
+            { version: '2.145.15-prerelease', expected: { status: 'supported', installedVersion: '2.145.15-prerelease' } },
+            { version: '2.145.15', expected: { status: 'supported', installedVersion: '2.145.15' } },
+            { version: '2.146.0', expected: { status: 'supported', installedVersion: '2.146.0' } },
+            { version: '3.0.0', expected: { status: 'supported', installedVersion: '3.0.0' } },
+            { version: '', expected: { status: 'outdated', installedVersion: '' } },
+            { version: 'not-a-version', expected: { status: 'outdated', installedVersion: 'not-a-version' } },
+            { version: '2.145', expected: { status: 'outdated', installedVersion: '2.145' } },
+            { version: '9007199254740992.0.0', expected: { status: 'outdated', installedVersion: '9007199254740992.0.0' } },
+        ] as const;
+
+        for (const { version, expected } of cases) {
+            const provider = useCsharpExtensionVersionProviderForTests(() => version);
+            try {
+                assert.deepStrictEqual(getCsharpBlazorWasmDebuggingSupport(), expected);
+            }
+            finally {
+                provider.dispose();
+            }
+        }
+    });
+
+    for (const [browser, expectedBrowser] of [['msedge', 'edge'], ['chrome', 'chrome']] as const) {
+        test(`maps a ${browser} Blazor client project to the C# extension attach contract`, async () => {
+            const debugConfig = await createManagedConfiguration(browser, {
+                projectFile: '/workspace/AppHost.csproj',
+                isApphost: false,
+                webRoot: '/workspace/previous',
+                sourceMaps: true,
+                resolveSourceMapLocations: ['**'],
+                sourceMapPathOverrides: { '/src/*': '/workspace/*' },
+                outFiles: ['/workspace/**/*.js'],
+                userDataDir: '/workspace/profile',
+                runtimeArgs: ['--user-data-dir=/workspace/profile'],
+            });
+
+            assert.deepStrictEqual(debugConfig, {
+                runId: '1',
+                debugSessionId: '1',
+                type: 'blazorwasm',
+                name: 'Browser',
+                request: 'attach',
+                projectFile: '/workspace/AppHost.csproj',
+                isApphost: false,
+                projectPath: BLAZOR_PROJECT_PATH,
+                url: BROWSER_RESOURCE_URL,
+                browser: expectedBrowser,
+            });
+        });
+    }
+
+    test('detects Blazor client project extensions case-insensitively', async () => {
+        const upperCaseProjectPath = path.join(path.dirname(BLAZOR_PROJECT_PATH), 'Missing.Client.CSPROJ');
+        const provider = useCsharpExtensionVersionProviderForTests(() => minimumCsharpBlazorWasmDebuggingVersion);
+        try {
+            await assert.rejects(
+                () => createConfiguration({
+                    type: 'browser',
+                    url: BROWSER_RESOURCE_URL,
+                    browser: 'chrome',
+                    web_root: upperCaseProjectPath,
+                }),
+                new RegExp(escapeForRegExp(missingBlazorClientProject(upperCaseProjectPath))));
+        }
+        finally {
+            provider.dispose();
+        }
+    });
+
+    test('reports when the C# extension is missing for a Blazor client project', async () => {
+        const provider = useCsharpExtensionVersionProviderForTests(() => undefined);
+        try {
+            await assert.rejects(
+                () => createConfiguration({ type: 'browser', url: BROWSER_RESOURCE_URL, web_root: BLAZOR_PROJECT_PATH }),
+                new RegExp(escapeForRegExp(csharpExtensionMissingForBlazorDebugging(
+                    'ms-dotnettools.csharp',
+                    minimumCsharpBlazorWasmDebuggingVersion))));
+        }
+        finally {
+            provider.dispose();
+        }
+    });
+
+    for (const version of ['2.145.14', 'not-a-version']) {
+        test(`reports when C# extension version ${version} cannot debug a Blazor client project`, async () => {
+            const provider = useCsharpExtensionVersionProviderForTests(() => version);
+            try {
+                await assert.rejects(
+                    () => createConfiguration({ type: 'browser', url: BROWSER_RESOURCE_URL, web_root: BLAZOR_PROJECT_PATH }),
+                    new RegExp(escapeForRegExp(csharpExtensionOutdatedForBlazorDebugging(
+                        'ms-dotnettools.csharp',
+                        version,
+                        minimumCsharpBlazorWasmDebuggingVersion))));
+            }
+            finally {
+                provider.dispose();
+            }
+        });
+    }
+
+    test('reports a missing Blazor client project without falling back to js-debug', async () => {
+        const missingProjectPath = path.join(path.dirname(BLAZOR_PROJECT_PATH), 'Missing.Client.csproj');
+        const provider = useCsharpExtensionVersionProviderForTests(() => minimumCsharpBlazorWasmDebuggingVersion);
+        try {
+            await assert.rejects(
+                () => createConfiguration({ type: 'browser', url: BROWSER_RESOURCE_URL, web_root: missingProjectPath }),
+                new RegExp(escapeForRegExp(missingBlazorClientProject(missingProjectPath))));
+        }
+        finally {
+            provider.dispose();
+        }
+    });
 
     test('defaults to the built-in js-debug Edge adapter', async () => {
         const debugConfig = await createConfiguration({ type: 'browser', url: 'http://localhost:5173' });
@@ -38,6 +181,32 @@ suite('Browser Debugger Tests', () => {
         const debugConfig = await createConfiguration({ type: 'browser', url: 'http://localhost:5173', web_root: '/workspace/frontend/src' });
 
         assert.strictEqual(debugConfig.webRoot, '/workspace/frontend/src');
+    });
+
+    test('hardens generic Chromium arguments and removes user data directory switches', async () => {
+        const debugConfig = await createConfiguration(
+            { type: 'browser', url: BROWSER_RESOURCE_URL, browser: 'chrome', web_root: '/workspace/frontend/src' },
+            {
+                runtimeArgs: [
+                    '--preserved',
+                    '--USER-DATA-DIR=/workspace/combined',
+                    '--user-data-dir',
+                    '/workspace/split',
+                    '--no-first-run',
+                    '--no-first-run',
+                    '--USER-DATA-DIR',
+                    '--disable-extensions',
+                ],
+            });
+
+        assert.strictEqual(debugConfig.userDataDir, true);
+        assert.deepStrictEqual(debugConfig.runtimeArgs, [
+            '--preserved',
+            '--disable-extensions',
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-background-mode',
+        ]);
     });
 
     // js-debug has no way to express "no web root": it defaults webRoot to '${workspaceFolder}'

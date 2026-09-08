@@ -42,9 +42,71 @@ export function isCsDevKitInstalled() {
 }
 
 export const csharpExtensionId = 'ms-dotnettools.csharp';
+export const minimumCsharpBlazorWasmDebuggingVersion = '2.145.15-prerelease';
 export const azureFunctionsExtensionId = 'ms-azuretools.vscode-azurefunctions';
 export const mauiExtensionId = 'ms-dotnettools.dotnet-maui';
 export const codeLldbExtensionId = 'vadimcn.vscode-lldb';
+
+type CsharpExtensionVersionProvider = () => string | undefined;
+let csharpExtensionVersionProvider: CsharpExtensionVersionProvider = () => {
+    const extension = vscode.extensions.getExtension(csharpExtensionId);
+    return typeof extension?.packageJSON?.version === 'string' ? extension.packageJSON.version : undefined;
+};
+
+export type CsharpBlazorWasmDebuggingSupport =
+    | { status: 'missing' }
+    | { status: 'outdated'; installedVersion: string }
+    | { status: 'supported'; installedVersion: string };
+
+export function useCsharpExtensionVersionProviderForTests(provider: CsharpExtensionVersionProvider): vscode.Disposable {
+    const previous = csharpExtensionVersionProvider;
+    csharpExtensionVersionProvider = provider;
+    return new vscode.Disposable(() => { csharpExtensionVersionProvider = previous; });
+}
+
+export function getCsharpBlazorWasmDebuggingSupport(): CsharpBlazorWasmDebuggingSupport {
+    const installedVersion = csharpExtensionVersionProvider();
+    if (installedVersion === undefined) {
+        return { status: 'missing' };
+    }
+
+    const installedCore = parseNumericVersionCore(installedVersion);
+    const minimumCore = parseNumericVersionCore(minimumCsharpBlazorWasmDebuggingVersion)!;
+    if (!installedCore || compareNumericVersionCores(installedCore, minimumCore) < 0) {
+        return { status: 'outdated', installedVersion };
+    }
+
+    return { status: 'supported', installedVersion };
+}
+
+type NumericVersionCore = readonly [major: number, minor: number, patch: number];
+
+function parseNumericVersionCore(version: string): NumericVersionCore | undefined {
+    // The Blazor attach contract shipped in a prerelease but remains available in the stable build
+    // with the same numeric core, so only major.minor.patch affects support. Keep the parser bounded
+    // to three safe integer components rather than accepting the broader semver grammar.
+    const match = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$/.exec(version);
+    if (!match) {
+        return undefined;
+    }
+
+    const core: NumericVersionCore = [Number(match[1]), Number(match[2]), Number(match[3])];
+    if (core.some(component => !Number.isSafeInteger(component))) {
+        return undefined;
+    }
+
+    return core;
+}
+
+function compareNumericVersionCores(left: NumericVersionCore, right: NumericVersionCore): number {
+    for (let index = 0; index < left.length; index++) {
+        if (left[index] !== right[index]) {
+            return left[index] - right[index];
+        }
+    }
+
+    return 0;
+}
 
 export function isCsharpInstalled() {
     return isExtensionInstalled(csharpExtensionId);
