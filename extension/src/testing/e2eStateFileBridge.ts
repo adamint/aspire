@@ -21,10 +21,11 @@ import { extensionLogOutputChannel } from '../utils/logging';
 import { onDidInvokeCommand } from '../utils/telemetry';
 import { AspireAppHostTreeProvider } from '../views/AspireAppHostTreeProvider';
 import { ResourceItem } from '../views/treeItems/resourceItems';
-import { ResourceJson } from '../data/appHostCliContracts';
+import { ResourceCommandJson, ResourceJson } from '../data/appHostCliContracts';
 import { AppHostDataRepository } from '../data/AppHostDataRepository';
-import { getSupportedCapabilities, javaLanguageExtensionId } from '../capabilities';
+import { getSupportedCapabilities, javaLanguageExtensionId, useCsharpExtensionVersionProviderForTests } from '../capabilities';
 import { getCliPathTargetKey, workspaceFolderCliPathTarget } from '../utils/cliPathVariables';
+import { isEnabledCommand } from '../views/treePresentation';
 
 let atomicWriteSequence = 0;
 
@@ -284,8 +285,8 @@ export function createE2eStateFileBridge(
   return vscode.Disposable.from(stateSubscription, commandSubscription, terminalCommandSubscription, debugLaunchSubscription, debugConsoleOutputSubscription, taskStartSubscription, taskEndSubscription, browserDebugSessionStartSubscription, browserDebugSessionEndSubscription, controlSubscription);
 }
 
-function isBrowserDebugSessionType(type: string): boolean {
-  return type === 'pwa-chrome' || type === 'pwa-msedge' || type === 'firefox';
+export function isBrowserDebugSessionType(type: string): boolean {
+  return type === 'blazorwasm' || type === 'pwa-chrome' || type === 'pwa-msedge';
 }
 
 function trimTaskProcessEvents(events: AspireExtensionE2ETaskProcessEvent[]): void {
@@ -733,6 +734,10 @@ export async function executeE2eControlCommand(
       }
 
       const runId = 'e2e-resource-debug-configuration';
+      const csharpExtensionVersion = getE2eCsharpExtensionVersion(command.csharpExtensionVersion);
+      const csharpExtensionVersionProvider = csharpExtensionVersion === undefined
+        ? undefined
+        : useCsharpExtensionVersionProviderForTests(() => csharpExtensionVersion ?? undefined);
       try {
         const debugSessionConfiguration = {
           type: 'aspire',
@@ -765,12 +770,17 @@ export async function executeE2eControlCommand(
           }
           : loggableConfiguration;
       } finally {
+        csharpExtensionVersionProvider?.dispose();
         cleanupRun(runId);
       }
     }
     case 'proveAppHostAndResourceDebugging': {
       markStarted();
       return await proveAppHostAndResourceDebugging(command, aspireContext, appHostTreeProvider);
+    }
+    case 'proveBlazorWasmDebugging': {
+      markStarted();
+      return await proveBlazorWasmDebugging(command, appHostTreeProvider);
     }
     case 'proveMauiResourceDebugging': {
       markStarted();
@@ -1027,7 +1037,16 @@ function getE2eEnvVars(value: unknown): EnvVar[] {
   return value.map(item => ({ name: item.name, value: item.value }));
 }
 
+function getE2eCsharpExtensionVersion(value: unknown): string | null | undefined {
+  if (value !== undefined && value !== null && typeof value !== 'string') {
+    throw new Error('Aspire extension E2E createResourceDebugConfiguration csharpExtensionVersion must be a string or null when provided.');
+  }
+
+  return value;
+}
+
 type AppHostAndResourceDebugProofCommand = Extract<AspireExtensionE2EControlCommand, { name: 'proveAppHostAndResourceDebugging' }>;
+type BlazorWasmDebugProofCommand = Extract<AspireExtensionE2EControlCommand, { name: 'proveBlazorWasmDebugging' }>;
 type MauiResourceDebugProofCommand = Extract<AspireExtensionE2EControlCommand, { name: 'proveMauiResourceDebugging' }>;
 
 interface DebugSessionSnapshot {
@@ -1064,9 +1083,26 @@ interface DebugAdapterMessageSummary {
   sessionId: string;
   sessionType: string;
   sessionName: string;
+  sequence?: number;
+  requestSequence?: number;
   command?: string;
   success?: boolean;
+  arguments?: unknown;
   body?: unknown;
+}
+
+interface DebugAdapterStackTraceResponse extends DebugAdapterMessageSummary {
+  success: boolean;
+  error?: string;
+  body?: {
+    stackFrames?: Array<{
+      id?: number;
+      name?: string;
+      source?: { path?: string };
+      line?: number;
+      column?: number;
+    }>;
+  };
 }
 
 async function proveAppHostAndResourceDebugging(command: AppHostAndResourceDebugProofCommand, aspireContext: AspireExtensionContext, appHostTreeProvider: AspireAppHostTreeProvider): Promise<unknown> {
@@ -1282,6 +1318,465 @@ ${JSON.stringify({
     sessionSubscription.dispose();
     trackerRegistration.dispose();
     await vscode.debug.stopDebugging();
+  }
+}
+
+async function proveBlazorWasmDebugging(command: BlazorWasmDebugProofCommand, appHostTreeProvider: AspireAppHostTreeProvider): Promise<unknown> {
+  const appHostPath = getE2eWorkspacePath(command.appHostPath);
+  const sourcePath = getE2eWorkspacePath(command.sourcePath);
+  const resourceName = getE2eRequiredString(command.resourceName, 'Aspire extension E2E Blazor WASM proof requires resourceName.');
+  const breakpointLine = getE2ePositiveBreakpointLine(command.breakpointLine);
+  const requestPath = getE2eRequiredString(command.requestPath, 'Aspire extension E2E Blazor WASM proof requires requestPath.');
+  const expectedBrowser = getE2eBlazorBrowser(command.expectedBrowser);
+  const closeMode = getE2eBlazorCloseMode(command.closeMode);
+  const timeoutMs = getE2eStrictlyPositiveInteger(command.timeoutMs, 300000, 'timeoutMs');
+  const deadline = Date.now() + timeoutMs;
+
+  const debugSessions: DebugSessionSnapshot[] = [];
+  const sessionById = new Map<string, vscode.DebugSession>();
+  const activeSessionIds = new Set<string>();
+  const launchRequests: DebugAdapterMessageSummary[] = [];
+  const debugAdapterResponses: DebugAdapterMessageSummary[] = [];
+  const breakpointRequests: DebugAdapterMessageSummary[] = [];
+  const breakpointResponses: DebugAdapterMessageSummary[] = [];
+  const stoppedEvents: DebugAdapterStoppedEvent[] = [];
+  const outputEvents: DebugAdapterOutputEvent[] = [];
+  const stackTraceResponses: DebugAdapterStackTraceResponse[] = [];
+  let rootSessionForCleanup: vscode.DebugSession | undefined;
+
+  const diagnostics = () => ({
+    debugSessions,
+    launchRequests,
+    debugAdapterResponses,
+    breakpointRequests,
+    breakpointResponses,
+    stoppedEvents,
+    outputEvents,
+    stackTraceResponses,
+  });
+  const describeDiagnostics = () => JSON.stringify(diagnostics());
+  const remainingTime = (description: string) => {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      throw new Error(`Timed out after ${timeoutMs}ms waiting for ${description}.`);
+    }
+
+    return remaining;
+  };
+  const waitForProofValue = async <T>(description: string, getValue: () => T | undefined | Promise<T | undefined>) =>
+    await waitForE2eValue(description, remainingTime(description), getValue, describeDiagnostics);
+  const runBeforeProofDeadline = async <T>(description: string, operation: () => Thenable<T>): Promise<T> => {
+    const operationTimeoutMs = remainingTime(description);
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        operation(),
+        new Promise<T>((_, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error(`Timed out after ${timeoutMs}ms waiting for ${description}.`)),
+            operationTimeoutMs);
+        }),
+      ]);
+    }
+    finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
+  };
+
+  const sessionSubscription = vscode.debug.onDidStartDebugSession(session => {
+    sessionById.set(session.id, session);
+    activeSessionIds.add(session.id);
+    pushBounded(debugSessions, toDebugSessionSnapshot(session), 100);
+  });
+  const terminateSubscription = vscode.debug.onDidTerminateDebugSession(session => {
+    activeSessionIds.delete(session.id);
+  });
+  const trackerRegistration = vscode.debug.registerDebugAdapterTrackerFactory('*', {
+    createDebugAdapterTracker(session) {
+      // Tracker construction can precede onDidStartDebugSession. Retain the live object so evidence
+      // emitted during adapter startup can still be connected to the later session topology.
+      sessionById.set(session.id, session);
+      return {
+        onWillReceiveMessage(message) {
+          if (message?.type === 'request' && (message.command === 'launch' || message.command === 'attach')) {
+            pushBounded(launchRequests, {
+              sessionId: session.id,
+              sessionType: session.type,
+              sessionName: session.name,
+              sequence: message.seq,
+              command: message.command,
+              arguments: redactDebugAdapterArguments(message.arguments),
+            }, 100);
+          }
+          if (message?.type === 'request' && (message.command === 'setBreakpoints' || message.command === 'configurationDone')) {
+            pushBounded(breakpointRequests, {
+              sessionId: session.id,
+              sessionType: session.type,
+              sessionName: session.name,
+              sequence: message.seq,
+              command: message.command,
+              arguments: redactDebugAdapterArguments(message.arguments),
+            }, 100);
+          }
+        },
+        onDidSendMessage(message) {
+          if (message?.type === 'response' && message.success === false) {
+            pushBounded(debugAdapterResponses, {
+              sessionId: session.id,
+              sessionType: session.type,
+              sessionName: session.name,
+              requestSequence: message.request_seq,
+              command: message.command,
+              success: message.success,
+              body: redactDebugAdapterArguments(message),
+            }, 100);
+          }
+          if (message?.type === 'response' && (message.command === 'setBreakpoints' || message.command === 'configurationDone')) {
+            pushBounded(breakpointResponses, {
+              sessionId: session.id,
+              sessionType: session.type,
+              sessionName: session.name,
+              requestSequence: message.request_seq,
+              command: message.command,
+              success: message.success,
+              body: redactDebugAdapterArguments(message.body),
+            }, 100);
+          }
+          if (message?.type === 'event' && message.event === 'stopped') {
+            pushBounded(stoppedEvents, {
+              sessionId: session.id,
+              sessionType: session.type,
+              sessionName: session.name,
+              reason: message.body?.reason,
+              threadId: message.body?.threadId,
+            }, 100);
+          }
+          if (message?.type === 'event' && message.event === 'output') {
+            pushBounded(outputEvents, {
+              sessionId: session.id,
+              sessionType: session.type,
+              output: String(message.body?.output ?? ''),
+            }, 200);
+          }
+        }
+      };
+    }
+  });
+
+  vscode.debug.removeBreakpoints(vscode.debug.breakpoints);
+  const breakpoint = new vscode.SourceBreakpoint(
+    new vscode.Location(vscode.Uri.file(sourcePath), new vscode.Position(breakpointLine, 0)),
+    true);
+  vscode.debug.addBreakpoints([breakpoint]);
+
+  try {
+    const debugCommandElement = getResourceCommandElement(appHostTreeProvider, {
+      name: 'executeResourceCommandItem',
+      appHostPath,
+      resourceName,
+      commandName: 'debug-in-browser',
+    });
+    await runBeforeProofDeadline(
+      `'debug-in-browser' command completion`,
+      () => vscode.commands.executeCommand('aspire-vscode.executeResourceCommandItem', debugCommandElement));
+
+    const rootSession = await waitForProofValue(
+      `Blazor WASM root session for resource '${resourceName}'`,
+      () => {
+        for (const session of sessionById.values()) {
+          if (session.type !== 'blazorwasm') {
+            continue;
+          }
+
+          const configuration = session.configuration as Record<string, unknown>;
+          const projectPath = configuration.projectPath;
+          if (configuration.browser !== expectedBrowser
+            || configuration.resourceType !== 'browser'
+            || typeof projectPath !== 'string'
+            || !isPathWithinDirectory(sourcePath, path.dirname(projectPath))) {
+            continue;
+          }
+
+          return session;
+        }
+
+        return undefined;
+      });
+    rootSessionForCleanup = rootSession;
+    const browserType = expectedBrowser === 'edge' ? 'pwa-msedge' : 'pwa-chrome';
+    const browserSession = await waitForProofValue(
+      `${browserType} child session for Blazor WASM root '${rootSession.id}'`,
+      () => [...sessionById.values()].find(session =>
+        session.type === browserType
+        && session.parentSession?.id === rootSession.id));
+
+    const breakpointEvidence = await waitForProofValue(
+      `successful setBreakpoints response for ${sourcePath}:${breakpointLine + 1}`,
+      () => findSuccessfulBreakpointResponse(
+        rootSession,
+        sourcePath,
+        breakpointLine + 1,
+        sessionById,
+        breakpointRequests,
+        breakpointResponses));
+    await waitForProofValue(
+      `managed sibling or child session for Blazor WASM root '${rootSession.id}'`,
+      () => [...sessionById.values()].find(session =>
+        isManagedProofSession(session, rootSession, sessionById)));
+
+    await runBeforeProofDeadline(
+      `browser navigation to '${requestPath}'`,
+      () => browserSession.customRequest('evaluate', {
+        expression: `window.location.assign(new URL(${JSON.stringify(requestPath)}, window.location.origin).href)`,
+        context: 'repl',
+      }));
+    await waitForProofValue(
+      `Blazor page '${requestPath}' to finish loading`,
+      async () => {
+        const response = await runBeforeProofDeadline(
+          `browser readiness evaluation for '${requestPath}'`,
+          () => browserSession.customRequest('evaluate', {
+            expression: "document.readyState === 'complete' && !!document.querySelector('button.btn-primary')",
+            context: 'repl',
+          })) as { result?: unknown };
+        return response?.result === true || response?.result === 'true' ? true : undefined;
+      });
+    await runBeforeProofDeadline(
+      'managed Counter button click',
+      () => browserSession.customRequest('evaluate', {
+        expression: "document.querySelector('button.btn-primary')?.click()",
+        context: 'repl',
+      }));
+
+    const breakpointHit = await waitForProofValue(
+      `managed breakpoint in ${sourcePath}:${breakpointLine + 1}`,
+      async () => await findManagedBreakpointHit(
+        rootSession,
+        sourcePath,
+        breakpointLine + 1,
+        sessionById,
+        stoppedEvents,
+        stackTraceResponses,
+        (session, threadId) => runBeforeProofDeadline(
+          `stack trace for managed session '${session.id}'`,
+          () => session.customRequest('stackTrace', {
+            threadId,
+            startFrame: 0,
+            levels: 20,
+          }))));
+
+    if (closeMode === 'explicit') {
+      const stopCommandElement = getResourceCommandElement(appHostTreeProvider, {
+        name: 'executeResourceCommandItem',
+        appHostPath,
+        resourceName,
+        commandName: 'stop-browser-debug',
+      });
+      await runBeforeProofDeadline(
+        `'stop-browser-debug' command completion`,
+        () => vscode.commands.executeCommand('aspire-vscode.executeResourceCommandItem', stopCommandElement));
+    }
+    else {
+      await runBeforeProofDeadline(
+        'browser window to close naturally',
+        () => browserSession.customRequest('evaluate', {
+          expression: 'window.close()',
+          context: 'repl',
+        }));
+    }
+
+    const proofSessionIds = new Set([rootSession.id, browserSession.id, breakpointHit.session.id]);
+    const commandStateAfterStop = await waitForProofValue(
+      `'debug-in-browser' to be enabled after ${closeMode} browser close`,
+      () => {
+        if ([...proofSessionIds].some(id => activeSessionIds.has(id))) {
+          return undefined;
+        }
+
+        const commandElement = appHostTreeProvider.findResourceCommandElement({
+          appHostPath,
+          resourceName,
+          commandName: 'debug-in-browser',
+        });
+        if (!commandElement || !hasResourceCommandShape(commandElement) || !isEnabledCommand(commandElement.commandJson as ResourceCommandJson)) {
+          return undefined;
+        }
+
+        return toResourceCommandSnapshot(commandElement.commandName, commandElement.commandJson as ResourceCommandJson);
+      });
+
+    return {
+      proof: 'blazor-wasm-managed-breakpoint-hit',
+      rootSession: toDebugSessionSnapshot(rootSession),
+      browserSession: toDebugSessionSnapshot(browserSession),
+      managedSession: toDebugSessionSnapshot(breakpointHit.session),
+      breakpointResponse: breakpointEvidence.response,
+      stoppedEvent: breakpointHit.stoppedEvent,
+      stackTrace: breakpointHit.stackTrace,
+      commandStateAfterStop,
+    };
+  }
+  catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}
+Diagnostics:
+${JSON.stringify(diagnostics(), undefined, 2)}`);
+  }
+  finally {
+    vscode.debug.removeBreakpoints([breakpoint]);
+    const remainingSessions = [...activeSessionIds]
+      .map(id => sessionById.get(id))
+      .filter((session): session is vscode.DebugSession =>
+        session !== undefined
+        && (rootSessionForCleanup === undefined || isProofSession(session.id, rootSessionForCleanup, sessionById)));
+    await Promise.allSettled(remainingSessions.map(session => vscode.debug.stopDebugging(session)));
+    sessionSubscription.dispose();
+    terminateSubscription.dispose();
+    trackerRegistration.dispose();
+  }
+}
+
+function findSuccessfulBreakpointResponse(
+  rootSession: vscode.DebugSession,
+  sourcePath: string,
+  line: number,
+  sessionById: ReadonlyMap<string, vscode.DebugSession>,
+  requests: readonly DebugAdapterMessageSummary[],
+  responses: readonly DebugAdapterMessageSummary[],
+): { response: DebugAdapterMessageSummary } | undefined {
+  for (const request of requests) {
+    if (request.command !== 'setBreakpoints'
+      || !isProofSession(request.sessionId, rootSession, sessionById)
+      || !isBreakpointRequestForSource(request.arguments, sourcePath, line)) {
+      continue;
+    }
+
+    const response = responses.find(candidate =>
+      candidate.command === 'setBreakpoints'
+      && candidate.sessionId === request.sessionId
+      && candidate.success === true
+      && (request.sequence === undefined || candidate.requestSequence === request.sequence));
+    if (response) {
+      return { response };
+    }
+  }
+
+  return undefined;
+}
+
+async function findManagedBreakpointHit(
+  rootSession: vscode.DebugSession,
+  sourcePath: string,
+  line: number,
+  sessionById: ReadonlyMap<string, vscode.DebugSession>,
+  stoppedEvents: readonly DebugAdapterStoppedEvent[],
+  stackTraceResponses: DebugAdapterStackTraceResponse[],
+  requestStackTrace: (session: vscode.DebugSession, threadId: number) => Promise<DebugAdapterStackTraceResponse['body']>,
+): Promise<{ session: vscode.DebugSession; stoppedEvent: DebugAdapterStoppedEvent; stackTrace: DebugAdapterStackTraceResponse['body'] } | undefined> {
+  for (const stoppedEvent of stoppedEvents) {
+    if (stoppedEvent.reason !== 'breakpoint' || stoppedEvent.threadId === undefined) {
+      continue;
+    }
+
+    const session = sessionById.get(stoppedEvent.sessionId);
+    if (!session || !isManagedProofSession(session, rootSession, sessionById)) {
+      continue;
+    }
+
+    try {
+      const stackTrace = await requestStackTrace(session, stoppedEvent.threadId);
+      pushBounded(stackTraceResponses, {
+        sessionId: session.id,
+        sessionType: session.type,
+        sessionName: session.name,
+        command: 'stackTrace',
+        success: true,
+        body: redactDebugAdapterArguments(stackTrace) as DebugAdapterStackTraceResponse['body'],
+      }, 100);
+      const matchingFrame = stackTrace?.stackFrames?.find(frame =>
+        typeof frame.source?.path === 'string'
+        && isSamePath(frame.source.path, sourcePath)
+        && frame.line === line);
+      if (matchingFrame) {
+        return { session, stoppedEvent, stackTrace };
+      }
+    }
+    catch (error) {
+      pushBounded(stackTraceResponses, {
+        sessionId: session.id,
+        sessionType: session.type,
+        sessionName: session.name,
+        command: 'stackTrace',
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      }, 100);
+    }
+  }
+
+  return undefined;
+}
+
+function isManagedProofSession(
+  session: vscode.DebugSession,
+  rootSession: vscode.DebugSession,
+  sessionById: ReadonlyMap<string, vscode.DebugSession>,
+): boolean {
+  return session.id !== rootSession.id
+    && !isBrowserDebugSessionType(session.type)
+    && isProofSession(session.id, rootSession, sessionById);
+}
+
+function isProofSession(
+  sessionId: string,
+  rootSession: vscode.DebugSession,
+  sessionById: ReadonlyMap<string, vscode.DebugSession>,
+): boolean {
+  if (sessionId === rootSession.id) {
+    return true;
+  }
+
+  let session = sessionById.get(sessionId);
+  const visited = new Set<string>();
+  while (session?.parentSession && !visited.has(session.id)) {
+    if (session.parentSession.id === rootSession.id) {
+      return true;
+    }
+
+    visited.add(session.id);
+    session = sessionById.get(session.parentSession.id) ?? session.parentSession;
+  }
+
+  const rootParentId = rootSession.parentSession?.id;
+  return rootParentId !== undefined && sessionById.get(sessionId)?.parentSession?.id === rootParentId;
+}
+
+function isBreakpointRequestForSource(value: unknown, sourcePath: string, line: number): boolean {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const request = value as { source?: { path?: unknown }; breakpoints?: Array<{ line?: unknown }> };
+  return typeof request.source?.path === 'string'
+    && isSamePath(request.source.path, sourcePath)
+    && Array.isArray(request.breakpoints)
+    && request.breakpoints.some(breakpoint => breakpoint.line === line);
+}
+
+function toResourceCommandSnapshot(commandName: string, command: ResourceCommandJson): Record<string, unknown> {
+  return {
+    commandName,
+    displayName: command.displayName,
+    description: command.description,
+    state: command.state,
+    visibility: command.visibility,
+  };
+}
+
+function pushBounded<T>(values: T[], value: T, limit: number): void {
+  values.push(value);
+  if (values.length > limit) {
+    values.splice(0, values.length - limit);
   }
 }
 
@@ -1645,7 +2140,8 @@ async function withResourceTraffic<T>(
   }
 }
 
-async function waitForE2eValue<T>(description: string, timeoutMs: number, getValue: () => T | undefined | Promise<T | undefined>, describeState?: () => string): Promise<T> {  const started = Date.now();
+async function waitForE2eValue<T>(description: string, timeoutMs: number, getValue: () => T | undefined | Promise<T | undefined>, describeState?: () => string): Promise<T> {
+  const started = Date.now();
   let lastError: string | undefined;
   while (Date.now() - started < timeoutMs) {
     try {
@@ -1658,7 +2154,7 @@ async function waitForE2eValue<T>(description: string, timeoutMs: number, getVal
       lastError = error instanceof Error ? error.message : String(error);
     }
 
-    await delay(500);
+    await delay(Math.min(500, Math.max(1, timeoutMs - (Date.now() - started))));
   }
 
   // A poll that returns undefined never sets lastError, so waits that are simply never satisfied
@@ -1729,6 +2225,42 @@ function getE2ePositiveInteger(value: unknown, defaultValue: number, propertyNam
 
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
     throw new Error(`Aspire extension E2E MAUI proof ${propertyName} must be a non-negative integer when provided.`);
+  }
+
+  return value;
+}
+
+function getE2eStrictlyPositiveInteger(value: unknown, defaultValue: number, propertyName: string): number {
+  if (value === undefined) {
+    return defaultValue;
+  }
+
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`Aspire extension E2E Blazor WASM proof ${propertyName} must be a positive integer when provided.`);
+  }
+
+  return value;
+}
+
+function getE2ePositiveBreakpointLine(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw new Error('Aspire extension E2E Blazor WASM proof breakpointLine must be a positive zero-based integer.');
+  }
+
+  return value;
+}
+
+function getE2eBlazorBrowser(value: unknown): 'edge' | 'chrome' {
+  if (value !== 'edge' && value !== 'chrome') {
+    throw new Error("Aspire extension E2E Blazor WASM proof expectedBrowser must be 'edge' or 'chrome'.");
+  }
+
+  return value;
+}
+
+function getE2eBlazorCloseMode(value: unknown): 'explicit' | 'natural' {
+  if (value !== 'explicit' && value !== 'natural') {
+    throw new Error("Aspire extension E2E Blazor WASM proof closeMode must be 'explicit' or 'natural'.");
   }
 
   return value;
