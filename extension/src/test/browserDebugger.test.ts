@@ -107,8 +107,11 @@ suite('Browser Debugger Tests', () => {
             terminateListener = listener;
             return { dispose: () => { terminateListener = undefined; } };
         });
-        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').returns(new Promise<void>(() => { }));
+        const stopRequest = deferred<void>();
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').returns(stopRequest.promise);
         const send = sinon.stub();
+        const cleanup = sinon.stub();
+        registerRunCleanup('run-1', cleanup);
         const session = createDebugSession('browser-root');
         const termination = new BrowserDebugSessionTermination(session, 'run-1', 'dcp-1', send);
 
@@ -117,25 +120,39 @@ suite('Browser Debugger Tests', () => {
         await Promise.resolve();
 
         assert.strictEqual(stopDebugging.calledOnceWithExactly(session), true);
+        stopRequest.resolve();
+        await stopRequest.promise;
+        await Promise.resolve();
+
         assert.strictEqual(completed, false);
+        assert.strictEqual(send.notCalled, true);
+        assert.strictEqual(cleanup.notCalled, true);
         terminateListener!(session);
         await stop;
 
         assert.strictEqual(send.calledOnceWithExactly('run-1', 'dcp-1'), true);
+        assert.strictEqual(cleanup.calledOnce, true);
     });
 
     test('retries after synchronous and asynchronous browser stop failures', async () => {
-        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').returns({ dispose: () => { } });
+        let terminateListener: ((session: vscode.DebugSession) => void) | undefined;
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(listener => {
+            terminateListener = listener;
+            return { dispose: () => { terminateListener = undefined; } };
+        });
         const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging');
         stopDebugging.onFirstCall().throws(new Error('synchronous stop failure'));
         stopDebugging.onSecondCall().rejects(new Error('asynchronous stop failure'));
         stopDebugging.onThirdCall().resolves();
         const send = sinon.stub();
-        const termination = new BrowserDebugSessionTermination(createDebugSession('browser-root'), 'run-1', 'dcp-1', send);
+        const session = createDebugSession('browser-root');
+        const termination = new BrowserDebugSessionTermination(session, 'run-1', 'dcp-1', send);
 
         await assert.rejects(termination.stop(), /synchronous stop failure/);
         await assert.rejects(termination.stop(), /asynchronous stop failure/);
-        await termination.stop();
+        const finalStop = termination.stop();
+        terminateListener!(session);
+        await finalStop;
 
         assert.strictEqual(stopDebugging.callCount, 3);
         assert.strictEqual(send.calledOnce, true);
@@ -144,12 +161,17 @@ suite('Browser Debugger Tests', () => {
     test('keeps a newer browser stop cached when a stale attempt rejects', async () => {
         const firstStop = deferred<void>();
         const secondStop = deferred<void>();
-        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').returns({ dispose: () => { } });
+        let terminateListener: ((session: vscode.DebugSession) => void) | undefined;
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(listener => {
+            terminateListener = listener;
+            return { dispose: () => { terminateListener = undefined; } };
+        });
         const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging');
         stopDebugging.onFirstCall().returns(firstStop.promise);
         stopDebugging.onSecondCall().returns(secondStop.promise);
+        const session = createDebugSession('browser-root');
         const termination = new BrowserDebugSessionTermination(
-            createDebugSession('browser-root'),
+            session,
             'run-1',
             'dcp-1',
             sinon.stub());
@@ -164,19 +186,25 @@ suite('Browser Debugger Tests', () => {
         assert.strictEqual(stopDebugging.callCount, 2);
 
         secondStop.resolve();
+        terminateListener!(session);
         await retry;
     });
 
-    test('stale browser stop completion settles a newer attempt through shared termination', async () => {
+    test('stale browser stop response waits with a newer attempt for shared root termination', async () => {
         const firstStop = deferred<void>();
         const secondStop = deferred<void>();
-        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').returns({ dispose: () => { } });
+        let terminateListener: ((session: vscode.DebugSession) => void) | undefined;
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(listener => {
+            terminateListener = listener;
+            return { dispose: () => { terminateListener = undefined; } };
+        });
         const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging');
         stopDebugging.onFirstCall().returns(firstStop.promise);
         stopDebugging.onSecondCall().returns(secondStop.promise);
         const send = sinon.stub();
+        const session = createDebugSession('browser-root');
         const termination = new BrowserDebugSessionTermination(
-            createDebugSession('browser-root'),
+            session,
             'run-1',
             'dcp-1',
             send);
@@ -184,16 +212,24 @@ suite('Browser Debugger Tests', () => {
         const first = termination.stop();
         termination.resetStopAttempt(first);
         const retry = termination.stop();
+        let firstCompleted = false;
         let retryCompleted = false;
+        void first.then(() => { firstCompleted = true; });
         void retry.then(() => { retryCompleted = true; });
 
         firstStop.resolve();
-        await first;
+        await firstStop.promise;
         await Promise.resolve();
         await Promise.resolve();
 
-        assert.strictEqual(retryCompleted, true);
+        assert.strictEqual(firstCompleted, false);
+        assert.strictEqual(retryCompleted, false);
         assert.strictEqual(stopDebugging.callCount, 2);
+        assert.strictEqual(send.notCalled, true);
+
+        terminateListener!(session);
+        await Promise.all([first, retry]);
+
         assert.strictEqual(send.calledOnceWithExactly('run-1', 'dcp-1'), true);
     });
 
@@ -210,13 +246,31 @@ suite('Browser Debugger Tests', () => {
         const session = createDebugSession('browser-root');
         const termination = new BrowserDebugSessionTermination(session, 'run-1', 'dcp-1', send);
 
-        termination.stopAndDisposeOnFailure();
-        await Promise.resolve();
-        await Promise.resolve();
+        await assert.rejects(termination.stop(), /stop failed/);
         terminateListener!(session);
 
         assert.strictEqual(send.calledOnceWithExactly('run-1', 'dcp-1'), true);
         assert.strictEqual(cleanup.calledOnce, true);
+    });
+
+    test('disposal releases the root termination listener after a browser stop failure', async () => {
+        let terminateListener: ((session: vscode.DebugSession) => void) | undefined;
+        const disposeListener = sinon.stub().callsFake(() => { terminateListener = undefined; });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(listener => {
+            terminateListener = listener;
+            return { dispose: disposeListener };
+        });
+        sinon.stub(vscode.debug, 'stopDebugging').rejects(new Error('stop failed'));
+        const termination = new BrowserDebugSessionTermination(
+            createDebugSession('browser-root'),
+            'run-1',
+            'dcp-1',
+            sinon.stub());
+        termination.stopAndDisposeOnFailure();
+        await new Promise(resolve => setImmediate(resolve));
+
+        assert.strictEqual(disposeListener.calledOnce, true);
+        assert.strictEqual(terminateListener, undefined);
     });
 
     test('warns with the run ID and cleans up when the DCP session ID is missing', () => {
@@ -264,10 +318,18 @@ suite('Browser Debugger Tests', () => {
         const cases = [
             { version: undefined, expected: { status: 'missing' } },
             { version: '2.145.14', expected: { status: 'outdated', installedVersion: '2.145.14' } },
+            { version: '2.145.15-alpha', expected: { status: 'outdated', installedVersion: '2.145.15-alpha' } },
             { version: '2.145.15-prerelease', expected: { status: 'supported', installedVersion: '2.145.15-prerelease' } },
+            { version: '2.145.15-prerelease.0', expected: { status: 'supported', installedVersion: '2.145.15-prerelease.0' } },
+            { version: '2.145.15-prerelease.01', expected: { status: 'outdated', installedVersion: '2.145.15-prerelease.01' } },
+            { version: '2.145.15-prerelease+build', expected: { status: 'supported', installedVersion: '2.145.15-prerelease+build' } },
+            { version: '2.145.15-prerelease.', expected: { status: 'outdated', installedVersion: '2.145.15-prerelease.' } },
             { version: '2.145.15', expected: { status: 'supported', installedVersion: '2.145.15' } },
+            { version: '2.145.15+build', expected: { status: 'supported', installedVersion: '2.145.15+build' } },
+            { version: '2.145.16-alpha', expected: { status: 'supported', installedVersion: '2.145.16-alpha' } },
             { version: '2.146.0', expected: { status: 'supported', installedVersion: '2.146.0' } },
             { version: '3.0.0', expected: { status: 'supported', installedVersion: '3.0.0' } },
+            { version: '02.145.15', expected: { status: 'outdated', installedVersion: '02.145.15' } },
             { version: '', expected: { status: 'outdated', installedVersion: '' } },
             { version: 'not-a-version', expected: { status: 'outdated', installedVersion: 'not-a-version' } },
             { version: '2.145', expected: { status: 'outdated', installedVersion: '2.145' } },

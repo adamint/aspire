@@ -8,8 +8,8 @@ export type SendBrowserSessionTerminated = (runId: string, dcpId: string) => voi
  * Owns the terminal state for one Aspire-launched browser debug session.
  *
  * js-debug is server-hosted and does not have a per-run adapter exit. The root VS Code session
- * ending, or a successful `stopDebugging`, is therefore the only point where Aspire can report
- * termination.
+ * ending is therefore the only point where Aspire can report termination; a successful
+ * `stopDebugging` only acknowledges the DAP request.
  */
 export class BrowserDebugSessionTermination {
     private readonly _session: vscode.DebugSession;
@@ -64,10 +64,10 @@ export class BrowserDebugSessionTermination {
     }
 
     stopAndDisposeOnFailure(): void {
-        // A failed explicit stop can still be followed by a natural root-session termination.
-        // Keep observing that event while handling the rejection so disposal cannot create an
-        // unhandled promise or suppress the eventual DCP notification and cleanup.
-        void this.stop().catch(() => { });
+        // AspireDebugSession calls this only from its irreversible disposeCore path. Explicit stop
+        // failures do not dispose the owner and keep this listener armed for natural termination or
+        // a retry; once ownership ends, a failed final stop must not retain the listener.
+        void this.stop().catch(() => this._terminationListener.dispose());
     }
 
     private async stopCore(): Promise<void> {
@@ -75,8 +75,10 @@ export class BrowserDebugSessionTermination {
             // A timed-out attempt may still confirm the shared session's termination while a newer
             // VS Code stop request is pending. Every generation races the same completion signal so
             // that confirmation settles all of them without letting stale promises own the cache.
+            // A DAP stop response only acknowledges the request; root-session termination remains
+            // the authoritative lifecycle boundary.
             await Promise.race([
-                Promise.resolve(vscode.debug.stopDebugging(this._session)),
+                Promise.resolve(vscode.debug.stopDebugging(this._session)).then(() => this._completion),
                 this._completion,
             ]);
         }
@@ -88,8 +90,6 @@ export class BrowserDebugSessionTermination {
             extensionLogOutputChannel.warn(`Failed to stop browser debug session '${this._session.name}': ${error instanceof Error ? error.message : String(error)}`);
             throw error;
         }
-
-        this.finish();
     }
 
     private finish(): void {

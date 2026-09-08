@@ -9,6 +9,7 @@ import WebSocket from 'ws';
 import type { AspireDebugSession } from '../debugger/AspireDebugSession';
 import * as debuggerExtensions from '../debugger/debuggerExtensions';
 import { cleanupRun, registerRunCleanup } from '../debugger/runCleanupRegistry';
+import { BrowserDebugSessionTermination } from '../debugger/browserDebugSessionTermination';
 import AspireDcpServer from '../dcp/AspireDcpServer';
 import type { RunSessionRecord, RunSessionRegistration } from '../dcp/RunSessionRegistry';
 import type {
@@ -1110,6 +1111,62 @@ suite('Aspire DCP run session lifecycle', () => {
         });
         const duplicateDelete = await request(harness, 'DELETE', `/run_session/${runId}`);
         assert.strictEqual(duplicateDelete.statusCode, 204);
+    });
+
+    test('browser DELETE preserves confirmed success when root termination evicts the run during stop', async () => {
+        let terminateListener: ((session: vscode.DebugSession) => void) | undefined;
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(listener => {
+            terminateListener = listener;
+            return { dispose: () => { terminateListener = undefined; } };
+        });
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const cleanup = sinon.stub();
+        let rootSession: vscode.DebugSession | undefined;
+        let resourceStop: sinon.SinonStub | undefined;
+        harness.startDebugSession.resetBehavior();
+        harness.startDebugSession.callsFake((configuration: { runId: string; debugSessionId: string }) => {
+            rootSession = {
+                id: 'browser-root',
+                name: 'Browser',
+            } as vscode.DebugSession;
+            registerRunCleanup(configuration.runId, cleanup);
+            const termination = new BrowserDebugSessionTermination(
+                rootSession,
+                configuration.runId,
+                configuration.debugSessionId,
+                (runId, dcpId) => harness.dcpServer.sendNotification({
+                    notification_type: 'sessionTerminated',
+                    session_id: runId,
+                    dcp_id: dcpId,
+                }));
+            resourceStop = sinon.stub().callsFake(() => termination.stop());
+            return createResourceSession(rootSession.id, resourceStop);
+        });
+        const client = await openNotificationClient(harness);
+        const runId = await createRun(harness, 'browser', sinon.stub());
+
+        const deletePromise = request(harness, 'DELETE', `/run_session/${runId}`);
+        await waitFor(() => stopDebugging.calledOnce);
+        let deleteResponse: HttpResponse | undefined;
+        void deletePromise.then(response => deleteResponse = response);
+        await Promise.resolve();
+
+        assert.strictEqual(deleteResponse, undefined);
+        assert.ok(rootSession);
+        terminateListener!(rootSession);
+        const response = await deletePromise;
+        const terminal = await client.waitForNotification();
+        await drainNotifications(client);
+
+        assert.strictEqual(response.statusCode, 200);
+        assert.strictEqual(resourceStop?.calledOnce, true);
+        assert.deepStrictEqual(client.notifications, [terminal]);
+        assert.strictEqual(cleanup.calledOnce, true);
+        assert.strictEqual(getInternals(harness.dcpServer)._runSessions?.get(runId), undefined);
+        assert.strictEqual(getInternals(harness.dcpServer)._runTelemetryById.has(runId), false);
+        assert.strictEqual(
+            telemetryReporter.events.filter(event => event.name === 'aspire/vscode/debug/runsession/end').length,
+            1);
     });
 
     test('failed browser stop returns 500 without termination and can be retried', async () => {

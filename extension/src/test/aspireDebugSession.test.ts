@@ -5694,6 +5694,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
     test('keeps browser resource sessions reachable when they start after Aspire session disposal', async () => {
         let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        const terminateSessionCallbacks: ((session: vscode.DebugSession) => void)[] = [];
         const startDebugging = createDeferred<boolean>();
         const parentDebugSession = {
             id: 'aspire-session',
@@ -5729,7 +5730,10 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             startSessionCallback = callback;
             return { dispose: sinon.stub() };
         });
-        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').returns({ dispose: sinon.stub() });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(callback => {
+            terminateSessionCallbacks.push(callback);
+            return { dispose: sinon.stub() };
+        });
         sinon.stub(vscode.debug, 'startDebugging').returns(startDebugging.promise);
         const stopDebuggingStub = sinon.stub(vscode.debug, 'stopDebugging').resolves();
         const sendNotification = sinon.stub();
@@ -5750,6 +5754,11 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         assert.strictEqual(session?.session, lateBrowserSession);
         assert.strictEqual(stopDebuggingStub.calledWith(lateBrowserSession), true);
+        assert.strictEqual(sendNotification.notCalled, true);
+
+        terminateSessionCallbacks.forEach(callback => callback(lateBrowserSession));
+        await Promise.resolve();
+
         assert.strictEqual(sendNotification.calledOnceWithExactly({
             notification_type: 'sessionTerminated',
             session_id: 'run-1',

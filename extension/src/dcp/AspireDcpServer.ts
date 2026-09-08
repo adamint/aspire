@@ -308,7 +308,10 @@ export default class AspireDcpServer {
                 deadline,
                 () => resetDebuggerStopAttempt(run, teardown));
 
-            return runSessions.get(run.runId) === run;
+            // Browser root termination synchronously delivers sessionTerminated and evicts this
+            // captured run before stopSession() resumes. The completed stop still confirms this
+            // DELETE even though there is no record left for the fallback confirmation below.
+            return true;
         };
 
         return new Promise(async (resolve, reject) => {
@@ -752,7 +755,9 @@ export default class AspireDcpServer {
                         return;
                     }
 
-                    runSessions.confirmStop(runId);
+                    if (runSessions.get(runId) === run) {
+                        runSessions.confirmStop(runId);
+                    }
                     res.status(200).end();
                     return;
                 }

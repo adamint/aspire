@@ -70,9 +70,9 @@ export function getCsharpBlazorWasmDebuggingSupport(): CsharpBlazorWasmDebugging
         return { status: 'missing' };
     }
 
-    const installedCore = parseNumericVersionCore(installedVersion);
-    const minimumCore = parseNumericVersionCore(minimumCsharpBlazorWasmDebuggingVersion)!;
-    if (!installedCore || compareNumericVersionCores(installedCore, minimumCore) < 0) {
+    const installed = parseSemanticVersion(installedVersion);
+    const minimum = parseSemanticVersion(minimumCsharpBlazorWasmDebuggingVersion)!;
+    if (!installed || compareSemanticVersions(installed, minimum) < 0) {
         return { status: 'outdated', installedVersion };
     }
 
@@ -81,11 +81,20 @@ export function getCsharpBlazorWasmDebuggingSupport(): CsharpBlazorWasmDebugging
 
 type NumericVersionCore = readonly [major: number, minor: number, patch: number];
 
-function parseNumericVersionCore(version: string): NumericVersionCore | undefined {
-    // The Blazor attach contract shipped in a prerelease but remains available in the stable build
-    // with the same numeric core, so only major.minor.patch affects support. Keep the parser bounded
-    // to three safe integer components rather than accepting the broader semver grammar.
-    const match = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$/.exec(version);
+interface SemanticVersion {
+    readonly core: NumericVersionCore;
+    readonly prerelease: readonly string[];
+}
+
+function parseSemanticVersion(version: string): SemanticVersion | undefined {
+    // SemVer permits only ASCII alphanumerics and hyphens in dot-separated prerelease/build
+    // identifiers. Build metadata is validated here but intentionally omitted from the result
+    // because it does not affect precedence. See https://semver.org/#spec-item-11.
+    const identifier = '[0-9A-Za-z-]+';
+    const match = new RegExp(
+        `^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)` +
+        `(?:-(${identifier}(?:\\.${identifier})*))?` +
+        `(?:\\+${identifier}(?:\\.${identifier})*)?$`).exec(version);
     if (!match) {
         return undefined;
     }
@@ -95,17 +104,47 @@ function parseNumericVersionCore(version: string): NumericVersionCore | undefine
         return undefined;
     }
 
-    return core;
+    const prerelease = match[4]?.split('.') ?? [];
+    if (prerelease.some(part => /^\d+$/.test(part) && part.length > 1 && part.startsWith('0'))) {
+        return undefined;
+    }
+
+    return { core, prerelease };
 }
 
-function compareNumericVersionCores(left: NumericVersionCore, right: NumericVersionCore): number {
-    for (let index = 0; index < left.length; index++) {
-        if (left[index] !== right[index]) {
-            return left[index] - right[index];
+function compareSemanticVersions(left: SemanticVersion, right: SemanticVersion): number {
+    for (let index = 0; index < left.core.length; index++) {
+        if (left.core[index] !== right.core[index]) {
+            return left.core[index] - right.core[index];
         }
     }
 
-    return 0;
+    if (left.prerelease.length === 0 || right.prerelease.length === 0) {
+        return right.prerelease.length - left.prerelease.length;
+    }
+
+    for (let index = 0; index < Math.min(left.prerelease.length, right.prerelease.length); index++) {
+        const leftPart = left.prerelease[index];
+        const rightPart = right.prerelease[index];
+        if (leftPart === rightPart) {
+            continue;
+        }
+
+        const leftIsNumeric = /^\d+$/.test(leftPart);
+        const rightIsNumeric = /^\d+$/.test(rightPart);
+        if (leftIsNumeric && rightIsNumeric) {
+            return leftPart.length === rightPart.length
+                ? (leftPart < rightPart ? -1 : 1)
+                : leftPart.length - rightPart.length;
+        }
+        if (leftIsNumeric !== rightIsNumeric) {
+            return leftIsNumeric ? -1 : 1;
+        }
+
+        return leftPart < rightPart ? -1 : 1;
+    }
+
+    return left.prerelease.length - right.prerelease.length;
 }
 
 export function isCsharpInstalled() {
