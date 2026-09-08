@@ -13,9 +13,6 @@ suite('E2E shard matrix', () => {
     const workflowPath = path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml');
     const specDirectory = path.join(extensionRoot, 'src', 'test-e2e');
     const advisoryIssuePattern = /^https:\/\/github\.com\/microsoft\/aspire\/issues\/\d+$/;
-    // The managed browser spec requires platform-specific C# and .NET runtime VSIX artifacts.
-    // Keep this explicit until #17795's follow-up pins those artifacts in the workflow.
-    const specsAwaitingPinnedCiPrerequisites = new Set(['browserDebugger.e2e.test.ts']);
 
     // Hand-maintained on purpose: making an E2E shard advisory must be an explicit, reviewable code
     // change rather than something a workflow edit can do silently. Deriving this from the workflow
@@ -65,6 +62,10 @@ suite('E2E shard matrix', () => {
                 shardName: optionalString(row, 'shardName', index),
                 spec: optionalString(row, 'spec', index),
                 advisoryIssue: optionalString(row, 'advisoryIssue', index),
+                runner: optionalString(row, 'runner', index),
+                browser: optionalString(row, 'browser', index),
+                installDotnetDebugger: optionalBoolean(row, 'installDotnetDebugger', index),
+                installAzureFunctions: optionalBoolean(row, 'installAzureFunctions', index),
             };
         });
     }
@@ -89,6 +90,16 @@ suite('E2E shard matrix', () => {
 
         assert.strictEqual(typeof value, 'string', `Expected extension_e2e matrix row ${index + 1} field '${key}' to be a string.`);
         return value as string;
+    }
+
+    function optionalBoolean(row: Record<string, unknown>, key: string, index: number): boolean | undefined {
+        const value = row[key];
+        if (value === undefined) {
+            return undefined;
+        }
+
+        assert.strictEqual(typeof value, 'boolean', `Expected extension_e2e matrix row ${index + 1} field '${key}' to be a boolean.`);
+        return value as boolean;
     }
 
     function assertNoLegacyFields(row: Record<string, unknown>, index: number): void {
@@ -155,17 +166,48 @@ suite('E2E shard matrix', () => {
 
     test('runs exactly the set of E2E specs in the CI matrix', () => {
         const specFileNames = readSpecFileNamesRecursively(specDirectory);
-        const scheduledSpecFileNames = specFileNames.filter(file => !specsAwaitingPinnedCiPrerequisites.has(file));
         const workflow = fs.readFileSync(workflowPath, 'utf8');
 
         assert.ok(canonicalSpecPaths(specFileNames).length > 0, `Expected E2E spec files under ${specDirectory}.`);
         assert.ok(matrixSpecPaths(workflow).length > 0, 'Expected spec entries in the E2E workflow matrix.');
-        assert.deepStrictEqual(
-            specFileNames.filter(file => specsAwaitingPinnedCiPrerequisites.has(file)),
-            [...specsAwaitingPinnedCiPrerequisites],
-            'Every E2E spec awaiting pinned CI prerequisites must exist.');
-        assertMatrixMatchesSpecs(workflow, scheduledSpecFileNames);
+        assertMatrixMatchesSpecs(workflow, specFileNames);
         assertAdvisoryRowsAreTracked(workflow, expectedAdvisoryRows);
+    });
+
+    test('schedules browser debugger proofs on Chrome and Edge with debugger prerequisites', () => {
+        const workflow = fs.readFileSync(workflowPath, 'utf8');
+        const browserDebuggerRows = matrixRows(workflow)
+            .filter(row => row.shardName === 'browser-debugger')
+            .map(row => ({
+                name: row.name,
+                runner: row.runner,
+                spec: row.spec,
+                browser: row.browser,
+                installDotnetDebugger: row.installDotnetDebugger,
+                installAzureFunctions: row.installAzureFunctions,
+                advisoryIssue: row.advisoryIssue,
+            }));
+
+        assert.deepStrictEqual(browserDebuggerRows, [
+            {
+                name: 'Linux',
+                runner: 'ubuntu-latest',
+                spec: 'out/test-e2e/test-e2e/browserDebugger.e2e.test.js',
+                browser: 'chrome',
+                installDotnetDebugger: true,
+                installAzureFunctions: undefined,
+                advisoryIssue: undefined,
+            },
+            {
+                name: 'Windows',
+                runner: 'windows-latest',
+                spec: 'out/test-e2e/test-e2e/browserDebugger.e2e.test.js',
+                browser: 'msedge',
+                installDotnetDebugger: true,
+                installAzureFunctions: undefined,
+                advisoryIssue: undefined,
+            },
+        ]);
     });
 
     test('rejects a spec that has no matrix row', () => {
@@ -314,4 +356,8 @@ interface MatrixRow {
     shardName?: string;
     spec?: string;
     advisoryIssue?: string;
+    runner?: string;
+    browser?: string;
+    installDotnetDebugger?: boolean;
+    installAzureFunctions?: boolean;
 }

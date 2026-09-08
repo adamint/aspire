@@ -588,7 +588,7 @@ suite('E2E launch profile', () => {
         assert.ok(!workflow.includes('VS Code extension E2E matrix skipped'));
     });
 
-    test('pins the real Azure Functions toolchain for the offline E2E shard', () => {
+    test('pins the shared debugger and Azure Functions toolchains for offline E2E shards', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
         const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
@@ -599,10 +599,16 @@ suite('E2E launch profile', () => {
         const resourceGroupsInstallIndex = runner.indexOf("displayName: 'Azure Resource Groups'");
         const functionsInstallIndex = runner.indexOf("displayName: 'Azure Functions'");
         const dotNetSetupIndex = workflow.indexOf('name: Setup .NET');
-        const azureFunctionsPrerequisitesIndex = workflow.indexOf('name: Install Azure Functions E2E prerequisites');
+        const debuggerPrerequisitesIndex = workflow.indexOf('name: .NET debugger E2E prerequisites');
+        const azureFunctionsPrerequisitesIndex = workflow.indexOf('name: Azure Functions E2E prerequisites');
         const runStepIndex = workflow.indexOf('- name: Run extension E2E tests');
         const uploadStepIndex = workflow.indexOf('- name: Upload E2E diagnostics');
+        const debuggerPrerequisiteStep = workflow.slice(debuggerPrerequisitesIndex, azureFunctionsPrerequisitesIndex);
+        const azureFunctionsPrerequisiteStep = workflow.slice(azureFunctionsPrerequisitesIndex, runStepIndex);
         const runStep = workflow.slice(runStepIndex, uploadStepIndex);
+        const uploadStep = workflow.slice(uploadStepIndex, workflow.indexOf('\n      - name:', uploadStepIndex + 1));
+        const csharpVersion = /csharp\/([^/]+)\/vspackage\?targetPlatform=linux-x64/.exec(debuggerPrerequisiteStep)?.[1];
+        const minimumCsharpVersion = '2.145.15-prerelease';
         // Generated project files embed their target framework as:
         //   <TargetFramework>net10.0</TargetFramework>
         const runnerTargetFrameworks = [...runner.matchAll(/<TargetFramework>([^<]+)<\/TargetFramework>/g)].map(match => match[1]);
@@ -612,23 +618,40 @@ suite('E2E launch profile', () => {
         assert.ok(workflow.includes('shardName: azure-functions'));
         assert.ok(workflow.includes('installAzureFunctions: true'));
         assert.ok(dotNetSetupIndex >= 0);
-        assert.ok(dotNetSetupIndex < azureFunctionsPrerequisitesIndex);
+        assert.ok(dotNetSetupIndex < debuggerPrerequisitesIndex);
+        assert.ok(debuggerPrerequisitesIndex < azureFunctionsPrerequisitesIndex);
+        assert.ok(azureFunctionsPrerequisitesIndex < runStepIndex);
         assert.ok(workflow.includes('global-json-file: global.json'));
         assert.deepStrictEqual(runnerTargetFrameworks, ['net10.0', 'net10.0', 'net10.0', 'net10.0']);
         assert.deepStrictEqual(fixtureTargetFrameworks, ['net10.0', 'net10.0']);
-        assert.ok(workflow.includes("core_tools_version='4.12.1'"));
-        assert.ok(workflow.includes('faf8fb8d50b5293df338bec70594b12f45730e9fe251805298859b2238cf627e'));
-        assert.ok(workflow.includes('vscode-dotnet-runtime/3.1.0/vspackage'));
-        assert.ok(workflow.includes('8e675ffe5f3674430d63e28d2dc05ab40f36c8494e9549e79d3995d721b13f5a'));
-        assert.ok(workflow.includes('csharp/2.148.23/vspackage?targetPlatform=linux-x64'));
-        assert.ok(workflow.includes('18b503e614a979212762683b35a4fa1806688ba773d5fe93bf62c9f9346db23f'));
-        assert.ok(workflow.includes('vscode-azureresourcegroups/0.12.7/vspackage'));
-        assert.ok(workflow.includes('e4a2e7ab012de3777e1ac1781e2c25d65f150ad6f3770e8cfcc5a3d3658df35a'));
-        assert.ok(workflow.includes('vscode-azurefunctions/1.22.0/vspackage'));
-        assert.ok(workflow.includes('146aede06f941b07a55c5aebd28c5e3df684d57b07cf6f9ebf90d7bb8ecd41a2'));
-        assert.ok(workflow.includes('ASPIRE_EXTENSION_E2E_ENABLE_AZURE_FUNCTIONS=true'));
-        assert.ok(workflow.includes('ASPIRE_EXTENSION_E2E_DOTNET_RUNTIME_VSIX=$dotnet_runtime_vsix'));
-        assert.ok(workflow.includes('ASPIRE_EXTENSION_E2E_CSHARP_VSIX=$csharp_vsix'));
+        assert.ok(debuggerPrerequisiteStep.includes('if: ${{ matrix.installDotnetDebugger || matrix.installAzureFunctions }}'));
+        assert.ok(debuggerPrerequisiteStep.includes('vscode-dotnet-runtime/3.1.0/vspackage'));
+        assert.ok(debuggerPrerequisiteStep.includes('8e675ffe5f3674430d63e28d2dc05ab40f36c8494e9549e79d3995d721b13f5a'));
+        assert.strictEqual(csharpVersion, '2.148.23');
+        assert.ok(compareVersionStrings(csharpVersion, minimumCsharpVersion.split('-')[0]) >= 0);
+        assert.ok(debuggerPrerequisiteStep.includes('csharp/2.148.23/vspackage?targetPlatform=linux-x64'));
+        assert.ok(debuggerPrerequisiteStep.includes('18b503e614a979212762683b35a4fa1806688ba773d5fe93bf62c9f9346db23f'));
+        assert.ok(debuggerPrerequisiteStep.includes('csharp/2.148.23/vspackage?targetPlatform=win32-x64'));
+        assert.ok(debuggerPrerequisiteStep.includes('27cf5f0fdcd677f7af61a6d43f2dc75bac7ca2cffa1f29e3262b615bbcabb952'));
+        assert.ok(debuggerPrerequisiteStep.includes('Get-FileHash'));
+        assert.ok(debuggerPrerequisiteStep.includes('-Algorithm SHA256'));
+        assert.ok(debuggerPrerequisiteStep.includes('ASPIRE_EXTENSION_E2E_DOTNET_RUNTIME_VSIX='));
+        assert.ok(debuggerPrerequisiteStep.includes('ASPIRE_EXTENSION_E2E_CSHARP_VSIX='));
+        assert.strictEqual(debuggerPrerequisiteStep.includes('Azure.Functions.Cli'), false);
+        assert.strictEqual(debuggerPrerequisiteStep.includes('vscode-azureresourcegroups'), false);
+        assert.strictEqual(debuggerPrerequisiteStep.includes('vscode-azurefunctions'), false);
+        assert.ok(azureFunctionsPrerequisiteStep.includes('if: ${{ matrix.installAzureFunctions }}'));
+        assert.ok(azureFunctionsPrerequisiteStep.includes("core_tools_version='4.12.1'"));
+        assert.ok(azureFunctionsPrerequisiteStep.includes('faf8fb8d50b5293df338bec70594b12f45730e9fe251805298859b2238cf627e'));
+        assert.ok(azureFunctionsPrerequisiteStep.includes('vscode-azureresourcegroups/0.12.7/vspackage'));
+        assert.ok(azureFunctionsPrerequisiteStep.includes('e4a2e7ab012de3777e1ac1781e2c25d65f150ad6f3770e8cfcc5a3d3658df35a'));
+        assert.ok(azureFunctionsPrerequisiteStep.includes('vscode-azurefunctions/1.22.0/vspackage'));
+        assert.ok(azureFunctionsPrerequisiteStep.includes('146aede06f941b07a55c5aebd28c5e3df684d57b07cf6f9ebf90d7bb8ecd41a2'));
+        assert.ok(azureFunctionsPrerequisiteStep.includes('ASPIRE_EXTENSION_E2E_ENABLE_AZURE_FUNCTIONS=true'));
+        assert.ok(azureFunctionsPrerequisiteStep.includes('ASPIRE_EXTENSION_E2E_AZURE_RESOURCE_GROUPS_VSIX='));
+        assert.ok(azureFunctionsPrerequisiteStep.includes('ASPIRE_EXTENSION_E2E_AZURE_FUNCTIONS_VSIX='));
+        assert.strictEqual(azureFunctionsPrerequisiteStep.includes('ASPIRE_EXTENSION_E2E_DOTNET_RUNTIME_VSIX='), false);
+        assert.strictEqual(azureFunctionsPrerequisiteStep.includes('ASPIRE_EXTENSION_E2E_CSHARP_VSIX='), false);
         assert.ok(dotnetRuntimeInstallIndex >= 0);
         assert.ok(csharpInstallIndex > dotnetRuntimeInstallIndex);
         assert.ok(resourceGroupsInstallIndex > csharpInstallIndex);
@@ -641,8 +664,16 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes("const args = isWindows ? ['/d', '/s', '/c', 'func.cmd --version'] : ['--version'];"));
         assert.ok(runner.includes("const certificatePassword = String.raw`Aspire E2E p@ss'\\word`;"));
         assert.ok(runner.includes('commandLineArgs: `--useHttps --cert "${certificatePath}" --password "${certificatePassword}"`'));
+        assert.ok(runStep.includes('ASPIRE_EXTENSION_E2E_SHARD: ${{ matrix.shardName }}'));
+        assert.ok(runStep.includes('ASPIRE_EXTENSION_E2E_SPEC: ${{ matrix.spec }}'));
+        assert.ok(runStep.includes('ASPIRE_EXTENSION_E2E_BROWSER: ${{ matrix.browser }}'));
         assert.ok(runStep.includes('ASPIRE_EXTENSION_E2E_ADVISORY_ISSUE: ${{ matrix.advisoryIssue }}'));
+        // The prerequisite step writes these values to GITHUB_ENV, so the run step should inherit
+        // them rather than shadowing a runner-specific path in its local environment.
+        assert.strictEqual(runStep.includes('ASPIRE_EXTENSION_E2E_DOTNET_RUNTIME_VSIX:'), false);
+        assert.strictEqual(runStep.includes('ASPIRE_EXTENSION_E2E_CSHARP_VSIX:'), false);
         assert.strictEqual(runStep.includes('continue-on-error:'), false);
+        assert.ok(uploadStep.includes('if: always()'));
     });
 
     test('generates all browser debugger fixtures in an isolated shard', () => {
