@@ -13,6 +13,9 @@ suite('E2E shard matrix', () => {
     const workflowPath = path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml');
     const specDirectory = path.join(extensionRoot, 'src', 'test-e2e');
     const advisoryIssuePattern = /^https:\/\/github\.com\/microsoft\/aspire\/issues\/\d+$/;
+    // The managed browser spec requires platform-specific C# and .NET runtime VSIX artifacts.
+    // Keep this explicit until #17795's follow-up pins those artifacts in the workflow.
+    const specsAwaitingPinnedCiPrerequisites = new Set(['browserDebugger.e2e.test.ts']);
 
     // Hand-maintained on purpose: making an E2E shard advisory must be an explicit, reviewable code
     // change rather than something a workflow edit can do silently. Deriving this from the workflow
@@ -152,11 +155,16 @@ suite('E2E shard matrix', () => {
 
     test('runs exactly the set of E2E specs in the CI matrix', () => {
         const specFileNames = readSpecFileNamesRecursively(specDirectory);
+        const scheduledSpecFileNames = specFileNames.filter(file => !specsAwaitingPinnedCiPrerequisites.has(file));
         const workflow = fs.readFileSync(workflowPath, 'utf8');
 
         assert.ok(canonicalSpecPaths(specFileNames).length > 0, `Expected E2E spec files under ${specDirectory}.`);
         assert.ok(matrixSpecPaths(workflow).length > 0, 'Expected spec entries in the E2E workflow matrix.');
-        assertMatrixMatchesSpecs(workflow, specFileNames);
+        assert.deepStrictEqual(
+            specFileNames.filter(file => specsAwaitingPinnedCiPrerequisites.has(file)),
+            [...specsAwaitingPinnedCiPrerequisites],
+            'Every E2E spec awaiting pinned CI prerequisites must exist.');
+        assertMatrixMatchesSpecs(workflow, scheduledSpecFileNames);
         assertAdvisoryRowsAreTracked(workflow, expectedAdvisoryRows);
     });
 

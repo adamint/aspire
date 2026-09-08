@@ -614,7 +614,7 @@ suite('E2E launch profile', () => {
         assert.ok(dotNetSetupIndex >= 0);
         assert.ok(dotNetSetupIndex < azureFunctionsPrerequisitesIndex);
         assert.ok(workflow.includes('global-json-file: global.json'));
-        assert.deepStrictEqual(runnerTargetFrameworks, ['net10.0', 'net10.0', 'net10.0']);
+        assert.deepStrictEqual(runnerTargetFrameworks, ['net10.0', 'net10.0', 'net10.0', 'net10.0']);
         assert.deepStrictEqual(fixtureTargetFrameworks, ['net10.0', 'net10.0']);
         assert.ok(workflow.includes("core_tools_version='4.12.1'"));
         assert.ok(workflow.includes('faf8fb8d50b5293df338bec70594b12f45730e9fe251805298859b2238cf627e'));
@@ -643,6 +643,62 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes('commandLineArgs: `--useHttps --cert "${certificatePath}" --password "${certificatePassword}"`'));
         assert.ok(runStep.includes('ASPIRE_EXTENSION_E2E_ADVISORY_ISSUE: ${{ matrix.advisoryIssue }}'));
         assert.strictEqual(runStep.includes('continue-on-error:'), false);
+    });
+
+    test('generates all browser debugger fixtures in an isolated shard', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const compactRunner = runner.replace(/\s+/g, ' ');
+
+        assert.ok(runner.includes("const enableBrowserDebuggerE2E = shardName === 'browser-debugger';"));
+        assert.ok(runner.includes("const e2eBrowser = process.platform === 'win32' ? 'msedge' : 'chrome';"));
+        assert.ok(runner.includes('const enableDebuggerExtensions = enableAzureFunctionsE2E || enableBrowserDebuggerE2E;'));
+        assert.ok(compactRunner.includes("runDotnetTemplate(['new', 'blazorwasm', '--name', 'StandaloneClient', '--output', standaloneDirectory, '--no-https', '--no-restore']);"));
+        assert.ok(compactRunner.includes("runDotnetTemplate(['new', 'blazor', '--name', 'HostedGlobal', '--output', hostedGlobalDirectory, '--interactivity', 'WebAssembly', '--all-interactive', '--no-https', '--no-restore']);"));
+        assert.ok(compactRunner.includes("runDotnetTemplate(['new', 'blazor', '--name', 'HostedPerPage', '--output', hostedPerPageDirectory, '--interactivity', 'WebAssembly', '--no-https', '--no-restore']);"));
+        assert.ok(runner.includes("process.env.ASPIRE_EXTENSION_E2E_SKIP_RESTORE_PREWARM === 'true' && !enableBrowserDebuggerE2E"));
+        assert.ok(runner.includes("targetFramework !== 'net10.0'"));
+        assert.ok(runner.includes('currentCount = 42; // ASPIRE_E2E_MANAGED_BREAKPOINT'));
+        assert.ok(runner.includes('<Routes\\s+@rendermode\\s*=\\s*["\']InteractiveWebAssembly["\']\\s*\\/>'));
+        assert.ok(runner.includes('@rendermode\\s+InteractiveWebAssembly'));
+        assert.ok(runner.includes('<PackageReference Include="Aspire.Hosting.Blazor" Version="${resolvedAppHostSdkVersion}" />'));
+        assert.ok(runner.includes('<ProjectReference Include="../StandaloneClient/StandaloneClient.csproj" />'));
+        assert.ok(runner.includes('<ProjectReference Include="../HostedGlobal/HostedGlobal/HostedGlobal.csproj" />'));
+        assert.ok(runner.includes('<ProjectReference Include="../HostedGlobal/HostedGlobal.Client/HostedGlobal.Client.csproj" />'));
+        assert.ok(runner.includes('<ProjectReference Include="../HostedPerPage/HostedPerPage/HostedPerPage.csproj" />'));
+        assert.ok(runner.includes('<ProjectReference Include="../HostedPerPage/HostedPerPage.Client/HostedPerPage.Client.csproj" />'));
+        assert.ok(runner.includes('builder.AddBlazorWasmProject<Projects.StandaloneClient>("standalone")'));
+        assert.ok(runner.includes('builder.AddProject<Projects.HostedGlobal>("hosted-global")'));
+        assert.ok(runner.includes('builder.AddProject<Projects.HostedPerPage>("hosted-per-page")'));
+        assert.ok(runner.includes('ASPIRE_EXTENSION_E2E_BROWSER: e2eBrowser'));
+    });
+
+    test('requires only the debugger VSIX dependencies shared by browser and Azure Functions shards', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const debuggerVsixStart = runner.indexOf('function resolveDebuggerVsixPaths()');
+        const debuggerVsixEnd = runner.indexOf('\nfunction ', debuggerVsixStart + 1);
+        const debuggerVsixResolver = runner.slice(debuggerVsixStart, debuggerVsixEnd);
+
+        assert.ok(debuggerVsixStart >= 0);
+        assert.ok(debuggerVsixResolver.includes("path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_DOTNET_RUNTIME_VSIX')"));
+        assert.ok(debuggerVsixResolver.includes("path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_CSHARP_VSIX')"));
+        assert.ok(debuggerVsixResolver.includes('if (enableAzureFunctionsE2E)'));
+        assert.ok(debuggerVsixResolver.includes("path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_AZURE_RESOURCE_GROUPS_VSIX')"));
+        assert.ok(debuggerVsixResolver.includes("path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_AZURE_FUNCTIONS_VSIX')"));
+        assert.ok(runner.includes('ASPIRE_EXTENSION_E2E_ENABLE_AZURE_FUNCTIONS=true or ASPIRE_EXTENSION_E2E_SHARD=browser-debugger'));
+    });
+
+    test('keeps browser selection platform-specific without changing default or Azure Functions fixture gates', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+
+        assert.ok(runner.includes("const e2eBrowser = process.platform === 'win32' ? 'msedge' : 'chrome';"));
+        assert.ok(runner.includes("const enableAzureFunctionsE2E = process.env.ASPIRE_EXTENSION_E2E_ENABLE_AZURE_FUNCTIONS === 'true';"));
+        assert.ok(runner.includes('if (enableBrowserDebuggerE2E) {'));
+        assert.ok(runner.includes("writeBrowserDebuggerAppHostProject('AspireE2E.Blazor.AppHost', resolvedAppHostSdkVersion);"));
+        assert.ok(runner.includes("writeWorkerProject('AspireE2E.Worker');"));
+        assert.ok(runner.includes("writeAppHostProject('AspireE2E.AppHost', resolvedAppHostSdkVersion, enableAzureFunctionsE2E);"));
     });
 
     test('wires structured E2E harness failures into advisory handling', () => {
