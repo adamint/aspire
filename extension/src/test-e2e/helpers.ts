@@ -1,8 +1,10 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
+import * as path from 'path';
 
 import { isSamePath } from './helpers/assertions';
 import { executeE2eControlCommand } from './helpers/fixtures';
+import { ensureDiagnosticsDir } from './helpers/paths';
 
 interface BlazorWasmDebugSessionSnapshot {
     id: string;
@@ -73,6 +75,10 @@ export async function proveBlazorScenario(options: ProveBlazorScenarioOptions): 
         timeoutMs: timeoutMs + 60000,
     });
     const proof = status.result as BlazorWasmDebugProof;
+    // The next control command replaces the state-file result. Preserve each
+    // scenario's real adapter evidence before teardown or the next scenario.
+    const proofFileName = `blazor-${options.resourceName.replace(/[^a-zA-Z0-9-]/g, '_')}-proof.json`;
+    fs.writeFileSync(path.join(ensureDiagnosticsDir(), proofFileName), JSON.stringify(proof, undefined, 2));
     const expectedBrowserSessionType = options.expectedBrowser === 'edge' ? 'pwa-msedge' : 'pwa-chrome';
     const matchingFrame = proof.stackTrace.stackFrames?.find(frame =>
         typeof frame.source?.path === 'string'

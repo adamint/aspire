@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
 import * as ts from 'typescript';
+import * as vm from 'vm';
 
 function removeDirectorySafely(directory: string): void {
     try {
@@ -689,6 +690,7 @@ suite('E2E launch profile', () => {
         assert.ok(compactRunner.includes("runDotnetTemplate(['new', 'blazor', '--name', 'HostedPerPage', '--output', hostedPerPageDirectory, '--interactivity', 'WebAssembly', '--no-https', '--no-restore']);"));
         assert.ok(runner.includes("process.env.ASPIRE_EXTENSION_E2E_SKIP_RESTORE_PREWARM === 'true' && !enableBrowserDebuggerE2E"));
         assert.ok(runner.includes("targetFramework !== 'net10.0'"));
+        assert.ok(runner.includes('addNet10WebAssemblyDiscoveryTargets(projectPath);'));
         assert.ok(runner.includes('currentCount = 42; // ASPIRE_E2E_MANAGED_BREAKPOINT'));
         assert.ok(runner.includes('<Routes\\s+@rendermode\\s*=\\s*["\']InteractiveWebAssembly["\']\\s*\\/>'));
         assert.ok(runner.includes('@rendermode\\s+InteractiveWebAssembly'));
@@ -704,6 +706,46 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes('ASPIRE_EXTENSION_E2E_BROWSER: e2eBrowser'));
     });
 
+    test('generates evaluated WebAssembly discovery targets for the .NET 10 fixture', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const source = ts.createSourceFile('run-e2e.js', runner, ts.ScriptTarget.Latest, true);
+        const declaration = source.statements.find(statement => ts.isFunctionDeclaration(statement)
+            && statement.name?.text === 'addNet10WebAssemblyDiscoveryTargets');
+        assert.ok(declaration, 'fixture generation must be able to call the discovery helper');
+
+        const projects = new Map([
+            ['Client.csproj', '<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">\n</Project>'],
+            ['Server.csproj', '<Project Sdk="Microsoft.NET.Sdk.Web">\n</Project>']
+        ]);
+        vm.runInNewContext(`${declaration.getText(source)}
+            addNet10WebAssemblyDiscoveryTargets('Client.csproj');
+            addNet10WebAssemblyDiscoveryTargets('Server.csproj');`, {
+            fs: {
+                readFileSync: (projectPath: string) => projects.get(projectPath),
+                writeFileSync: (projectPath: string, content: string) => projects.set(projectPath, content)
+            }
+        });
+
+        assert.strictEqual(projects.get('Client.csproj'), `<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+  <Target Name="GetWebAssemblyProjectReference" Returns="@(_WebAssemblyProjectReference)">
+    <ItemGroup>
+      <_WebAssemblyProjectReference Include="$(MSBuildProjectFullPath)" />
+    </ItemGroup>
+  </Target>
+</Project>`);
+        assert.strictEqual(projects.get('Server.csproj'), `<Project Sdk="Microsoft.NET.Sdk.Web">
+  <Target Name="ResolveWebAssemblyProjectReferences">
+    <MSBuild Projects="@(ProjectReference)"
+             Targets="GetWebAssemblyProjectReference"
+             BuildInParallel="true"
+             SkipNonexistentTargets="true">
+      <Output TaskParameter="TargetOutputs" ItemName="WebAssemblyProjectReference" />
+    </MSBuild>
+  </Target>
+</Project>`);
+    });
+
     test('does not load extension-host modules in the browser debugger ExTester process', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const specPath = path.join(extensionRoot, 'src', 'test-e2e', 'browserDebugger.e2e.test.ts');
@@ -715,6 +757,12 @@ suite('E2E launch profile', () => {
             .filter(moduleName => moduleName?.startsWith('../'));
 
         assert.deepStrictEqual(runtimeProductionImports, []);
+    });
+
+    test('starts the browser debugger fixture in debug mode', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const spec = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'browserDebugger.e2e.test.ts'), 'utf8');
+        assert.ok(spec.includes("executeE2eControlCommand({ name: 'debugAppHost', appHostPath }"));
     });
 
     test('isolates repository-local E2E fixtures from repository build settings', () => {

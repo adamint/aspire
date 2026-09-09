@@ -1505,6 +1505,7 @@ function generateBrowserDebuggerProjects() {
   ];
   for (const projectPath of generatedProjects) {
     assertGeneratedProjectTargetsNet10(projectPath);
+    addNet10WebAssemblyDiscoveryTargets(projectPath);
   }
 
   const standaloneCounterPath = path.join(standaloneDirectory, 'Pages', 'Counter.razor');
@@ -1542,6 +1543,29 @@ function runDotnetTemplate(args) {
   if (result.status !== 0) {
     throw new Error(`'dotnet ${args.join(' ')}' failed with code ${result.status ?? `signal ${result.signal ?? 'unknown'}`}.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
   }
+}
+
+function addNet10WebAssemblyDiscoveryTargets(projectPath) {
+  // Hosted discovery uses the .NET 11 SDK contract. Like playground/BlazorHosted,
+  // the .NET 10 fixture must supply real evaluated-reference targets until the
+  // repository SDK moves forward; returning a fixed client path would hide bugs.
+  // https://github.com/dotnet/sdk/blob/c0fb107a5474a2993546bc574fd7a6daac9fd7aa/src/StaticWebAssetsSdk/Sdk/Sdk.targets
+  const project = fs.readFileSync(projectPath, 'utf8');
+  const target = project.includes('Sdk="Microsoft.NET.Sdk.BlazorWebAssembly"')
+    ? `  <Target Name="GetWebAssemblyProjectReference" Returns="@(_WebAssemblyProjectReference)">
+    <ItemGroup>
+      <_WebAssemblyProjectReference Include="$(MSBuildProjectFullPath)" />
+    </ItemGroup>
+  </Target>`
+    : `  <Target Name="ResolveWebAssemblyProjectReferences">
+    <MSBuild Projects="@(ProjectReference)"
+             Targets="GetWebAssemblyProjectReference"
+             BuildInParallel="true"
+             SkipNonexistentTargets="true">
+      <Output TaskParameter="TargetOutputs" ItemName="WebAssemblyProjectReference" />
+    </MSBuild>
+  </Target>`;
+  fs.writeFileSync(projectPath, project.replace('</Project>', `${target}\n</Project>`));
 }
 
 function assertGeneratedProjectTargetsNet10(projectPath) {

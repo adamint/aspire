@@ -27,7 +27,7 @@ interface BrowserDebugConfiguration {
     projectPath?: string;
     webRoot?: string;
     userDataDir?: boolean;
-    runtimeArgs?: string[];
+    runtimeArgs?: string;
 }
 
 suite('Aspire Blazor browser debugger E2E', function () {
@@ -48,7 +48,7 @@ suite('Aspire Blazor browser debugger E2E', function () {
         await openAspireView();
         await waitForRepositoryIdle();
         await waitForWorkspaceAppHost();
-        await executeE2eControlCommand({ name: 'runAppHost', appHostPath }, { waitFor: 'started', timeoutMs: 600000 });
+        await executeE2eControlCommand({ name: 'debugAppHost', appHostPath }, { waitFor: 'started', timeoutMs: 600000 });
         await Promise.all([
             waitForResourceState('standalone', ['Running'], 600000),
             waitForResourceState('hosted-global', ['Running'], 600000),
@@ -109,11 +109,8 @@ suite('Aspire Blazor browser debugger E2E', function () {
         assert.strictEqual(configuration.request, 'launch');
         assert.strictEqual(configuration.webRoot, genericWebRoot);
         assert.strictEqual(configuration.userDataDir, true);
-        assert.deepStrictEqual(configuration.runtimeArgs, [
-            '--no-first-run',
-            '--no-default-browser-check',
-            '--disable-background-mode',
-        ]);
+        // The state bridge returns the logging-safe configuration, not raw arguments.
+        assert.strictEqual(configuration.runtimeArgs, '<redacted>');
     });
 
     test('reports an actionable localized error when C# is missing', async () => {
