@@ -5,6 +5,7 @@ import * as path from 'path';
 import { spawnSync } from 'child_process';
 import * as ts from 'typescript';
 import * as vm from 'vm';
+import { blazorWasmDebugProofResponseAllowanceMs, blazorWasmDebugProofTimeoutMs, getBlazorWasmDebugProofCleanupTimeoutMs, getBlazorWasmDebugProofControlTimeoutMs } from '../testing/blazorWasmDebugProofTimeouts';
 
 function removeDirectorySafely(directory: string): void {
     try {
@@ -763,6 +764,31 @@ suite('E2E launch profile', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const spec = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'browserDebugger.e2e.test.ts'), 'utf8');
         assert.ok(spec.includes("executeE2eControlCommand({ name: 'debugAppHost', appHostPath }"));
+    });
+
+    test('budgets managed proof cleanup and state delivery inside the scenario timeout', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const spec = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'browserDebugger.e2e.test.ts'), 'utf8');
+        const source = ts.createSourceFile('browserDebugger.e2e.test.ts', spec, ts.ScriptTarget.Latest, true);
+        const names = ['serverTransitionTimeoutMs', 'browserStateTimeoutMs', 'scenarioTimeoutMs'];
+        const declarations = getSuiteStatements(source)
+            .filter(ts.isVariableStatement)
+            .filter(statement => statement.declarationList.declarations.some(declaration =>
+                ts.isIdentifier(declaration.name) && names.includes(declaration.name.text)));
+        const budgets = vm.runInNewContext(`${declarations.map(declaration => declaration.getText(source)).join('\n')}
+            ({ ${names.join(', ')} });`, {
+            blazorWasmDebugProofResponseAllowanceMs,
+            blazorWasmDebugProofTimeoutMs,
+            getBlazorWasmDebugProofControlTimeoutMs,
+        });
+
+        assert.strictEqual(getBlazorWasmDebugProofCleanupTimeoutMs(5), 5);
+        assert.strictEqual(getBlazorWasmDebugProofCleanupTimeoutMs(blazorWasmDebugProofTimeoutMs), 30000);
+        assert.strictEqual(getBlazorWasmDebugProofControlTimeoutMs(blazorWasmDebugProofTimeoutMs), 360000);
+        assert.strictEqual(budgets.serverTransitionTimeoutMs, 90000);
+        assert.strictEqual(budgets.browserStateTimeoutMs, 10000);
+        assert.strictEqual(budgets.scenarioTimeoutMs, 580000);
+        assert.ok(spec.includes('this.timeout(scenarioTimeoutMs)'));
     });
 
     test('isolates repository-local E2E fixtures from repository build settings', () => {

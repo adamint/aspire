@@ -26,6 +26,7 @@ import { AppHostDataRepository } from '../data/AppHostDataRepository';
 import { getSupportedCapabilities, javaLanguageExtensionId, useCsharpExtensionVersionProviderForTests } from '../capabilities';
 import { getCliPathTargetKey, workspaceFolderCliPathTarget } from '../utils/cliPathVariables';
 import { isEnabledCommand } from '../views/treePresentation';
+import { blazorWasmDebugProofTimeoutMs, getBlazorWasmDebugProofCleanupTimeoutMs } from './blazorWasmDebugProofTimeouts';
 
 let atomicWriteSequence = 0;
 
@@ -1345,11 +1346,11 @@ async function proveBlazorWasmDebugging(command: BlazorWasmDebugProofCommand, ap
   const appHostPath = getE2eWorkspacePath(command.appHostPath);
   const sourcePath = getE2eWorkspacePath(command.sourcePath);
   const resourceName = getE2eRequiredString(command.resourceName, 'Aspire extension E2E Blazor WASM proof requires resourceName.');
-  const breakpointLine = getE2ePositiveBreakpointLine(command.breakpointLine);
+  const breakpointLine = getE2eBlazorBreakpointLine(command.breakpointLine);
   const requestPath = getE2eRequiredString(command.requestPath, 'Aspire extension E2E Blazor WASM proof requires requestPath.');
   const expectedBrowser = getE2eBlazorBrowser(command.expectedBrowser);
   const closeMode = getE2eBlazorCloseMode(command.closeMode);
-  const timeoutMs = getE2eStrictlyPositiveInteger(command.timeoutMs, 300000, 'timeoutMs');
+  const timeoutMs = getE2eStrictlyPositiveInteger(command.timeoutMs, blazorWasmDebugProofTimeoutMs, 'timeoutMs');
   const deadline = Date.now() + timeoutMs;
 
   const debugSessions: DebugSessionSnapshot[] = [];
@@ -1652,10 +1653,24 @@ ${JSON.stringify(diagnostics(), undefined, 2)}`);
       .filter((session): session is vscode.DebugSession =>
         session !== undefined
         && (rootSessionForCleanup === undefined || isProofSession(session.id, rootSessionForCleanup, sessionById)));
-    await Promise.allSettled(remainingSessions.map(session => vscode.debug.stopDebugging(session)));
-    sessionSubscription.dispose();
-    terminateSubscription.dispose();
-    trackerRegistration.dispose();
+    let cleanupTimer: NodeJS.Timeout | undefined;
+    try {
+      // An unresponsive adapter must not prevent the bridge from returning the
+      // original failure and its diagnostics. Cleanup has a separate, bounded
+      // allowance after the proof deadline, also included by the ExTester waiter.
+      await Promise.race([
+        Promise.allSettled(remainingSessions.map(async session => await vscode.debug.stopDebugging(session))),
+        new Promise<void>(resolve => {
+          cleanupTimer = setTimeout(resolve, getBlazorWasmDebugProofCleanupTimeoutMs(timeoutMs));
+        }),
+      ]);
+    }
+    finally {
+      clearTimeout(cleanupTimer);
+      sessionSubscription.dispose();
+      terminateSubscription.dispose();
+      trackerRegistration.dispose();
+    }
   }
 }
 
@@ -2283,9 +2298,9 @@ function getE2eStrictlyPositiveInteger(value: unknown, defaultValue: number, pro
   return value;
 }
 
-function getE2ePositiveBreakpointLine(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
-    throw new Error('Aspire extension E2E Blazor WASM proof breakpointLine must be a positive zero-based integer.');
+function getE2eBlazorBreakpointLine(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw new Error('Aspire extension E2E Blazor WASM proof breakpointLine must be a non-negative zero-based integer.');
   }
 
   return value;

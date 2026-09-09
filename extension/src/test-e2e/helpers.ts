@@ -1,6 +1,9 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { blazorWasmDebugProofTimeoutMs, getBlazorWasmDebugProofControlTimeoutMs } from '../testing/blazorWasmDebugProofTimeouts';
+
+export { blazorWasmDebugProofTimeoutMs, blazorWasmDebugProofResponseAllowanceMs, getBlazorWasmDebugProofControlTimeoutMs } from '../testing/blazorWasmDebugProofTimeouts';
 
 import { isSamePath } from './helpers/assertions';
 import { executeE2eControlCommand } from './helpers/fixtures';
@@ -61,7 +64,7 @@ export interface ProveBlazorScenarioOptions {
 
 export async function proveBlazorScenario(options: ProveBlazorScenarioOptions): Promise<BlazorWasmDebugProof> {
     const breakpointLine = findBreakpointLine(options.sourcePath, options.breakpointMarker);
-    const timeoutMs = options.timeoutMs ?? 300000;
+    const timeoutMs = options.timeoutMs ?? blazorWasmDebugProofTimeoutMs;
     const status = await executeE2eControlCommand({
         name: 'proveBlazorWasmDebugging',
         appHostPath: options.appHostPath,
@@ -73,7 +76,7 @@ export async function proveBlazorScenario(options: ProveBlazorScenarioOptions): 
         closeMode: options.closeMode,
         timeoutMs,
     }, {
-        timeoutMs: timeoutMs + 60000,
+        timeoutMs: getBlazorWasmDebugProofControlTimeoutMs(timeoutMs),
     });
     const proof = status.result as BlazorWasmDebugProof;
     // The next control command replaces the state-file result. Preserve each

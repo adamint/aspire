@@ -14,7 +14,7 @@ import {
 import { executeE2eControlCommand, runE2eTeardown, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
 import { getPrimaryAppHostProjectPath, getWorkspaceRoot } from './helpers/paths';
 import { openAspireView } from './helpers/vscode';
-import { proveBlazorScenario } from './helpers';
+import { blazorWasmDebugProofResponseAllowanceMs, blazorWasmDebugProofTimeoutMs, getBlazorWasmDebugProofControlTimeoutMs, proveBlazorScenario } from './helpers';
 
 // ExTester loads these tests in Node, not in the extension host. Keep the expected
 // contract independent of production modules that import the VS Code API.
@@ -38,33 +38,42 @@ suite('Aspire Blazor browser debugger E2E', function () {
     const standaloneProjectPath = path.join(workspaceRoot, 'StandaloneClient', 'StandaloneClient.csproj');
     const browser = process.env.ASPIRE_EXTENSION_E2E_BROWSER === 'msedge' ? 'msedge' : 'chrome';
     const expectedBrowser = browser === 'msedge' ? 'edge' : 'chrome';
+    const serverTransitionTimeoutMs = 90000;
+    const browserStateTimeoutMs = 10000;
+    const scenarioTimeoutMs = 2 * serverTransitionTimeoutMs
+        + getBlazorWasmDebugProofControlTimeoutMs(blazorWasmDebugProofTimeoutMs)
+        + browserStateTimeoutMs
+        + blazorWasmDebugProofResponseAllowanceMs;
 
     suiteSetup(async function () {
-        this.timeout(600000);
+        const startupTimeoutMs = 600000;
+        this.timeout(startupTimeoutMs + blazorWasmDebugProofResponseAllowanceMs);
         if (!shouldRunBrowserDebuggerE2E()) {
             this.skip();
         }
 
+        const deadline = Date.now() + startupTimeoutMs;
+        const remaining = () => Math.max(1, deadline - Date.now());
         await openAspireView();
-        await waitForRepositoryIdle();
-        await waitForWorkspaceAppHost();
-        await executeE2eControlCommand({ name: 'debugAppHost', appHostPath }, { waitFor: 'started', timeoutMs: 600000 });
+        await waitForRepositoryIdle(remaining());
+        await waitForWorkspaceAppHost(remaining());
+        await executeE2eControlCommand({ name: 'debugAppHost', appHostPath }, { waitFor: 'started', timeoutMs: remaining() });
         await Promise.all([
-            waitForResourceState('standalone', ['Running'], 600000),
-            waitForResourceState('standalone-gateway', ['Running'], 600000),
-            waitForResourceState('hosted-global', ['Running'], 600000),
-            waitForResourceState('hosted-per-page', ['Running'], 600000),
+            waitForResourceState('standalone', ['Running'], remaining()),
+            waitForResourceState('standalone-gateway', ['Running'], remaining()),
+            waitForResourceState('hosted-global', ['Running'], remaining()),
+            waitForResourceState('hosted-per-page', ['Running'], remaining()),
         ]);
 
         // Each scenario needs one web server, not three concurrent CLR debuggers
         // alongside Chrome and the WASM debugger on memory-constrained runners.
         for (const resourceName of ['hosted-global', 'hosted-per-page']) {
-            await stopScenarioServer(resourceName);
+            await runScenarioServerCommand('stopResource', resourceName, Math.min(serverTransitionTimeoutMs, remaining()));
         }
     });
 
     suiteTeardown(async function () {
-        this.timeout(600000);
+        this.timeout(600000 + blazorWasmDebugProofResponseAllowanceMs);
         if (!shouldRunBrowserDebuggerE2E()) {
             return;
         }
@@ -162,14 +171,13 @@ suite('Aspire Blazor browser debugger E2E', function () {
 
     for (const scenario of scenarios) {
         test(`hits a managed breakpoint for ${scenario.resourceName}`, async function () {
-            this.timeout(600000);
-
-            if (scenario.resourceName !== 'standalone') {
-                await executeE2eControlCommand({ name: 'startResource', appHostPath, resourceName: scenario.serverResourceName });
-                await waitForResourceState(scenario.serverResourceName, ['Running'], 90000);
-            }
+            this.timeout(scenarioTimeoutMs);
 
             try {
+                if (scenario.resourceName !== 'standalone') {
+                    await runScenarioServerCommand('startResource', scenario.serverResourceName, serverTransitionTimeoutMs);
+                }
+
                 const proof = await proveBlazorScenario({
                     appHostPath,
                     resourceName: scenario.resourceName,
@@ -179,9 +187,9 @@ suite('Aspire Blazor browser debugger E2E', function () {
                     expectedBrowser,
                     clientProjectPath: scenario.clientProjectPath,
                     closeMode: scenario.closeMode,
-                    timeoutMs: 300000,
+                    timeoutMs: blazorWasmDebugProofTimeoutMs,
                 });
-                await waitForNoBrowserDebugSessions(90000);
+                await waitForNoBrowserDebugSessions(browserStateTimeoutMs);
 
                 const proofSessionIds = new Set([proof.rootSession.id, proof.browserSession.id, proof.managedSession.id]);
                 assert.ok(
@@ -189,14 +197,18 @@ suite('Aspire Blazor browser debugger E2E', function () {
                     `Expected no proof-owned browser sessions after stopping ${scenario.resourceName}.`);
             }
             finally {
-                await stopScenarioServer(scenario.serverResourceName);
+                await runScenarioServerCommand('stopResource', scenario.serverResourceName, serverTransitionTimeoutMs);
             }
         });
     }
 
-    async function stopScenarioServer(resourceName: string): Promise<void> {
-        await executeE2eControlCommand({ name: 'stopResource', appHostPath, resourceName });
-        await waitForResourceState(resourceName, ['Exited', 'Finished', 'Stopped'], 90000);
+    async function runScenarioServerCommand(name: 'startResource' | 'stopResource', resourceName: string, timeoutMs: number): Promise<void> {
+        const deadline = Date.now() + timeoutMs;
+        await executeE2eControlCommand({ name, appHostPath, resourceName }, { timeoutMs });
+        await waitForResourceState(
+            resourceName,
+            name === 'startResource' ? ['Running'] : ['Exited', 'Finished', 'Stopped'],
+            Math.max(1, deadline - Date.now()));
     }
 
     async function createBrowserDebugConfiguration(launchConfig: BrowserLaunchConfiguration): Promise<BrowserDebugConfiguration> {

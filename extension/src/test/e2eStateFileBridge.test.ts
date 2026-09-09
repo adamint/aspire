@@ -275,32 +275,49 @@ suite('E2E state file bridge', () => {
     }
 
     for (const rootType of ['chrome', 'pwa-chrome'] as const) {
-        test(`recognizes a C#-rewritten ${rootType} root and detached WASM adapter`, async () => {
-            const harness = createBlazorProofHarness(sandbox, {
-                expectedBrowser: 'chrome',
-                managedTopology: 'detached',
-                rootType,
-            });
-            const proof = await dispatchControlCommand(
-                harness.command,
-                harness.repository,
-                harness.launchService,
-                harness.provider,
-                harness.terminalProvider) as Record<string, any>;
+        for (const managedTopology of ['detached', 'sibling'] as const) {
+            test(`recognizes a C#-rewritten ${rootType} root and ${managedTopology} WASM adapter`, async () => {
+                const harness = createBlazorProofHarness(sandbox, {
+                    expectedBrowser: 'chrome',
+                    managedTopology,
+                    rootType,
+                });
+                const proof = await dispatchControlCommand(
+                    harness.command,
+                    harness.repository,
+                    harness.launchService,
+                    harness.provider,
+                    harness.terminalProvider) as Record<string, any>;
 
-            assert.strictEqual(proof.rootSession.type, rootType);
-            assert.strictEqual(proof.managedSession.type, 'monovsdbg_wasm');
-            assert.strictEqual(proof.managedSession.parentSessionId, undefined);
-            assert.strictEqual(proof.stoppedEvent.reason, 'breakpoint');
-            assert.strictEqual(proof.stackTrace.stackFrames[0].source.path, harness.sourcePath);
-        });
+                assert.strictEqual(proof.rootSession.type, rootType);
+                assert.strictEqual(proof.managedSession.type, 'monovsdbg_wasm');
+                assert.strictEqual(proof.managedSession.parentSessionId,
+                    managedTopology === 'detached' ? undefined : proof.rootSession.parentSessionId);
+                assert.strictEqual(proof.stoppedEvent.reason, 'breakpoint');
+                assert.strictEqual(proof.stackTrace.stackFrames[0].source.path, harness.sourcePath);
+            });
+        }
     }
+
+    test('converts the first zero-based source line to DAP line one', async () => {
+        const harness = createBlazorProofHarness(sandbox, { breakpointLine: 0 });
+        const proof = await dispatchControlCommand(
+            harness.command,
+            harness.repository,
+            harness.launchService,
+            harness.provider,
+            harness.terminalProvider) as Record<string, any>;
+
+        assert.strictEqual(proof.breakpointResponse.body.breakpoints[0].line, 1);
+        assert.strictEqual(proof.stackTrace.stackFrames[0].line, 1);
+    });
 
     test('rejects invalid managed Blazor proof inputs before starting debugging', async () => {
         const harness = createBlazorProofHarness(sandbox);
         const invalidCommands = [
             { ...harness.command, sourcePath: '/outside/Counter.razor' },
-            { ...harness.command, breakpointLine: 0 },
+            { ...harness.command, breakpointLine: -1 },
+            { ...harness.command, breakpointLine: 0.5 },
             { ...harness.command, expectedBrowser: 'firefox' },
             { ...harness.command, expectedBrowser: 42 },
             { ...harness.command, timeoutMs: 0 },
@@ -340,6 +357,29 @@ suite('E2E state file bridge', () => {
         assert.strictEqual(harness.terminateListenerDispose.calledOnce, true);
         assert.strictEqual(harness.trackerDispose.calledOnce, true);
         assert.strictEqual(harness.stopDebugging.callCount, 3);
+    });
+
+    test('finishes failed proof cleanup when an adapter never acknowledges stop', async () => {
+        const clock = sandbox.useFakeTimers({ shouldClearNativeTimers: true });
+        const harness = createBlazorProofHarness(sandbox, { breakpointResponseSuccess: false });
+        harness.stopDebugging.callsFake(() => new Promise<void>(() => undefined));
+        let failure: Error | undefined;
+        const completion = captureError(() => dispatchControlCommand(
+            harness.command,
+            harness.repository,
+            harness.launchService,
+            harness.provider,
+            harness.terminalProvider)).then(error => { failure = error; });
+
+        await clock.tickAsync(100);
+
+        assert.ok(failure, 'the bridge must respond even when adapter cleanup hangs');
+        assert.match(failure.message, /setBreakpoints/);
+        assert.strictEqual(harness.stopDebugging.callCount, 3);
+        assert.strictEqual(harness.startListenerDispose.calledOnce, true);
+        assert.strictEqual(harness.terminateListenerDispose.calledOnce, true);
+        assert.strictEqual(harness.trackerDispose.calledOnce, true);
+        await completion;
     });
 
     test('requires a breakpoint stopped event with a stack frame at the requested source and line', async () => {
@@ -418,6 +458,7 @@ interface BlazorProofHarnessOptions {
     stackSourcePath?: string;
     managedTopology?: 'child' | 'sibling' | 'detached';
     rootType?: 'chrome' | 'pwa-chrome';
+    breakpointLine?: number;
 }
 
 function createBlazorProofHarness(sandbox: sinon.SinonSandbox, options: BlazorProofHarnessOptions = {}) {
@@ -425,7 +466,7 @@ function createBlazorProofHarness(sandbox: sinon.SinonSandbox, options: BlazorPr
     const appHostPath = '/repo/AppHost/AppHost.csproj';
     const clientProjectPath = '/repo/client/Client.csproj';
     const sourcePath = '/repo/client/Pages/Counter.razor';
-    const breakpointLine = 12;
+    const breakpointLine = options.breakpointLine ?? 12;
     const repository = createRepository([appHostPath], appHostPath);
     const launchService = createLaunchService();
     const terminalProvider = {} as AspireTerminalProvider;
@@ -486,7 +527,7 @@ function createBlazorProofHarness(sandbox: sinon.SinonSandbox, options: BlazorPr
         projectPath: clientProjectPath,
         resourceType: 'browser',
     }, options.managedTopology === 'sibling' ? compoundSession : undefined);
-    const managedType = options.managedTopology === 'detached' ? 'monovsdbg_wasm' : 'coreclr';
+    const managedType = options.managedTopology === 'detached' || options.rootType !== undefined ? 'monovsdbg_wasm' : 'coreclr';
     const managedSession = createDebugSession('managed', managedType, 'Managed client', {
         type: managedType,
         request: 'attach',
