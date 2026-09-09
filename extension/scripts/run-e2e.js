@@ -1485,6 +1485,13 @@ function restoreWorkspaceFixture() {
   if (result.status !== 0) {
     throw new Error(`Restoring the Aspire E2E fixture failed with code ${result.status ?? `signal ${result.signal ?? 'unknown'}`}.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
   }
+
+  if (enableBrowserDebuggerE2E) {
+    // Build before opening VS Code: otherwise C#'s initial design-time build races
+    // the AppHost build writing AssemblyInfo.cs on Windows. A failed project load
+    // leaves that client's output out of the managed debugger's assetsPath.
+    runDotnetForFixture(['build', primaryAppHostProject, '--no-restore', '--disable-build-servers']);
+  }
 }
 
 function generateBrowserDebuggerProjects() {
@@ -1492,9 +1499,9 @@ function generateBrowserDebuggerProjects() {
   const hostedGlobalDirectory = path.join(workspaceRoot, 'HostedGlobal');
   const hostedPerPageDirectory = path.join(workspaceRoot, 'HostedPerPage');
 
-  runDotnetTemplate(['new', 'blazorwasm', '--name', 'StandaloneClient', '--output', standaloneDirectory, '--no-https', '--no-restore']);
-  runDotnetTemplate(['new', 'blazor', '--name', 'HostedGlobal', '--output', hostedGlobalDirectory, '--interactivity', 'WebAssembly', '--all-interactive', '--no-https', '--no-restore']);
-  runDotnetTemplate(['new', 'blazor', '--name', 'HostedPerPage', '--output', hostedPerPageDirectory, '--interactivity', 'WebAssembly', '--no-https', '--no-restore']);
+  runDotnetForFixture(['new', 'blazorwasm', '--name', 'StandaloneClient', '--output', standaloneDirectory, '--no-https', '--no-restore']);
+  runDotnetForFixture(['new', 'blazor', '--name', 'HostedGlobal', '--output', hostedGlobalDirectory, '--interactivity', 'WebAssembly', '--all-interactive', '--no-https', '--no-restore']);
+  runDotnetForFixture(['new', 'blazor', '--name', 'HostedPerPage', '--output', hostedPerPageDirectory, '--interactivity', 'WebAssembly', '--no-https', '--no-restore']);
   configureStandaloneBasePath(standaloneDirectory);
 
   const generatedProjects = [
@@ -1528,7 +1535,7 @@ function generateBrowserDebuggerProjects() {
   }
 }
 
-function runDotnetTemplate(args) {
+function runDotnetForFixture(args) {
   const result = spawnSync('dotnet', args, {
     cwd: workspaceRoot,
     env: getAspireCliEnvironment(),

@@ -234,8 +234,9 @@ suite('E2E state file bridge', () => {
                 rootType: closeMode === 'natural' ? 'pwa-chrome' : undefined,
             });
 
+            const proofTimeoutMs = closeMode === 'explicit' ? 120000 : harness.command.timeoutMs;
             const proof = await dispatchControlCommand(
-                harness.command,
+                { ...harness.command, timeoutMs: proofTimeoutMs },
                 harness.repository,
                 harness.launchService,
                 harness.provider,
@@ -270,6 +271,12 @@ suite('E2E state file bridge', () => {
             assert.strictEqual(harness.stopDebugging.called, false);
             assert.strictEqual(path.dirname(harness.tracedConfiguration.trace.logFile), vscode.Uri.file('/repo/logs').fsPath);
             assert.match(path.basename(harness.tracedConfiguration.trace.logFile), /^blazor-debugadapter-[0-9a-f-]+\.json$/);
+            if (closeMode === 'explicit') {
+                assert.strictEqual(harness.tracedConfiguration.timeout, 90000);
+            }
+            else {
+                assert.ok(harness.tracedConfiguration.timeout > 0 && harness.tracedConfiguration.timeout <= proofTimeoutMs);
+            }
 
             const navigationExpression = harness.browserEvaluateExpressions.find(expression => expression.startsWith('window.location.replace'));
             assert.ok(navigationExpression);

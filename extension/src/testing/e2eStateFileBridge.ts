@@ -1440,6 +1440,10 @@ async function proveBlazorWasmDebugging(command: BlazorWasmDebugProofCommand, ap
         // tracing then defaults to OS temp, outside the collected/redacted VS Code logs.
         // https://github.com/microsoft/vscode-js-debug/blob/v1.117.0/src/common/logging/index.ts
         configuration.trace = { logFile: path.join(logDirectory, `blazor-debugadapter-${randomUUID()}.json`) };
+        // Cold C# proxy/Chromium startup on CI can consume the default 30 seconds
+        // before target discovery completes. Keep this test-only startup allowance
+        // within the existing proof deadline; breakpoint and teardown gates are unchanged.
+        configuration.timeout = Math.min(90000, remainingTime('browser startup'));
       }
       return configuration;
     }

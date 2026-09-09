@@ -686,9 +686,9 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes("const enableBrowserDebuggerE2E = shardName === 'browser-debugger';"));
         assert.ok(runner.includes("const e2eBrowser = process.platform === 'win32' ? 'msedge' : 'chrome';"));
         assert.ok(runner.includes('const enableDebuggerExtensions = enableAzureFunctionsE2E || enableBrowserDebuggerE2E || enableWinUiE2E;'));
-        assert.ok(compactRunner.includes("runDotnetTemplate(['new', 'blazorwasm', '--name', 'StandaloneClient', '--output', standaloneDirectory, '--no-https', '--no-restore']);"));
-        assert.ok(compactRunner.includes("runDotnetTemplate(['new', 'blazor', '--name', 'HostedGlobal', '--output', hostedGlobalDirectory, '--interactivity', 'WebAssembly', '--all-interactive', '--no-https', '--no-restore']);"));
-        assert.ok(compactRunner.includes("runDotnetTemplate(['new', 'blazor', '--name', 'HostedPerPage', '--output', hostedPerPageDirectory, '--interactivity', 'WebAssembly', '--no-https', '--no-restore']);"));
+        assert.ok(compactRunner.includes("runDotnetForFixture(['new', 'blazorwasm', '--name', 'StandaloneClient', '--output', standaloneDirectory, '--no-https', '--no-restore']);"));
+        assert.ok(compactRunner.includes("runDotnetForFixture(['new', 'blazor', '--name', 'HostedGlobal', '--output', hostedGlobalDirectory, '--interactivity', 'WebAssembly', '--all-interactive', '--no-https', '--no-restore']);"));
+        assert.ok(compactRunner.includes("runDotnetForFixture(['new', 'blazor', '--name', 'HostedPerPage', '--output', hostedPerPageDirectory, '--interactivity', 'WebAssembly', '--no-https', '--no-restore']);"));
         assert.ok(runner.includes("process.env.ASPIRE_EXTENSION_E2E_SKIP_RESTORE_PREWARM === 'true' && !enableBrowserDebuggerE2E"));
         assert.ok(runner.includes("targetFramework !== 'net10.0'"));
         assert.ok(runner.includes('addNet10WebAssemblyDiscoveryTargets(projectPath);'));
@@ -706,6 +706,81 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes('builder.AddProject<Projects.HostedPerPage>("hosted-per-page")'));
         assert.ok(runner.includes('ASPIRE_EXTENSION_E2E_BROWSER: e2eBrowser'));
     });
+
+    for (const enableBrowserDebuggerE2E of [false, true]) {
+        test(`prewarms the fixture with ${enableBrowserDebuggerE2E ? 'restore and build before browser debugging' : 'restore only for other shards'}`, () => {
+            const runner = fs.readFileSync(path.resolve(__dirname, '..', '..', 'scripts', 'run-e2e.js'), 'utf8');
+            const source = ts.createSourceFile('run-e2e.js', runner, ts.ScriptTarget.Latest, true);
+            const declarations = ['restoreWorkspaceFixture', 'runDotnetForFixture'].map(name => {
+                const declaration = source.statements.find(statement => ts.isFunctionDeclaration(statement) && statement.name?.text === name);
+                assert.ok(declaration);
+                return declaration.getText(source);
+            });
+            const calls: { command: string; args: string[]; cwd: string }[] = [];
+            vm.runInNewContext(`${declarations.join('\n')}\nrestoreWorkspaceFixture();`, {
+                enableBrowserDebuggerE2E,
+                enableJavaE2E: false,
+                workspaceRoot: '/workspace',
+                workspaceNuGetConfigPath: '/workspace/NuGet.config',
+                primaryAppHostProject: '/workspace/AppHost/AppHost.csproj',
+                process: { env: { ASPIRE_EXTENSION_E2E_SKIP_RESTORE_PREWARM: enableBrowserDebuggerE2E ? 'true' : 'false' } },
+                fs: { existsSync: () => true },
+                getAspireCliEnvironment: () => ({}),
+                spawnSync: (command: string, args: string[], options: { cwd: string }) => {
+                    calls.push({ command, args: [...args], cwd: options.cwd });
+                    return { status: 0, stdout: '', stderr: '' };
+                },
+            });
+            const expected = [{
+                command: 'dotnet',
+                args: ['restore', '/workspace/AppHost/AppHost.csproj', '--configfile', '/workspace/NuGet.config'],
+                cwd: '/workspace',
+            }];
+            if (enableBrowserDebuggerE2E) {
+                expected.push({
+                    command: 'dotnet',
+                    args: ['build', '/workspace/AppHost/AppHost.csproj', '--no-restore', '--disable-build-servers'],
+                    cwd: '/workspace',
+                });
+            }
+            assert.deepStrictEqual(calls, expected);
+        });
+    }
+
+    for (const dialogText of [
+        { message: 'Unable to launch browser', details: '' },
+        { message: '', details: 'Unable to launch browser: "Could not attach to main target"' },
+    ]) {
+        test(`dismisses a launch error dialog with text in its ${dialogText.message ? 'heading' : 'details'}`, async () => {
+            const helpers = fs.readFileSync(path.resolve(__dirname, '..', '..', 'src', 'test-e2e', 'helpers', 'vscode.ts'), 'utf8');
+            const source = ts.createSourceFile('vscode.ts', helpers, ts.ScriptTarget.Latest, true);
+            const declaration = source.statements.find(statement => ts.isFunctionDeclaration(statement) && statement.name?.text === 'acceptModalDialog');
+            assert.ok(declaration);
+            const compiled = ts.transpileModule(declaration.getText(source), {
+                compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+            }).outputText;
+            const exported: { acceptModalDialog?: (buttonTitle: string) => Promise<{ message: string; details: string }> } = {};
+            const pressed: string[] = [];
+            vm.runInNewContext(compiled, {
+                exports: exported,
+                ModalDialog: class {
+                    async getMessage() { return dialogText.message; }
+                    async getDetails() { return dialogText.details; }
+                    async pushButton(title: string) { pressed.push(title); }
+                },
+                VSBrowser: { instance: { driver: { wait: async (predicate: () => Promise<unknown>) => {
+                    const result = await predicate();
+                    assert.ok(result, 'A visible launch error must not be ignored because its heading is empty.');
+                    return result;
+                } } } },
+            });
+            assert.ok(exported.acceptModalDialog);
+            const accepted = await exported.acceptModalDialog('Cancel');
+            assert.strictEqual(accepted.message, dialogText.message);
+            assert.strictEqual(accepted.details, dialogText.details);
+            assert.deepStrictEqual(pressed, ['Cancel']);
+        });
+    }
 
     test('configures gateway-relative assets and an interactive-only Counter marker', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
