@@ -1,12 +1,7 @@
 import * as assert from 'assert';
 import * as path from 'path';
 
-import { minimumCsharpBlazorWasmDebuggingVersion } from '../capabilities';
 import type { BrowserLaunchConfiguration } from '../dcp/types';
-import {
-    csharpExtensionMissingForBlazorDebugging,
-    csharpExtensionOutdatedForBlazorDebugging,
-} from '../loc/strings';
 import {
     getBrowserDebugSessions,
     isSamePath,
@@ -20,6 +15,10 @@ import { executeE2eControlCommand, runE2eTeardown, stopPrimaryAppHostIfRunning }
 import { getPrimaryAppHostProjectPath, getWorkspaceRoot } from './helpers/paths';
 import { openAspireView } from './helpers/vscode';
 import { proveBlazorScenario } from './helpers';
+
+// ExTester loads these tests in Node, not in the extension host. Keep the expected
+// contract independent of production modules that import the VS Code API.
+const minimumCsharpBlazorWasmDebuggingVersion = '2.145.15-prerelease';
 
 interface BrowserDebugConfiguration {
     type?: string;
@@ -118,19 +117,14 @@ suite('Aspire Blazor browser debugger E2E', function () {
     });
 
     test('reports an actionable localized error when C# is missing', async () => {
-        const expectedMessage = csharpExtensionMissingForBlazorDebugging(
-            'ms-dotnettools.csharp',
-            minimumCsharpBlazorWasmDebuggingVersion);
+        const expectedMessage = `Debugging this Blazor client requires ms-dotnettools.csharp version ${minimumCsharpBlazorWasmDebuggingVersion} or later. Install the C# extension, then start debugging again.`;
 
         await assertConfigurationRejected(null, expectedMessage);
     });
 
     test('reports installed and minimum C# versions when C# is outdated', async () => {
         const installedVersion = '2.145.14';
-        const expectedMessage = csharpExtensionOutdatedForBlazorDebugging(
-            'ms-dotnettools.csharp',
-            installedVersion,
-            minimumCsharpBlazorWasmDebuggingVersion);
+        const expectedMessage = `Debugging this Blazor client requires ms-dotnettools.csharp version ${minimumCsharpBlazorWasmDebuggingVersion} or later. Installed version: ${installedVersion}. Update the C# extension, then start debugging again.`;
 
         await assertConfigurationRejected(installedVersion, expectedMessage);
     });

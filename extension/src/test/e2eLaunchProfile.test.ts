@@ -704,6 +704,28 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes('ASPIRE_EXTENSION_E2E_BROWSER: e2eBrowser'));
     });
 
+    test('does not load extension-host modules in the browser debugger ExTester process', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const specPath = path.join(extensionRoot, 'src', 'test-e2e', 'browserDebugger.e2e.test.ts');
+        const sourceFile = ts.createSourceFile(specPath, fs.readFileSync(specPath, 'utf8'), ts.ScriptTarget.Latest, true);
+        const runtimeProductionImports = sourceFile.statements
+            .filter(ts.isImportDeclaration)
+            .filter(statement => !statement.importClause?.isTypeOnly)
+            .map(statement => getLiteralText(statement.moduleSpecifier))
+            .filter(moduleName => moduleName?.startsWith('../'));
+
+        assert.deepStrictEqual(runtimeProductionImports, []);
+    });
+
+    test('isolates repository-local E2E fixtures from repository build settings', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+
+        assert.ok(runner.includes("['Directory.Build.props', 'Directory.Build.targets', 'Directory.Packages.props']"));
+        assert.ok(runner.includes("fs.writeFileSync(path.join(shortRunRoot, fileName), '<Project />\\n');"));
+        assert.ok(runner.includes('<packageSourceMapping>\n    <clear />\n  </packageSourceMapping>'));
+    });
+
     test('requires only the debugger VSIX dependencies shared by browser and Azure Functions shards', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');

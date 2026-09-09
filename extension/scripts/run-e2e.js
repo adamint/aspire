@@ -169,6 +169,11 @@ function prepareRunDirectories() {
   for (const directory of [artifactsDir, resultsDir, diagnosticsStorageRoot, isolatedAspireHome, storageDir, extensionsDir]) {
     fs.mkdirSync(directory, { recursive: true });
   }
+  // A repository-local E2E temp root must behave like an external consumer, not
+  // inherit Arcade targets or central package versions from the Aspire checkout.
+  for (const fileName of ['Directory.Build.props', 'Directory.Build.targets', 'Directory.Packages.props']) {
+    fs.writeFileSync(path.join(shortRunRoot, fileName), '<Project />\n');
+  }
 }
 
 function prepareNuGetPackageCache() {
@@ -2086,6 +2091,9 @@ function writeNuGetConfigIfLocalPackageSourcesExist() {
 ${sourceEntries}
 ${fallbackSourceEntries}
   </packageSources>
+  <packageSourceMapping>
+    <clear />
+  </packageSourceMapping>
 </configuration>
 `;
   // External AppHost fixtures are siblings of the workspace, while an explicitly supplied
