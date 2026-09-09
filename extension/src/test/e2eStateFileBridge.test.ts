@@ -216,6 +216,8 @@ suite('E2E state file bridge', () => {
         assert.strictEqual(isBrowserDebugSessionType('blazorwasm'), true);
         assert.strictEqual(isBrowserDebugSessionType('pwa-msedge'), true);
         assert.strictEqual(isBrowserDebugSessionType('pwa-chrome'), true);
+        assert.strictEqual(isBrowserDebugSessionType('chrome'), true);
+        assert.strictEqual(isBrowserDebugSessionType('msedge'), true);
         assert.strictEqual(isBrowserDebugSessionType('firefox'), false);
         assert.strictEqual(isBrowserDebugSessionType('coreclr'), false);
     });
@@ -269,6 +271,28 @@ suite('E2E state file bridge', () => {
                 assert.strictEqual(harness.executedResourceCommands.includes('stop-browser-debug'), false);
                 assert.strictEqual(harness.browserEvaluateExpressions.includes('window.close()'), true);
             }
+        });
+    }
+
+    for (const rootType of ['chrome', 'pwa-chrome'] as const) {
+        test(`recognizes a C#-rewritten ${rootType} root and detached WASM adapter`, async () => {
+            const harness = createBlazorProofHarness(sandbox, {
+                expectedBrowser: 'chrome',
+                managedTopology: 'detached',
+                rootType,
+            });
+            const proof = await dispatchControlCommand(
+                harness.command,
+                harness.repository,
+                harness.launchService,
+                harness.provider,
+                harness.terminalProvider) as Record<string, any>;
+
+            assert.strictEqual(proof.rootSession.type, rootType);
+            assert.strictEqual(proof.managedSession.type, 'monovsdbg_wasm');
+            assert.strictEqual(proof.managedSession.parentSessionId, undefined);
+            assert.strictEqual(proof.stoppedEvent.reason, 'breakpoint');
+            assert.strictEqual(proof.stackTrace.stackFrames[0].source.path, harness.sourcePath);
         });
     }
 
@@ -392,7 +416,8 @@ interface BlazorProofHarnessOptions {
     breakpointResponseSuccess?: boolean;
     expectedBrowser?: 'edge' | 'chrome';
     stackSourcePath?: string;
-    managedTopology?: 'child' | 'sibling';
+    managedTopology?: 'child' | 'sibling' | 'detached';
+    rootType?: 'chrome' | 'pwa-chrome';
 }
 
 function createBlazorProofHarness(sandbox: sinon.SinonSandbox, options: BlazorProofHarnessOptions = {}) {
@@ -453,17 +478,20 @@ function createBlazorProofHarness(sandbox: sinon.SinonSandbox, options: BlazorPr
         type: 'compound',
         request: 'launch',
     });
-    const rootSession = createDebugSession('root', 'blazorwasm', 'Debug client', {
-        type: 'blazorwasm',
+    const rootType = options.rootType ?? 'blazorwasm';
+    const rootSession = createDebugSession('root', rootType, 'Debug client', {
+        type: rootType,
         request: 'attach',
         browser: expectedBrowser,
         projectPath: clientProjectPath,
         resourceType: 'browser',
     }, options.managedTopology === 'sibling' ? compoundSession : undefined);
-    const managedSession = createDebugSession('managed', 'coreclr', 'Managed client', {
-        type: 'coreclr',
+    const managedType = options.managedTopology === 'detached' ? 'monovsdbg_wasm' : 'coreclr';
+    const managedSession = createDebugSession('managed', managedType, 'Managed client', {
+        type: managedType,
         request: 'attach',
-    }, options.managedTopology === 'sibling' ? compoundSession : rootSession);
+        monoDebuggerOptions: { platform: 'browser' },
+    }, options.managedTopology === 'detached' ? undefined : options.managedTopology === 'sibling' ? compoundSession : rootSession);
     managedSession.customRequest = sandbox.stub().callsFake(async (request: string) => {
         if (request === 'stackTrace') {
             return {

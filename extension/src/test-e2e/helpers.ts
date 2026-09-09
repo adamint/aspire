@@ -16,6 +16,7 @@ interface BlazorWasmDebugSessionSnapshot {
         browser?: unknown;
         projectPath?: unknown;
         resourceType?: unknown;
+        noDebug?: unknown;
     };
 }
 
@@ -86,14 +87,16 @@ export async function proveBlazorScenario(options: ProveBlazorScenarioOptions): 
         && frame.line === breakpointLine + 1);
 
     assert.strictEqual(proof.proof, 'blazor-wasm-managed-breakpoint-hit');
-    assert.strictEqual(proof.rootSession.type, 'blazorwasm');
+    const expectedBrowserAlias = options.expectedBrowser === 'edge' ? 'msedge' : 'chrome';
+    assert.ok(['blazorwasm', expectedBrowserAlias, expectedBrowserSessionType].includes(proof.rootSession.type));
+    assert.notStrictEqual(proof.rootSession.configuration.noDebug, true);
     assert.strictEqual(proof.rootSession.configuration.browser, options.expectedBrowser);
     assert.strictEqual(proof.rootSession.configuration.resourceType, 'browser');
     assert.ok(
         typeof proof.rootSession.configuration.projectPath === 'string'
         && isSamePath(proof.rootSession.configuration.projectPath, options.clientProjectPath),
         `Expected Blazor client project '${options.clientProjectPath}', got '${String(proof.rootSession.configuration.projectPath)}'.`);
-    assert.strictEqual(proof.browserSession.type, expectedBrowserSessionType);
+    assert.ok([expectedBrowserAlias, expectedBrowserSessionType].includes(proof.browserSession.type));
     assert.strictEqual(proof.browserSession.parentSessionId, proof.rootSession.id);
     assert.strictEqual(proof.breakpointResponse.success, true);
     assert.strictEqual(proof.stoppedEvent.reason, 'breakpoint');

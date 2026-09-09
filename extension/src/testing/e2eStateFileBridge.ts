@@ -286,7 +286,7 @@ export function createE2eStateFileBridge(
 }
 
 export function isBrowserDebugSessionType(type: string): boolean {
-  return type === 'blazorwasm' || type === 'pwa-chrome' || type === 'pwa-msedge';
+  return type === 'blazorwasm' || type === 'chrome' || type === 'msedge' || type === 'pwa-chrome' || type === 'pwa-msedge';
 }
 
 function trimTaskProcessEvents(events: AspireExtensionE2ETaskProcessEvent[]): void {
@@ -1506,7 +1506,9 @@ async function proveBlazorWasmDebugging(command: BlazorWasmDebugProofCommand, ap
       `Blazor WASM root session for resource '${resourceName}'`,
       () => {
         for (const session of sessionById.values()) {
-          if (session.type !== 'blazorwasm') {
+          // C# 2.148 resolves blazorwasm to chrome/msedge before VS Code creates
+          // the session. js-debug can expose either that alias or its pwa-* type.
+          if (session.type !== 'blazorwasm' && !isExpectedBlazorBrowserType(session.type, expectedBrowser)) {
             continue;
           }
 
@@ -1529,7 +1531,7 @@ async function proveBlazorWasmDebugging(command: BlazorWasmDebugProofCommand, ap
     const browserSession = await waitForProofValue(
       `${browserType} child session for Blazor WASM root '${rootSession.id}'`,
       () => [...sessionById.values()].find(session =>
-        session.type === browserType
+        isExpectedBlazorBrowserType(session.type, expectedBrowser)
         && session.parentSession?.id === rootSession.id));
 
     const breakpointEvidence = await waitForProofValue(
@@ -1756,6 +1758,18 @@ function isProofSession(
     return true;
   }
 
+  // C# starts its WASM adapter before the browser, without a parent or Aspire
+  // metadata. This map contains only sessions created during this one command.
+  // Require a unique browser WASM adapter rather than accepting arbitrary CLR
+  // sessions that happen to start at the same time.
+  const managedSessions = [...sessionById.values()].filter(session =>
+    session.type === 'monovsdbg_wasm'
+    && session.parentSession === undefined
+    && session.configuration.monoDebuggerOptions?.platform === 'browser');
+  if (managedSessions.length === 1 && managedSessions[0].id === sessionId) {
+    return true;
+  }
+
   let session = sessionById.get(sessionId);
   const visited = new Set<string>();
   while (session?.parentSession && !visited.has(session.id)) {
@@ -1769,6 +1783,11 @@ function isProofSession(
 
   const rootParentId = rootSession.parentSession?.id;
   return rootParentId !== undefined && sessionById.get(sessionId)?.parentSession?.id === rootParentId;
+}
+
+function isExpectedBlazorBrowserType(type: string, browser: 'edge' | 'chrome'): boolean {
+  const alias = browser === 'edge' ? 'msedge' : 'chrome';
+  return type === alias || type === `pwa-${alias}`;
 }
 
 function isBreakpointRequestForSource(value: unknown, sourcePath: string, line: number): boolean {

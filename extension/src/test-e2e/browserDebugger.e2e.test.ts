@@ -51,9 +51,16 @@ suite('Aspire Blazor browser debugger E2E', function () {
         await executeE2eControlCommand({ name: 'debugAppHost', appHostPath }, { waitFor: 'started', timeoutMs: 600000 });
         await Promise.all([
             waitForResourceState('standalone', ['Running'], 600000),
+            waitForResourceState('standalone-gateway', ['Running'], 600000),
             waitForResourceState('hosted-global', ['Running'], 600000),
             waitForResourceState('hosted-per-page', ['Running'], 600000),
         ]);
+
+        // Each scenario needs one web server, not three concurrent CLR debuggers
+        // alongside Chrome and the WASM debugger on memory-constrained runners.
+        for (const resourceName of ['hosted-global', 'hosted-per-page']) {
+            await stopScenarioServer(resourceName);
+        }
     });
 
     suiteTeardown(async function () {
@@ -131,6 +138,7 @@ suite('Aspire Blazor browser debugger E2E', function () {
             resourceName: 'standalone',
             sourcePath: path.join(workspaceRoot, 'StandaloneClient', 'Pages', 'Counter.razor'),
             clientProjectPath: standaloneProjectPath,
+            serverResourceName: 'standalone-gateway',
             requestPath: '/counter',
             closeMode: 'explicit',
         },
@@ -138,6 +146,7 @@ suite('Aspire Blazor browser debugger E2E', function () {
             resourceName: 'hosted-global',
             sourcePath: path.join(workspaceRoot, 'HostedGlobal', 'HostedGlobal.Client', 'Pages', 'Counter.razor'),
             clientProjectPath: path.join(workspaceRoot, 'HostedGlobal', 'HostedGlobal.Client', 'HostedGlobal.Client.csproj'),
+            serverResourceName: 'hosted-global',
             requestPath: '/counter',
             closeMode: 'natural',
         },
@@ -145,6 +154,7 @@ suite('Aspire Blazor browser debugger E2E', function () {
             resourceName: 'hosted-per-page',
             sourcePath: path.join(workspaceRoot, 'HostedPerPage', 'HostedPerPage.Client', 'Pages', 'Counter.razor'),
             clientProjectPath: path.join(workspaceRoot, 'HostedPerPage', 'HostedPerPage.Client', 'HostedPerPage.Client.csproj'),
+            serverResourceName: 'hosted-per-page',
             requestPath: '/counter',
             closeMode: 'explicit',
         },
@@ -152,26 +162,41 @@ suite('Aspire Blazor browser debugger E2E', function () {
 
     for (const scenario of scenarios) {
         test(`hits a managed breakpoint for ${scenario.resourceName}`, async function () {
-            this.timeout(300000);
+            this.timeout(600000);
 
-            const proof = await proveBlazorScenario({
-                appHostPath,
-                resourceName: scenario.resourceName,
-                sourcePath: scenario.sourcePath,
-                breakpointMarker: '// ASPIRE_E2E_MANAGED_BREAKPOINT',
-                requestPath: scenario.requestPath,
-                expectedBrowser,
-                clientProjectPath: scenario.clientProjectPath,
-                closeMode: scenario.closeMode,
-                timeoutMs: 300000,
-            });
-            await waitForNoBrowserDebugSessions(300000);
+            if (scenario.resourceName !== 'standalone') {
+                await executeE2eControlCommand({ name: 'startResource', appHostPath, resourceName: scenario.serverResourceName });
+                await waitForResourceState(scenario.serverResourceName, ['Running'], 90000);
+            }
 
-            const proofSessionIds = new Set([proof.rootSession.id, proof.browserSession.id, proof.managedSession.id]);
-            assert.ok(
-                getBrowserDebugSessions().every(session => !proofSessionIds.has(session.id)),
-                `Expected no proof-owned browser sessions after stopping ${scenario.resourceName}.`);
+            try {
+                const proof = await proveBlazorScenario({
+                    appHostPath,
+                    resourceName: scenario.resourceName,
+                    sourcePath: scenario.sourcePath,
+                    breakpointMarker: '// ASPIRE_E2E_MANAGED_BREAKPOINT',
+                    requestPath: scenario.requestPath,
+                    expectedBrowser,
+                    clientProjectPath: scenario.clientProjectPath,
+                    closeMode: scenario.closeMode,
+                    timeoutMs: 300000,
+                });
+                await waitForNoBrowserDebugSessions(90000);
+
+                const proofSessionIds = new Set([proof.rootSession.id, proof.browserSession.id, proof.managedSession.id]);
+                assert.ok(
+                    getBrowserDebugSessions().every(session => !proofSessionIds.has(session.id)),
+                    `Expected no proof-owned browser sessions after stopping ${scenario.resourceName}.`);
+            }
+            finally {
+                await stopScenarioServer(scenario.serverResourceName);
+            }
         });
+    }
+
+    async function stopScenarioServer(resourceName: string): Promise<void> {
+        await executeE2eControlCommand({ name: 'stopResource', appHostPath, resourceName });
+        await waitForResourceState(resourceName, ['Exited', 'Finished', 'Stopped'], 90000);
     }
 
     async function createBrowserDebugConfiguration(launchConfig: BrowserLaunchConfiguration): Promise<BrowserDebugConfiguration> {
