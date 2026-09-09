@@ -6,7 +6,7 @@ import { randomUUID } from 'crypto';
 import { AspireExtensionContext } from '../AspireExtensionContext';
 import { getLoggableDebugConfiguration, type AspireDebugSession } from '../debugger/AspireDebugSession';
 import { createDebugSessionConfiguration, getResourceDebuggerExtensions } from '../debugger/debuggerExtensions';
-import { projectDebuggerExtension } from '../debugger/languages/dotnet';
+import { externalBuildProjectDebuggerExtension, projectDebuggerExtension } from '../debugger/languages/dotnet';
 import { redactCliArgsForLogging, spawnCliProcess, terminateCliProcess } from '../utils/process/cliProcess';
 import { cleanupRun } from '../debugger/runCleanupRegistry';
 import type { AspireResourceExtendedDebugConfiguration, EnvVar, ExecutableLaunchConfiguration } from '../dcp/types';
@@ -726,8 +726,13 @@ export async function executeE2eControlCommand(
       markStarted();
       const launchConfig = getE2eLaunchConfiguration(command.launchConfig);
       const isApphost = command.isApphost ?? false;
-      const debuggerExtension = isApphost && launchConfig.type === 'project'
+      const appHostProjectDebuggerExtension = launchConfig.type === 'project'
         ? projectDebuggerExtension
+        : launchConfig.type === 'project-with-external-build.v1'
+          ? externalBuildProjectDebuggerExtension
+          : undefined;
+      const debuggerExtension = isApphost && appHostProjectDebuggerExtension
+        ? appHostProjectDebuggerExtension
         : getResourceDebuggerExtensions().find(extension => extension.resourceType === launchConfig.type);
       if (!debuggerExtension) {
         throw new Error(`No resource debugger extension is registered for launch configuration type '${launchConfig.type}'.`);
@@ -784,7 +789,17 @@ export async function executeE2eControlCommand(
     }
     case 'proveMauiResourceDebugging': {
       markStarted();
-      return await proveMauiResourceDebugging(command, aspireContext, appHostTreeProvider, terminalProvider);
+      return await proveResourceDebugging(command, aspireContext, appHostTreeProvider, terminalProvider, {
+        displayName: 'MAUI',
+        proof: 'aspire-maui-resource-debug-breakpoint-hit',
+      });
+    }
+    case 'proveDenoResourceDebugging': {
+      markStarted();
+      return await proveResourceDebugging(command, aspireContext, appHostTreeProvider, terminalProvider, {
+        displayName: 'Deno',
+        proof: 'aspire-deno-resource-debug-breakpoint-hit',
+      });
     }
     case 'getExtensionPackageJson': {
       markStarted();
@@ -1047,7 +1062,12 @@ function getE2eCsharpExtensionVersion(value: unknown): string | null | undefined
 
 type AppHostAndResourceDebugProofCommand = Extract<AspireExtensionE2EControlCommand, { name: 'proveAppHostAndResourceDebugging' }>;
 type BlazorWasmDebugProofCommand = Extract<AspireExtensionE2EControlCommand, { name: 'proveBlazorWasmDebugging' }>;
-type MauiResourceDebugProofCommand = Extract<AspireExtensionE2EControlCommand, { name: 'proveMauiResourceDebugging' }>;
+type ResourceDebugProofCommand = Extract<AspireExtensionE2EControlCommand, { name: 'proveMauiResourceDebugging' | 'proveDenoResourceDebugging' }>;
+
+interface ResourceDebugProofOptions {
+  displayName: string;
+  proof: string;
+}
 
 interface DebugSessionSnapshot {
   id: string;
@@ -1780,10 +1800,10 @@ function pushBounded<T>(values: T[], value: T, limit: number): void {
   }
 }
 
-async function proveMauiResourceDebugging(command: MauiResourceDebugProofCommand, aspireContext: AspireExtensionContext, appHostTreeProvider: AspireAppHostTreeProvider, terminalProvider: AspireTerminalProvider): Promise<unknown> {
+async function proveResourceDebugging(command: ResourceDebugProofCommand, aspireContext: AspireExtensionContext, appHostTreeProvider: AspireAppHostTreeProvider, terminalProvider: AspireTerminalProvider, options: ResourceDebugProofOptions): Promise<unknown> {
   const appHostPath = getE2eWorkspacePath(command.appHostPath);
   const sourcePath = getE2eWorkspacePath(command.sourcePath);
-  const resourceName = getE2eRequiredString(command.resourceName, 'Aspire extension E2E MAUI proof requires resourceName.');
+  const resourceName = getE2eRequiredString(command.resourceName, `Aspire extension E2E ${options.displayName} proof requires resourceName.`);
   const breakpointLine = getE2eBreakpointLine(command.breakpointLine);
   const timeoutMs = getE2ePositiveInteger(command.timeoutMs, 300000, 'timeoutMs');
   const pauseOnBreakpointMs = getE2ePositiveInteger(command.pauseOnBreakpointMs, 0, 'pauseOnBreakpointMs');
@@ -1902,7 +1922,7 @@ async function proveMauiResourceDebugging(command: MauiResourceDebugProofCommand
     let stoppedEvent: { stoppedEvent: DebugAdapterStoppedEvent; stackTrace: { stackFrames?: Array<{ source?: { path?: string }; line?: number }> }; matchingFrame: { source?: { path?: string }; line?: number } };
     try {
       stoppedEvent = await waitForE2eValue(
-        `MAUI breakpoint in ${sourcePath}:${breakpointLine + 1}`,
+        `${options.displayName} breakpoint in ${sourcePath}:${breakpointLine + 1}`,
         breakpointTimeoutMs,
         async () => {
           for (const stoppedEvent of stoppedEvents) {
@@ -1927,7 +1947,9 @@ async function proveMauiResourceDebugging(command: MauiResourceDebugProofCommand
               continue;
             }
             const matchingFrame = stackTrace?.stackFrames?.find((frame: { source?: { path?: string }; line?: number }) =>
-              typeof frame.source?.path === 'string' && isSamePath(frame.source.path, sourcePath));
+              typeof frame.source?.path === 'string' &&
+              isSamePath(frame.source.path, sourcePath) &&
+              frame.line === breakpointLine + 1);
             if (matchingFrame) {
               return { stoppedEvent, stackTrace: stackTrace!, matchingFrame };
             }
@@ -1952,7 +1974,7 @@ ${JSON.stringify({
     }
 
     if (stoppedEvent.matchingFrame.line !== breakpointLine + 1) {
-      throw new Error(`Expected MAUI breakpoint line ${breakpointLine + 1}, got ${stoppedEvent.matchingFrame.line}.`);
+      throw new Error(`Expected ${options.displayName} breakpoint line ${breakpointLine + 1}, got ${stoppedEvent.matchingFrame.line}.`);
     }
 
     if (pauseOnBreakpointMs > 0) {
@@ -1960,7 +1982,7 @@ ${JSON.stringify({
     }
 
     return {
-      proof: 'aspire-maui-resource-debug-breakpoint-hit',
+      proof: options.proof,
       appHostPath,
       resourceName,
       timeouts: {
