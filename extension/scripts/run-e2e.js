@@ -1646,17 +1646,24 @@ function writeBrowserDebuggerAppHostProject(projectName, resolvedAppHostSdkVersi
 `);
 
   fs.writeFileSync(path.join(projectDirectory, 'AppHost.cs'), `${csharpFileHeader}#pragma warning disable ASPIREBLAZOR001
+using Aspire.Hosting.ApplicationModel;
+
 var builder = DistributedApplication.CreateBuilder(args);
 var browser = Environment.GetEnvironmentVariable("ASPIRE_EXTENSION_E2E_BROWSER") ?? "chrome";
 var standalone = builder.AddBlazorWasmProject<Projects.StandaloneClient>("standalone")
     .WithBlazorDebuggerBrowser(browser);
-builder.AddBlazorGateway("standalone-gateway")
-    .WithExternalHttpEndpoints()
+var gateway = builder.AddBlazorGateway("standalone-gateway");
+// Match the HTTP-only client fixtures without depending on machine-wide browser certificate trust.
+gateway.Resource.Annotations.Remove(gateway.Resource.Annotations.OfType<EndpointAnnotation>().Single(endpoint => endpoint.UriScheme == "https"));
+gateway.WithExternalHttpEndpoints()
     .WithBlazorClientApp(standalone);
+// Launch one server per scenario rather than competing for C# run-api startup timeouts.
 builder.AddProject<Projects.HostedGlobal>("hosted-global")
+    .WithExplicitStart()
     .WithBlazorDebuggerBrowser(browser)
     .ProxyBlazorTelemetry();
 builder.AddProject<Projects.HostedPerPage>("hosted-per-page")
+    .WithExplicitStart()
     .WithBlazorDebuggerBrowser(browser)
     .ProxyBlazorTelemetry();
 builder.Build().Run();

@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { randomUUID } from 'crypto';
+import { WebSocket, type RawData } from 'ws';
 
 import { AspireExtensionContext } from '../AspireExtensionContext';
 import { getLoggableDebugConfiguration, type AspireDebugSession } from '../debugger/AspireDebugSession';
@@ -786,7 +787,7 @@ export async function executeE2eControlCommand(
     }
     case 'proveBlazorWasmDebugging': {
       markStarted();
-      return await proveBlazorWasmDebugging(command, appHostTreeProvider);
+      return await proveBlazorWasmDebugging(command, appHostTreeProvider, context.logUri.fsPath);
     }
     case 'proveMauiResourceDebugging': {
       markStarted();
@@ -1342,7 +1343,7 @@ ${JSON.stringify({
   }
 }
 
-async function proveBlazorWasmDebugging(command: BlazorWasmDebugProofCommand, appHostTreeProvider: AspireAppHostTreeProvider): Promise<unknown> {
+async function proveBlazorWasmDebugging(command: BlazorWasmDebugProofCommand, appHostTreeProvider: AspireAppHostTreeProvider, logDirectory: string): Promise<unknown> {
   const appHostPath = getE2eWorkspacePath(command.appHostPath);
   const sourcePath = getE2eWorkspacePath(command.sourcePath);
   const resourceName = getE2eRequiredString(command.resourceName, 'Aspire extension E2E Blazor WASM proof requires resourceName.');
@@ -1356,6 +1357,8 @@ async function proveBlazorWasmDebugging(command: BlazorWasmDebugProofCommand, ap
   const debugSessions: DebugSessionSnapshot[] = [];
   const sessionById = new Map<string, vscode.DebugSession>();
   const activeSessionIds = new Set<string>();
+  const terminationEvents: { sessionId: string; sessionType: string; observedAt: string }[] = [];
+  let commandStateAfterClose: Record<string, unknown> | undefined;
   const launchRequests: DebugAdapterMessageSummary[] = [];
   const debugAdapterResponses: DebugAdapterMessageSummary[] = [];
   const breakpointRequests: DebugAdapterMessageSummary[] = [];
@@ -1367,6 +1370,9 @@ async function proveBlazorWasmDebugging(command: BlazorWasmDebugProofCommand, ap
 
   const diagnostics = () => ({
     debugSessions,
+    activeSessionIds: [...activeSessionIds],
+    terminationEvents,
+    commandStateAfterClose,
     launchRequests,
     debugAdapterResponses,
     breakpointRequests,
@@ -1430,7 +1436,10 @@ async function proveBlazorWasmDebugging(command: BlazorWasmDebugProofCommand, ap
     resolveDebugConfiguration(_folder, configuration) {
       if (configuration.resourceType === 'browser' && typeof configuration.projectPath === 'string'
         && isPathWithinDirectory(sourcePath, path.dirname(configuration.projectPath))) {
-        configuration.trace = true;
+        // C#'s resolved launch bypasses js-debug's configuration resolver. Boolean
+        // tracing then defaults to OS temp, outside the collected/redacted VS Code logs.
+        // https://github.com/microsoft/vscode-js-debug/blob/v1.117.0/src/common/logging/index.ts
+        configuration.trace = { logFile: path.join(logDirectory, `blazor-debugadapter-${randomUUID()}.json`) };
       }
       return configuration;
     }
@@ -1442,6 +1451,11 @@ async function proveBlazorWasmDebugging(command: BlazorWasmDebugProofCommand, ap
   });
   const terminateSubscription = vscode.debug.onDidTerminateDebugSession(session => {
     activeSessionIds.delete(session.id);
+    pushBounded(terminationEvents, {
+      sessionId: session.id,
+      sessionType: session.type,
+      observedAt: new Date().toISOString(),
+    }, 100);
   });
   const trackerRegistration = vscode.debug.registerDebugAdapterTrackerFactory('*', {
     createDebugAdapterTracker(session) {
@@ -1582,7 +1596,6 @@ async function proveBlazorWasmDebugging(command: BlazorWasmDebugProofCommand, ap
       `browser navigation to '${requestPath}'`,
       () => browserSession.customRequest('evaluate', {
         // Resolve against Blazor's <base href="/standalone/"> when behind a gateway.
-        // Replacing the entry also lets the script-opened page close without extra history.
         expression: `window.location.replace(new URL(${JSON.stringify(requestPath)}, document.baseURI).href)`,
         context: 'repl',
       }));
@@ -1637,27 +1650,38 @@ async function proveBlazorWasmDebugging(command: BlazorWasmDebugProofCommand, ap
       await runBeforeProofDeadline(
         'managed execution to resume before natural close',
         () => breakpointHit.session.customRequest('continue', { threadId: breakpointHit.stoppedEvent.threadId }));
-      await runBeforeProofDeadline(
-        'browser window to close naturally',
-        () => browserSession.customRequest('evaluate', {
-          expression: 'setTimeout(() => window.close(), 0); undefined',
-          context: 'repl',
-        }));
+      // window.close() can silently refuse to close a browser-launched tab with navigation
+      // history. Use js-debug's public, target-scoped CDP connection instead of discovering
+      // C#'s private bridge ports or stopping the DAP session ourselves.
+      // https://github.com/microsoft/vscode-js-debug/blob/v1.117.0/EXTENSION_AUTHORS.md#requesting-a-cdp-connection
+      const proxy = await runBeforeProofDeadline(
+        'browser CDP proxy',
+        () => vscode.commands.executeCommand<BrowserCdpProxy>(
+          'extension.js-debug.requestCDPProxy', browserSession.id));
+      if (!proxy || typeof proxy.host !== 'string' || !proxy.host
+        || !Number.isInteger(proxy.port) || proxy.port < 1 || proxy.port > 65535
+        || typeof proxy.path !== 'string' || !proxy.path.startsWith('/')) {
+        throw new Error('js-debug did not return a valid browser CDP proxy endpoint.');
+      }
+      await closeBrowserPageThroughCdp(proxy, remainingTime('browser window to close naturally'));
     }
 
     const proofSessionIds = new Set([rootSession.id, browserSession.id, breakpointHit.session.id]);
     const commandStateAfterStop = await waitForProofValue(
       `'debug-in-browser' to be enabled after ${closeMode} browser close`,
       () => {
-        if ([...proofSessionIds].some(id => activeSessionIds.has(id))) {
-          return undefined;
-        }
-
         const commandElement = appHostTreeProvider.findResourceCommandElement({
           appHostPath,
           resourceName,
           commandName: 'debug-in-browser',
         });
+        commandStateAfterClose = commandElement && hasResourceCommandShape(commandElement)
+          ? toResourceCommandSnapshot(commandElement.commandName, commandElement.commandJson as ResourceCommandJson)
+          : undefined;
+        if ([...proofSessionIds].some(id => activeSessionIds.has(id))) {
+          return undefined;
+        }
+
         if (!commandElement || !hasResourceCommandShape(commandElement) || !isEnabledCommand(commandElement.commandJson as ResourceCommandJson)) {
           return undefined;
         }
@@ -1708,6 +1732,90 @@ ${JSON.stringify(diagnostics(), undefined, 2)}`);
       trackerRegistration.dispose();
     }
   }
+}
+
+interface BrowserCdpProxy {
+  host: string;
+  port: number;
+  path: string;
+}
+
+async function closeBrowserPageThroughCdp(proxy: BrowserCdpProxy, timeoutMs: number): Promise<void> {
+  const host = proxy.host.includes(':') && !proxy.host.startsWith('[') ? `[${proxy.host}]` : proxy.host;
+  // The random path is part of js-debug's endpoint; connecting only to its host/port is rejected.
+  const socket = new WebSocket(`ws://${host}:${proxy.port}${proxy.path}`);
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let closeRequested = false;
+    const finish = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimeout(timeout);
+      socket.off('open', onOpen);
+      socket.off('message', onMessage);
+      if (socket.readyState === WebSocket.CLOSED) {
+        socket.off('error', onError);
+        socket.off('close', onClose);
+      }
+      else {
+        // Abort rather than waiting for a close handshake beyond the proof deadline. Aborting
+        // a CONNECTING ws emits an asynchronous error, so retain its error handler until close.
+        socket.terminate();
+      }
+      if (error) {
+        reject(error);
+      }
+      else {
+        resolve();
+      }
+    };
+    const onError = (error: Error) => finish(new Error(`Browser CDP transport failed: ${error.message}`));
+    const onClose = () => {
+      // Page.close can destroy its target before the response arrives. This only ends the
+      // transport operation: the caller still requires root, page, and Mono termination.
+      finish(closeRequested ? undefined : new Error('Browser CDP connection closed before Page.close.'));
+      socket.off('error', onError);
+      socket.off('close', onClose);
+    };
+    const onMessage = (data: RawData) => {
+      try {
+        // CDP replies look like {"id":1,"result":{}} or
+        // {"id":1,"error":{"code":-32601,"message":"Method not found"}}.
+        // Events and replies for other request IDs are not acknowledgements of our close.
+        const response = JSON.parse(data.toString()) as { id?: number; error?: unknown };
+        if (response?.id === 1) {
+          finish(response.error === undefined
+            ? undefined
+            : new Error(`Browser CDP Page.close failed: ${JSON.stringify(response.error)}`));
+        }
+      }
+      catch (error) {
+        finish(new Error(`Invalid browser CDP response: ${error instanceof Error ? error.message : String(error)}`));
+      }
+    };
+    const onOpen = () => {
+      closeRequested = true;
+      try {
+        socket.send(JSON.stringify({ id: 1, method: 'Page.close', params: {} }), error => {
+          if (error) {
+            onError(error);
+          }
+        });
+      }
+      catch (error) {
+        onError(error instanceof Error ? error : new Error(String(error)));
+      }
+    };
+    const timeout = setTimeout(() => finish(new Error(
+      `Timed out after ${timeoutMs}ms waiting for browser CDP ${closeRequested ? 'Page.close response' : 'connection'}.`)), timeoutMs);
+    socket.on('open', onOpen);
+    socket.on('message', onMessage);
+    socket.on('error', onError);
+    socket.on('close', onClose);
+  });
 }
 
 function findSuccessfulBreakpointResponse(

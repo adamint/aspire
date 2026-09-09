@@ -61,15 +61,7 @@ suite('Aspire Blazor browser debugger E2E', function () {
         await Promise.all([
             waitForResourceState('standalone', ['Running'], remaining()),
             waitForResourceState('standalone-gateway', ['Running'], remaining()),
-            waitForResourceState('hosted-global', ['Running'], remaining()),
-            waitForResourceState('hosted-per-page', ['Running'], remaining()),
         ]);
-
-        // Each scenario needs one web server, not three concurrent CLR debuggers
-        // alongside Chrome and the WASM debugger on memory-constrained runners.
-        for (const resourceName of ['hosted-global', 'hosted-per-page']) {
-            await runScenarioServerCommand('stopResource', resourceName, Math.min(serverTransitionTimeoutMs, remaining()));
-        }
     });
 
     suiteTeardown(async function () {

@@ -711,7 +711,7 @@ suite('E2E launch profile', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
         const source = ts.createSourceFile('run-e2e.js', runner, ts.ScriptTarget.Latest, true);
-        const declarations = ['configureStandaloneBasePath', 'replaceCounterHandler'].map(name => {
+        const declarations = ['configureStandaloneBasePath', 'replaceCounterHandler', 'writeBrowserDebuggerAppHostProject'].map(name => {
             const declaration = source.statements.find(statement => ts.isFunctionDeclaration(statement) && statement.name?.text === name);
             assert.ok(declaration, `Missing fixture helper ${name}`);
             return declaration.getText(source);
@@ -730,9 +730,13 @@ suite('E2E launch profile', () => {
         ]);
         vm.runInNewContext(`${declarations.join('\n')}
             configureStandaloneBasePath('/app');
-            replaceCounterHandler('Counter.razor');`, {
+            replaceCounterHandler('Counter.razor');
+            writeBrowserDebuggerAppHostProject('AppHost', '13.6.0-test');`, {
             path,
+            workspaceRoot: '/app',
+            csharpFileHeader: '',
             fs: {
+                mkdirSync: () => undefined,
                 readFileSync: (filePath: string) => files.get(filePath),
                 writeFileSync: (filePath: string, content: string) => files.set(filePath, content),
             },
@@ -757,6 +761,29 @@ suite('E2E launch profile', () => {
         currentCount = 42; // ASPIRE_E2E_MANAGED_BREAKPOINT
     }
 }`);
+        assert.strictEqual(files.get(path.join('/app', 'AppHost', 'AppHost.cs')), `#pragma warning disable ASPIREBLAZOR001
+using Aspire.Hosting.ApplicationModel;
+
+var builder = DistributedApplication.CreateBuilder(args);
+var browser = Environment.GetEnvironmentVariable("ASPIRE_EXTENSION_E2E_BROWSER") ?? "chrome";
+var standalone = builder.AddBlazorWasmProject<Projects.StandaloneClient>("standalone")
+    .WithBlazorDebuggerBrowser(browser);
+var gateway = builder.AddBlazorGateway("standalone-gateway");
+// Match the HTTP-only client fixtures without depending on machine-wide browser certificate trust.
+gateway.Resource.Annotations.Remove(gateway.Resource.Annotations.OfType<EndpointAnnotation>().Single(endpoint => endpoint.UriScheme == "https"));
+gateway.WithExternalHttpEndpoints()
+    .WithBlazorClientApp(standalone);
+// Launch one server per scenario rather than competing for C# run-api startup timeouts.
+builder.AddProject<Projects.HostedGlobal>("hosted-global")
+    .WithExplicitStart()
+    .WithBlazorDebuggerBrowser(browser)
+    .ProxyBlazorTelemetry();
+builder.AddProject<Projects.HostedPerPage>("hosted-per-page")
+    .WithExplicitStart()
+    .WithBlazorDebuggerBrowser(browser)
+    .ProxyBlazorTelemetry();
+builder.Build().Run();
+`);
     });
 
     test('generates evaluated WebAssembly discovery targets for the .NET 10 fixture', () => {

@@ -1,8 +1,10 @@
 import * as assert from 'assert';
+import { EventEmitter } from 'events';
 import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vm from 'vm';
 import * as vscode from 'vscode';
+import WebSocket from 'ws';
 
 import { AspireExtensionContext } from '../AspireExtensionContext';
 import { registerTreeViewCommands } from '../activation/registerTreeViewCommands';
@@ -228,7 +230,8 @@ suite('E2E state file bridge', () => {
             const harness = createBlazorProofHarness(sandbox, {
                 closeMode,
                 expectedBrowser: closeMode === 'natural' ? 'chrome' : 'edge',
-                managedTopology: closeMode === 'natural' ? 'sibling' : 'child',
+                managedTopology: closeMode === 'natural' ? 'detached' : 'child',
+                rootType: closeMode === 'natural' ? 'pwa-chrome' : undefined,
             });
 
             const proof = await dispatchControlCommand(
@@ -239,7 +242,7 @@ suite('E2E state file bridge', () => {
                 harness.terminalProvider) as Record<string, any>;
 
             assert.strictEqual(proof.proof, 'blazor-wasm-managed-breakpoint-hit');
-            assert.strictEqual(proof.rootSession.type, 'blazorwasm');
+            assert.strictEqual(proof.rootSession.type, closeMode === 'natural' ? 'pwa-chrome' : 'blazorwasm');
             assert.strictEqual(proof.rootSession.configuration.browser, harness.command.expectedBrowser);
             assert.strictEqual(proof.rootSession.configuration.projectPath, harness.clientProjectPath);
             assert.strictEqual(proof.rootSession.configuration.resourceType, 'browser');
@@ -251,7 +254,8 @@ suite('E2E state file bridge', () => {
                 assert.strictEqual(proof.managedSession.parentSessionId, proof.rootSession.id);
             }
             else {
-                assert.strictEqual(proof.managedSession.parentSessionId, proof.rootSession.parentSessionId);
+                assert.strictEqual(proof.managedSession.type, 'monovsdbg_wasm');
+                assert.strictEqual(proof.managedSession.parentSessionId, undefined);
             }
             assert.strictEqual(proof.breakpointResponse.success, true);
             assert.strictEqual(proof.stoppedEvent.reason, 'breakpoint');
@@ -264,7 +268,8 @@ suite('E2E state file bridge', () => {
             assert.strictEqual(harness.trackerDispose.calledOnce, true);
             assert.strictEqual(harness.configurationDispose.calledOnce, true);
             assert.strictEqual(harness.stopDebugging.called, false);
-            assert.strictEqual(harness.tracedConfiguration.trace, true);
+            assert.strictEqual(path.dirname(harness.tracedConfiguration.trace.logFile), vscode.Uri.file('/repo/logs').fsPath);
+            assert.match(path.basename(harness.tracedConfiguration.trace.logFile), /^blazor-debugadapter-[0-9a-f-]+\.json$/);
 
             const navigationExpression = harness.browserEvaluateExpressions.find(expression => expression.startsWith('window.location.replace'));
             assert.ok(navigationExpression);
@@ -291,12 +296,200 @@ suite('E2E state file bridge', () => {
             if (closeMode === 'explicit') {
                 assert.strictEqual(harness.executedResourceCommands.includes('stop-browser-debug'), true);
                 assert.deepStrictEqual(harness.continueRequests, []);
+                assert.strictEqual(harness.createCdpSocket.called, false);
             }
             else {
                 assert.strictEqual(harness.executedResourceCommands.includes('stop-browser-debug'), false);
                 assert.deepStrictEqual(harness.continueRequests, [{ threadId: 42 }]);
-                assert.strictEqual(harness.browserEvaluateExpressions.includes('setTimeout(() => window.close(), 0); undefined'), true);
+                assert.strictEqual(harness.executeCommand.calledWithExactly('extension.js-debug.requestCDPProxy', 'browser'), true);
+                assert.deepStrictEqual(harness.createCdpSocket.firstCall.args, ['ws://127.0.0.1:9222/random-proxy-path']);
+                assert.deepStrictEqual(harness.cdpSocket.send.firstCall.args.slice(0, 1), [
+                    JSON.stringify({ id: 1, method: 'Page.close', params: {} }),
+                ]);
+                assert.strictEqual(harness.cdpSocket.terminate.calledOnce, true);
+                assert.deepStrictEqual(harness.cdpSocket.eventNames(), []);
             }
+        });
+    }
+
+    test('accepts target disconnection during Page.close only after all proof sessions terminate', async () => {
+        const harness = createBlazorProofHarness(sandbox, { closeMode: 'natural' });
+        harness.cdpSocket.send.callsFake(() => {
+            harness.terminateAllSessions();
+            harness.cdpSocket.readyState = WebSocket.CLOSED;
+            harness.cdpSocket.emit('close');
+        });
+
+        const proof = await dispatchControlCommand(
+            harness.command, harness.repository, harness.launchService, harness.provider, harness.terminalProvider) as Record<string, any>;
+
+        assert.strictEqual(proof.commandStateAfterStop.state, 'Enabled');
+        assert.strictEqual(harness.stopDebugging.called, false);
+        assert.strictEqual(harness.cdpSocket.terminate.called, false);
+        assert.deepStrictEqual(harness.cdpSocket.eventNames(), []);
+    });
+
+    for (const remainingSession of ['root', 'browser', 'managed']) {
+        test(`rejects acknowledged natural close while the ${remainingSession} session remains active`, async () => {
+            const clock = sandbox.useFakeTimers({ shouldClearNativeTimers: true });
+            const harness = createBlazorProofHarness(sandbox, { closeMode: 'natural' });
+            harness.cdpSocket.send.callsFake(() => {
+                for (const sessionId of ['root', 'browser', 'managed']) {
+                    if (sessionId !== remainingSession) {
+                        harness.terminateSession(sessionId);
+                    }
+                }
+                harness.setBrowserCommandState('Enabled');
+                harness.cdpSocket.emit('message', Buffer.from('{"id":1,"result":{}}'));
+            });
+
+            const failure = captureError(() => dispatchControlCommand(
+                harness.command, harness.repository, harness.launchService, harness.provider, harness.terminalProvider));
+            await clock.tickAsync(1100);
+            const error = await failure;
+            const diagnostics = JSON.parse(error.message.split('\nDiagnostics:\n')[1]);
+
+            assert.match(error.message, /'debug-in-browser' to be enabled after natural browser close/);
+            assert.deepStrictEqual(diagnostics.activeSessionIds, [remainingSession]);
+            assert.deepStrictEqual(diagnostics.terminationEvents.map((event: { sessionId: string }) => event.sessionId),
+                ['root', 'browser', 'managed'].filter(id => id !== remainingSession));
+            assert.strictEqual(diagnostics.commandStateAfterClose.state, 'Enabled');
+            assert.strictEqual(harness.stopDebugging.callCount, 1);
+            assert.strictEqual(harness.stopDebugging.firstCall.args[0]?.id, remainingSession);
+            assert.strictEqual(harness.cdpSocket.terminate.calledOnce, true);
+            assert.deepStrictEqual(harness.cdpSocket.eventNames(), []);
+        });
+    }
+
+    test('requires command reset even after every proof session terminates naturally', async () => {
+        const clock = sandbox.useFakeTimers({ shouldClearNativeTimers: true });
+        const harness = createBlazorProofHarness(sandbox, { closeMode: 'natural' });
+        harness.cdpSocket.send.callsFake(() => {
+            harness.terminateAllSessions();
+            harness.setBrowserCommandState('Disabled');
+            harness.cdpSocket.emit('message', Buffer.from('{"id":1,"result":{}}'));
+        });
+
+        const failure = captureError(() => dispatchControlCommand(
+            harness.command, harness.repository, harness.launchService, harness.provider, harness.terminalProvider));
+        await clock.tickAsync(1100);
+        const error = await failure;
+        const diagnostics = JSON.parse(error.message.split('\nDiagnostics:\n')[1]);
+
+        assert.deepStrictEqual(diagnostics.activeSessionIds, []);
+        assert.strictEqual(diagnostics.commandStateAfterClose.state, 'Disabled');
+        assert.strictEqual(harness.stopDebugging.called, false);
+        assert.deepStrictEqual(harness.cdpSocket.eventNames(), []);
+    });
+
+    for (const failureKind of ['cdp', 'transport', 'send', 'malformed'] as const) {
+        test(`cleans up natural-close transport and sessions after a ${failureKind} failure`, async () => {
+            const harness = createBlazorProofHarness(sandbox, { closeMode: 'natural' });
+            harness.cdpSocket.send.callsFake((_data: string, callback: (error?: Error) => void) => {
+                if (failureKind === 'cdp') {
+                    harness.cdpSocket.emit('message', Buffer.from('{"id":1,"error":{"code":-32601,"message":"Method not found"}}'));
+                }
+                else if (failureKind === 'transport') {
+                    harness.cdpSocket.emit('error', new Error('connection reset'));
+                }
+                else if (failureKind === 'send') {
+                    callback(new Error('send failed'));
+                }
+                else {
+                    harness.cdpSocket.emit('message', Buffer.from('not JSON'));
+                }
+            });
+
+            const error = await captureError(() => dispatchControlCommand(
+                harness.command, harness.repository, harness.launchService, harness.provider, harness.terminalProvider));
+
+            assert.match(error.message, failureKind === 'cdp'
+                ? /Browser CDP Page.close failed:.*Method not found/
+                : failureKind === 'malformed' ? /Invalid browser CDP response/ : /Browser CDP transport failed/);
+            assert.strictEqual(harness.stopDebugging.callCount, 3);
+            assert.strictEqual(harness.cdpSocket.terminate.calledOnce, true);
+            assert.deepStrictEqual(harness.cdpSocket.eventNames(), []);
+            assert.strictEqual(harness.terminateListenerDispose.calledOnce, true);
+            assert.strictEqual(harness.trackerDispose.calledOnce, true);
+        });
+    }
+
+    test('rejects disconnection before Page.close is sent', async () => {
+        const harness = createBlazorProofHarness(sandbox, { closeMode: 'natural' });
+        harness.createCdpSocket.callsFake(() => {
+            void Promise.resolve().then(() => {
+                harness.cdpSocket.readyState = WebSocket.CLOSED;
+                harness.cdpSocket.emit('close');
+            });
+            return harness.cdpSocket as unknown as WebSocket;
+        });
+
+        await assert.rejects(
+            dispatchControlCommand(harness.command, harness.repository, harness.launchService, harness.provider, harness.terminalProvider),
+            /Browser CDP connection closed before Page.close/);
+        assert.strictEqual(harness.cdpSocket.send.called, false);
+        assert.strictEqual(harness.stopDebugging.callCount, 3);
+        assert.deepStrictEqual(harness.cdpSocket.eventNames(), []);
+    });
+
+    for (const phase of ['connection', 'response'] as const) {
+        test(`bounds the natural-close ${phase} and releases its socket on timeout`, async () => {
+            const clock = sandbox.useFakeTimers({ shouldClearNativeTimers: true });
+            const harness = createBlazorProofHarness(sandbox, { closeMode: 'natural' });
+            if (phase === 'connection') {
+                harness.createCdpSocket.callsFake(() => harness.cdpSocket as unknown as WebSocket);
+            }
+            else {
+                harness.cdpSocket.send.callsFake(() => {
+                    // Neither an event nor another request's reply acknowledges Page.close.
+                    harness.cdpSocket.emit('message', Buffer.from('{"method":"Debugger.resumed","params":{}}'));
+                    harness.cdpSocket.emit('message', Buffer.from('{"id":2,"result":{}}'));
+                });
+            }
+
+            const failure = captureError(() => dispatchControlCommand(
+                harness.command, harness.repository, harness.launchService, harness.provider, harness.terminalProvider));
+            await clock.tickAsync(1100);
+            const error = await failure;
+
+            assert.match(error.message, phase === 'connection' ? /waiting for browser CDP connection/ : /waiting for browser CDP Page.close response/);
+            assert.strictEqual(harness.cdpSocket.terminate.calledOnce, true);
+            assert.deepStrictEqual(harness.cdpSocket.eventNames(), []);
+            assert.strictEqual(harness.stopDebugging.callCount, 3);
+            assert.strictEqual(clock.countTimers(), 0);
+        });
+    }
+
+    test('bounds the CDP proxy request without opening a socket after its deadline', async () => {
+        const clock = sandbox.useFakeTimers({ shouldClearNativeTimers: true });
+        const harness = createBlazorProofHarness(sandbox, { closeMode: 'natural' });
+        let resolveProxy!: (proxy: { host: string; port: number; path: string }) => void;
+        harness.executeCommand.withArgs('extension.js-debug.requestCDPProxy', 'browser').returns(
+            new Promise(resolve => { resolveProxy = resolve; }));
+        const failure = captureError(() => dispatchControlCommand(
+            harness.command, harness.repository, harness.launchService, harness.provider, harness.terminalProvider));
+
+        await clock.tickAsync(1100);
+        const error = await failure;
+        resolveProxy({ host: '127.0.0.1', port: 9222, path: '/late-proxy' });
+        await clock.tickAsync(0);
+
+        assert.match(error.message, /waiting for browser CDP proxy/);
+        assert.strictEqual(harness.createCdpSocket.called, false);
+        assert.strictEqual(harness.stopDebugging.callCount, 3);
+        assert.strictEqual(clock.countTimers(), 0);
+    });
+
+    for (const proxy of [undefined, { host: '127.0.0.1', port: 9222 }, { host: '127.0.0.1', port: '9222', path: '/proxy' }]) {
+        test(`rejects an incomplete CDP proxy endpoint ${JSON.stringify(proxy)}`, async () => {
+            const harness = createBlazorProofHarness(sandbox, { closeMode: 'natural' });
+            harness.executeCommand.withArgs('extension.js-debug.requestCDPProxy', 'browser').resolves(proxy);
+
+            await assert.rejects(
+                dispatchControlCommand(harness.command, harness.repository, harness.launchService, harness.provider, harness.terminalProvider),
+                /js-debug did not return a valid browser CDP proxy endpoint/);
+            assert.strictEqual(harness.createCdpSocket.called, false);
+            assert.strictEqual(harness.stopDebugging.callCount, 3);
         });
     }
 
@@ -411,7 +604,7 @@ suite('E2E state file bridge', () => {
             harness.provider,
             harness.terminalProvider)).then(error => { failure = error; });
 
-        await clock.tickAsync(100);
+        await clock.tickAsync(2100);
 
         assert.ok(failure, 'the bridge must respond even when adapter cleanup hangs');
         assert.match(failure.message, /setBreakpoints/);
@@ -478,7 +671,7 @@ async function dispatchControlCommand(
     markStarted: () => void = () => { },
 ): Promise<unknown> {
     return await executeE2eControlCommand(
-        {} as vscode.ExtensionContext,
+        { logUri: vscode.Uri.file('/repo/logs') } as vscode.ExtensionContext,
         {} as AspireExtensionContext,
         repository,
         launchService,
@@ -515,6 +708,34 @@ function createBlazorProofHarness(sandbox: sinon.SinonSandbox, options: BlazorPr
     const terminateListenerDispose = sandbox.spy();
     const trackerDispose = sandbox.spy();
     const configurationDispose = sandbox.spy();
+    const cdpSocket = Object.assign(new EventEmitter(), {
+        readyState: WebSocket.CONNECTING as number,
+        send: sandbox.stub(),
+        terminate: sandbox.stub(),
+    });
+    const createCdpSocket = sandbox.stub(WebSocket, 'WebSocket').callsFake(() => {
+        void Promise.resolve().then(() => {
+            cdpSocket.readyState = WebSocket.OPEN;
+            cdpSocket.emit('open');
+        });
+        return cdpSocket as unknown as WebSocket;
+    });
+    Object.assign(createCdpSocket, {
+        CONNECTING: WebSocket.CONNECTING,
+        OPEN: WebSocket.OPEN,
+        CLOSING: WebSocket.CLOSING,
+        CLOSED: WebSocket.CLOSED,
+    });
+    cdpSocket.terminate.callsFake(() => {
+        const connecting = cdpSocket.readyState === WebSocket.CONNECTING;
+        cdpSocket.readyState = WebSocket.CLOSED;
+        void Promise.resolve().then(() => {
+            if (connecting) {
+                cdpSocket.emit('error', new Error('WebSocket was closed before the connection was established'));
+            }
+            cdpSocket.emit('close');
+        });
+    });
     let configurationProvider: vscode.DebugConfigurationProvider | undefined;
     const continueRequests: unknown[] = [];
     let managedPaused = false;
@@ -556,13 +777,28 @@ function createBlazorProofHarness(sandbox: sinon.SinonSandbox, options: BlazorPr
         return { dispose: configurationDispose };
     });
 
-    const terminateAllSessions = () => {
-        for (const session of [...activeSessions.values()]) {
+    const terminateSession = (sessionId: string) => {
+        const session = activeSessions.get(sessionId);
+        if (session) {
             activeSessions.delete(session.id);
             terminateListener?.(session);
         }
+    };
+    const terminateAllSessions = () => {
+        for (const sessionId of [...activeSessions.keys()]) {
+            terminateSession(sessionId);
+        }
         browserCommandState = 'Enabled';
     };
+    cdpSocket.send.callsFake((data: string) => {
+        assert.strictEqual(managedPaused, false, 'Resume managed execution before closing the browser page.');
+        const request = JSON.parse(data);
+        assert.deepStrictEqual(request, { id: 1, method: 'Page.close', params: {} });
+        void Promise.resolve().then(() => {
+            terminateAllSessions();
+            cdpSocket.emit('message', Buffer.from(JSON.stringify({ id: request.id, result: {} })));
+        });
+    });
 
     const compoundSession = createDebugSession('compound', 'compound', 'Blazor compound', {
         type: 'compound',
@@ -627,11 +863,6 @@ function createBlazorProofHarness(sandbox: sinon.SinonSandbox, options: BlazorPr
                 body: { reason: 'breakpoint', threadId: 42 },
             });
         }
-        else if (expression === 'setTimeout(() => window.close(), 0); undefined') {
-            assert.strictEqual(managedPaused, false, 'Resume managed execution before evaluating natural close.');
-            terminateAllSessions();
-        }
-
         return expression.includes('document.readyState')
             ? { result: 'true', variablesReference: 0 }
             : { result: '', variablesReference: 0 };
@@ -691,9 +922,14 @@ function createBlazorProofHarness(sandbox: sinon.SinonSandbox, options: BlazorPr
         }),
     } as unknown as AspireAppHostTreeProvider;
 
-    const executeCommand = sandbox.stub(vscode.commands, 'executeCommand').callsFake(async (commandId: string, element?: { commandName?: string }) => {
+    const executeCommand = sandbox.stub(vscode.commands, 'executeCommand').callsFake(async (commandId: string, element?: { commandName?: string } | string) => {
+        if (commandId === 'extension.js-debug.requestCDPProxy') {
+            assert.strictEqual(element, browserSession.id);
+            assert.strictEqual(managedPaused, false);
+            return { host: '127.0.0.1', port: 9222, path: '/random-proxy-path' };
+        }
         assert.strictEqual(commandId, 'aspire-vscode.executeResourceCommandItem');
-        const commandName = element?.commandName ?? '';
+        const commandName = typeof element === 'object' ? element.commandName ?? '' : '';
         executedResourceCommands.push(commandName);
         if (commandName === 'debug-in-browser') {
             browserCommandState = 'Disabled';
@@ -722,8 +958,7 @@ function createBlazorProofHarness(sandbox: sinon.SinonSandbox, options: BlazorPr
     });
     const stopDebugging = sandbox.stub(vscode.debug, 'stopDebugging').callsFake(async (session?: vscode.DebugSession) => {
         if (session) {
-            activeSessions.delete(session.id);
-            terminateListener?.(session);
+            terminateSession(session.id);
         }
     });
 
@@ -737,7 +972,7 @@ function createBlazorProofHarness(sandbox: sinon.SinonSandbox, options: BlazorPr
             requestPath: 'counter',
             expectedBrowser,
             closeMode: options.closeMode ?? 'explicit',
-            timeoutMs: 5,
+            timeoutMs: 1000,
         } as const,
         repository,
         launchService,
@@ -756,6 +991,11 @@ function createBlazorProofHarness(sandbox: sinon.SinonSandbox, options: BlazorPr
         continueRequests,
         executeCommand,
         stopDebugging,
+        cdpSocket,
+        createCdpSocket,
+        terminateSession,
+        terminateAllSessions,
+        setBrowserCommandState: (state: string) => { browserCommandState = state; },
     };
 }
 
