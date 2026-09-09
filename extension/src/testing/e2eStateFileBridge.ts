@@ -1587,12 +1587,12 @@ async function proveBlazorWasmDebugging(command: BlazorWasmDebugProofCommand, ap
         context: 'repl',
       }));
     await waitForProofValue(
-      `Blazor page '${requestPath}' to finish loading`,
+      `Blazor page '${requestPath}' to become interactive`,
       async () => {
         const response = await runBeforeProofDeadline(
           `browser readiness evaluation for '${requestPath}'`,
           () => browserSession.customRequest('evaluate', {
-            expression: "document.readyState === 'complete' && !!document.querySelector('button.btn-primary')",
+            expression: `document.readyState === 'complete' && !!document.querySelector('button[data-aspire-e2e-interactive="true"]')`,
             context: 'repl',
           })) as { result?: unknown };
         return response?.result === true || response?.result === 'true' ? true : undefined;

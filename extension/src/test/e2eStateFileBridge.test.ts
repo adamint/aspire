@@ -275,6 +275,18 @@ suite('E2E state file bridge', () => {
                 window: { location: { replace: (url: string) => { navigationUrl = url; } } },
             });
             assert.strictEqual(navigationUrl, 'https://localhost:5000/standalone/counter');
+            const readinessExpression = harness.browserEvaluateExpressions.find(expression => expression.includes('document.readyState'));
+            assert.ok(readinessExpression);
+            let interactive = false;
+            const document = {
+                readyState: 'complete',
+                querySelector: (selector: string) => selector === 'button[data-aspire-e2e-interactive="true"]'
+                    ? (interactive ? {} : null)
+                    : {},
+            };
+            assert.strictEqual(vm.runInNewContext(readinessExpression, { document }), false);
+            interactive = true;
+            assert.strictEqual(vm.runInNewContext(readinessExpression, { document }), true);
 
             if (closeMode === 'explicit') {
                 assert.strictEqual(harness.executedResourceCommands.includes('stop-browser-debug'), true);

@@ -1495,6 +1495,7 @@ function generateBrowserDebuggerProjects() {
   runDotnetTemplate(['new', 'blazorwasm', '--name', 'StandaloneClient', '--output', standaloneDirectory, '--no-https', '--no-restore']);
   runDotnetTemplate(['new', 'blazor', '--name', 'HostedGlobal', '--output', hostedGlobalDirectory, '--interactivity', 'WebAssembly', '--all-interactive', '--no-https', '--no-restore']);
   runDotnetTemplate(['new', 'blazor', '--name', 'HostedPerPage', '--output', hostedPerPageDirectory, '--interactivity', 'WebAssembly', '--no-https', '--no-restore']);
+  configureStandaloneBasePath(standaloneDirectory);
 
   const generatedProjects = [
     path.join(standaloneDirectory, 'StandaloneClient.csproj'),
@@ -1576,18 +1577,48 @@ function assertGeneratedProjectTargetsNet10(projectPath) {
   }
 }
 
+function configureStandaloneBasePath(standaloneDirectory) {
+  const indexPath = path.join(standaloneDirectory, 'wwwroot', 'index.html');
+  const index = fs.readFileSync(indexPath, 'utf8');
+  // The template has <base href="/" />, but WithBlazorClientApp mounts this
+  // resource at /standalone/. Both framework assets and client routes need that base.
+  const basePattern = /<base\s+href=["']\/["']\s*\/?>/;
+  if (!basePattern.test(index)) {
+    throw new Error(`The installed .NET template generated an unsupported base href in ${indexPath}.`);
+  }
+  fs.writeFileSync(indexPath, index.replace(basePattern, '<base href="/standalone/" />'));
+}
+
 function replaceCounterHandler(counterPath) {
   const source = fs.readFileSync(counterPath, 'utf8');
   const handlerPattern = /private\s+void\s+IncrementCount\(\)\s*\{\s*currentCount\+\+;\s*\}/;
-  if (!handlerPattern.test(source)) {
+  const buttonPattern = /<button\b([^>]*@onclick="IncrementCount"[^>]*)>/;
+  if (!handlerPattern.test(source) || !buttonPattern.test(source)) {
     throw new Error(`The installed .NET template generated an unsupported Counter handler in ${counterPath}.`);
   }
 
-  const replacement = `private void IncrementCount()
+  // Static SSR already renders the Counter button before WASM is interactive.
+  // OnAfterRender is not called during prerendering, so this marker proves the
+  // client has taken over before the test clicks, rather than accepting a no-op.
+  // https://learn.microsoft.com/aspnet/core/blazor/components/lifecycle#after-component-render-onafterrenderasync
+  const replacement = `private bool isInteractive;
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender)
+        {
+            isInteractive = true;
+            StateHasChanged();
+        }
+    }
+
+    private void IncrementCount()
     {
         currentCount = 42; // ASPIRE_E2E_MANAGED_BREAKPOINT
     }`;
-  fs.writeFileSync(counterPath, source.replace(handlerPattern, replacement));
+  fs.writeFileSync(counterPath, source
+    .replace(handlerPattern, replacement)
+    .replace(buttonPattern, '<button$1 data-aspire-e2e-interactive="@(isInteractive ? "true" : "false")">'));
 }
 
 function writeBrowserDebuggerAppHostProject(projectName, resolvedAppHostSdkVersion) {

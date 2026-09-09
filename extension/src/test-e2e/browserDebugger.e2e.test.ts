@@ -200,7 +200,13 @@ suite('Aspire Blazor browser debugger E2E', function () {
                 if (error instanceof Error && error.message.includes('Unable to launch browser:')) {
                     // js-debug's launch failure opens a modal that blocks subsequent
                     // startDebugging calls until dismissed, even after adapter cleanup.
-                    await acceptModalDialog('Cancel', 30000, `blazor-launch-failure-${scenario.resourceName}`);
+                    try {
+                        await acceptModalDialog('Cancel', 30000, `blazor-launch-failure-${scenario.resourceName}`);
+                    }
+                    catch (dialogError) {
+                        throw new AggregateError([error, dialogError],
+                            `${error.message}\nLaunch-dialog cleanup failed: ${dialogError instanceof Error ? dialogError.message : String(dialogError)}`);
+                    }
                 }
                 throw error;
             }

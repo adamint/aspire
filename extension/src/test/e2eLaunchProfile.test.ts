@@ -707,6 +707,58 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes('ASPIRE_EXTENSION_E2E_BROWSER: e2eBrowser'));
     });
 
+    test('configures gateway-relative assets and an interactive-only Counter marker', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const source = ts.createSourceFile('run-e2e.js', runner, ts.ScriptTarget.Latest, true);
+        const declarations = ['configureStandaloneBasePath', 'replaceCounterHandler'].map(name => {
+            const declaration = source.statements.find(statement => ts.isFunctionDeclaration(statement) && statement.name?.text === name);
+            assert.ok(declaration, `Missing fixture helper ${name}`);
+            return declaration.getText(source);
+        });
+        const indexPath = path.join('/app', 'wwwroot', 'index.html');
+        const files = new Map([
+            [indexPath, '<html><head><base href="/" /></head></html>'],
+            ['Counter.razor', `<button class="btn btn-primary" @onclick="IncrementCount">Click me</button>
+@code {
+    private int currentCount = 0;
+    private void IncrementCount()
+    {
+        currentCount++;
+    }
+}`],
+        ]);
+        vm.runInNewContext(`${declarations.join('\n')}
+            configureStandaloneBasePath('/app');
+            replaceCounterHandler('Counter.razor');`, {
+            path,
+            fs: {
+                readFileSync: (filePath: string) => files.get(filePath),
+                writeFileSync: (filePath: string, content: string) => files.set(filePath, content),
+            },
+        });
+        assert.strictEqual(files.get(indexPath), '<html><head><base href="/standalone/" /></head></html>');
+        assert.strictEqual(files.get('Counter.razor'), `<button class="btn btn-primary" @onclick="IncrementCount" data-aspire-e2e-interactive="@(isInteractive ? "true" : "false")">Click me</button>
+@code {
+    private int currentCount = 0;
+    private bool isInteractive;
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender)
+        {
+            isInteractive = true;
+            StateHasChanged();
+        }
+    }
+
+    private void IncrementCount()
+    {
+        currentCount = 42; // ASPIRE_E2E_MANAGED_BREAKPOINT
+    }
+}`);
+    });
+
     test('generates evaluated WebAssembly discovery targets for the .NET 10 fixture', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
