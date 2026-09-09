@@ -1593,7 +1593,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
             resolveTermination();
             terminationDisposable.dispose();
           });
-          this._disposables.push(terminationDisposable);
+          this.registerDisposable(terminationDisposable);
           const disposalFunction = () => {
             if (terminated) {
               return Promise.resolve();
@@ -1647,7 +1647,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
             resetStopSessionAttempt,
           };
           if (browserTermination) {
-            this._disposables.push({
+            this.registerDisposable({
               dispose: () => browserTermination.stopAndDisposeOnFailure()
             });
           }
