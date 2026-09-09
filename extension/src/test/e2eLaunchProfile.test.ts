@@ -797,7 +797,7 @@ suite('E2E launch profile', () => {
 
         assert.ok(runner.includes("['Directory.Build.props', 'Directory.Build.targets', 'Directory.Packages.props']"));
         assert.ok(runner.includes("fs.writeFileSync(path.join(shortRunRoot, fileName), '<Project />\\n');"));
-        assert.ok(runner.includes('<packageSourceMapping>\n    <clear />\n  </packageSourceMapping>'));
+        assert.ok(runner.replace(/\r\n/g, '\n').includes('<packageSourceMapping>\n    <clear />\n  </packageSourceMapping>'));
     });
 
     test('requires only the debugger VSIX dependencies shared by browser and Azure Functions shards', () => {
