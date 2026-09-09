@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import * as path from 'path';
 import * as sinon from 'sinon';
+import * as vm from 'vm';
 import * as vscode from 'vscode';
 
 import { AspireExtensionContext } from '../AspireExtensionContext';
@@ -261,15 +262,28 @@ suite('E2E state file bridge', () => {
             assert.strictEqual(harness.startListenerDispose.calledOnce, true);
             assert.strictEqual(harness.terminateListenerDispose.calledOnce, true);
             assert.strictEqual(harness.trackerDispose.calledOnce, true);
+            assert.strictEqual(harness.configurationDispose.calledOnce, true);
             assert.strictEqual(harness.stopDebugging.called, false);
+            assert.strictEqual(harness.tracedConfiguration.trace, true);
+
+            const navigationExpression = harness.browserEvaluateExpressions.find(expression => expression.startsWith('window.location.replace'));
+            assert.ok(navigationExpression);
+            let navigationUrl: string | undefined;
+            vm.runInNewContext(navigationExpression, {
+                URL,
+                document: { baseURI: 'https://localhost:5000/standalone/' },
+                window: { location: { replace: (url: string) => { navigationUrl = url; } } },
+            });
+            assert.strictEqual(navigationUrl, 'https://localhost:5000/standalone/counter');
 
             if (closeMode === 'explicit') {
                 assert.strictEqual(harness.executedResourceCommands.includes('stop-browser-debug'), true);
-                assert.strictEqual(harness.browserEvaluateExpressions.includes('window.close()'), false);
+                assert.deepStrictEqual(harness.continueRequests, []);
             }
             else {
                 assert.strictEqual(harness.executedResourceCommands.includes('stop-browser-debug'), false);
-                assert.strictEqual(harness.browserEvaluateExpressions.includes('window.close()'), true);
+                assert.deepStrictEqual(harness.continueRequests, [{ threadId: 42 }]);
+                assert.strictEqual(harness.browserEvaluateExpressions.includes('setTimeout(() => window.close(), 0); undefined'), true);
             }
         });
     }
@@ -310,6 +324,20 @@ suite('E2E state file bridge', () => {
 
         assert.strictEqual(proof.breakpointResponse.body.breakpoints[0].line, 1);
         assert.strictEqual(proof.stackTrace.stackFrames[0].line, 1);
+    });
+
+    test('reports a rejected browser launch instead of timing out waiting for its child', async () => {
+        const harness = createBlazorProofHarness(sandbox, { browserLaunchFailure: true, rootType: 'pwa-chrome', expectedBrowser: 'chrome' });
+        await assert.rejects(
+            dispatchControlCommand(
+                { ...harness.command, timeoutMs: 1000 },
+                harness.repository,
+                harness.launchService,
+                harness.provider,
+                harness.terminalProvider),
+            /Blazor debugger launch failed:.*Could not attach to main target/);
+        assert.strictEqual(harness.configurationDispose.calledOnce, true);
+        assert.strictEqual(harness.stopDebugging.called, true);
     });
 
     test('rejects invalid managed Blazor proof inputs before starting debugging', async () => {
@@ -459,6 +487,7 @@ interface BlazorProofHarnessOptions {
     managedTopology?: 'child' | 'sibling' | 'detached';
     rootType?: 'chrome' | 'pwa-chrome';
     breakpointLine?: number;
+    browserLaunchFailure?: boolean;
 }
 
 function createBlazorProofHarness(sandbox: sinon.SinonSandbox, options: BlazorProofHarnessOptions = {}) {
@@ -473,6 +502,10 @@ function createBlazorProofHarness(sandbox: sinon.SinonSandbox, options: BlazorPr
     const startListenerDispose = sandbox.spy();
     const terminateListenerDispose = sandbox.spy();
     const trackerDispose = sandbox.spy();
+    const configurationDispose = sandbox.spy();
+    let configurationProvider: vscode.DebugConfigurationProvider | undefined;
+    const continueRequests: unknown[] = [];
+    let managedPaused = false;
     const breakpoints: vscode.Breakpoint[] = [{ enabled: true } as vscode.Breakpoint];
     const executedResourceCommands: string[] = [];
     const browserEvaluateExpressions: string[] = [];
@@ -506,6 +539,10 @@ function createBlazorProofHarness(sandbox: sinon.SinonSandbox, options: BlazorPr
         trackerFactory = factory;
         return { dispose: trackerDispose };
     });
+    sandbox.stub(vscode.debug, 'registerDebugConfigurationProvider').callsFake((_type, provider) => {
+        configurationProvider = provider;
+        return { dispose: configurationDispose };
+    });
 
     const terminateAllSessions = () => {
         for (const session of [...activeSessions.values()]) {
@@ -533,7 +570,11 @@ function createBlazorProofHarness(sandbox: sinon.SinonSandbox, options: BlazorPr
         request: 'attach',
         monoDebuggerOptions: { platform: 'browser' },
     }, options.managedTopology === 'detached' ? undefined : options.managedTopology === 'sibling' ? compoundSession : rootSession);
-    managedSession.customRequest = sandbox.stub().callsFake(async (request: string) => {
+    managedSession.customRequest = sandbox.stub().callsFake(async (request: string, args?: unknown) => {
+        if (request === 'continue') {
+            continueRequests.push(args);
+            managedPaused = false;
+        }
         if (request === 'stackTrace') {
             return {
                 stackFrames: [{
@@ -560,6 +601,8 @@ function createBlazorProofHarness(sandbox: sinon.SinonSandbox, options: BlazorPr
         const expression = args?.expression ?? '';
         browserEvaluateExpressions.push(expression);
         if (expression.includes("document.querySelector('button.btn-primary')?.click()")) {
+            assert.ok(expression.startsWith('setTimeout('), 'The click must not pause managed execution inside evaluate.');
+            managedPaused = true;
             const tracker = trackerFactory?.createDebugAdapterTracker(managedSession) as vscode.DebugAdapterTracker | undefined;
             tracker?.onDidSendMessage?.({
                 type: 'event',
@@ -572,7 +615,8 @@ function createBlazorProofHarness(sandbox: sinon.SinonSandbox, options: BlazorPr
                 body: { reason: 'breakpoint', threadId: 42 },
             });
         }
-        else if (expression === 'window.close()') {
+        else if (expression === 'setTimeout(() => window.close(), 0); undefined') {
+            assert.strictEqual(managedPaused, false, 'Resume managed execution before evaluating natural close.');
             terminateAllSessions();
         }
 
@@ -641,9 +685,23 @@ function createBlazorProofHarness(sandbox: sinon.SinonSandbox, options: BlazorPr
         executedResourceCommands.push(commandName);
         if (commandName === 'debug-in-browser') {
             browserCommandState = 'Disabled';
+            await configurationProvider?.resolveDebugConfiguration?.(
+                createWorkspaceFolder('repo', workspaceRoot), rootSession.configuration);
             for (const session of [rootSession, browserSession, managedSession]) {
+                if (session === browserSession && options.browserLaunchFailure) {
+                    continue;
+                }
                 emitAdapterStartup(session);
                 startSession(session);
+                if (session === rootSession && options.browserLaunchFailure) {
+                    const tracker = trackerFactory?.createDebugAdapterTracker(session) as vscode.DebugAdapterTracker | undefined;
+                    tracker?.onDidSendMessage?.({
+                        type: 'response',
+                        command: 'launch',
+                        success: false,
+                        body: { error: { format: 'Unable to launch browser: Could not attach to main target' } },
+                    });
+                }
             }
         }
         else if (commandName === 'stop-browser-debug') {
@@ -664,7 +722,7 @@ function createBlazorProofHarness(sandbox: sinon.SinonSandbox, options: BlazorPr
             resourceName: 'client',
             sourcePath,
             breakpointLine,
-            requestPath: '/counter',
+            requestPath: 'counter',
             expectedBrowser,
             closeMode: options.closeMode ?? 'explicit',
             timeoutMs: 5,
@@ -681,6 +739,9 @@ function createBlazorProofHarness(sandbox: sinon.SinonSandbox, options: BlazorPr
         startListenerDispose,
         terminateListenerDispose,
         trackerDispose,
+        configurationDispose,
+        tracedConfiguration: rootSession.configuration,
+        continueRequests,
         executeCommand,
         stopDebugging,
     };

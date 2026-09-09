@@ -1384,8 +1384,26 @@ async function proveBlazorWasmDebugging(command: BlazorWasmDebugProofCommand, ap
 
     return remaining;
   };
-  const waitForProofValue = async <T>(description: string, getValue: () => T | undefined | Promise<T | undefined>) =>
-    await waitForE2eValue(description, remainingTime(description), getValue, describeDiagnostics);
+  const waitForProofValue = async <T>(description: string, getValue: () => T | undefined | Promise<T | undefined>): Promise<T> => {
+    const result = await waitForE2eValue<{ value: T } | { failure: DebugAdapterMessageSummary }>(
+      description, remainingTime(description), async () => {
+        const failure = debugAdapterResponses.find(response =>
+          (response.command === 'launch' || response.command === 'attach')
+          && (isExpectedBlazorBrowserType(response.sessionType, expectedBrowser)
+            || response.sessionType === 'monovsdbg_wasm'));
+        if (failure) {
+          return { failure };
+        }
+
+        const value = await getValue();
+        return value === undefined ? undefined : { value };
+      }, describeDiagnostics);
+    if ('failure' in result) {
+      throw new Error(`Blazor debugger ${result.failure.command} failed: ${JSON.stringify(result.failure.body)}`);
+    }
+
+    return result.value;
+  };
   const runBeforeProofDeadline = async <T>(description: string, operation: () => Thenable<T>): Promise<T> => {
     const operationTimeoutMs = remainingTime(description);
     let timeout: NodeJS.Timeout | undefined;
@@ -1406,6 +1424,17 @@ async function proveBlazorWasmDebugging(command: BlazorWasmDebugProofCommand, ap
     }
   };
 
+  // The browser root can terminate before its page session starts. Keep js-debug's
+  // transport trace so a rejected proxy attach is distinguishable from a missing child.
+  const configurationSubscription = vscode.debug.registerDebugConfigurationProvider('*', {
+    resolveDebugConfiguration(_folder, configuration) {
+      if (configuration.resourceType === 'browser' && typeof configuration.projectPath === 'string'
+        && isPathWithinDirectory(sourcePath, path.dirname(configuration.projectPath))) {
+        configuration.trace = true;
+      }
+      return configuration;
+    }
+  });
   const sessionSubscription = vscode.debug.onDidStartDebugSession(session => {
     sessionById.set(session.id, session);
     activeSessionIds.add(session.id);
@@ -1552,7 +1581,9 @@ async function proveBlazorWasmDebugging(command: BlazorWasmDebugProofCommand, ap
     await runBeforeProofDeadline(
       `browser navigation to '${requestPath}'`,
       () => browserSession.customRequest('evaluate', {
-        expression: `window.location.assign(new URL(${JSON.stringify(requestPath)}, window.location.origin).href)`,
+        // Resolve against Blazor's <base href="/standalone/"> when behind a gateway.
+        // Replacing the entry also lets the script-opened page close without extra history.
+        expression: `window.location.replace(new URL(${JSON.stringify(requestPath)}, document.baseURI).href)`,
         context: 'repl',
       }));
     await waitForProofValue(
@@ -1569,7 +1600,8 @@ async function proveBlazorWasmDebugging(command: BlazorWasmDebugProofCommand, ap
     await runBeforeProofDeadline(
       'managed Counter button click',
       () => browserSession.customRequest('evaluate', {
-        expression: "document.querySelector('button.btn-primary')?.click()",
+        // A synchronous click can pause managed execution before evaluate returns.
+        expression: "setTimeout(() => document.querySelector('button.btn-primary')?.click(), 0); undefined",
         context: 'repl',
       }));
 
@@ -1603,9 +1635,12 @@ async function proveBlazorWasmDebugging(command: BlazorWasmDebugProofCommand, ap
     }
     else {
       await runBeforeProofDeadline(
+        'managed execution to resume before natural close',
+        () => breakpointHit.session.customRequest('continue', { threadId: breakpointHit.stoppedEvent.threadId }));
+      await runBeforeProofDeadline(
         'browser window to close naturally',
         () => browserSession.customRequest('evaluate', {
-          expression: 'window.close()',
+          expression: 'setTimeout(() => window.close(), 0); undefined',
           context: 'repl',
         }));
     }
@@ -1667,6 +1702,7 @@ ${JSON.stringify(diagnostics(), undefined, 2)}`);
     }
     finally {
       clearTimeout(cleanupTimer);
+      configurationSubscription.dispose();
       sessionSubscription.dispose();
       terminateSubscription.dispose();
       trackerRegistration.dispose();

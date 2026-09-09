@@ -13,7 +13,7 @@ import {
 } from './helpers/assertions';
 import { executeE2eControlCommand, runE2eTeardown, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
 import { getPrimaryAppHostProjectPath, getWorkspaceRoot } from './helpers/paths';
-import { openAspireView } from './helpers/vscode';
+import { acceptModalDialog, openAspireView } from './helpers/vscode';
 import { blazorWasmDebugProofResponseAllowanceMs, blazorWasmDebugProofTimeoutMs, getBlazorWasmDebugProofControlTimeoutMs, proveBlazorScenario } from './helpers';
 
 // ExTester loads these tests in Node, not in the extension host. Keep the expected
@@ -148,7 +148,7 @@ suite('Aspire Blazor browser debugger E2E', function () {
             sourcePath: path.join(workspaceRoot, 'StandaloneClient', 'Pages', 'Counter.razor'),
             clientProjectPath: standaloneProjectPath,
             serverResourceName: 'standalone-gateway',
-            requestPath: '/counter',
+            requestPath: 'counter',
             closeMode: 'explicit',
         },
         {
@@ -156,7 +156,7 @@ suite('Aspire Blazor browser debugger E2E', function () {
             sourcePath: path.join(workspaceRoot, 'HostedGlobal', 'HostedGlobal.Client', 'Pages', 'Counter.razor'),
             clientProjectPath: path.join(workspaceRoot, 'HostedGlobal', 'HostedGlobal.Client', 'HostedGlobal.Client.csproj'),
             serverResourceName: 'hosted-global',
-            requestPath: '/counter',
+            requestPath: 'counter',
             closeMode: 'natural',
         },
         {
@@ -164,7 +164,7 @@ suite('Aspire Blazor browser debugger E2E', function () {
             sourcePath: path.join(workspaceRoot, 'HostedPerPage', 'HostedPerPage.Client', 'Pages', 'Counter.razor'),
             clientProjectPath: path.join(workspaceRoot, 'HostedPerPage', 'HostedPerPage.Client', 'HostedPerPage.Client.csproj'),
             serverResourceName: 'hosted-per-page',
-            requestPath: '/counter',
+            requestPath: 'counter',
             closeMode: 'explicit',
         },
     ] as const;
@@ -195,6 +195,14 @@ suite('Aspire Blazor browser debugger E2E', function () {
                 assert.ok(
                     getBrowserDebugSessions().every(session => !proofSessionIds.has(session.id)),
                     `Expected no proof-owned browser sessions after stopping ${scenario.resourceName}.`);
+            }
+            catch (error) {
+                if (error instanceof Error && error.message.includes('Unable to launch browser:')) {
+                    // js-debug's launch failure opens a modal that blocks subsequent
+                    // startDebugging calls until dismissed, even after adapter cleanup.
+                    await acceptModalDialog('Cancel', 30000, `blazor-launch-failure-${scenario.resourceName}`);
+                }
+                throw error;
             }
             finally {
                 await runScenarioServerCommand('stopResource', scenario.serverResourceName, serverTransitionTimeoutMs);
