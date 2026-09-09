@@ -105,6 +105,11 @@ export const browserDebuggerExtension: ResourceDebuggerExtension = {
             delete debugConfiguration.program;
             delete debugConfiguration.args;
             delete debugConfiguration.cwd;
+            // C# applies these nested overrides after resolving its generated configurations.
+            // Forwarding them would let workspace settings replace Aspire's root-session identity
+            // or C#'s managed-session lifecycle, despite the authoritative fields set above.
+            delete debugConfiguration.browserConfig;
+            delete debugConfiguration.dotNetConfig;
             return;
         }
 

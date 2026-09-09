@@ -62,7 +62,7 @@ suite('Browser Debugger Tests', () => {
             debugSessionId: 'workspace-dcp',
             isApphost: true,
             resourceType: 'node',
-        });
+        }, { type: 'browser', url: 'https://localhost:5001', browser: 'chrome' });
 
         assert.deepStrictEqual(configuration.runtimeArgs, [
             '--start-maximized',
@@ -74,6 +74,46 @@ suite('Browser Debugger Tests', () => {
         assert.strictEqual(configuration.debugSessionId, 'dcp-1');
         assert.strictEqual(configuration.isApphost, false);
         assert.strictEqual(configuration.resourceType, 'browser');
+    });
+
+    test('keeps managed Aspire metadata authoritative over nested C# workspace overrides', async () => {
+        const provider = useCsharpExtensionVersionProviderForTests(() => minimumCsharpBlazorWasmDebuggingVersion);
+        try {
+            const launchConfig: BrowserLaunchConfiguration = {
+                type: 'browser',
+                url: BROWSER_RESOURCE_URL,
+                browser: 'chrome',
+                web_root: BLAZOR_PROJECT_PATH,
+            };
+            const configuration = await createBrowserConfiguration({
+                runId: 'workspace-run',
+                debugSessionId: 'workspace-dcp',
+                resourceType: 'node',
+                browserConfig: {
+                    type: 'node',
+                    request: 'attach',
+                    runId: 'nested-run',
+                    debugSessionId: 'nested-dcp',
+                    resourceType: 'node',
+                    cascadeTerminateToConfigurations: [],
+                },
+                dotNetConfig: {
+                    type: 'coreclr',
+                    request: 'attach',
+                    cascadeTerminateToConfigurations: [],
+                },
+            }, launchConfig);
+            const expected = await createBrowserConfiguration({}, launchConfig);
+
+            assert.deepStrictEqual(configuration, expected);
+            assert.strictEqual(configuration.type, 'blazorwasm');
+            assert.strictEqual(configuration.runId, 'run-1');
+            assert.strictEqual(configuration.debugSessionId, 'dcp-1');
+            assert.strictEqual(configuration.resourceType, 'browser');
+        }
+        finally {
+            provider.dispose();
+        }
     });
 
     test('reports a natural root browser termination exactly once and ignores child sessions', () => {
@@ -616,7 +656,8 @@ function createDebugConfig(): AspireResourceExtendedDebugConfiguration {
 }
 
 async function createBrowserConfiguration(
-    workspaceSettings: Record<string, unknown>): Promise<AspireResourceExtendedDebugConfiguration> {
+    workspaceSettings: Record<string, unknown>,
+    launchConfig: BrowserLaunchConfiguration): Promise<AspireResourceExtendedDebugConfiguration> {
     const prepared = await prepareDebugSession(
         {
             type: 'aspire',
@@ -625,7 +666,7 @@ async function createBrowserConfiguration(
             program: '/workspace/apphost.cs',
             debuggers: { browser: workspaceSettings as never },
         },
-        { type: 'browser', url: 'https://localhost:5001', browser: 'chrome' } as never,
+        launchConfig,
         [],
         [],
         {
