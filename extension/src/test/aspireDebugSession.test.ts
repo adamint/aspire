@@ -30,6 +30,8 @@ import { registerRunCleanup } from '../debugger/runCleanupRegistry';
 import { __resetAppHostIdentityRegistryForTests } from '../utils/appHostIdentity';
 import { AppHostBuildFailureError } from '../debugger/appHostBuildFailureError';
 import { AppHostDiscoveryService } from '../utils/appHostDiscovery';
+import { InteractionService } from '../server/interactionService';
+import type { ICliRpcClient } from '../server/rpcClient';
 
 interface RecordedEvent {
     name: string;
@@ -344,6 +346,118 @@ suite('AspireDebugSession tests', () => {
         spawnStub.firstCall.args[3]?.exitCallback?.(1);
         assert.deepStrictEqual(readLatestLaunchFailures(appHostPath), []);
     });
+
+    for (const scenario of [
+        { name: 'CLI-first failed startup', initiator: 'cli', exitCode: 1, startupCompleted: false, recordsFailure: true },
+        { name: 'CLI-first successful exit', initiator: 'cli', exitCode: 0, startupCompleted: false, recordsFailure: false },
+        { name: 'CLI-first exit after startup', initiator: 'cli', exitCode: 1, startupCompleted: true, recordsFailure: false },
+        { name: 'CLI-first AppHost stop failure', initiator: 'cli', exitCode: 1, startupCompleted: false, recordsFailure: true, stopFailure: 'apphost' },
+        { name: 'CLI-first parent stop failure', initiator: 'cli', exitCode: 1, startupCompleted: false, recordsFailure: true, stopFailure: 'parent' },
+        { name: 'editor-first stop', initiator: 'editor', exitCode: 1, startupCompleted: false, recordsFailure: false },
+        { name: 'extension-first stop', initiator: 'extension', exitCode: 1, startupCompleted: false, recordsFailure: false },
+        { name: 'DAP-first stop', initiator: 'dap', exitCode: 1, startupCompleted: false, recordsFailure: false },
+        { name: 'disposal-first stop', initiator: 'dispose', exitCode: 1, startupCompleted: false, recordsFailure: false },
+    ] as const) {
+        test(`preserves the shutdown initiator when the CLI exits after its stop RPC: ${scenario.name}`, async () => {
+            const appHostPath = join(makeTempDir(), 'AppHost.csproj');
+            const cliProcess = createFakeCliProcess(4332, scenario.exitCode);
+            const spawnStub = sinon.stub(cliModule, 'spawnCliProcess').returns(cliProcess);
+            sinon.stub(cliModule, 'terminateCliProcess').resolves();
+            let connectRpcClient: ((client: ICliRpcClient) => void) | undefined;
+            const stopCli = sinon.stub().resolves();
+            const aspireDebugSession = createSessionForSpawn(
+                async () => '/usr/local/bin/aspire',
+                () => { },
+                callback => {
+                    connectRpcClient = callback;
+                    return { dispose: () => { } };
+                });
+            aspireDebugSession.configuration = {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: appHostPath,
+                command: 'run',
+                noDebug: true,
+            };
+            const interactionService = new InteractionService(() => aspireDebugSession, {} as ICliRpcClient);
+            const stopFailure = 'stopFailure' in scenario ? scenario.stopFailure : undefined;
+            const shutdownError = new Error('Shutdown failed');
+            const shutdownErrorLog = sinon.stub(extensionLogOutputChannel, 'error');
+            const appHostStop = sinon.stub().rejects(shutdownError);
+            if (stopFailure === 'apphost') {
+                aspireDebugSession['_appHostDebugSession'] = {
+                    id: 'apphost-session',
+                    session: aspireDebugSession.parentSession,
+                    stopSession: appHostStop,
+                };
+            }
+            // Stopping the synthetic parent makes VS Code re-enter the adapter with disconnect.
+            // That callback must not turn a CLI-first shutdown into an editor-initiated stop.
+            const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').callsFake(async () => {
+                aspireDebugSession.handleMessage({ command: 'disconnect', seq: 1 });
+                if (stopFailure === 'parent') {
+                    throw shutdownError;
+                }
+            });
+
+            await aspireDebugSession.spawnAspireCommand(['run'], dirname(appHostPath), true, 'aspire run');
+            assert.ok(connectRpcClient);
+            connectRpcClient({
+                debugSessionId: aspireDebugSession.debugSessionId,
+                interactionService,
+                stopCli,
+                getCliVersion: async () => '13.6.0',
+                getCliCapabilities: async () => [],
+                validatePromptInputString: async () => null,
+                dispose: () => { },
+            });
+            if (scenario.startupCompleted) {
+                aspireDebugSession.notifyAppHostStartupCompleted();
+            }
+            const extensionStop = scenario.initiator === 'extension'
+                ? aspireDebugSession.requestCliStopForExtensionShutdown()
+                : undefined;
+            if (scenario.initiator === 'editor') {
+                void aspireDebugSession.stopDebugging();
+            } else if (scenario.initiator === 'dap') {
+                aspireDebugSession.handleMessage({ command: 'disconnect', seq: 2 });
+            } else if (scenario.initiator === 'dispose') {
+                aspireDebugSession.dispose();
+            }
+
+            // The CLI's ProcessExit handler awaits this RPC before Node observes its exit.
+            if (stopFailure) {
+                await assert.rejects(interactionService.stopDebugging(), error => error === shutdownError);
+                await waitFor(() => shutdownErrorLog.called);
+                assert.ok(aspireDebugSession['_cliTerminationTimer'], 'Failed cleanup must still schedule forced process-tree termination');
+                appHostStop.resolves();
+                stopDebugging.resolves();
+            } else {
+                await interactionService.stopDebugging();
+                assert.strictEqual(aspireDebugSession.isDisposed, true);
+            }
+            spawnStub.firstCall.args[3]?.exitCallback?.(scenario.exitCode);
+            await aspireDebugSession.stopDebugging();
+            await extensionStop;
+
+            // stopCli calls Environment.Exit(0), which would overwrite the CLI's failure code.
+            assert.strictEqual(stopCli.callCount, scenario.initiator === 'cli' ? 0 : 1);
+            const records = readLatestLaunchFailures(appHostPath);
+            assert.strictEqual(records.length, scenario.recordsFailure ? 1 : 0);
+            if (scenario.recordsFailure) {
+                assert.deepStrictEqual(getFailureDetails(records[0]), {
+                    stage: 'cliLaunch',
+                    category: 'processExited',
+                    controller: 'cli',
+                    mode: 'run',
+                    providerKind: 'dotnet',
+                    exitCodeBucket: 'one',
+                });
+            }
+            interactionService.dispose();
+        });
+    }
 
     function createSessionWithConfiguration(
         configuration: Record<string, unknown>,

@@ -731,7 +731,9 @@ export async function executeE2eControlCommand(
 
       return {
         registered: languageModelTools.get(command.toolName)?.registered === true,
-        invocation: command.cancelBeforeInvocation ? 'registeredToolCanceled' : 'vscode.lm.invokeTool',
+        invocation: command.cancelBeforeInvocation
+          ? 'registeredToolCanceled'
+          : command.invokeRegisteredToolDirectly ? 'registeredToolDirect' : 'vscode.lm.invokeTool',
         results: invocationResults.map(invocationResult => invocationResult.content
           .filter((part): part is vscode.LanguageModelTextPart => part instanceof vscode.LanguageModelTextPart)
           .map(part => part.value)

@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { findRunningAppHost, getCommandInvocationCount, getDebugLaunchCount, isSamePath, readStateFile, waitForCommandOutcome, waitForDebugSessionStartup, waitForNoDebugSessions, waitForNoRunningAppHost, waitForRepositoryIdle, waitForSelectedWorkspaceAppHost, waitForWorkspaceAppHost } from './helpers/assertions';
+import { findRunningAppHost, getCommandInvocationCount, getDebugLaunchCount, isSamePath, readStateFile, waitForCommandOutcome, waitForDebugSessionStartup, waitForExtensionState, waitForNoDebugSessions, waitForNoRunningAppHost, waitForRepositoryIdle, waitForSelectedWorkspaceAppHost, waitForWorkspaceAppHost } from './helpers/assertions';
 import { executeE2eControlCommand, getCliWrapperInvocations, restoreE2eCliPathForE2E, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, runE2eTeardown, setE2eCliPathForE2E, stopAppHostIfRunning, stopPrimaryAppHostIfRunning, writeTokenlessStableCliWrapper, writeWorkspaceAppHostConfigForPath, writeWorkspaceCliPath } from './helpers/fixtures';
 import { runProcess, terminateProcessTree } from './helpers/process';
 import { getProcessEntry, listProcessEntries, type ProcessEntry } from './helpers/processArguments';
@@ -38,6 +38,8 @@ interface RegisteredTool {
 }
 
 interface LanguageModelToolInvocationResponse {
+    registered: boolean;
+    invocation: 'vscode.lm.invokeTool' | 'registeredToolDirect' | 'registeredToolCanceled';
     results: string[];
     cancellations: number;
     unexpectedFailures: number;
@@ -756,6 +758,60 @@ suite('Aspire AppHost lifecycle E2E', function () {
             if (externalAppHostPid !== undefined && isProcessRunning(externalAppHostPid)) {
                 await stopAppHostIfRunning(appHostPath).catch(() => undefined);
             }
+        }
+    });
+
+    test('explains a CLI-owned compilation failure after shutdown through vscode.lm.invokeTool', async () => {
+        await openAspireView();
+        await waitForRepositoryIdle();
+        await waitForWorkspaceAppHost();
+        const appHostPath = getPrimaryAppHostProjectPath();
+        const relativeAppHostPath = path.relative(getWorkspaceRoot(), appHostPath).split(path.sep).join('/');
+        const sourcePath = path.join(path.dirname(appHostPath), 'AppHost.cs');
+        const originalSource = fs.readFileSync(sourcePath, 'utf8');
+        const compilerMarker = 'ASPIRE_E2E_INTENTIONAL_BUILD_FAILURE';
+        const previousOutputSequence = Math.max(0, ...readStateFile().debugConsoleOutputs.map(output => output.sequence));
+        try {
+            fs.writeFileSync(sourcePath, `#error ${compilerMarker}\n${originalSource}`);
+            const start = await invokeLifecycleTool({
+                name: 'invokeLanguageModelTool',
+                toolName: startToolName,
+                input: { appHostPath: relativeAppHostPath, mode: 'run' },
+            }, 180000, 1);
+            assert.strictEqual(start.results.length, 1);
+            assert.ok(['started', 'failed'].includes(start.results[0].outcome), JSON.stringify(start.results));
+            await waitForExtensionState(
+                file => file.debugConsoleOutputs.some(output =>
+                    output.sequence > previousOutputSequence && output.output.includes(compilerMarker)),
+                'the deliberately injected compiler error',
+                180000);
+            await waitForNoDebugSessions();
+            await waitForNoRunningAppHost();
+            // The CLI awaits its stopDebugging RPC in ProcessExit. The journal entry follows
+            // that shutdown, so poll the public tool rather than treating DAP teardown as proof.
+            const failure = await waitForToolResult<Record<string, unknown>>({
+                name: 'invokeLanguageModelTool',
+                toolName: explainToolName,
+                input: { appHostPath: relativeAppHostPath },
+            }, result => result.outcome === 'failureFound', 'the CLI startup-failure journal entry', 30000);
+            assert.deepStrictEqual({
+                outcome: failure.outcome,
+                category: failure.category,
+                controller: failure.controller,
+            }, {
+                outcome: 'failureFound',
+                category: 'processExited',
+                controller: 'cli',
+            });
+            assertSafeEditorAssistanceResult(failure);
+            fs.writeFileSync(path.join(ensureDiagnosticsDir(), 'apphost-startup-failure.json'), JSON.stringify({
+                compilerMarker,
+                invocation: 'vscode.lm.invokeTool',
+                failure,
+            }, undefined, 2));
+        }
+        finally {
+            fs.writeFileSync(sourcePath, originalSource);
         }
     });
 
@@ -2009,7 +2065,7 @@ async function invokeLifecycleTool(
     expectedConfirmations: number,
     screenshotName?: string
 ): Promise<{ results: LifecycleToolResult[]; dialogs: ModalDialogInteraction[] }> {
-    const invocation = invokeControlCommand<LanguageModelToolInvocationResponse>(command, timeoutMs);
+    const invocation = invokeLanguageModelTool(command, timeoutMs);
     // Keep the rejection observed while the dialogs are being answered; the real failure
     // is reported when the invocation is awaited below.
     invocation.catch(() => undefined);
@@ -2062,12 +2118,14 @@ async function waitForToolResult<T extends Record<string, unknown>>(
 async function invokeLanguageModelTool(
     command: Parameters<typeof executeE2eControlCommand>[0],
     timeoutMs = 120000): Promise<LanguageModelToolInvocationResponse> {
+    assert.ok(command.name === 'invokeLanguageModelTool', `Expected a language model tool invocation, got '${command.name}'.`);
     const response = await invokeControlCommand<LanguageModelToolInvocationResponse>(command, timeoutMs);
-    return {
-        results: response.results,
-        cancellations: response.cancellations,
-        unexpectedFailures: response.unexpectedFailures,
-    };
+    const expectedRoute = command.cancelBeforeInvocation
+        ? 'registeredToolCanceled'
+        : command.invokeRegisteredToolDirectly ? 'registeredToolDirect' : 'vscode.lm.invokeTool';
+    assert.strictEqual(response.registered, true);
+    assert.strictEqual(response.invocation, expectedRoute);
+    return response;
 }
 
 async function invokeLanguageModelToolWithConfirmations<T>(

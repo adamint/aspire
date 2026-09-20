@@ -151,6 +151,8 @@ Linux CI shards also record the Xvfb display with `ffmpeg`. The default workflow
 
 E2E tests should avoid fixed sleeps for readiness. Prefer the observation state written by the extension test bridge, ExTester wait APIs, unique generated workspaces, explicit per-phase timeouts, and cleanup through `aspire stop --apphost`. This is intentionally stricter than a normal smoke test because the suite runs a real VS Code, CLI, AppHost, terminal, and dashboard path. See https://github.com/microsoft/aspire/issues/17727 for the original tracking issue.
 
+Language-model tool tests must assert the bridge's `invocation` field before counting a call as public API coverage. `vscode.lm.invokeTool` identifies the public API; `registeredToolDirect` and `registeredToolCanceled` identify direct adapter calls that bypass it. The lifecycle suite also injects a real compiler error and checks that `aspire_explain_launch_failure` reports it after CLI-initiated shutdown.
+
 ## Localizing user-facing strings
 
 All user-facing text must be localized:

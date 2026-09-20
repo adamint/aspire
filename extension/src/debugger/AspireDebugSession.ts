@@ -224,6 +224,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
   private _cliProcessTreeTerminationAttempted = false;
   private _cliProcessTreeTerminationPromise: Promise<void> | undefined;
   private _extensionShutdownRequested = false;
+  private _shutdownInitiatedByCli = false;
   // Timestamp for the `debug/apphost/end` duration measurement. Captured the first
   // time we observe a `launch` request so it covers the actual user-visible session
   // lifetime, not the moment the AspireDebugSession object was constructed.
@@ -359,6 +360,17 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
    */
   recordParentDebugSessionTermination(): void {
     this._parentStopped = true;
+  }
+
+  stopDebuggingFromCli(): Promise<void> {
+    // The CLI awaits this RPC in ProcessExit, before Node reports its exit code. Preserve
+    // that outcome through teardown, but not when an editor stop already initiated shutdown.
+    // Reentrant DAP disconnects from stopping the parent must not change the first initiator.
+    if (!this.isShuttingDown) {
+      this._shutdownInitiatedByCli = true;
+    }
+
+    return this.stopDebugging();
   }
 
   /**
@@ -734,6 +746,12 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
   }
 
   requestCliStopForExtensionShutdown(): Promise<void> {
+    // Cleanup failures also reach this method. Once the CLI is in ProcessExit, stopCli's
+    // Environment.Exit(0) would replace its original exit code; forced cleanup remains scheduled.
+    if (this._shutdownInitiatedByCli) {
+      return Promise.resolve();
+    }
+
     this._extensionShutdownRequested = true;
     if (this._cliStopPromise) {
       return this._cliStopPromise;
@@ -1281,7 +1299,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
         },
         exitCallback: (code) => {
           const signal = this._cliProcess?.signalCode;
-          if (!this.isShuttingDown &&
+          if ((!this.isShuttingDown || this._shutdownInitiatedByCli) &&
             !this._startupCompleted &&
             !this._cliSpawnErrorRecorded &&
             (code !== 0 || signal !== null)) {
@@ -1347,10 +1365,14 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
 
     this._disposables.push({
       dispose: () => {
-        void this.requestCliStopForExtensionShutdown().catch((err) => {
-          extensionLogOutputChannel.info(`stopCli failed (connection may already be closed): ${err}`);
-        });
-        extensionLogOutputChannel.info(`Requested Aspire CLI exit with args: ${redactCliArgsForLogging(args).join(' ')}`);
+        // A CLI-initiated shutdown is already inside ProcessExit. Echoing stopCli back calls
+        // Environment.Exit(0), racing with and potentially replacing its original failure code.
+        if (!this._shutdownInitiatedByCli) {
+          void this.requestCliStopForExtensionShutdown().catch((err) => {
+            extensionLogOutputChannel.info(`stopCli failed (connection may already be closed): ${err}`);
+          });
+          extensionLogOutputChannel.info(`Requested Aspire CLI exit with args: ${redactCliArgsForLogging(args).join(' ')}`);
+        }
         // `stopCli` is cooperative and cannot be the only stop mechanism: it resolves without
         // effect when the transport is already closed, and never settles when the CLI has stopped
         // servicing the connection. Escalate to signalling the process group once the CLI has had

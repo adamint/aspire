@@ -569,7 +569,7 @@ export class InteractionService implements IInteractionService {
         // Await the ordered shutdown so the CLI (and the user, via the endpoint middleware) learns
         // if a resource, AppHost, or parent debug session did not stop. Disposable.dispose() starts
         // the same bounded work in the background but cannot return its failures.
-        await this._getAspireDebugSession()?.stopDebugging();
+        await this._getAspireDebugSession()?.stopDebuggingFromCli();
     }
 
     notifyAppHostStartupCompleted() {
