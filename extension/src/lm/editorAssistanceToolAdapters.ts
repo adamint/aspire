@@ -16,7 +16,6 @@ import {
     aspireOpenOutputToolName,
     type DebugSessionStatusToolInput,
     type EditorAssistanceToolRegistration,
-    type EditorAssistanceToolResult,
     type ExplainLaunchFailureToolInput,
     type HotReloadStatusToolInput,
     type ListDebugSessionsToolInput,
@@ -25,7 +24,7 @@ import {
 } from './editorAssistanceToolContracts';
 import { EditorAssistanceToolService } from './editorAssistanceToolService';
 import { EditorAssistanceTelemetry } from './editorAssistanceTelemetry';
-import { escapeMarkdown } from './languageModelToolUi';
+import { createJsonToolResult, escapeMarkdown } from './languageModelToolUi';
 
 export class AspireDebugSessionStatusLanguageModelTool implements vscode.LanguageModelTool<DebugSessionStatusToolInput> {
     constructor(
@@ -36,7 +35,7 @@ export class AspireDebugSessionStatusLanguageModelTool implements vscode.Languag
     async invoke(
         options: vscode.LanguageModelToolInvocationOptions<DebugSessionStatusToolInput>,
         token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        return createToolResult(await this._telemetry.capture(
+        return createJsonToolResult(await this._telemetry.capture(
             aspireDebugSessionStatusToolName,
             () => this._service.getDebugSessionStatus(options.input, token)));
     }
@@ -51,7 +50,7 @@ export class AspireExplainLaunchFailureLanguageModelTool implements vscode.Langu
     async invoke(
         options: vscode.LanguageModelToolInvocationOptions<ExplainLaunchFailureToolInput>,
         token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        return createToolResult(await this._telemetry.capture(
+        return createJsonToolResult(await this._telemetry.capture(
             aspireExplainLaunchFailureToolName,
             () => this._service.explainLaunchFailure(options.input, token)));
     }
@@ -79,7 +78,7 @@ export class AspireOpenDashboardLanguageModelTool implements vscode.LanguageMode
     async invoke(
         options: vscode.LanguageModelToolInvocationOptions<OpenDashboardToolInput>,
         token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        return createToolResult(await this._telemetry.capture(
+        return createJsonToolResult(await this._telemetry.capture(
             aspireOpenDashboardToolName,
             () => this._service.openDashboard(options.input, token)));
     }
@@ -106,7 +105,7 @@ export class AspireOpenOutputLanguageModelTool implements vscode.LanguageModelTo
     async invoke(
         options: vscode.LanguageModelToolInvocationOptions<OpenOutputToolInput>,
         token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        return createToolResult(await this._telemetry.capture(
+        return createJsonToolResult(await this._telemetry.capture(
             aspireOpenOutputToolName,
             () => this._service.openOutput(options.input, token)));
     }
@@ -121,7 +120,7 @@ export class AspireListDebugSessionsLanguageModelTool implements vscode.Language
     async invoke(
         options: vscode.LanguageModelToolInvocationOptions<ListDebugSessionsToolInput>,
         token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        return createToolResult(await this._telemetry.capture(
+        return createJsonToolResult(await this._telemetry.capture(
             aspireListDebugSessionsToolName,
             () => this._service.listDebugSessions(options.input, token)));
     }
@@ -136,7 +135,7 @@ export class AspireHotReloadStatusLanguageModelTool implements vscode.LanguageMo
     async invoke(
         options: vscode.LanguageModelToolInvocationOptions<HotReloadStatusToolInput>,
         token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        return createToolResult(await this._telemetry.capture(
+        return createJsonToolResult(await this._telemetry.capture(
             aspireHotReloadStatusToolName,
             () => this._service.getHotReloadStatus(options.input, token)));
     }
@@ -177,13 +176,9 @@ export function registerEditorAssistanceTools(
         extensionLogOutputChannel.info('Skipping Aspire editor assistance language model tools: the language model tool API is unavailable.');
     }
     else {
-        registrations.push(
-            vscode.lm.registerTool(aspireDebugSessionStatusToolName, statusTool),
-            vscode.lm.registerTool(aspireExplainLaunchFailureToolName, explainTool),
-            vscode.lm.registerTool(aspireOpenDashboardToolName, dashboardTool),
-            vscode.lm.registerTool(aspireOpenOutputToolName, outputTool),
-            vscode.lm.registerTool(aspireListDebugSessionsToolName, listTool),
-            vscode.lm.registerTool(aspireHotReloadStatusToolName, hotReloadTool));
+        for (const [name, tool] of tools) {
+            registrations.push(vscode.lm.registerTool(name, tool));
+        }
         extensionLogOutputChannel.info('Registered Aspire editor assistance language model tools.');
     }
 
@@ -197,10 +192,4 @@ export function registerEditorAssistanceTools(
             registrations.length = 0;
         },
     };
-}
-
-function createToolResult(result: EditorAssistanceToolResult): vscode.LanguageModelToolResult {
-    return new vscode.LanguageModelToolResult([
-        new vscode.LanguageModelTextPart(JSON.stringify(result)),
-    ]);
 }

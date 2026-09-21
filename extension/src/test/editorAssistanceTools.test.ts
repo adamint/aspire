@@ -1082,6 +1082,60 @@ suite('Editor assistance AppHost services', () => {
             assert.deepStrictEqual(resourceRepository.authoritativeRequests, [appHostProjectPath, appHostProjectPath]);
         });
 
+        for (const [label, otherDisplayName, displayName, selector] of [
+            ['uppercase expansion', '\u00df', 'ss', 'ss'],
+            ['ligature expansion', '\ufb03', 'ffi', 'FFI'],
+            ['dotless I', '\u0131', 'i', 'I'],
+            ['long S', '\u017f', 's', 'S'],
+        ]) {
+            test(`uses ordinal resource matching for status and Hot Reload: ${label}`, async () => {
+                const projectPath = addEditorDebuggedApiResource();
+                resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [
+                    {
+                        ...createResource('other', path.join(workspaceRoot, 'Other', 'Other.csproj')),
+                        displayName: otherDisplayName,
+                    },
+                    { ...createResource('api', projectPath), displayName },
+                ]);
+                const token = new vscode.CancellationTokenSource().token;
+
+                for (const resourceName of [selector, 'API']) {
+                    assert.deepStrictEqual(
+                        await service.getDebugSessionStatus({ appHostPath: 'AppHost/AppHost.csproj', resourceName }, token),
+                        {
+                            success: true,
+                            tool: aspireDebugSessionStatusToolName,
+                            outcome: 'running',
+                            scope: 'resource',
+                            controller: 'editor',
+                            mode: 'debug',
+                            appHost: 'AppHost/AppHost.csproj',
+                            resourceName,
+                            resource: createExpectedResource('Api.csproj'),
+                        });
+                    assert.deepStrictEqual(
+                        await service.getHotReloadStatus({ appHostPath: 'AppHost/AppHost.csproj', resourceName }, token),
+                        {
+                            success: true,
+                            tool: aspireHotReloadStatusToolName,
+                            outcome: 'applicable',
+                            appHost: 'AppHost/AppHost.csproj',
+                            resourceName: 'api',
+                            controller: 'editor',
+                            hotReloadEnabled: true,
+                            evidence: [
+                                'devKitInstalled',
+                                'hotReloadSettingEnabled',
+                                'hotReloadOnSaveEnabled',
+                                'editorDebugSession',
+                                'dotnetProjectResource',
+                            ],
+                            fallback: ['restartResource', 'rebuildAndRestartAppHost'],
+                        });
+                }
+            });
+        }
+
         test('matches resource sessions across AppHost project and source aliases', async () => {
             const programPath = path.join(path.dirname(appHostProjectPath), 'Program.cs');
             fs.writeFileSync(programPath, '// Program');
@@ -3597,6 +3651,50 @@ suite('Editor assistance AppHost services', () => {
             }
         });
 
+        for (const [label, character] of [
+            ['control', '\n'],
+            ['format', '\u202e'],
+            ['byte order mark', '\ufeff'],
+            ['surrogate', '\ud800'],
+            ['private use', '\ue000'],
+            ['unassigned', '\u0378'],
+        ]) {
+            for (const [resourceType, propertyName] of [
+                ['Project', 'project.path'],
+                ['Executable', 'executable.path'],
+                ['Container', 'container.image'],
+            ]) {
+                for (const [position, source] of [
+                    ['embedded', `source${character}name`],
+                    ['leading', `${character}source`],
+                    ['trailing', `source${character}`],
+                ]) {
+                    test(`omits ${position} ${label} characters from model-facing ${resourceType} sources`, async () => {
+                        addEditorAppHostRunSession(appHostProjectPath);
+                        resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [{
+                            ...createResource('api', undefined, { [propertyName]: source }),
+                            resourceType,
+                        }]);
+
+                        assert.deepStrictEqual(
+                            await service.getDebugSessionStatus(
+                                { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api' },
+                                new vscode.CancellationTokenSource().token),
+                            {
+                                success: true,
+                                tool: aspireDebugSessionStatusToolName,
+                                outcome: 'notDebugging',
+                                scope: 'resource',
+                                controller: 'editor',
+                                appHost: 'AppHost/AppHost.csproj',
+                                resourceName: 'api',
+                                resource: createExpectedResource(null, { resourceType }),
+                            });
+                    });
+                }
+            }
+        }
+
         test('maps unrecognized resource states to unknown', async () => {
             addEditorAppHostRunSession(appHostProjectPath);
             const privateState = 'Running with private-state-secret';
@@ -3614,6 +3712,28 @@ suite('Editor assistance AppHost services', () => {
             }));
             assert.strictEqual(JSON.stringify(result).includes(privateState), false);
         });
+
+        for (const [label, healthStatus, allowed] of [
+            ['128 ASCII code units', 'a'.repeat(128), true],
+            ['128 code units with a supplementary character', `${'a'.repeat(126)}\u{1f600}`, true],
+            ['129 code units but only 128 scalar values', `${'a'.repeat(127)}\u{1f600}`, false],
+        ] as const) {
+            test(`preserves the UTF-16 metadata bound: ${label}`, async () => {
+                addEditorAppHostRunSession(appHostProjectPath);
+                resourceRepository.resourcesByAppHost.set(path.resolve(appHostProjectPath), [{
+                    ...createResource('api', path.join(workspaceRoot, 'Api', 'Api.csproj')),
+                    healthStatus,
+                }]);
+
+                const result = await service.getDebugSessionStatus(
+                    { appHostPath: 'AppHost/AppHost.csproj', resourceName: 'api' },
+                    new vscode.CancellationTokenSource().token);
+
+                assert.deepStrictEqual((result as { resource?: unknown }).resource, createExpectedResource('Api.csproj', {
+                    healthStatus: allowed ? healthStatus : null,
+                }));
+            });
+        }
 
         test('drops unbounded or control-bearing resource metadata', async () => {
             addEditorAppHostRunSession(appHostProjectPath);

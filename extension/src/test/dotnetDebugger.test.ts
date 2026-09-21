@@ -132,13 +132,17 @@ suite('Dotnet Debugger Extension Tests', () => {
         return { dotNetService: fakeDotNetService, extension: createProjectDebuggerExtension(() => fakeDotNetService), doesFileExistStub: sinon.stub(io, 'doesFileExist').resolves(doesOutputFileExist) };
     }
 
-    for (const failure of ['nonzero exit', 'stderr on successful exit', 'spawn error'] as const) {
+    for (const failure of ['nonzero exit', 'stderr on successful exit', 'spawn error', 'synchronous spawn error'] as const) {
         test(`dotnet build failures use the typed AppHost build failure boundary: ${failure}`, async () => {
+            sinon.stub(cliPathModule, 'resolveCliPath').resolves({ cliPath: 'aspire', available: true, source: 'path' });
             const buildProcess = Object.assign(new EventEmitter(), {
                 stdout: new EventEmitter(),
                 stderr: new EventEmitter(),
             });
             sinon.stub(childProcess, 'spawn').callsFake(() => {
+                if (failure === 'synchronous spawn error') {
+                    throw new Error('dotnet could not start');
+                }
                 setImmediate(() => {
                     if (failure === 'spawn error') {
                         buildProcess.emit('error', new Error('dotnet could not start'));
@@ -158,11 +162,39 @@ suite('Dotnet Debugger Extension Tests', () => {
                 service.buildDotNetProject('/workspace/AppHost/AppHost.csproj'),
                 error => {
                     assert.ok(error instanceof AppHostBuildFailureError);
-                    assert.strictEqual(error.debugConsoleOutputAlreadyWritten, failure !== 'spawn error');
+                    assert.strictEqual(error.debugConsoleOutputAlreadyWritten,
+                        failure === 'nonzero exit' || failure === 'stderr on successful exit');
                     return true;
                 });
         });
     }
+
+    test('dotnet build classifies real synchronous argument validation as an unstreamed build failure', async () => {
+        sinon.stub(cliPathModule, 'resolveCliPath').resolves({ cliPath: 'aspire', available: true, source: 'path' });
+        const sendMessage = sinon.stub();
+        const service = new DotNetService({ sendMessage } as unknown as AspireDebugSession);
+
+        // Node rejects a NUL-containing argument before creating a child or emitting "error".
+        await assert.rejects(
+            service.buildDotNetProject('/workspace/AppHost/AppHost.csproj', 'Debug\0'),
+            error => {
+                assert.ok(error instanceof AppHostBuildFailureError);
+                assert.strictEqual(error.debugConsoleOutputAlreadyWritten, false);
+                assert.match(error.message, /null bytes/i);
+                return true;
+            });
+        sinon.assert.notCalled(sendMessage);
+    });
+
+    test('dotnet build leaves CLI resolution failures outside the build failure boundary', async () => {
+        const failure = new Error('CLI resolution failed');
+        sinon.stub(cliPathModule, 'resolveCliPath').rejects(failure);
+        const spawn = sinon.stub(childProcess, 'spawn');
+        const service = new DotNetService({ sendMessage: sinon.stub() } as unknown as AspireDebugSession);
+
+        await assert.rejects(service.buildDotNetProject('/workspace/AppHost/AppHost.csproj'), error => error === failure);
+        sinon.assert.notCalled(spawn);
+    });
 
     function createRunnableProjectOutput(testName: string): {
         tempRoot: string;

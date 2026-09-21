@@ -99,6 +99,10 @@ corepack yarn unit-test --grep "parseConfigInfoOutput"
 corepack yarn unit-test --run out/test/configInfoProvider.test.js --run out/test/extensionApi.test.js
 ```
 
+Editor-assistance regressions live in `editorAssistanceTools.test.ts`; shared ordinal name matching is covered by `strings.test.ts` and `launchProfiles.test.ts`. Model-facing resource sources must reject the same unsafe Unicode categories as metadata, including leading and trailing controls before trimming container images. Keep their separate length limits: 256 Unicode scalar values for sources and 128 UTF-16 code units for metadata. `dotnetDebugger.test.ts` covers both emitted process errors and synchronous Node argument-validation errors.
+
+The CLI's shared resource-wait budget is covered by `ResourceWaitServiceTests` and `WaitForResourcesToolTests` under `tests/Aspire.Cli.Tests/`. Clock-jump regressions must vary UTC independently of monotonic elapsed time; advancing both clocks together does not test this failure.
+
 ### End-to-end tests
 
 UI end-to-end tests live under `src/test-e2e`. They run a packaged VSIX in a real VS Code instance through ExTester, using a real Aspire CLI and a generated AppHost workspace.

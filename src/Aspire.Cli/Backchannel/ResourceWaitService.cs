@@ -69,30 +69,32 @@ internal sealed class ResourceWaitService(
         int timeoutSeconds,
         CancellationToken cancellationToken)
     {
-        // Capture one deadline before dispatch so every concurrent backchannel call consumes
-        // the same timeout budget instead of receiving a fresh timeout.
-        var deadline = timeProvider.GetUtcNow().AddSeconds(timeoutSeconds);
+        // Use one monotonic budget so UTC clock corrections cannot extend or expire the wait.
+        var startTimestamp = timeProvider.GetTimestamp();
+        var timeout = TimeSpan.FromSeconds(timeoutSeconds);
         var waitTasks = resourceNames
-            .Select(resourceName => WaitUntilDeadlineAsync(
+            .Select(resourceName => WaitWithinBudgetAsync(
                 connection,
                 resourceName,
                 target,
-                deadline,
+                startTimestamp,
+                timeout,
                 cancellationToken))
             .ToArray();
 
         return await Task.WhenAll(waitTasks).ConfigureAwait(false);
     }
 
-    private async Task<ResourceWaitResult> WaitUntilDeadlineAsync(
+    private async Task<ResourceWaitResult> WaitWithinBudgetAsync(
         IAppHostAuxiliaryBackchannel connection,
         string resourceName,
         ResourceWaitTarget target,
-        DateTimeOffset deadline,
+        long startTimestamp,
+        TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        var startTimestamp = timeProvider.GetTimestamp();
-        var remaining = deadline - timeProvider.GetUtcNow();
+        var resourceStartTimestamp = timeProvider.GetTimestamp();
+        var remaining = timeout - timeProvider.GetElapsedTime(startTimestamp);
         if (remaining <= TimeSpan.Zero)
         {
             return new ResourceWaitResult(
@@ -102,7 +104,7 @@ internal sealed class ResourceWaitService(
                 Health: null,
                 ResourceNotFound: false,
                 ErrorMessage: null,
-                timeProvider.GetElapsedTime(startTimestamp));
+                timeProvider.GetElapsedTime(resourceStartTimestamp));
         }
 
         // The backchannel accepts whole seconds. Round up so a fractional second remaining on
@@ -115,7 +117,7 @@ internal sealed class ResourceWaitService(
                 resourceName,
                 target,
                 remainingSeconds,
-                startTimestamp,
+                resourceStartTimestamp,
                 cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -131,7 +133,7 @@ internal sealed class ResourceWaitService(
                 Health: null,
                 ResourceNotFound: false,
                 ErrorMessage: null,
-                timeProvider.GetElapsedTime(startTimestamp));
+                timeProvider.GetElapsedTime(resourceStartTimestamp));
         }
     }
 

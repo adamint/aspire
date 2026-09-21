@@ -1,4 +1,5 @@
 import { aspireCliCommandFailed, aspireCliOutputParseFailed } from '../loc/strings';
+import { equalsOrdinalIgnoreCase } from '../utils/strings';
 
 export interface ResourceUrlJson {
     name: string | null;
@@ -78,8 +79,8 @@ export function isResourceNameMatch(
     resource: ResourceJson,
     resourceName: string,
     includeDisplayName = true): boolean {
-    return equalsIgnoreCase(resource.name, resourceName) ||
-        (includeDisplayName && typeof resource.displayName === 'string' && equalsIgnoreCase(resource.displayName, resourceName));
+    return equalsOrdinalIgnoreCase(resource.name, resourceName) ||
+        (includeDisplayName && typeof resource.displayName === 'string' && equalsOrdinalIgnoreCase(resource.displayName, resourceName));
 }
 
 export function resolveResourceNameMatches(
@@ -89,10 +90,6 @@ export function resolveResourceNameMatches(
     return exactMatches.length > 0
         ? exactMatches
         : resources.filter(resource => isResourceNameMatch(resource, resourceName));
-}
-
-function equalsIgnoreCase(left: string, right: string): boolean {
-    return left.toUpperCase() === right.toUpperCase();
 }
 
 export interface AppHostDisplayInfo {

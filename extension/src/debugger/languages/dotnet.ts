@@ -116,56 +116,64 @@ export class DotNetService implements IDotNetService {
             }
 
             extensionLogOutputChannel.info(`Building .NET project: ${projectFile} using dotnet CLI`);
+            const { cliPath } = await resolveCliPath(getCliPathTargetForUri(vscode.Uri.file(projectFile)));
+            const processEnvironment = createDotNetProcessEnvironment(cliPath, environment);
             await new Promise<void>((resolve, reject) => {
-                void (async () => {
-                    const { cliPath } = await resolveCliPath(getCliPathTargetForUri(vscode.Uri.file(projectFile)));
-                    const buildProcess = spawn('dotnet', args, {
+                const rejectSpawnFailure = (error: unknown) => {
+                    const message = error instanceof Error ? error.message : String(error);
+                    extensionLogOutputChannel.error(`dotnet build process error: ${message}`);
+                    // Synchronous argument validation and emitted spawn errors both occur
+                    // before a build transcript, so the caller must still surface the message.
+                    reject(new AppHostBuildFailureError(
+                        buildFailedForProjectWithError(projectFile, message),
+                        false));
+                };
+
+                let buildProcess: ChildProcessWithoutNullStreams;
+                try {
+                    buildProcess = spawn('dotnet', args, {
                         // The .NET SDK searches for global.json from the process working directory, not the project
                         // argument. Coordinated builds provide their directory so IDE evaluation selects the same SDK.
                         cwd: workingDirectory ?? path.dirname(projectFile),
-                        env: createDotNetProcessEnvironment(cliPath, environment)
+                        env: processEnvironment
                     });
+                } catch (error) {
+                    rejectSpawnFailure(error);
+                    return;
+                }
 
-                    const stdoutChunks: Buffer[] = [];
-                    const stderrChunks: Buffer[] = [];
-                    buildProcess.stdout?.on('data', (data: Buffer) => {
-                        stdoutChunks.push(data);
-                        this.writeToDebugConsole(data.toString(), 'stdout');
-                    });
+                const stdoutChunks: Buffer[] = [];
+                const stderrChunks: Buffer[] = [];
+                buildProcess.stdout?.on('data', (data: Buffer) => {
+                    stdoutChunks.push(data);
+                    this.writeToDebugConsole(data.toString(), 'stdout');
+                });
 
-                    // Keep stdout and stderr separate so their debug-console categories remain intact.
-                    buildProcess.stderr?.on('data', (data: Buffer) => {
-                        stderrChunks.push(data);
-                        this.writeToDebugConsole(data.toString(), 'stderr');
-                    });
+                // Keep stdout and stderr separate so their debug-console categories remain intact.
+                buildProcess.stderr?.on('data', (data: Buffer) => {
+                    stderrChunks.push(data);
+                    this.writeToDebugConsole(data.toString(), 'stderr');
+                });
 
-                    buildProcess.on('error', (err) => {
-                        extensionLogOutputChannel.error(`dotnet build process error: ${err.message}`);
-                        // A spawn failure produces no build transcript, so the message has not been
-                        // streamed to the debug console yet and must still be surfaced by the caller.
-                        reject(new AppHostBuildFailureError(
-                            buildFailedForProjectWithError(projectFile, err.message),
-                            false));
-                    });
+                buildProcess.on('error', rejectSpawnFailure);
 
-                    buildProcess.on('close', (code) => {
-                        const stdoutOutput = Buffer.concat(stdoutChunks).toString();
-                        const stderrOutput = Buffer.concat(stderrChunks).toString();
-                        if (code === 0) {
-                            // if build succeeds, simply return. otherwise throw to trigger error handling
-                            if (stderrOutput) {
-                                reject(new AppHostBuildFailureError(stderrOutput, true));
-                            } else {
-                                resolve();
-                            }
+                buildProcess.on('close', (code) => {
+                    const stdoutOutput = Buffer.concat(stdoutChunks).toString();
+                    const stderrOutput = Buffer.concat(stderrChunks).toString();
+                    if (code === 0) {
+                        // if build succeeds, simply return. otherwise throw to trigger error handling
+                        if (stderrOutput) {
+                            reject(new AppHostBuildFailureError(stderrOutput, true));
                         } else {
-                            const output = stdoutOutput || stderrOutput || `Exit code ${code}`;
-                            reject(new AppHostBuildFailureError(
-                                buildFailedForProjectWithError(projectFile, output),
-                                true));
+                            resolve();
                         }
-                    });
-                })().catch(reject);
+                    } else {
+                        const output = stdoutOutput || stderrOutput || `Exit code ${code}`;
+                        reject(new AppHostBuildFailureError(
+                            buildFailedForProjectWithError(projectFile, output),
+                            true));
+                    }
+                });
             });
         });
     }

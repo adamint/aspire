@@ -19,12 +19,11 @@ import {
     aspireAppHostStopToolName,
     parseMode,
     type AppHostLifecycleToolRegistration,
-    type AppHostLifecycleToolResult,
     type AppHostStartToolInput,
     type AppHostStopToolInput,
 } from './appHostLifecycleToolContracts';
 import { AppHostLifecycleToolService } from './appHostLifecycleToolService';
-import { escapeMarkdown } from './languageModelToolUi';
+import { createJsonToolResult, escapeMarkdown } from './languageModelToolUi';
 import { isValidLaunchProfile } from '../utils/launchProfile';
 
 export class AppHostStartLanguageModelTool implements vscode.LanguageModelTool<AppHostStartToolInput> {
@@ -55,7 +54,7 @@ export class AppHostStartLanguageModelTool implements vscode.LanguageModelTool<A
     }
 
     async invoke(options: vscode.LanguageModelToolInvocationOptions<AppHostStartToolInput>, token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        return createToolResult(await this._service.startConfirmed(options.input, token));
+        return createJsonToolResult(await this._service.startConfirmed(options.input, token));
     }
 }
 
@@ -75,7 +74,7 @@ export class AppHostStopLanguageModelTool implements vscode.LanguageModelTool<Ap
     }
 
     async invoke(options: vscode.LanguageModelToolInvocationOptions<AppHostStopToolInput>, token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-        return createToolResult(await this._service.stopConfirmed(options.input, token));
+        return createJsonToolResult(await this._service.stopConfirmed(options.input, token));
     }
 }
 
@@ -100,22 +99,14 @@ export function registerAppHostLifecycleTools(service: AppHostLifecycleToolServi
         [aspireAppHostStartToolName, startTool as unknown as vscode.LanguageModelTool<unknown>],
         [aspireAppHostStopToolName, stopTool as unknown as vscode.LanguageModelTool<unknown>],
     ]);
-    const registerTools = () => {
-        if (registrations.length > 0) {
-            return;
-        }
-
-        registrations.push(
-            vscode.lm.registerTool(aspireAppHostStartToolName, startTool),
-            vscode.lm.registerTool(aspireAppHostStopToolName, stopTool));
-        extensionLogOutputChannel.info('Registered Aspire AppHost lifecycle language model tools.');
-    };
-
     if (typeof vscode.lm?.registerTool !== 'function') {
         extensionLogOutputChannel.info('Skipping Aspire AppHost lifecycle language model tools: the language model tool API is unavailable.');
     }
     else {
-        registerTools();
+        for (const [name, tool] of tools) {
+            registrations.push(vscode.lm.registerTool(name, tool));
+        }
+        extensionLogOutputChannel.info('Registered Aspire AppHost lifecycle language model tools.');
     }
 
     return {
@@ -128,10 +119,6 @@ export function registerAppHostLifecycleTools(service: AppHostLifecycleToolServi
             registrations.length = 0;
         },
     };
-}
-
-function createToolResult(result: AppHostLifecycleToolResult): vscode.LanguageModelToolResult {
-    return new vscode.LanguageModelToolResult([new vscode.LanguageModelTextPart(JSON.stringify(result))]);
 }
 
 function describeRequestedMode(value: unknown): string {

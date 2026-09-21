@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as locStrings from '../loc/strings';
 import { defaultConfigurationNameForWorkspaceFolder, launchingWithAppHost, launchingWithDirectory } from '../loc/strings';
-import { collapseWhitespace, escapeCodicons, formatText } from '../utils/strings';
+import { collapseWhitespace, equalsOrdinalIgnoreCase, escapeCodicons, formatText } from '../utils/strings';
 
 suite('utils/strings tests', () => {
 	test('formatText formats correctly ', () => {
@@ -22,6 +22,25 @@ suite('utils/strings tests', () => {
         const resultWithNoEmojis = formatText(inputWithNoEmojis);
         assert.strictEqual(resultWithNoEmojis, expectedOutputWithNoEmojis);
 	});
+
+    for (const [left, right, expected] of [
+        ['', '', true],
+        ['Api', 'API', true],
+        ['Api', 'Other', false],
+        ['\u00e9', '\u00c9', true],
+        ['\u00df', 'ss', false],
+        ['\ufb03', 'ffi', false],
+        ['\u0131', 'I', false],
+        ['\u017f', 'S', false],
+        ['\u0130', 'i', false],
+        ['\u{10428}', '\u{10400}', true],
+        ['\u00df', '\u00df', true],
+    ] as const) {
+        test(`equalsOrdinalIgnoreCase matches ordinal casing for ${JSON.stringify(left)} and ${JSON.stringify(right)}`, () => {
+            assert.strictEqual(equalsOrdinalIgnoreCase(left, right), expected);
+            assert.strictEqual(equalsOrdinalIgnoreCase(right, left), expected);
+        });
+    }
 
     test('collapseWhitespace renders multi-line CLI status as a single line', () => {
         assert.strictEqual(collapseWhitespace('  Building\n  the AppHost\r\n\tnow  '), 'Building the AppHost now');

@@ -1,3 +1,11 @@
+import * as vscode from 'vscode';
+
+export function createJsonToolResult(result: object): vscode.LanguageModelToolResult {
+    return new vscode.LanguageModelToolResult([
+        new vscode.LanguageModelTextPart(JSON.stringify(result)),
+    ]);
+}
+
 /**
  * Escapes the Markdown constructs that change how a path renders inline.
  *
