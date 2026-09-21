@@ -576,6 +576,12 @@ suite('AppHost lifecycle language model tools', () => {
             const registerToolStub = sinon.stub(vscode.lm, 'registerTool').value(undefined);
             try {
                 const registration = registerAppHostLifecycleTools(service);
+                assert.strictEqual(registration.registered, false);
+                assert.deepStrictEqual([...registration.tools.keys()], [
+                    aspireAppHostStartToolName,
+                    aspireAppHostStopToolName,
+                ]);
+                registration.dispose();
                 registration.dispose();
                 assert.strictEqual(registration.registered, false);
             }
@@ -608,7 +614,9 @@ suite('AppHost lifecycle language model tools', () => {
 
         test('registers both tools once when the API exists and the workspace is trusted', () => {
             const disposed: string[] = [];
-            const registerToolStub = sinon.stub(vscode.lm, 'registerTool').callsFake((name: string) => new vscode.Disposable(() => disposed.push(name)));
+            const registerToolStub = sinon.stub(vscode.lm, 'registerTool').callsFake((name: string) => ({
+                dispose: () => disposed.push(name),
+            }));
             try {
                 const registration = registerAppHostLifecycleTools(service);
                 assert.strictEqual(registration.registered, true);
@@ -620,6 +628,8 @@ suite('AppHost lifecycle language model tools', () => {
                     registration.tools.get(aspireAppHostStopToolName),
                     registerToolStub.secondCall.args[1]);
 
+                registration.dispose();
+                assert.strictEqual(registration.registered, false);
                 registration.dispose();
                 assert.deepStrictEqual(disposed, [aspireAppHostStartToolName, aspireAppHostStopToolName]);
             }

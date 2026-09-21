@@ -182,15 +182,7 @@ export interface AppHostLifecycleToolDependencies {
     readonly discoveryService: AppHostLifecycleDiscoveryService;
 }
 
-export interface AppHostLifecycleToolRegistration extends vscode.Disposable {
-    readonly registered: boolean;
-    /**
-     * The registered tool instances by tool name. VS Code does not surface
-     * `prepareInvocation` through `vscode.lm`, so E2E automation needs a way to ask the
-     * extension's own instance for preparation and pre-cancelled invocation.
-     */
-    readonly tools: ReadonlyMap<string, vscode.LanguageModelTool<unknown>>;
-}
+export type { LanguageModelToolRegistration as AppHostLifecycleToolRegistration } from './languageModelToolRegistration';
 
 export function createResult(
     tool: string,

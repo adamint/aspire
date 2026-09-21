@@ -13,7 +13,6 @@ import {
     appHostLifecycleStopInvocationMessage,
     appHostLifecycleUnspecifiedMode,
 } from '../loc/strings';
-import { extensionLogOutputChannel } from '../utils/logging';
 import {
     aspireAppHostStartToolName,
     aspireAppHostStopToolName,
@@ -24,6 +23,7 @@ import {
 } from './appHostLifecycleToolContracts';
 import { AppHostLifecycleToolService } from './appHostLifecycleToolService';
 import { createJsonToolResult, escapeMarkdown } from './languageModelToolUi';
+import { registerLanguageModelTools } from './languageModelToolRegistration';
 import { isValidLaunchProfile } from '../utils/launchProfile';
 
 export class AppHostStartLanguageModelTool implements vscode.LanguageModelTool<AppHostStartToolInput> {
@@ -89,7 +89,6 @@ export class AppHostStopLanguageModelTool implements vscode.LanguageModelTool<Ap
  * instead of failing with a missing implementation.
  */
 export function registerAppHostLifecycleTools(service: AppHostLifecycleToolService): AppHostLifecycleToolRegistration {
-    const registrations: vscode.Disposable[] = [];
     const startTool = new AppHostStartLanguageModelTool(service);
     const stopTool = new AppHostStopLanguageModelTool(service);
     // E2E automation supplies raw JSON, while the production tool API carries the
@@ -99,26 +98,8 @@ export function registerAppHostLifecycleTools(service: AppHostLifecycleToolServi
         [aspireAppHostStartToolName, startTool as unknown as vscode.LanguageModelTool<unknown>],
         [aspireAppHostStopToolName, stopTool as unknown as vscode.LanguageModelTool<unknown>],
     ]);
-    if (typeof vscode.lm?.registerTool !== 'function') {
-        extensionLogOutputChannel.info('Skipping Aspire AppHost lifecycle language model tools: the language model tool API is unavailable.');
-    }
-    else {
-        for (const [name, tool] of tools) {
-            registrations.push(vscode.lm.registerTool(name, tool));
-        }
-        extensionLogOutputChannel.info('Registered Aspire AppHost lifecycle language model tools.');
-    }
 
-    return {
-        get registered() {
-            return registrations.length > 0;
-        },
-        tools,
-        dispose() {
-            registrations.forEach(registration => registration.dispose());
-            registrations.length = 0;
-        },
-    };
+    return registerLanguageModelTools(tools, 'AppHost lifecycle');
 }
 
 function describeRequestedMode(value: unknown): string {

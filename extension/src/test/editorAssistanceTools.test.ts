@@ -5218,8 +5218,9 @@ suite('Editor assistance AppHost services', () => {
                 sendEvent: (eventName, properties, measurements) =>
                     telemetryEvents.push({ eventName, properties, measurements }),
             });
-            const registerToolStub = sinon.stub(vscode.lm, 'registerTool').callsFake((name: string) =>
-                new vscode.Disposable(() => disposed.push(name)));
+            const registerToolStub = sinon.stub(vscode.lm, 'registerTool').callsFake((name: string) => ({
+                dispose: () => disposed.push(name),
+            }));
             try {
                 const registration = registerEditorAssistanceTools(service, telemetry);
                 assert.strictEqual(registration.registered, true);
@@ -5306,6 +5307,8 @@ suite('Editor assistance AppHost services', () => {
                 ]);
 
                 registration.dispose();
+                assert.strictEqual(registration.registered, false);
+                registration.dispose();
                 assert.deepStrictEqual(disposed, [
                     aspireDebugSessionStatusToolName,
                     aspireExplainLaunchFailureToolName,
@@ -5334,6 +5337,8 @@ suite('Editor assistance AppHost services', () => {
                     aspireHotReloadStatusToolName,
                 ]);
                 registration.dispose();
+                registration.dispose();
+                assert.strictEqual(registration.registered, false);
             }
             finally {
                 registerToolStub.restore();

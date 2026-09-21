@@ -470,10 +470,7 @@ export interface EditorAssistanceToolDependencies {
     readonly uiHandoffService: EditorUiHandoffOperations;
 }
 
-export interface EditorAssistanceToolRegistration extends vscode.Disposable {
-    readonly registered: boolean;
-    readonly tools: ReadonlyMap<string, vscode.LanguageModelTool<unknown>>;
-}
+export type { LanguageModelToolRegistration as EditorAssistanceToolRegistration } from './languageModelToolRegistration';
 
 export function isValidDebugSessionStatusInput(value: unknown): value is DebugSessionStatusToolInput {
     if (!hasOnlyAllowedProperties(value, ['appHostPath', 'resourceName']) ||

@@ -6,7 +6,6 @@ import {
     editorAssistanceOpenOutputConfirmationTitle,
     editorAssistanceOpenOutputInvocationMessage,
 } from '../loc/strings';
-import { extensionLogOutputChannel } from '../utils/logging';
 import {
     aspireDebugSessionStatusToolName,
     aspireExplainLaunchFailureToolName,
@@ -25,6 +24,7 @@ import {
 import { EditorAssistanceToolService } from './editorAssistanceToolService';
 import { EditorAssistanceTelemetry } from './editorAssistanceTelemetry';
 import { createJsonToolResult, escapeMarkdown } from './languageModelToolUi';
+import { registerLanguageModelTools } from './languageModelToolRegistration';
 
 export class AspireDebugSessionStatusLanguageModelTool implements vscode.LanguageModelTool<DebugSessionStatusToolInput> {
     constructor(
@@ -156,7 +156,6 @@ export class AspireHotReloadStatusLanguageModelTool implements vscode.LanguageMo
 export function registerEditorAssistanceTools(
     service: EditorAssistanceToolService,
     telemetry: EditorAssistanceTelemetry = new EditorAssistanceTelemetry()): EditorAssistanceToolRegistration {
-    const registrations: vscode.Disposable[] = [];
     const statusTool = new AspireDebugSessionStatusLanguageModelTool(service, telemetry);
     const explainTool = new AspireExplainLaunchFailureLanguageModelTool(service, telemetry);
     const dashboardTool = new AspireOpenDashboardLanguageModelTool(service, telemetry);
@@ -172,24 +171,5 @@ export function registerEditorAssistanceTools(
         [aspireHotReloadStatusToolName, hotReloadTool as vscode.LanguageModelTool<unknown>],
     ]);
 
-    if (typeof vscode.lm?.registerTool !== 'function') {
-        extensionLogOutputChannel.info('Skipping Aspire editor assistance language model tools: the language model tool API is unavailable.');
-    }
-    else {
-        for (const [name, tool] of tools) {
-            registrations.push(vscode.lm.registerTool(name, tool));
-        }
-        extensionLogOutputChannel.info('Registered Aspire editor assistance language model tools.');
-    }
-
-    return {
-        get registered() {
-            return registrations.length > 0;
-        },
-        tools,
-        dispose() {
-            registrations.forEach(registration => registration.dispose());
-            registrations.length = 0;
-        },
-    };
+    return registerLanguageModelTools(tools, 'editor assistance');
 }
