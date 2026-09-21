@@ -30,6 +30,7 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Policy;
+using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.HttpsPolicy;
@@ -231,6 +232,10 @@ public sealed class DashboardWebApplication : IAsyncDisposable
 
         // Add services to the container.
         builder.Services.AddRazorComponents().AddInteractiveServerComponents();
+    #if !NET9_0_OR_GREATER
+        // Fluent uses constructor injection, which Blazor's default activator only supports in .NET 9+.
+        builder.Services.Replace(ServiceDescriptor.Scoped<IComponentActivator, DashboardComponentActivator>());
+    #endif
         builder.Services.AddCascadingAuthenticationState();
         builder.Services.AddResponseCompression(options =>
         {
@@ -291,9 +296,12 @@ public sealed class DashboardWebApplication : IAsyncDisposable
         builder.Services.AddHostedService<DashboardDataSourceInitializer>();
         builder.Services.AddScoped<DashboardDataSource>();
         builder.Services.AddScoped<IDashboardRunSelection>(services => services.GetRequiredService<DashboardDataSource>());
-        builder.Services.AddScoped<IDashboardClient, SelectedDashboardClient>();
+        // TryAdd, so a preConfigureBuilder callback can substitute the client. That callback runs before this method,
+        // and the last registration wins, so a plain AddScoped here would silently override the substitute. The
+        // Playwright fixture relies on this to serve a mock AppHost.
+        builder.Services.TryAddScoped<IDashboardClient, SelectedDashboardClient>();
 
-        builder.Services.TryAddSingleton<INotificationService, NotificationService>();
+        builder.Services.TryAddSingleton<Aspire.Dashboard.Model.INotificationService, Aspire.Dashboard.Model.NotificationService>();
         builder.Services.TryAddSingleton(TimeProvider.System);
         builder.Services.TryAddScoped<DashboardCommandExecutor>();
 
@@ -319,7 +327,9 @@ public sealed class DashboardWebApplication : IAsyncDisposable
         builder.Services.AddGrpc();
         builder.Services.AddSingleton<DashboardRunStore>();
         builder.Services.AddSingleton<IDashboardRunStore>(services => services.GetRequiredService<DashboardRunStore>());
-        builder.Services.AddSingleton<IRepositoryFactory, RepositoryFactory>();
+        // TryAdd for the same reason as IDashboardClient above: the factory decides which resource repository the
+        // dashboard reads from, so a substituted client is only actually reachable if its factory survives too.
+        builder.Services.TryAddSingleton<IRepositoryFactory, RepositoryFactory>();
         builder.Services.AddSingleton(services => services.GetRequiredService<DashboardDataSourcePool>().Current.TelemetryRepository);
         // OTLP ingestion and telemetry mutations always target the current dashboard run, even when a browser circuit selects a historical run.
         builder.Services.AddSingleton<ITelemetryRepositoryWriter>(services =>
@@ -342,6 +352,8 @@ public sealed class DashboardWebApplication : IAsyncDisposable
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IOutgoingPeerResolver, BrowserLinkOutgoingPeerResolver>());
 
         builder.Services.AddFluentUIComponents();
+        builder.Services.AddScoped<NavigationDialogService>();
+        builder.Services.AddScoped<IDialogService>(services => services.GetRequiredService<NavigationDialogService>());
 
         builder.Services.AddSingleton<IconResolver>();
 
@@ -368,9 +380,11 @@ public sealed class DashboardWebApplication : IAsyncDisposable
         // path the AppHost stamped onto the snapshot.
         builder.Services.TryAddSingleton<Aspire.Dashboard.Terminal.ITerminalConnectionResolver>(services =>
             new Aspire.Dashboard.Terminal.DefaultTerminalConnectionResolver(services.GetRequiredService<DashboardClient>()));
+        builder.Services.TryAddSingleton<TerminalViewSessionRegistry>();
 
         builder.Services.AddScoped<DimensionManager>();
         builder.Services.AddScoped<DashboardDialogService>();
+        builder.Services.AddScoped<DashboardMessageBarService>();
         builder.Services.AddScoped<ResourceMenuBuilder>();
         builder.Services.AddScoped<StructuredLogMenuBuilder>();
         builder.Services.AddScoped<SpanMenuBuilder>();
@@ -475,7 +489,7 @@ public sealed class DashboardWebApplication : IAsyncDisposable
         {
             if (context.Request.Path.Equals(TargetLocationInterceptor.ResourcesPath, StringComparisons.UrlPath))
             {
-                var client = context.RequestServices.GetRequiredService<DashboardClient>();
+                var client = context.RequestServices.GetRequiredService<IDashboardClient>();
                 if (!client.IsEnabled)
                 {
                     context.Response.Redirect(TargetLocationInterceptor.StructuredLogsPath);
@@ -1091,4 +1105,12 @@ public sealed class DashboardWebApplication : IAsyncDisposable
     }
 
     private static bool IsHttpsOrNull(BindingAddress? address) => address == null || string.Equals(address.Scheme, "https", StringComparison.Ordinal);
+
+    private sealed class DashboardComponentActivator(IServiceProvider serviceProvider) : IComponentActivator
+    {
+        public IComponent CreateInstance([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] Type componentType)
+        {
+            return (IComponent)ActivatorUtilities.CreateInstance(serviceProvider, componentType);
+        }
+    }
 }

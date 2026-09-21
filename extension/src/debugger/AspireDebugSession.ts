@@ -15,6 +15,7 @@ import { nodeDebuggerExtension } from "./languages/node";
 import { createDefaultRustDebuggerExtension } from "./languages/rust";
 import { javaDebuggerExtension, parseJavaAppHostCommand, resolveJavaClassPaths } from "./languages/java";
 import { cleanupRun } from "./runCleanupRegistry";
+import { BrowserDebugSessionTermination } from "./browserDebugSessionTermination";
 import { runWithRunStartWrappers } from "./runStartRegistry";
 import AspireRpcServer from "../server/AspireRpcServer";
 import { AlreadyStartedResourceDebugSession, createDebugSessionConfiguration } from "./debuggerExtensions";
@@ -44,6 +45,10 @@ import type { EditorResourceSessionMode, EditorResourceSessionSnapshot, EditorRe
 import { getOrCreateIdentityForCurrentAppHostTarget, type OpaqueAppHostIdentity } from "../utils/appHostIdentity";
 
 export type AppHostDebugSessionTracker = (owner: AspireDebugSession, appHostPath: string, debugSession: AspireResourceDebugSession) => void;
+
+export interface PendingDebugSessionStart extends vscode.Disposable {
+  readonly completion: Promise<void>;
+}
 
 const debugConfigurationsWithSensitiveEnvironment = new WeakSet<AspireResourceExtendedDebugConfiguration>();
 
@@ -506,7 +511,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
         () => session.stopSession(),
         session.session.name,
         resourceDeadline,
-        () => session.resetStopSessionAttempt?.())),
+        stop => session.resetStopSessionAttempt?.(stop))),
     ]);
     const stopFailures: unknown[] = [dashboardResult, ...resourceResults]
       .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
@@ -539,7 +544,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
           () => appHostDebugSession.stopSession(),
           appHostDebugSession.session.name,
           finalStopDeadline,
-          () => appHostDebugSession.resetStopSessionAttempt?.());
+          stop => appHostDebugSession.resetStopSessionAttempt?.(stop));
         this._appHostStopped = true;
         this._resourceDebugSessions = this._resourceDebugSessions.filter(session => session.id !== appHostDebugSession.id);
       }
@@ -605,7 +610,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
     return false;
   }
 
-  beginPendingDebugSessionStart(name: string): vscode.Disposable {
+  beginPendingDebugSessionStart(name: string): PendingDebugSessionStart {
     let resolveCompletion!: () => void;
     const pendingStart = {
       name,
@@ -616,6 +621,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
     this._pendingDebugSessionStarts.add(pendingStart);
 
     return {
+      completion: pendingStart.completion,
       dispose: () => {
         if (this._pendingDebugSessionStarts.delete(pendingStart)) {
           resolveCompletion();
@@ -728,7 +734,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
         lateStop.stop,
         lateStop.session.session.name,
         deadline,
-        () => lateStop.session.resetStopSessionAttempt?.());
+        stop => lateStop.session.resetStopSessionAttempt?.(stop));
     }
     catch (err) {
       if (!lateStop.retryOnNextShutdown) {
@@ -741,7 +747,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
         () => lateStop.session.stopSession(),
         lateStop.session.session.name,
         deadline,
-        () => lateStop.session.resetStopSessionAttempt?.());
+        stop => lateStop.session.resetStopSessionAttempt?.(stop));
     }
   }
 
@@ -918,7 +924,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
     operation: () => Thenable<void>,
     sessionName: string,
     deadline: number,
-    onTimeout?: () => void): Promise<void> {
+    onTimeout?: (stop: PromiseLike<void>) => void): Promise<void> {
     return this.waitWithinBudget(startStop(operation), sessionName, deadline, onTimeout);
   }
 
@@ -926,7 +932,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
     stop: PromiseLike<void>,
     sessionName: string,
     deadline: number,
-    onTimeout?: () => void,
+    onTimeout?: (stop: PromiseLike<void>) => void,
     timeoutMessage: (sessionName: string, seconds: number) => string = debugSessionStopTimedOut): Promise<void> {
     const remainingMs = Math.max(0, deadline - Date.now());
     const remainingSeconds = Math.ceil(remainingMs / 1000);
@@ -934,7 +940,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(
         () => {
-          onTimeout?.();
+          onTimeout?.(stop);
           reject(new Error(timeoutMessage(sessionName, remainingSeconds)));
         },
         remainingMs);
@@ -1787,8 +1793,19 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
           extensionLogOutputChannel.info(`Debug session started: ${session.name} (run id: ${session.configuration.runId})`);
           disposable.dispose();
           this.updateEditorResourceSessionState(debugConfig.runId, 'running');
+          const browserTermination = debugConfig.resourceType === 'browser'
+            ? new BrowserDebugSessionTermination(session, debugConfig.runId, debugConfig.debugSessionId, (runId, dcpId) => {
+              const notification: SessionTerminatedNotification = {
+                notification_type: 'sessionTerminated',
+                session_id: runId,
+                dcp_id: dcpId
+              };
+              this._dcpServer.sendNotification(notification);
+            })
+            : undefined;
 
           let stopSessionPromise: Promise<void> | undefined;
+          let browserStopPromise: Promise<void> | undefined;
           let runCleanedUp = false;
           let terminated = false;
           let resolveTermination: () => void;
@@ -1817,7 +1834,7 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
             resolveTermination();
             terminationDisposable.dispose();
           });
-          this._disposables.push(terminationDisposable);
+          this.registerDisposable(terminationDisposable);
           const disposalFunction = () => {
             if (terminated) {
               return Promise.resolve();
@@ -1829,17 +1846,22 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
 
             extensionLogOutputChannel.info(`Stopping debug session: ${session.name} (run id: ${session.configuration.runId})`);
             this.updateEditorResourceSessionState(debugConfig.runId, 'stopping');
-            const stop = Promise.race([
-              Promise.resolve(vscode.debug.stopDebugging(session)),
-              termination,
-            ]);
+            const browserStop = browserTermination?.stop();
+            const stop = browserStop
+              ? Promise.race([browserStop, termination])
+              : Promise.race([
+                Promise.resolve(vscode.debug.stopDebugging(session)),
+                termination,
+              ]);
             stopSessionPromise = stop;
+            browserStopPromise = browserStop;
 
             // A rejected adapter stop leaves the resource running. Forget only that failed attempt
             // so the ordered shutdown can issue a fresh VS Code stop request on its next retry.
             void stop.catch(() => {
               if (stopSessionPromise === stop) {
                 stopSessionPromise = undefined;
+                browserStopPromise = undefined;
               }
             });
 
@@ -1847,8 +1869,17 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
 
             return stop;
           };
-          const resetStopSessionAttempt = () => {
+          const resetStopSessionAttempt = (attempt: Thenable<void>) => {
+            if (stopSessionPromise !== attempt) {
+              return;
+            }
+
             stopSessionPromise = undefined;
+            const browserStop = browserStopPromise;
+            browserStopPromise = undefined;
+            if (browserStop) {
+              browserTermination?.resetStopAttempt(browserStop);
+            }
           };
 
           const vsCodeDebugSession: AspireResourceDebugSession = {
@@ -1857,12 +1888,20 @@ export class AspireDebugSession implements vscode.DebugAdapter, DashboardLaunche
             stopSession: disposalFunction,
             resetStopSessionAttempt,
           };
+          if (browserTermination) {
+            this.registerDisposable({
+              dispose: () => browserTermination.stopAndDisposeOnFailure()
+            });
+          }
 
           if (this.isShuttingDown) {
             extensionLogOutputChannel.info(`Stopping debug session that started after Aspire session shutdown began: ${session.name} (run id: ${session.configuration.runId})`);
             this.stopLateResourceSession(vsCodeDebugSession);
             resolved = true;
-            resolve(undefined);
+            // DCP owns the confirmed-stop contract for browser runs. Keep this session reachable
+            // while the ordered Aspire shutdown waits on the same single-flight stop so DCP cannot
+            // mistake a pending or failed stop for a debugger that never started.
+            resolve(browserTermination ? vsCodeDebugSession : undefined);
             return;
           }
 

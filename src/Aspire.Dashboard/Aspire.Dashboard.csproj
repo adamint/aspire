@@ -1,5 +1,4 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk.Web">
-
   <PropertyGroup>
     <!-- This list of runtimes needs to match the set of runtimes specified in eng/workloads/workloads.csproj -->
     <RuntimeIdentifiers>win-x86;win-x64;win-arm64;linux-x64;linux-arm64;linux-musl-x64;osx-x64;osx-arm64</RuntimeIdentifiers>
@@ -14,7 +13,7 @@
 
     <!-- This Application is a framework-dependent application that targets .NET 8.0. This means that the
     application is not able to run if the place where it is deployed does not have the .NET 8.0 runtime installed.
-    Given we want to be able to support people running on environments where they only have the 9.0 SDK/runtime installed,
+    Given we want to be able to support people running on environments where they only have a newer SDK/runtime installed,
     we allow roll-forward to the next major in order to support these customers.-->
     <RollForward>Major</RollForward>
 
@@ -62,7 +61,10 @@
     <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
     <PackageReference Include="Microsoft.Data.Sqlite.Core" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
-    <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components" />
+    <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components">
+      <!-- Daily Fluent UI previews are signed with an untrusted, untimestamped certificate. -->
+      <NoWarn Condition="'$(MicrosoftFluentUIAspNetCoreComponentsIsPreview)' == 'true'">NU3018;NU3027;NU3042</NoWarn>
+    </PackageReference>
     <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components.Icons" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
@@ -96,6 +98,11 @@
       <DesignTime>True</DesignTime>
       <AutoGen>True</AutoGen>
       <DependentUpon>ConsoleLogs.resx</DependentUpon>
+    </Compile>
+    <Compile Update="Resources\TerminalStrings.Designer.cs">
+      <DesignTime>True</DesignTime>
+      <AutoGen>True</AutoGen>
+      <DependentUpon>TerminalStrings.resx</DependentUpon>
     </Compile>
     <Compile Update="Resources\ControlsStrings.Designer.cs">
       <DesignTime>True</DesignTime>
@@ -178,6 +185,13 @@
       <SubType>Designer</SubType>
       <Generator>PublicResXFileCodeGenerator</Generator>
       <LastGenOutput>ConsoleLogs.Designer.cs</LastGenOutput>
+    </EmbeddedResource>
+    <EmbeddedResource Update="Resources\TerminalStrings.resx">
+      <XlfSourceFormat>Resx</XlfSourceFormat>
+      <XlfOutputItem>EmbeddedResource</XlfOutputItem>
+      <SubType>Designer</SubType>
+      <Generator>PublicResXFileCodeGenerator</Generator>
+      <LastGenOutput>TerminalStrings.Designer.cs</LastGenOutput>
     </EmbeddedResource>
     <EmbeddedResource Update="Resources\Dialogs.resx">
       <XlfSourceFormat>Resx</XlfSourceFormat>
@@ -329,10 +343,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Content Update="package.json;package-lock.json" CopyToPublishDirectory="Never" />
     <Content Remove="wwwroot\js\README.md" />
     <None Include="wwwroot\js\README.md" />
-    <Content Remove="wwwroot\fonts\cascadia-mono-nf\README.md" />
-    <None Include="wwwroot\fonts\cascadia-mono-nf\README.md" />
   </ItemGroup>
 
   <Import Project="BlazorAssets.targets" />
