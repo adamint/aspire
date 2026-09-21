@@ -229,13 +229,12 @@ export class LaunchFailureJournal {
 
     private pruneExpired(): void {
         const oldestAllowed = this._clock.now() - launchFailureTtlMs;
-        let expired = 0;
-        while (expired < this._records.length && this._records[expired].recordedAt <= oldestAllowed) {
-            expired++;
-        }
-
-        if (expired > 0) {
-            this._records.splice(0, expired);
+        // Clock rollback can make timestamps differ from insertion order. Scan every record,
+        // removing backwards so retained failures keep their original ordering.
+        for (let index = this._records.length - 1; index >= 0; index--) {
+            if (this._records[index].recordedAt <= oldestAllowed) {
+                this._records.splice(index, 1);
+            }
         }
     }
 }

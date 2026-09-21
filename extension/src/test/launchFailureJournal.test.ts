@@ -238,6 +238,37 @@ suite('Editor assistance AppHost services', () => {
             assert.deepStrictEqual(journal.readLatest(), []);
         });
 
+        for (const pruneOn of ['read', 'record']) {
+            for (const includeLaterValidRecord of [false, true]) {
+                test(`prunes rollback expirations on ${pruneOn}, later valid record: ${includeLaterValidRecord}`, () => {
+                    const minute = 60_000;
+                    let now = 40 * minute;
+                    const acceptedSizes: number[] = [];
+                    const journal = new LaunchFailureJournal(
+                        { now: () => now },
+                        (_failure, size) => acceptedSizes.push(size));
+                    const identity = getOrCreateIdentityForCurrentAppHostTarget(appHostProjectPath);
+                    const expected = [journal.record(identity, createFailure())];
+
+                    now = 0;
+                    journal.record(identity, createFailure());
+                    if (includeLaterValidRecord) {
+                        now = 2 * minute;
+                        expected.unshift(journal.record(identity, createFailure()));
+                    }
+
+                    now = 31 * minute;
+                    if (pruneOn === 'record') {
+                        expected.unshift(journal.record(identity, createFailure()));
+                        assert.strictEqual(acceptedSizes.at(-1), expected.length);
+                    }
+
+                    assert.deepStrictEqual(journal.readLatest(identity), expected);
+                    assert.deepStrictEqual(journal.readLatest(), expected);
+                });
+            }
+        }
+
         test('bounds provider kinds and exit code buckets', () => {
             const providers = [
                 ['coreclr', 'dotnet'],
