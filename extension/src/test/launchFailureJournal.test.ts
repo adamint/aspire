@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as sinon from 'sinon';
 
 import { SafeAppHostTargetResolver } from '../lm/safeAppHostTargetResolver';
 import {
@@ -237,6 +238,47 @@ suite('Editor assistance AppHost services', () => {
             assert.deepStrictEqual(journal.readLatest(identity), []);
             assert.deepStrictEqual(journal.readLatest(), []);
         });
+
+        for (const wallClockDelta of [-3_600_000, 3_600_000]) {
+            for (const pruneOn of ['read', 'record']) {
+                test(`uses elapsed time for expiry on ${pruneOn} after a ${wallClockDelta}ms wall-clock jump`, () => {
+                    const sandbox = sinon.createSandbox();
+                    try {
+                        const wallClock = sandbox.stub(Date, 'now').returns(10_000_000);
+                        const monotonicClock = sandbox.stub(performance, 'now').returns(1_000);
+                        const journal = new LaunchFailureJournal();
+                        const identity = getOrCreateIdentityForCurrentAppHostTarget(appHostProjectPath);
+                        const records = [journal.record(identity, createFailure())];
+                        const globalRecords = [recordLaunchFailureForAppHostPath(appHostProjectPath, {
+                            stage: 'build',
+                            category: 'buildFailed',
+                            controller: 'editor',
+                        })];
+
+                        wallClock.returns(10_000_000 + wallClockDelta);
+                        monotonicClock.returns(1_000 + 30 * 60_000 - 1);
+                        if (pruneOn === 'record') {
+                            records.unshift(journal.record(identity, createFailure()));
+                            globalRecords.unshift(recordLaunchFailureForAppHostPath(appHostProjectPath, {
+                                stage: 'build',
+                                category: 'buildFailed',
+                                controller: 'editor',
+                            }));
+                        }
+
+                        assert.deepStrictEqual(journal.readLatest(identity), records);
+                        assert.deepStrictEqual(readLatestLaunchFailures(appHostProjectPath), globalRecords);
+
+                        monotonicClock.returns(1_000 + 30 * 60_000);
+                        assert.deepStrictEqual(journal.readLatest(identity), pruneOn === 'record' ? records.slice(0, 1) : []);
+                        assert.deepStrictEqual(readLatestLaunchFailures(appHostProjectPath), pruneOn === 'record' ? globalRecords.slice(0, 1) : []);
+                    }
+                    finally {
+                        sandbox.restore();
+                    }
+                });
+            }
+        }
 
         for (const pruneOn of ['read', 'record']) {
             for (const includeLaterValidRecord of [false, true]) {

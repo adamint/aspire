@@ -205,12 +205,13 @@ public class PathNormalizerTests(ITestOutputHelper outputHelper)
         Assert.EndsWith(Path.Combine("Missing.AppHost", "Missing.AppHost.csproj"), resolved, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void ResolveToFilesystemPath_UsesEnumeratedUnicodeNormalization()
+    [Theory]
+    [InlineData("Cafe\u0301")]
+    [InlineData("\u1100\u1161")]
+    public void ResolveToFilesystemPath_UsesEnumeratedUnicodeNormalization(string decomposedName)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var testRoot = workspace.WorkspaceRoot.CreateSubdirectory("unicode-normalization");
-        var decomposedName = "Cafe\u0301";
         var composedName = decomposedName.Normalize(NormalizationForm.FormC);
         var decomposedPath = Path.Combine(testRoot.FullName, decomposedName);
         Directory.CreateDirectory(decomposedPath);

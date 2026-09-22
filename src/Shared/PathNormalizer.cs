@@ -51,7 +51,7 @@ internal static class PathNormalizer
     }
 
     /// <summary>
-    /// Resolves the casing of each path component without resolving symbolic links.
+    /// Resolves the casing and Unicode normalization of each path component without resolving symbolic links.
     /// </summary>
     /// <param name="path">An absolute path whose casing should be resolved.</param>
     /// <returns>The path with filesystem casing, or <paramref name="path"/> if it cannot be resolved.</returns>
@@ -88,11 +88,20 @@ internal static class PathNormalizer
 
             try
             {
-                if (!TryCreateCaseVariant(segment, out var caseVariant) ||
-                    !Path.Exists(Path.Combine(current, caseVariant)))
+                var normalizedSegment = segment.Normalize(NormalizationForm.FormC);
+                var normalizationVariant = segment.Equals(normalizedSegment, StringComparison.Ordinal)
+                    ? segment.Normalize(NormalizationForm.FormD)
+                    : normalizedSegment;
+                // Normalization-insensitive filesystems also alias caseless segments such as
+                // "\u1100\u1161" and "\uAC00". Probe that spelling independently of letter case.
+                var hasAlternateSpelling =
+                    (TryCreateCaseVariant(segment, out var caseVariant) &&
+                        Path.Exists(Path.Combine(current, caseVariant))) ||
+                    (!normalizationVariant.Equals(segment, StringComparison.Ordinal) &&
+                        Path.Exists(Path.Combine(current, normalizationVariant)));
+                if (!hasAlternateSpelling)
                 {
-                    // If an alternate casing does not resolve, this directory is case-sensitive for the
-                    // segment and the existing candidate already has authoritative filesystem casing.
+                    // No alternate spelling resolves, so the existing candidate is authoritative.
                     current = candidate;
                     continue;
                 }
@@ -100,7 +109,6 @@ internal static class PathNormalizer
                 string? exactMatch = null;
                 string? caseInsensitiveMatch = null;
                 string? normalizationMatch = null;
-                var normalizedSegment = segment.Normalize(NormalizationForm.FormC);
                 foreach (var entry in Directory.EnumerateFileSystemEntries(current))
                 {
                     var entryName = Path.GetFileName(entry);
@@ -125,13 +133,17 @@ internal static class PathNormalizer
                     }
                 }
 
-                current = exactMatch ?? caseInsensitiveMatch ?? normalizationMatch ?? candidate;
+                current = exactMatch ?? normalizationMatch ?? caseInsensitiveMatch ?? candidate;
             }
             catch (IOException)
             {
                 return path;
             }
             catch (UnauthorizedAccessException)
+            {
+                return path;
+            }
+            catch (ArgumentException)
             {
                 return path;
             }
@@ -266,7 +278,7 @@ internal static class PathNormalizer
                     return false;
                 }
 
-                current = exactMatch ?? caseInsensitiveMatch ?? normalizationMatch!;
+                current = exactMatch ?? normalizationMatch ?? caseInsensitiveMatch!;
             }
 
             resolvedPath = current;

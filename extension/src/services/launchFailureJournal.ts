@@ -83,6 +83,7 @@ export interface SanitizedLaunchFailure {
 
 export interface LaunchFailureRecord extends SanitizedLaunchFailure {
     readonly appHostIdentity: OpaqueAppHostIdentity;
+    /** Monotonic elapsed milliseconds, not a wall-clock timestamp. */
     readonly recordedAt: number;
     readonly sequence: number;
 }
@@ -104,8 +105,11 @@ export interface LaunchFailureInput {
 }
 
 export interface LaunchFailureJournalClock {
+    /** Returns monotonic elapsed milliseconds. */
     now(): number;
 }
+
+const monotonicClock: LaunchFailureJournalClock = { now: () => performance.now() };
 
 const launchFailureRecordedEventName = 'aspire/vscode/launchfailure/recorded' as const;
 type LaunchFailureRecordedProperties = EventProperties<typeof launchFailureRecordedEventName>;
@@ -176,7 +180,7 @@ export class LaunchFailureJournal {
     private _nextSequence = 0;
 
     constructor(
-        private readonly _clock: LaunchFailureJournalClock = { now: Date.now },
+        private readonly _clock: LaunchFailureJournalClock = monotonicClock,
         private readonly _onRecordAccepted: LaunchFailureRecordAccepted = ignoreAcceptedLaunchFailure) {
     }
 
@@ -229,7 +233,7 @@ export class LaunchFailureJournal {
 
     private pruneExpired(): void {
         const oldestAllowed = this._clock.now() - launchFailureTtlMs;
-        // Clock rollback can make timestamps differ from insertion order. Scan every record,
+        // Scan every record defensively even if an injected clock returns out-of-order values,
         // removing backwards so retained failures keep their original ordering.
         for (let index = this._records.length - 1; index >= 0; index--) {
             if (this._records[index].recordedAt <= oldestAllowed) {
@@ -270,7 +274,7 @@ export function sendLaunchFailureRecordedTelemetry(
 }
 
 const defaultLaunchFailureJournal = new LaunchFailureJournal(
-    { now: Date.now },
+    monotonicClock,
     sendLaunchFailureRecordedTelemetry);
 
 export function recordLaunchFailureForAppHostPath(appHostPath: string, input: LaunchFailureInput): LaunchFailureRecord {

@@ -105,6 +105,8 @@ Multi-root lifecycle tests must round-trip returned `appHostPath` selectors thro
 
 Start/stop confirmations expire against monotonic time. Expiry regressions must vary wall time independently, checking just before and exactly at the deadline for both tools.
 
+The launch-failure journal also uses monotonic time for its 30-minute window. Cover reads and writes, including the production singleton, when testing clock changes. CLI filesystem normalization coverage must include caseless Unicode names such as Hangul, not only names with upper/lowercase variants.
+
 The CLI's shared resource-wait budget is covered by `ResourceWaitServiceTests` and `WaitForResourcesToolTests` under `tests/Aspire.Cli.Tests/`. Clock-jump regressions must vary UTC independently of monotonic elapsed time; advancing both clocks together does not test this failure.
 
 ### End-to-end tests
