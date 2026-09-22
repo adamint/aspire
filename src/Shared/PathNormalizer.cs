@@ -133,7 +133,16 @@ internal static class PathNormalizer
                     }
                 }
 
-                current = exactMatch ?? normalizationMatch ?? caseInsensitiveMatch ?? candidate;
+                // Case and normalization aliases can name different entries on filesystems
+                // where only one of those transformations is insensitive. Do not guess.
+                if (exactMatch is null && caseInsensitiveMatch is not null &&
+                    normalizationMatch is not null &&
+                    !caseInsensitiveMatch.Equals(normalizationMatch, StringComparison.Ordinal))
+                {
+                    return path;
+                }
+
+                current = exactMatch ?? caseInsensitiveMatch ?? normalizationMatch ?? candidate;
             }
             catch (IOException)
             {
@@ -278,7 +287,16 @@ internal static class PathNormalizer
                     return false;
                 }
 
-                current = exactMatch ?? normalizationMatch ?? caseInsensitiveMatch!;
+                // Preserve the distinction between case aliases and normalization aliases.
+                // The existence probe cannot tell which of two conflicting entries is selected.
+                if (exactMatch is null && caseInsensitiveMatch is not null &&
+                    normalizationMatch is not null &&
+                    !caseInsensitiveMatch.Equals(normalizationMatch, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                current = exactMatch ?? caseInsensitiveMatch ?? normalizationMatch!;
             }
 
             resolvedPath = current;

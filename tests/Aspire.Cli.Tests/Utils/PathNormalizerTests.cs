@@ -233,6 +233,32 @@ public class PathNormalizerTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public void ResolveToFilesystemPath_DoesNotChooseBetweenConflictingCaseAndNormalizationMatches()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var testRoot = workspace.WorkspaceRoot.CreateSubdirectory("normalization-collision");
+        var caseMatch = testRoot.CreateSubdirectory("CAF\u00C9");
+        var normalizationMatch = Path.Combine(testRoot.FullName, "Cafe\u0301");
+        Assert.SkipWhen(
+            Directory.Exists(normalizationMatch),
+            "The filesystem aliases both case and normalization, so the two entries cannot coexist.");
+        Directory.CreateDirectory(normalizationMatch);
+
+        var candidate = Path.Combine(testRoot.FullName, "Caf\u00E9");
+        Assert.SkipUnless(
+            Directory.Exists(candidate),
+            "The filesystem does not resolve either alternate spelling.");
+
+        Assert.Equal(
+            PathNormalizer.ResolveSymlinks(candidate),
+            PathNormalizer.ResolveToFilesystemPath(candidate));
+        Assert.False(PathNormalizer.TryResolveToFilesystemPath(candidate, out var unresolvedPath));
+        Assert.Equal(candidate, unresolvedPath);
+        Assert.True(PathNormalizer.TryResolveToFilesystemPath(caseMatch.FullName, out _));
+        Assert.True(PathNormalizer.TryResolveToFilesystemPath(normalizationMatch, out _));
+    }
+
+    [Fact]
     public void ResolveToFilesystemPath_UsesUppercaseWindowsDriveLetter()
     {
         Assert.SkipWhen(!OperatingSystem.IsWindows(), "Drive-letter casing only applies on Windows.");
