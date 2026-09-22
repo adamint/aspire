@@ -103,6 +103,8 @@ Editor-assistance regressions live in `editorAssistanceTools.test.ts`; shared or
 
 Multi-root lifecycle tests must round-trip returned `appHostPath` selectors through subsequent operations. MCP registration tests must cover ownership changes between nested workspace folders while preserving labels and definitions for unaffected pins.
 
+Start/stop confirmations expire against monotonic time. Expiry regressions must vary wall time independently, checking just before and exactly at the deadline for both tools.
+
 The CLI's shared resource-wait budget is covered by `ResourceWaitServiceTests` and `WaitForResourcesToolTests` under `tests/Aspire.Cli.Tests/`. Clock-jump regressions must vary UTC independently of monotonic elapsed time; advancing both clocks together does not test this failure.
 
 ### End-to-end tests

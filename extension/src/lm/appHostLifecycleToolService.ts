@@ -36,6 +36,7 @@ interface PreparedLifecycleAction {
     readonly inputKey: string;
     readonly identity: AppHostTargetIdentity;
     readonly isolated?: boolean;
+    /** Monotonic deadline so wall-clock adjustments cannot extend or shorten consent. */
     readonly expiresAt: number;
 }
 
@@ -119,7 +120,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             tool: aspireAppHostStopToolName,
             inputKey: getStopInputKey(input),
             identity: resolution.target.identity,
-            expiresAt: Date.now() + preparedActionLifetimeMs,
+            expiresAt: performance.now() + preparedActionLifetimeMs,
         });
         return resolution.target.displayPath;
     }
@@ -156,7 +157,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             inputKey: getStartInputKey(input),
             identity: resolution.target.identity,
             isolated,
-            expiresAt: Date.now() + preparedActionLifetimeMs,
+            expiresAt: performance.now() + preparedActionLifetimeMs,
         });
         return { displayPath: resolution.target.displayPath, isolated };
     }
@@ -479,7 +480,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
     }
 
     private prunePreparedActions(): void {
-        const now = Date.now();
+        const now = performance.now();
         for (let index = this._preparedActions.length - 1; index >= 0; index--) {
             if (this._preparedActions[index].expiresAt <= now) {
                 this._preparedActions.splice(index, 1);

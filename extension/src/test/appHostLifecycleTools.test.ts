@@ -2061,14 +2061,14 @@ suite('AppHost lifecycle language model tools', () => {
                     inputKey,
                     identity: 'apphost-a',
                     isolated: false,
-                    expiresAt: Date.now() + 60_000,
+                    expiresAt: performance.now() + 60_000,
                 },
                 {
                     tool: aspireAppHostStartToolName,
                     inputKey,
                     identity: 'apphost-b',
                     isolated: false,
-                    expiresAt: Date.now() + 60_000,
+                    expiresAt: performance.now() + 60_000,
                 });
             const tool = new AppHostStartLanguageModelTool(service);
 
@@ -2234,8 +2234,46 @@ suite('AppHost lifecycle language model tools', () => {
             assert.strictEqual(launchService.launchCalls.length, 1);
         });
 
+        for (const operation of ['start', 'stop'] as const) {
+            for (const wallClockDelta of [-600_000, 600_000]) {
+                for (const elapsedMs of [299_999, 300_000]) {
+                    const expired = elapsedMs === 300_000;
+                    test(`${operation} confirmation ${expired ? 'expires' : 'remains valid'} when the wall clock changes by ${wallClockDelta}ms after ${elapsedMs}ms`, async () => {
+                        const sandbox = sinon.createSandbox();
+                        const cancellation = new vscode.CancellationTokenSource();
+                        const input = { appHostPath: 'AppHost/AppHost.csproj', mode: 'run' } as const;
+                        const stopInput = { appHostPath: input.appHostPath };
+                        try {
+                            const wallClock = sandbox.stub(Date, 'now').returns(1_000_000);
+                            const monotonicClock = sandbox.stub(performance, 'now').returns(1_000);
+                            if (operation === 'start') {
+                                await service.describeStartTarget(input, cancellation.token);
+                            }
+                            else {
+                                await service.prepareStopTarget(stopInput, cancellation.token);
+                            }
+
+                            wallClock.returns(1_000_000 + wallClockDelta);
+                            monotonicClock.returns(1_000 + elapsedMs);
+                            const result = operation === 'start'
+                                ? await service.startConfirmed(input, cancellation.token)
+                                : await service.stopConfirmed(stopInput, cancellation.token);
+
+                            assert.strictEqual(result.outcome, expired ? 'failed' : operation === 'start' ? 'started' : 'notRunning');
+                            assert.strictEqual(launchService.launchCalls.length, !expired && operation === 'start' ? 1 : 0);
+                            assert.strictEqual(launchService.stopCalls.length, !expired && operation === 'stop' ? 1 : 0);
+                        }
+                        finally {
+                            sandbox.restore();
+                            cancellation.dispose();
+                        }
+                    });
+                }
+            }
+        }
+
         test('rejects an expired prepared action', async () => {
-            const now = sinon.stub(Date, 'now').returns(1_000);
+            const now = sinon.stub(performance, 'now').returns(1_000);
             const tool = new AppHostStartLanguageModelTool(service);
             const token = new vscode.CancellationTokenSource().token;
             const input = { appHostPath: 'AppHost/AppHost.csproj', mode: 'run' } as const;
