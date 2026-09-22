@@ -10,7 +10,7 @@ import {
   settingsLabel,
 } from "../../loc/strings";
 import { describeStopFailure, startStop, stopSessionInBackground } from "./stopHelpers";
-import { normalizeLaunchFailure, type LaunchFailureMode, type SanitizedLaunchFailure } from "../../services/launchFailureJournal";
+import { normalizeLaunchFailure, type LaunchFailureMode, type SanitizedLaunchFailure } from "../../services/launchFailureStore";
 
 export type DashboardLaunchBehavior = 'none' | 'notification' | DashboardBrowserType;
 export type DashboardBrowserType = 'openExternalBrowser' | 'integratedBrowser' | 'debugChrome' | 'debugEdge' | 'debugFirefox';
@@ -471,7 +471,7 @@ export class DashboardLauncher implements vscode.Disposable {
     debugType: 'pwa-chrome' | 'pwa-msedge' | 'firefox'): void {
     void this.launchDebugBrowser(url, debugType).catch(() => {
       // Debug-adapter errors can contain the full Dashboard URL, including its login token.
-      // The sanitized launch journal already records a bounded failure category.
+      // The sanitized launch store already records a bounded failure category.
       extensionLogOutputChannel.warn(`Failed to launch dashboard debug session (${debugType}).`);
     });
   }

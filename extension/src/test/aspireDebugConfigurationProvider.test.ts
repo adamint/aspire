@@ -1,3 +1,4 @@
+import { captureLaunchFailureWrites } from './helpers/editorAssistanceTestSupport';
 /// <reference types="mocha" />
 
 import * as assert from 'assert';
@@ -11,10 +12,8 @@ import { appHostLaunchReservationIdConfigKey, appHostLaunchTokenConfigKey, appHo
 import { isAspireDebugConfigurationExtensionOwned, markAspireDebugConfigurationAsExtensionOwned, markAspireDebugConfigurationWithResolvedCliPath, markAspireDebugConfigurationWithResolvedCliPathScope, stripAspireDebugConfigurationProviderInternalProperties } from '../debugger/AspireDebugConfigurationProviderInternal';
 import type { AspireExtendedDebugConfiguration } from '../dcp/types';
 import {
-    __resetLaunchFailureJournalForTests,
-    readLatestLaunchFailures,
-    type LaunchFailureRecord,
-} from '../services/launchFailureJournal';
+    resetLaunchFailureStore,
+} from '../services/launchFailureStore';
 import { appHostOperationAlreadyInProgress, defaultConfigurationName, defaultConfigurationNameForWorkspaceFolder } from '../loc/strings';
 import * as cliPathModule from '../utils/cliPath';
 import { getCliPathTargetKey, windowCliPathTarget, workspaceFolderCliPathTarget } from '../utils/cliPathVariables';
@@ -154,6 +153,7 @@ class RecordingLaunchReservation implements ExternalLaunchReservation {
 }
 
 suite('AspireDebugConfigurationProvider', () => {
+    let failureWrites: ReturnType<typeof captureLaunchFailureWrites>;
     let tempDir: string;
     let sandbox: sinon.SinonSandbox;
     let launchReservation: RecordingLaunchReservation;
@@ -163,8 +163,9 @@ suite('AspireDebugConfigurationProvider', () => {
 
     setup(() => {
         __resetAppHostIdentityRegistryForTests();
-        __resetLaunchFailureJournalForTests();
+        resetLaunchFailureStore();
         sandbox = sinon.createSandbox();
+        failureWrites = captureLaunchFailureWrites(sandbox);
         launchReservation = new RecordingLaunchReservation();
         workspaceState = new TestMemento();
         tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-debug-configuration-provider-'));
@@ -177,7 +178,7 @@ suite('AspireDebugConfigurationProvider', () => {
     });
 
     teardown(() => {
-        __resetLaunchFailureJournalForTests();
+        resetLaunchFailureStore();
         __resetAppHostIdentityRegistryForTests();
         sandbox.restore();
         removeDirectorySafely(tempDir);
@@ -545,7 +546,7 @@ suite('AspireDebugConfigurationProvider', () => {
         }]);
     });
 
-    test('does not journal a directory-scoped reservation denial', async () => {
+    test('does not store a directory-scoped reservation denial', async () => {
         const folder = createWorkspaceFolder(path.join(tempDir, 'workspace'));
         launchReservation.claimedByLifecycle = true;
         const message = sandbox.stub(vscode.window, 'showInformationMessage').resolves(undefined);
@@ -564,7 +565,7 @@ suite('AspireDebugConfigurationProvider', () => {
         assert.strictEqual(message.calledOnce, true);
         assert.deepStrictEqual(launchReservation.reserved, [folder.uri.fsPath]);
         assert.deepStrictEqual(launchReservation.directoryScoped, [folder.uri.fsPath]);
-        assert.deepStrictEqual(readLatestLaunchFailures(), []);
+        assert.deepStrictEqual(failureWrites.read(), []);
     });
 
     test('records validation when a lifecycle-owned launch already claimed the project file', async () => {
@@ -586,7 +587,7 @@ suite('AspireDebugConfigurationProvider', () => {
 
         assert.strictEqual(config, undefined);
         assert.strictEqual(message.calledOnce, true);
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+        assert.deepStrictEqual(failureWrites.read(appHostPath)[0], {
             stage: 'validation',
             category: 'invalidConfiguration',
             controller: 'editor',
@@ -612,7 +613,7 @@ suite('AspireDebugConfigurationProvider', () => {
 
         assert.strictEqual(config, undefined);
         assert.strictEqual(message.calledOnce, true);
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+        assert.deepStrictEqual(failureWrites.read(appHostPath)[0], {
             stage: 'validation',
             category: 'invalidConfiguration',
             controller: 'editor',
@@ -1732,7 +1733,7 @@ suite('AspireDebugConfigurationProvider', () => {
         const configs = await provider.provideDebugConfigurations(folder);
 
         assert.strictEqual(getOnlyConfiguration(configs).program, folder.uri.fsPath);
-        assert.deepStrictEqual(readLatestLaunchFailures(), []);
+        assert.deepStrictEqual(failureWrites.read(), []);
     });
 
     test('provides default dynamic launch config when discovery fails', async () => {
@@ -1756,7 +1757,7 @@ suite('AspireDebugConfigurationProvider', () => {
         assert.strictEqual(getOnlyConfiguration(configs).program, folder.uri.fsPath);
     });
 
-    test('continues with an existing exact target without journaling a recoverable discovery failure', async () => {
+    test('continues with an existing exact target without recording a recoverable discovery failure', async () => {
         const programPath = path.join(tempDir, 'AppHost', 'Program.cs');
         fs.mkdirSync(path.dirname(programPath), { recursive: true });
         fs.writeFileSync(programPath, 'var builder = DistributedApplication.CreateBuilder(args);');
@@ -1770,10 +1771,10 @@ suite('AspireDebugConfigurationProvider', () => {
         });
 
         assert.strictEqual(config?.program, programPath);
-        assert.deepStrictEqual(readLatestLaunchFailures(programPath), []);
+        assert.deepStrictEqual(failureWrites.read(programPath), []);
     });
 
-    test('does not journal a recoverable discovery failure across provider passes', async () => {
+    test('does not store a recoverable discovery failure across provider passes', async () => {
         const programPath = path.join(tempDir, 'AppHost', 'Program.cs');
         fs.mkdirSync(path.dirname(programPath), { recursive: true });
         fs.writeFileSync(programPath, 'var builder = DistributedApplication.CreateBuilder(args);');
@@ -1799,7 +1800,7 @@ suite('AspireDebugConfigurationProvider', () => {
             undefined,
             { ...initialResult } as vscode.DebugConfiguration);
 
-        assert.strictEqual(readLatestLaunchFailures(programPath).length, 0);
+        assert.strictEqual(failureWrites.read(programPath).length, 0);
         assert.ok(dynamicResult);
         stripAspireDebugConfigurationProviderInternalProperties(dynamicResult);
         assert.deepStrictEqual(
@@ -1822,7 +1823,7 @@ suite('AspireDebugConfigurationProvider', () => {
         });
 
         assert.strictEqual(config, undefined);
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(programPath)[0]), {
+        assert.deepStrictEqual(failureWrites.read(programPath)[0], {
             stage: 'discovery',
             category: 'canceled',
             controller: 'editor',
@@ -1847,7 +1848,7 @@ suite('AspireDebugConfigurationProvider', () => {
         });
 
         assert.strictEqual(config, undefined);
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(programPath)[0]), {
+        assert.deepStrictEqual(failureWrites.read(programPath)[0], {
             stage: 'discovery',
             category: 'canceled',
             controller: 'editor',
@@ -1869,7 +1870,7 @@ suite('AspireDebugConfigurationProvider', () => {
         });
 
         assert.strictEqual(config, undefined);
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(programPath)[0]), {
+        assert.deepStrictEqual(failureWrites.read(programPath)[0], {
             stage: 'discovery',
             category: 'unknown',
             controller: 'editor',
@@ -1912,7 +1913,7 @@ suite('AspireDebugConfigurationProvider', () => {
         });
 
         assert.strictEqual(config, undefined);
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(programPath)[0]), {
+        assert.deepStrictEqual(failureWrites.read(programPath)[0], {
             stage: 'discovery',
             category: 'unknown',
             controller: 'editor',
@@ -1934,7 +1935,7 @@ suite('AspireDebugConfigurationProvider', () => {
         });
 
         assert.strictEqual(config, undefined);
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(programPath)[0]), {
+        assert.deepStrictEqual(failureWrites.read(programPath)[0], {
             stage: 'discovery',
             category: 'unknown',
             controller: 'editor',
@@ -2284,16 +2285,4 @@ function createFailingAppHostDiscoveryService(error: Error = new Error('discover
             throw error;
         },
     } as unknown as AppHostDiscoveryService;
-}
-
-function getFailureDetails(record: LaunchFailureRecord | undefined) {
-    assert.ok(record);
-    return {
-        stage: record.stage,
-        category: record.category,
-        controller: record.controller,
-        mode: record.mode,
-        providerKind: record.providerKind,
-        exitCodeBucket: record.exitCodeBucket,
-    };
 }

@@ -2,6 +2,7 @@ import * as assert from 'assert';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import type { SinonSandbox } from 'sinon';
 import * as vscode from 'vscode';
 
 import { type AspireOperationKind } from '../../dcp/types';
@@ -12,7 +13,26 @@ import {
     type AppHostLifecycleRunningAppHost,
 } from '../../lm/appHostLifecycleToolContracts';
 import { type CandidateAppHostDisplayInfo } from '../../utils/appHostDiscovery';
-import { compareAppHostIdentity, type OpaqueAppHostIdentity } from '../../utils/appHostIdentity';
+import { compareAppHostIdentity, getOrCreateIdentityForCurrentAppHostTarget, type OpaqueAppHostIdentity } from '../../utils/appHostIdentity';
+import { LaunchFailureStore } from '../../services/launchFailureStore';
+
+// A latest-value store hides duplicate captures. Observe writes separately so producer
+// tests still prove that one failed launch is recorded once.
+export function captureLaunchFailureWrites(sandbox: SinonSandbox) {
+    const writes = sandbox.spy(LaunchFailureStore.prototype, 'record');
+    return {
+        read(appHostPath?: string) {
+            const identity = appHostPath === undefined
+                ? undefined
+                : getOrCreateIdentityForCurrentAppHostTarget(appHostPath);
+            return writes.getCalls()
+                .filter(call => identity === undefined || call.args[0] === identity)
+                .map(call => ({ ...call.args[1] }))
+                .reverse();
+        },
+        reset: () => writes.resetHistory(),
+    };
+}
 
 interface TestEditorSession {
     readonly appHostPath: string | undefined;

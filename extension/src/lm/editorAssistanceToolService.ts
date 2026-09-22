@@ -370,13 +370,13 @@ export class EditorAssistanceToolService {
         }
 
         try {
-            // The journal answers about whichever AppHost the path it is given resolves to, so it
+            // The store answers about whichever AppHost the path it is given resolves to, so it
             // is given the physical AppHost this target was bound to rather than the selector. The
-            // journal's own path-to-identity resolution and the freshness check below are separate
+            // store's own path-to-identity resolution and the freshness check below are separate
             // filesystem calls, and another process can repoint an alias between them and repoint
             // it back, which would publish one AppHost's recorded failure - or its recorded
             // silence - under an identity that never named it.
-            const [failure] = this._dependencies.readLatestLaunchFailures(preflight.target.canonicalPath);
+            const failure = this._dependencies.readLatestLaunchFailure(preflight.target.canonicalPath);
             throwIfCanceled(token);
             // The target was resolved before that read across an asynchronous step. Revalidating
             // here - after the read and before either answer is assembled, with nothing awaited in

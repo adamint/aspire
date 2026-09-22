@@ -95,7 +95,7 @@ export interface TelemetryEventSchema {
     };
     'aspire/vscode/launchfailure/recorded': {
         properties: 'stage' | 'category' | 'controller' | 'mode' | 'provider_kind' | 'exit_code_bucket';
-        measurements: 'journal_size';
+        measurements: 'store_size';
     };
     'aspire/vscode/cli/availability': {
         properties: 'available' | 'source' | 'operation';

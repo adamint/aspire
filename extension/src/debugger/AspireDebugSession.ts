@@ -32,7 +32,7 @@ import { AppHostLogOutputCoordinator } from "./appHostLogOutput";
 import type { AppHostLogEntry } from "./appHostLogOutput";
 import { getAppHostTargetVersion } from "../utils/appHostTargetVersion";
 import type { AspireDebugConsoleOutputEvent } from "../types/extensionApi";
-import { getLaunchFailureProviderKindForAppHostPath, recordLaunchFailureForAppHostIdentity, recordLaunchFailureForAppHostPath, recordSanitizedLaunchFailureForAppHostIdentity, recordSanitizedLaunchFailureForAppHostPath, type LaunchFailureMode, type SanitizedLaunchFailure } from "../services/launchFailureJournal";
+import { getLaunchFailureMode, getLaunchFailureProviderKindForAppHostPath, recordLaunchFailureForAppHostIdentity, recordLaunchFailureForAppHostPath, recordSanitizedLaunchFailureForAppHostIdentity, recordSanitizedLaunchFailureForAppHostPath, type LaunchFailureMode, type SanitizedLaunchFailure } from "../services/launchFailureStore";
 import { appHostLaunchTokenConfigKey, appHostRestartSourceSessionIdConfigKey, appHostSelectionOriginConfigKey, appHostTelemetryTargetPathConfigKey } from "./AspireDebugConfigurationMetadata";
 import { markAspireDebugConfigurationAsExtensionOwned, markAspireDebugConfigurationWithResolvedCliPath, markAspireDebugConfigurationWithResolvedCliPathScope } from "./AspireDebugConfigurationProviderInternal";
 import { getAppHostLaunchProfileOptions, getRootLaunchProfileCliArg } from "../utils/launchProfile";
@@ -2236,17 +2236,6 @@ function getEditorResourceSessionMode(noDebug: unknown): EditorResourceSessionMo
     : noDebug === false
       ? 'debug'
       : 'other';
-}
-
-function getLaunchFailureMode(operationKind: AspireOperationKind, noDebug: boolean): LaunchFailureMode {
-  if (operationKind === 'deploy' || operationKind === 'publish') {
-    return operationKind;
-  }
-  if (operationKind === 'run') {
-    return noDebug ? 'run' : 'debug';
-  }
-
-  return 'other';
 }
 
 export function buildAspireCommandArgs(command: string, commandArgs: string[], extensionArgs: string[], step?: string): string[] {

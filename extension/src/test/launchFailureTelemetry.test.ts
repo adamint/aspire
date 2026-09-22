@@ -1,11 +1,11 @@
 import * as assert from 'assert';
 
 import {
-    LaunchFailureJournal,
+    LaunchFailureStore,
     sendLaunchFailureRecordedTelemetry,
     type LaunchFailureRecordedTelemetryEvent,
     type SanitizedLaunchFailure,
-} from '../services/launchFailureJournal';
+} from '../services/launchFailureStore';
 import { type OpaqueAppHostIdentity } from '../utils/appHostIdentity';
 
 suite('launch failure telemetry', () => {
@@ -57,16 +57,16 @@ suite('launch failure telemetry', () => {
                 provider_kind: 'node',
                 exit_code_bucket: 'other',
             },
-            measurements: { journal_size: 7 },
+            measurements: { store_size: 7 },
         }]);
         assertTelemetryOmits(events, sentinels);
     });
 
     test('emits once after an accepted write with the maintained global size', () => {
-        const accepted: Array<{ failure: SanitizedLaunchFailure; journalSize: number }> = [];
-        const journal = new LaunchFailureJournal(
+        const accepted: Array<{ failure: SanitizedLaunchFailure; storeSize: number }> = [];
+        const store = new LaunchFailureStore(
             { now: () => 10_000 },
-            (failure, journalSize) => accepted.push({ failure, journalSize }));
+            (failure, storeSize) => accepted.push({ failure, storeSize }));
         const failure: SanitizedLaunchFailure = {
             stage: 'build',
             category: 'buildFailed',
@@ -77,19 +77,73 @@ suite('launch failure telemetry', () => {
         };
 
         for (let index = 1; index <= 51; index++) {
-            journal.record(`apphost-${index}` as OpaqueAppHostIdentity, failure);
+            store.record(`apphost-${index}` as OpaqueAppHostIdentity, failure);
         }
 
         assert.strictEqual(accepted.length, 51);
         assert.deepStrictEqual(accepted[50], {
             failure,
-            journalSize: 50,
+            storeSize: 50,
         });
 
-        journal.readLatest();
-        journal.readLatest('apphost-51' as OpaqueAppHostIdentity);
-        journal.clear();
+        store.read('apphost-51' as OpaqueAppHostIdentity);
+        store.clear();
         assert.strictEqual(accepted.length, 51, 'Reads, capacity maintenance, and clear must not double-emit.');
+    });
+
+    test('a replacement emits a new event without increasing retained AppHost count', () => {
+        const accepted: Array<{ failure: SanitizedLaunchFailure; storeSize: number }> = [];
+        const store = new LaunchFailureStore(
+            undefined,
+            (failure, storeSize) => accepted.push({ failure, storeSize }));
+        const first: SanitizedLaunchFailure = {
+            stage: 'build',
+            category: 'buildFailed',
+            controller: 'cli',
+            mode: 'run',
+            providerKind: 'dotnet',
+            exitCodeBucket: 'one',
+        };
+        const latest: SanitizedLaunchFailure = { ...first, stage: 'cliLaunch', category: 'processExited' };
+        const identity = 'apphost-1' as OpaqueAppHostIdentity;
+        store.record(identity, first);
+        store.record(identity, latest);
+
+        assert.deepStrictEqual(accepted, [
+            { failure: first, storeSize: 1 },
+            { failure: latest, storeSize: 1 },
+        ]);
+        assert.deepStrictEqual(store.read(identity), latest);
+    });
+
+    test('telemetry independently revalidates unsafe fields and bounds its measurement', () => {
+        const failure = {
+            stage: 'unsafe-stage',
+            category: 'unsafe-category',
+            controller: 'unsafe-controller',
+            mode: 'unsafe-mode',
+            providerKind: 'unsafe-provider',
+            exitCodeBucket: 'unsafe-exit-code',
+        } as unknown as SanitizedLaunchFailure;
+
+        for (const [size, expected] of [[-1, 0], [3.9, 3], [51, 50], [NaN, 0], [Infinity, 0]]) {
+            const events: LaunchFailureRecordedTelemetryEvent[] = [];
+            sendLaunchFailureRecordedTelemetry(failure, size, (eventName, properties, measurements) => {
+                events.push({ eventName, properties, measurements });
+            });
+            assert.deepStrictEqual(events, [{
+                eventName: 'aspire/vscode/launchfailure/recorded',
+                properties: {
+                    stage: 'debugSession',
+                    category: 'unknown',
+                    controller: 'editor',
+                    mode: 'other',
+                    provider_kind: 'other',
+                    exit_code_bucket: 'none',
+                },
+                measurements: { store_size: expected },
+            }]);
+        }
     });
 });
 

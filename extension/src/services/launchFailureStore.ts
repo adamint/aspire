@@ -39,6 +39,17 @@ export type LaunchFailureController = typeof launchFailureControllers[number];
 export const launchFailureModes = Object.freeze(['run', 'debug', 'deploy', 'publish', 'other'] as const);
 export type LaunchFailureMode = typeof launchFailureModes[number];
 
+export function getLaunchFailureMode(command: string | undefined, noDebug: boolean): LaunchFailureMode {
+    if (command === 'deploy' || command === 'publish') {
+        return command;
+    }
+    if (command === 'run') {
+        return noDebug ? 'run' : 'debug';
+    }
+
+    return 'other';
+}
+
 export const launchFailureProviderKinds = Object.freeze([
     'dotnet',
     'node',
@@ -81,13 +92,6 @@ export interface SanitizedLaunchFailure {
     readonly exitCodeBucket: LaunchFailureExitCodeBucket;
 }
 
-export interface LaunchFailureRecord extends SanitizedLaunchFailure {
-    readonly appHostIdentity: OpaqueAppHostIdentity;
-    /** Monotonic elapsed milliseconds, not a wall-clock timestamp. */
-    readonly recordedAt: number;
-    readonly sequence: number;
-}
-
 export interface LaunchFailureInput {
     readonly stage: LaunchFailureStage;
     readonly category?: LaunchFailureCategory | unknown;
@@ -104,12 +108,12 @@ export interface LaunchFailureInput {
     readonly timedOut?: boolean;
 }
 
-export interface LaunchFailureJournalClock {
+export interface LaunchFailureClock {
     /** Returns monotonic elapsed milliseconds. */
     now(): number;
 }
 
-const monotonicClock: LaunchFailureJournalClock = { now: () => performance.now() };
+const monotonicClock: LaunchFailureClock = { now: () => performance.now() };
 
 const launchFailureRecordedEventName = 'aspire/vscode/launchfailure/recorded' as const;
 type LaunchFailureRecordedProperties = EventProperties<typeof launchFailureRecordedEventName>;
@@ -123,11 +127,10 @@ export interface LaunchFailureRecordedTelemetryEvent {
 
 export type LaunchFailureRecordAccepted = (
     failure: SanitizedLaunchFailure,
-    journalSize: number) => void;
+    storeSize: number) => void;
 
 const ignoreAcceptedLaunchFailure: LaunchFailureRecordAccepted = () => undefined;
 const launchFailureTtlMs = 30 * 60 * 1_000;
-const maxFailuresPerAppHost = 5;
 const maxFailuresGlobally = 50;
 const opaqueAppHostIdentityPattern = /^apphost-[1-9]\d*$/;
 
@@ -175,149 +178,133 @@ export function normalizeLaunchFailure(input: LaunchFailureInput): SanitizedLaun
     };
 }
 
-export class LaunchFailureJournal {
-    private readonly _records: LaunchFailureRecord[] = [];
-    private _nextSequence = 0;
+export class LaunchFailureStore {
+    private readonly _failures = new Map<OpaqueAppHostIdentity, {
+        readonly failure: SanitizedLaunchFailure;
+        readonly expiresAt: number;
+    }>();
 
     constructor(
-        private readonly _clock: LaunchFailureJournalClock = monotonicClock,
+        private readonly _clock: LaunchFailureClock = monotonicClock,
         private readonly _onRecordAccepted: LaunchFailureRecordAccepted = ignoreAcceptedLaunchFailure) {
     }
 
-    record(appHostIdentity: OpaqueAppHostIdentity, failure: SanitizedLaunchFailure): LaunchFailureRecord {
-        if (!opaqueAppHostIdentityPattern.test(appHostIdentity)) {
-            throw new TypeError('Launch failure journal requires an opaque AppHost identity.');
+    record(appHostIdentity: OpaqueAppHostIdentity, failure: SanitizedLaunchFailure): void {
+        if (typeof appHostIdentity !== 'string' || !opaqueAppHostIdentityPattern.test(appHostIdentity)) {
+            throw new TypeError('Launch failure store requires an opaque AppHost identity.');
         }
 
         this.pruneExpired();
-        const record: LaunchFailureRecord = {
-            appHostIdentity,
-            stage: stages.has(failure.stage) ? failure.stage : 'debugSession',
-            category: categories.has(failure.category) ? failure.category : 'unknown',
-            controller: controllers.has(failure.controller) ? failure.controller : 'editor',
-            mode: normalizeMode(failure.mode),
-            providerKind: normalizeProviderKind(failure.providerKind),
-            exitCodeBucket: exitCodeBuckets.has(failure.exitCodeBucket) ? failure.exitCodeBucket : 'none',
-            recordedAt: this._clock.now(),
-            sequence: ++this._nextSequence,
-        };
-        this._records.push(record);
+        const sanitized = toSanitizedLaunchFailure(failure);
+        // Replacing an entry also refreshes its write-order position for global eviction.
+        this._failures.delete(appHostIdentity);
+        this._failures.set(appHostIdentity, {
+            failure: sanitized,
+            expiresAt: this._clock.now() + launchFailureTtlMs,
+        });
 
-        const appHostRecords = this._records.filter(candidate => candidate.appHostIdentity === appHostIdentity);
-        if (appHostRecords.length > maxFailuresPerAppHost) {
-            const oldest = appHostRecords[0];
-            this._records.splice(this._records.indexOf(oldest), 1);
+        if (this._failures.size > maxFailuresGlobally) {
+            const oldest = this._failures.keys().next();
+            if (!oldest.done) {
+                this._failures.delete(oldest.value);
+            }
         }
 
-        while (this._records.length > maxFailuresGlobally) {
-            this._records.shift();
-        }
-
-        this._onRecordAccepted(toSanitizedLaunchFailure(record), this._records.length);
-        return { ...record };
+        this._onRecordAccepted({ ...sanitized }, this._failures.size);
     }
 
-    readLatest(appHostIdentity?: OpaqueAppHostIdentity): readonly LaunchFailureRecord[] {
+    read(appHostIdentity: OpaqueAppHostIdentity): SanitizedLaunchFailure | undefined {
         this.pruneExpired();
-        const records = appHostIdentity
-            ? this._records.filter(record => record.appHostIdentity === appHostIdentity)
-            : this._records;
+        const entry = this._failures.get(appHostIdentity);
 
-        return records.slice().reverse().map(record => ({ ...record }));
+        return entry ? { ...entry.failure } : undefined;
     }
 
     clear(): void {
-        this._records.splice(0);
-        this._nextSequence = 0;
+        this._failures.clear();
     }
 
     private pruneExpired(): void {
-        const oldestAllowed = this._clock.now() - launchFailureTtlMs;
-        // Scan every record defensively even if an injected clock returns out-of-order values,
-        // removing backwards so retained failures keep their original ordering.
-        for (let index = this._records.length - 1; index >= 0; index--) {
-            if (this._records[index].recordedAt <= oldestAllowed) {
-                this._records.splice(index, 1);
+        const now = this._clock.now();
+        for (const [identity, entry] of this._failures) {
+            if (entry.expiresAt <= now) {
+                this._failures.delete(identity);
             }
         }
     }
 }
 
 /**
- * Emits the finite launch-failure projection accepted by the in-memory journal.
+ * Emits the finite launch-failure projection accepted by the in-memory store.
  *
- * The journal calls this only after TTL and capacity maintenance. AppHost identity,
- * timestamps, sequence numbers, and all raw capture input stay outside the callback.
+ * The store calls this only after TTL and capacity maintenance. AppHost identity,
+ * expiry metadata, and all raw capture input stay outside the callback.
  */
 export function sendLaunchFailureRecordedTelemetry(
     failure: SanitizedLaunchFailure,
-    journalSize: number,
+    storeSize: number,
     sendEvent: (
         eventName: typeof launchFailureRecordedEventName,
         properties: LaunchFailureRecordedProperties,
         measurements: LaunchFailureRecordedMeasurements) => void = sendTelemetryEvent): void {
+    const sanitized = toSanitizedLaunchFailure(failure);
     sendEvent(
         launchFailureRecordedEventName,
         {
-            stage: stages.has(failure.stage) ? failure.stage : 'debugSession',
-            category: categories.has(failure.category) ? failure.category : 'unknown',
-            controller: controllers.has(failure.controller) ? failure.controller : 'editor',
-            mode: normalizeMode(failure.mode),
-            provider_kind: normalizeProviderKind(failure.providerKind),
-            exit_code_bucket: exitCodeBuckets.has(failure.exitCodeBucket) ? failure.exitCodeBucket : 'none',
+            stage: sanitized.stage,
+            category: sanitized.category,
+            controller: sanitized.controller,
+            mode: sanitized.mode,
+            provider_kind: sanitized.providerKind,
+            exit_code_bucket: sanitized.exitCodeBucket,
         },
         {
-            journal_size: Number.isFinite(journalSize)
-                ? Math.min(maxFailuresGlobally, Math.max(0, Math.floor(journalSize)))
+            store_size: Number.isFinite(storeSize)
+                ? Math.min(maxFailuresGlobally, Math.max(0, Math.floor(storeSize)))
                 : 0,
         });
 }
 
-const defaultLaunchFailureJournal = new LaunchFailureJournal(
+const defaultLaunchFailureStore = new LaunchFailureStore(
     monotonicClock,
     sendLaunchFailureRecordedTelemetry);
 
-export function recordLaunchFailureForAppHostPath(appHostPath: string, input: LaunchFailureInput): LaunchFailureRecord {
+export function recordLaunchFailureForAppHostPath(appHostPath: string, input: LaunchFailureInput): void {
     return recordLaunchFailureForAppHostIdentity(
         getOrCreateIdentityForCurrentAppHostTarget(appHostPath),
         input);
 }
 
-export function recordLaunchFailureForAppHostIdentity(appHostIdentity: OpaqueAppHostIdentity, input: LaunchFailureInput): LaunchFailureRecord {
-    return defaultLaunchFailureJournal.record(appHostIdentity, normalizeLaunchFailure(input));
+export function recordLaunchFailureForAppHostIdentity(appHostIdentity: OpaqueAppHostIdentity, input: LaunchFailureInput): void {
+    defaultLaunchFailureStore.record(appHostIdentity, normalizeLaunchFailure(input));
 }
 
-export function recordSanitizedLaunchFailureForAppHostPath(appHostPath: string, failure: SanitizedLaunchFailure): LaunchFailureRecord {
+export function recordSanitizedLaunchFailureForAppHostPath(appHostPath: string, failure: SanitizedLaunchFailure): void {
     return recordSanitizedLaunchFailureForAppHostIdentity(
         getOrCreateIdentityForCurrentAppHostTarget(appHostPath),
         failure);
 }
 
-export function recordSanitizedLaunchFailureForAppHostIdentity(appHostIdentity: OpaqueAppHostIdentity, failure: SanitizedLaunchFailure): LaunchFailureRecord {
-    return defaultLaunchFailureJournal.record(appHostIdentity, failure);
+export function recordSanitizedLaunchFailureForAppHostIdentity(appHostIdentity: OpaqueAppHostIdentity, failure: SanitizedLaunchFailure): void {
+    defaultLaunchFailureStore.record(appHostIdentity, failure);
 }
 
-export function readLatestLaunchFailures(appHostPath?: string): readonly LaunchFailureRecord[] {
-    const identity = appHostPath ? getOrCreateIdentityForCurrentAppHostTarget(appHostPath) : undefined;
-    return defaultLaunchFailureJournal.readLatest(identity);
+export function readLatestLaunchFailure(appHostPath: string): SanitizedLaunchFailure | undefined {
+    return defaultLaunchFailureStore.read(getOrCreateIdentityForCurrentAppHostTarget(appHostPath));
 }
 
-export function resetLaunchFailureJournal(): void {
-    defaultLaunchFailureJournal.clear();
+export function resetLaunchFailureStore(): void {
+    defaultLaunchFailureStore.clear();
 }
 
-export function __resetLaunchFailureJournalForTests(): void {
-    resetLaunchFailureJournal();
-}
-
-function toSanitizedLaunchFailure(record: LaunchFailureRecord): SanitizedLaunchFailure {
+function toSanitizedLaunchFailure(failure: SanitizedLaunchFailure): SanitizedLaunchFailure {
     return {
-        stage: record.stage,
-        category: record.category,
-        controller: record.controller,
-        mode: record.mode,
-        providerKind: record.providerKind,
-        exitCodeBucket: record.exitCodeBucket,
+        stage: stages.has(failure.stage) ? failure.stage : 'debugSession',
+        category: categories.has(failure.category) ? failure.category : 'unknown',
+        controller: controllers.has(failure.controller) ? failure.controller : 'editor',
+        mode: normalizeMode(failure.mode),
+        providerKind: normalizeProviderKind(failure.providerKind),
+        exitCodeBucket: exitCodeBuckets.has(failure.exitCodeBucket) ? failure.exitCodeBucket : 'none',
     };
 }
 

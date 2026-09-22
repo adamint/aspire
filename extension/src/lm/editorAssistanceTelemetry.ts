@@ -18,7 +18,7 @@ import {
     launchFailureModes,
     launchFailureProviderKinds,
     launchFailureStages,
-} from '../services/launchFailureJournal';
+} from '../services/launchFailureStore';
 
 const editorAssistanceResultEventName = 'aspire/vscode/editorassistance/result' as const;
 

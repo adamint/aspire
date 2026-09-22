@@ -43,7 +43,7 @@ import { EditorStateSnapshotService } from './lm/editorStateSnapshotService';
 import { EditorAssistanceToolService } from './lm/editorAssistanceToolService';
 import { registerEditorAssistanceTools } from './lm/editorAssistanceToolAdapters';
 import { EditorUiHandoffService } from './lm/editorUiHandoffService';
-import { readLatestLaunchFailures } from './services/launchFailureJournal';
+import { readLatestLaunchFailure } from './services/launchFailureStore';
 import { getHotReloadDiagnostics, initializeHotReloadAdvisory } from './debugger/hotReload';
 import { InternalMicrosoftTelemetryProvider } from './utils/internalMicrosoftTelemetry';
 import { OutdatedCliNotifier } from './utils/outdatedCliNotifier';
@@ -283,7 +283,7 @@ export async function activate(context: vscode.ExtensionContext) {
     snapshotService: editorStateSnapshotService,
     resourceRepository: dataRepository,
     getEditorResourceSessions: () => aspireExtensionContext.editorResourceSessions,
-    readLatestLaunchFailures,
+    readLatestLaunchFailure,
     readHotReloadDiagnostics: getHotReloadDiagnostics,
     uiHandoffService: editorUiHandoffService,
   });

@@ -20,10 +20,8 @@ import { isAspireDebugConfigurationExtensionOwned } from '../debugger/AspireDebu
 import { windowCliPathTarget, workspaceFolderCliPathTarget } from '../utils/cliPathVariables';
 import { AspireExtendedDebugConfiguration, AspireResourceExtendedDebugConfiguration, JavaLaunchConfiguration, NodeLaunchConfiguration, ProjectLaunchConfiguration, RustLaunchConfiguration } from '../dcp/types';
 import {
-    __resetLaunchFailureJournalForTests,
-    readLatestLaunchFailures,
-    type LaunchFailureRecord,
-} from '../services/launchFailureJournal';
+    resetLaunchFailureStore,
+} from '../services/launchFailureStore';
 import { __resetCommonPropertiesForTests, __setReporterForTests } from '../utils/telemetry';
 import { aspireDashboard, debugSessionStopTimedOut } from '../loc/strings';
 import { registerRunCleanup } from '../debugger/runCleanupRegistry';
@@ -32,6 +30,7 @@ import { AppHostBuildFailureError } from '../debugger/appHostBuildFailureError';
 import { AppHostDiscoveryService } from '../utils/appHostDiscovery';
 import { InteractionService } from '../server/interactionService';
 import type { ICliRpcClient } from '../server/rpcClient';
+import { captureLaunchFailureWrites } from './helpers/editorAssistanceTestSupport';
 
 interface RecordedEvent {
     name: string;
@@ -65,6 +64,7 @@ class FakeTelemetryReporter {
 }
 
 suite('AspireDebugSession tests', () => {
+    let failureWrites: ReturnType<typeof captureLaunchFailureWrites>;
     const tempDirs: string[] = [];
 
     function makeTempDir(): string {
@@ -89,11 +89,12 @@ suite('AspireDebugSession tests', () => {
 
     setup(() => {
         __resetAppHostIdentityRegistryForTests();
-        __resetLaunchFailureJournalForTests();
+        resetLaunchFailureStore();
+        failureWrites = captureLaunchFailureWrites(sinon);
     });
 
     teardown(() => {
-        __resetLaunchFailureJournalForTests();
+        resetLaunchFailureStore();
         __resetAppHostIdentityRegistryForTests();
         sinon.restore();
         __resetCommonPropertiesForTests();
@@ -217,10 +218,10 @@ suite('AspireDebugSession tests', () => {
         await aspireDebugSession.spawnAspireCommand(['run'], dirname(appHostPath), false, 'aspire run');
         spawnStub.firstCall.args[3]?.errorCallback?.(rawError);
 
-        const records = readLatestLaunchFailures(appHostPath);
+        const records = failureWrites.read(appHostPath);
         assert.strictEqual(records.length, 1);
         sinon.assert.calledOnce(requestOrderedShutdown);
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+        assert.deepStrictEqual(failureWrites.read(appHostPath)[0], {
             stage: 'cliLaunch',
             category: 'missingDependency',
             controller: 'cli',
@@ -228,7 +229,7 @@ suite('AspireDebugSession tests', () => {
             providerKind: 'dotnet',
             exitCodeBucket: 'none',
         });
-        const serialized = JSON.stringify(readLatestLaunchFailures(appHostPath));
+        const serialized = JSON.stringify(failureWrites.read(appHostPath));
         assert.strictEqual(serialized.includes(rawError.message), false);
         assert.strictEqual(serialized.includes(rawError.path), false);
         assert.strictEqual(serialized.includes(rawError.token), false);
@@ -260,8 +261,8 @@ suite('AspireDebugSession tests', () => {
 
         sinon.assert.notCalled(spawnStub);
         sinon.assert.calledOnce(requestOrderedShutdown);
-        assert.strictEqual(readLatestLaunchFailures(appHostPath).length, 1);
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+        assert.strictEqual(failureWrites.read(appHostPath).length, 1);
+        assert.deepStrictEqual(failureWrites.read(appHostPath)[0], {
             stage: 'cliLaunch',
             category: 'missingDependency',
             controller: 'cli',
@@ -269,7 +270,7 @@ suite('AspireDebugSession tests', () => {
             providerKind: 'dotnet',
             exitCodeBucket: 'none',
         });
-        const serialized = JSON.stringify(readLatestLaunchFailures(appHostPath));
+        const serialized = JSON.stringify(failureWrites.read(appHostPath));
         assert.strictEqual(serialized.includes(rawError.message), false);
         assert.strictEqual(serialized.includes(rawError.path), false);
         assert.strictEqual(serialized.includes(rawError.environment.RAW_SECRET), false);
@@ -298,8 +299,8 @@ suite('AspireDebugSession tests', () => {
         await aspireDebugSession.spawnAspireCommand(['run'], dirname(appHostPath), true, 'aspire run');
 
         sinon.assert.calledOnce(requestOrderedShutdown);
-        assert.strictEqual(readLatestLaunchFailures(appHostPath).length, 1);
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+        assert.strictEqual(failureWrites.read(appHostPath).length, 1);
+        assert.deepStrictEqual(failureWrites.read(appHostPath)[0], {
             stage: 'cliLaunch',
             category: 'permissionDenied',
             controller: 'cli',
@@ -307,7 +308,7 @@ suite('AspireDebugSession tests', () => {
             providerKind: 'dotnet',
             exitCodeBucket: 'none',
         });
-        const serialized = JSON.stringify(readLatestLaunchFailures(appHostPath));
+        const serialized = JSON.stringify(failureWrites.read(appHostPath));
         assert.strictEqual(serialized.includes(rawError.message), false);
         assert.strictEqual(serialized.includes(rawError.path), false);
         assert.strictEqual(serialized.includes(rawError.arguments[0]), false);
@@ -332,7 +333,7 @@ suite('AspireDebugSession tests', () => {
         await aspireDebugSession.spawnAspireCommand(['run'], dirname(appHostPath), true, 'aspire run');
         spawnStub.firstCall.args[3]?.exitCallback?.(1);
 
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+        assert.deepStrictEqual(failureWrites.read(appHostPath)[0], {
             stage: 'cliLaunch',
             category: 'processExited',
             controller: 'cli',
@@ -341,10 +342,11 @@ suite('AspireDebugSession tests', () => {
             exitCodeBucket: 'one',
         });
 
-        __resetLaunchFailureJournalForTests();
+        resetLaunchFailureStore();
         (aspireDebugSession as any)._stopping = true;
+        failureWrites.reset();
         spawnStub.firstCall.args[3]?.exitCallback?.(1);
-        assert.deepStrictEqual(readLatestLaunchFailures(appHostPath), []);
+        assert.deepStrictEqual(failureWrites.read(appHostPath), []);
     });
 
     for (const scenario of [
@@ -443,10 +445,10 @@ suite('AspireDebugSession tests', () => {
 
             // stopCli calls Environment.Exit(0), which would overwrite the CLI's failure code.
             assert.strictEqual(stopCli.callCount, scenario.initiator === 'cli' ? 0 : 1);
-            const records = readLatestLaunchFailures(appHostPath);
+            const records = failureWrites.read(appHostPath);
             assert.strictEqual(records.length, scenario.recordsFailure ? 1 : 0);
             if (scenario.recordsFailure) {
-                assert.deepStrictEqual(getFailureDetails(records[0]), {
+                assert.deepStrictEqual(records[0], {
                     stage: 'cliLaunch',
                     category: 'processExited',
                     controller: 'cli',
@@ -2507,7 +2509,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         await startDebuggingPromise;
 
         assert.strictEqual(openExternal.called, false);
-        assert.deepStrictEqual(readLatestLaunchFailures(appHostPath), []);
+        assert.deepStrictEqual(failureWrites.read(appHostPath), []);
     });
 
     test('a rejected shutdown blocks later dashboard browser presentations', async () => {
@@ -2581,7 +2583,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         const presentation = await aspireDebugSession.openDashboard('https://localhost:1234/private', 'debugEdge', true);
 
         assert.strictEqual(presentation, 'externalBrowser');
-        assert.deepStrictEqual(readLatestLaunchFailures(appHostPath), []);
+        assert.deepStrictEqual(failureWrites.read(appHostPath), []);
     });
 
     test('records one dashboard failure when external fallback declines', async () => {
@@ -2605,9 +2607,9 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         await aspireDebugSession.openDashboard('https://localhost:1234/private', 'debugEdge', true);
 
-        const records = readLatestLaunchFailures(appHostPath);
+        const records = failureWrites.read(appHostPath);
         assert.strictEqual(records.length, 1);
-        assert.deepStrictEqual(getFailureDetails(records[0]), {
+        assert.deepStrictEqual(records[0], {
             stage: 'dashboard',
             category: 'unknown',
             controller: 'editor',
@@ -2640,9 +2642,9 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         await assert.rejects(() => aspireDebugSession.openDashboard(dashboardUrl, 'debugChrome', true), rawError);
 
-        const records = readLatestLaunchFailures(appHostPath);
+        const records = failureWrites.read(appHostPath);
         assert.strictEqual(records.length, 1);
-        assert.deepStrictEqual(getFailureDetails(records[0]), {
+        assert.deepStrictEqual(records[0], {
             stage: 'dashboard',
             category: 'permissionDenied',
             controller: 'editor',
@@ -2674,9 +2676,9 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         await aspireDebugSession.openDashboard('https://localhost:1234/private', 'openExternalBrowser');
 
-        const records = readLatestLaunchFailures(appHostPath);
+        const records = failureWrites.read(appHostPath);
         assert.strictEqual(records.length, 1);
-        assert.deepStrictEqual(getFailureDetails(records[0]), {
+        assert.deepStrictEqual(records[0], {
             stage: 'dashboard',
             category: 'unknown',
             controller: 'editor',
@@ -2708,8 +2710,8 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         await assert.rejects(() => aspireDebugSession.openDashboard(dashboardUrl, 'debugChrome', true), rawError);
 
-        const records = readLatestLaunchFailures(appHostPath);
-        assert.deepStrictEqual(getFailureDetails(records[0]), {
+        const records = failureWrites.read(appHostPath);
+        assert.deepStrictEqual(records[0], {
             stage: 'dashboard',
             category: 'unknown',
             controller: 'editor',
@@ -2742,7 +2744,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         await assert.rejects(() => aspireDebugSession.openDashboard('https://localhost:1234', 'integratedBrowser'), rawError);
 
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+        assert.deepStrictEqual(failureWrites.read(appHostPath)[0], {
             stage: 'dashboard',
             category: 'unknown',
             controller: 'editor',
@@ -2772,7 +2774,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         await assert.rejects(() => aspireDebugSession.openDashboard('https://localhost:1234', 'openExternalBrowser'), rawError);
 
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+        assert.deepStrictEqual(failureWrites.read(appHostPath)[0], {
             stage: 'dashboard',
             category: 'permissionDenied',
             controller: 'editor',
@@ -4874,7 +4876,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         });
         await terminateCallback!(appHostVsCodeSession);
 
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+        assert.deepStrictEqual(failureWrites.read(appHostPath)[0], {
             stage: 'dcpStartup',
             category: 'processExited',
             controller: 'editor',
@@ -4930,7 +4932,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         await terminateCallback!(appHostVsCodeSession);
 
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+        assert.deepStrictEqual(failureWrites.read(appHostPath)[0], {
             stage: 'dcpStartup',
             category: 'processExited',
             controller: 'editor',
@@ -4938,7 +4940,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             providerKind: 'dotnet',
             exitCodeBucket: 'none',
         });
-        assert.deepStrictEqual(readLatestLaunchFailures(workspacePath), []);
+        assert.deepStrictEqual(failureWrites.read(workspacePath), []);
     });
 
     test('does not record a pre-start process exit when an explicit disconnect precedes adapter termination', async () => {
@@ -5005,7 +5007,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         });
         await terminateCallback!(appHostVsCodeSession);
 
-        assert.deepStrictEqual(readLatestLaunchFailures(appHostPath), []);
+        assert.deepStrictEqual(failureWrites.read(appHostPath), []);
     });
 
     test('does not record DCP startup failure after startup completion', async () => {
@@ -5053,7 +5055,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         await terminateCallback!(appHostVsCodeSession);
 
-        assert.deepStrictEqual(readLatestLaunchFailures(appHostPath), []);
+        assert.deepStrictEqual(failureWrites.read(appHostPath), []);
     });
 
     test('does not record a successful pipeline AppHost exit as a DCP startup failure', async () => {
@@ -5108,7 +5110,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         await terminateCallback!(appHostVsCodeSession);
 
-        assert.deepStrictEqual(readLatestLaunchFailures(appHostPath), []);
+        assert.deepStrictEqual(failureWrites.read(appHostPath), []);
     });
 
     test('records typed AppHost build failures as build failures', async () => {
@@ -5157,7 +5159,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         await aspireDebugSession.startAppHost(appHostPath, [], [], true, { forceBuild: true });
 
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+        assert.deepStrictEqual(failureWrites.read(appHostPath)[0], {
             stage: 'build',
             category: 'buildFailed',
             controller: 'editor',
@@ -5165,12 +5167,12 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             providerKind: 'dotnet',
             exitCodeBucket: 'none',
         });
-        const serialized = JSON.stringify(readLatestLaunchFailures(appHostPath));
+        const serialized = JSON.stringify(failureWrites.read(appHostPath));
         assert.strictEqual(serialized.includes(rawBuildOutput), false);
         assert.strictEqual(serialized.includes(appHostPath), false);
     });
 
-    test('records typed Rust build failures without raw Cargo data in the journal or telemetry', async () => {
+    test('records typed Rust build failures without raw Cargo data in the store or telemetry', async () => {
         const appHostPath = join(makeTempDir(), 'apphost.rs');
         writeFileSync(appHostPath, '');
         const sentinels = [
@@ -5226,9 +5228,9 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
                 true,
                 { forceBuild: false });
 
-            const failures = readLatestLaunchFailures(appHostPath);
+            const failures = failureWrites.read(appHostPath);
             assert.strictEqual(failures.length, 1);
-            assert.deepStrictEqual(getFailureDetails(failures[0]), {
+            assert.deepStrictEqual(failures[0], {
                 stage: 'build',
                 category: 'buildFailed',
                 controller: 'editor',
@@ -5249,7 +5251,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             });
 
             const serialized = JSON.stringify({
-                journal: failures,
+                store: failures,
                 telemetry: fake.events,
             });
             for (const sentinel of sentinels) {
@@ -5283,7 +5285,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         await aspireDebugSession.startAppHost(appHostPath, [], [], false, { forceBuild: false });
 
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+        assert.deepStrictEqual(failureWrites.read(appHostPath)[0], {
             stage: 'debugSession',
             category: 'unknown',
             controller: 'editor',
@@ -5330,7 +5332,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             true,
             { forceBuild: false });
 
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+        assert.deepStrictEqual(failureWrites.read(appHostPath)[0], {
             stage: 'debugSession',
             category: 'unknown',
             controller: 'editor',
@@ -6570,7 +6572,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(startDebuggingStub.calledOnce, true);
         assert.strictEqual(startDebuggingStub.firstCall.args[0], workspaceFolder);
         assert.strictEqual(startDebuggingStub.firstCall.args[2], parentDebugSession);
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures('/workspace/MauiAppHost/MauiAppHost.csproj')[0]), {
+        assert.deepStrictEqual(failureWrites.read('/workspace/MauiAppHost/MauiAppHost.csproj')[0], {
             stage: 'debugSession',
             category: 'unknown',
             controller: 'editor',
@@ -6613,7 +6615,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         const result = await aspireDebugSession.startAndGetDebugSession(debugConfig);
 
         assert.strictEqual(result, undefined);
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+        assert.deepStrictEqual(failureWrites.read(appHostPath)[0], {
             stage: 'debugSession',
             category: 'unknown',
             controller: 'editor',
@@ -6663,7 +6665,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         resolveStart(false);
 
         assert.strictEqual(await resultPromise, undefined);
-        assert.deepStrictEqual(readLatestLaunchFailures(appHostPath), []);
+        assert.deepStrictEqual(failureWrites.read(appHostPath), []);
     });
 
     test('records resource debug-session start timeouts at the timeout boundary', async () => {
@@ -6702,7 +6704,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         const result = await resultPromise;
 
         assert.strictEqual(result, undefined);
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+        assert.deepStrictEqual(failureWrites.read(appHostPath)[0], {
             stage: 'debugSession',
             category: 'timeout',
             controller: 'editor',
@@ -7567,18 +7569,6 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
             await clock.tickAsync(10);
         }
-    }
-
-    function getFailureDetails(record: LaunchFailureRecord | undefined) {
-        assert.ok(record);
-        return {
-            stage: record.stage,
-            category: record.category,
-            controller: record.controller,
-            mode: record.mode,
-            providerKind: record.providerKind,
-            exitCodeBucket: record.exitCodeBucket,
-        };
     }
 
     async function captureLaunchCommandArgs(

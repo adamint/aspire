@@ -11,7 +11,7 @@ import {
     type LaunchFailureProviderKind,
     type LaunchFailureStage,
     type SanitizedLaunchFailure,
-} from '../services/launchFailureJournal';
+} from '../services/launchFailureStore';
 import { type EditorStateSnapshotService } from './editorStateSnapshotService';
 import {
     type AppHostTargetIdentity,
@@ -460,7 +460,7 @@ export interface EditorAssistanceToolDependencies {
     readonly snapshotService: EditorStateSnapshotService;
     readonly resourceRepository: EditorAssistanceResourceRepository;
     readonly getEditorResourceSessions: () => readonly EditorResourceSessionSnapshot[];
-    readonly readLatestLaunchFailures: (appHostPath: string) => readonly SanitizedLaunchFailure[];
+    readonly readLatestLaunchFailure: (appHostPath: string) => SanitizedLaunchFailure | undefined;
     /**
      * The debugger's own Hot Reload probe. It is injected rather than imported so the tool
      * reports exactly what the dotnet launch path reports instead of growing a second,

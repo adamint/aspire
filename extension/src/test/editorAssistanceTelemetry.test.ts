@@ -23,7 +23,7 @@ import {
     normalizeLaunchFailure,
     type LaunchFailureInput,
     type SanitizedLaunchFailure,
-} from '../services/launchFailureJournal';
+} from '../services/launchFailureStore';
 
 const expectedLaunchFailureStages = [
     'discovery',

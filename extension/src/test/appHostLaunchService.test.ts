@@ -9,10 +9,9 @@ import { appHostLaunchReservationIdConfigKey, appHostLaunchTokenConfigKey, appHo
 import { AspireDebugConfigurationProvider } from '../debugger/AspireDebugConfigurationProvider';
 import { isAspireDebugConfigurationExtensionOwned } from '../debugger/AspireDebugConfigurationProviderInternal';
 import {
-    __resetLaunchFailureJournalForTests,
-    readLatestLaunchFailures,
-    type LaunchFailureRecord,
-} from '../services/launchFailureJournal';
+    resetLaunchFailureStore,
+    type SanitizedLaunchFailure,
+} from '../services/launchFailureStore';
 import * as locStrings from '../loc/strings';
 import { appHostLifecycleBusy } from '../loc/strings';
 import { AppHostLaunchService, AppHostLaunchTargetChangedError, AppHostLifecycleLockTimeoutError, AppHostStopCancellationError, appHostLifecycleLockMaxHoldMs, appHostLifecycleLockWaitTimeoutMs, externalLaunchReservationTimeoutMs, type AppHostLaunchCapabilityProvider, type AppHostLaunchRequestedEvent, type AppHostLaunchSession } from '../services/AppHostLaunchService';
@@ -26,6 +25,7 @@ import { isolatedLaunchCapability, launchProfileCapability, type CapabilityStatu
 import { getCliPathTargetKey, windowCliPathTarget, workspaceFolderCliPathTarget } from '../utils/cliPathVariables';
 import { __resetCommonPropertiesForTests, __setReporterForTests } from '../utils/telemetry';
 import { writeLinkedWorktreeMetadata } from './testGitWorktree';
+import { captureLaunchFailureWrites } from './helpers/editorAssistanceTestSupport';
 
 interface RecordedEvent {
     name: string;
@@ -127,6 +127,8 @@ interface LaunchArgumentPreparer {
 }
 
 suite('AppHostLaunchService', () => {
+    const failureSandbox = sinon.createSandbox();
+    let failureWrites: ReturnType<typeof captureLaunchFailureWrites>;
     let service: AppHostLaunchService;
     let capabilityProvider: FakeCapabilityProvider;
     let startDebuggingStub: sinon.SinonStub;
@@ -139,7 +141,8 @@ suite('AppHostLaunchService', () => {
 
     setup(() => {
         __resetAppHostIdentityRegistryForTests();
-        __resetLaunchFailureJournalForTests();
+        resetLaunchFailureStore();
+        failureWrites = captureLaunchFailureWrites(failureSandbox);
         onDidStartDebugSessionStub = sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
             onDidStartDebugSessionCallback = callback;
             return new vscode.Disposable(() => { });
@@ -156,7 +159,8 @@ suite('AppHostLaunchService', () => {
     });
 
     teardown(() => {
-        __resetLaunchFailureJournalForTests();
+        failureSandbox.restore();
+        resetLaunchFailureStore();
         __resetAppHostIdentityRegistryForTests();
         service.dispose();
         startDebuggingStub.restore();
@@ -1245,7 +1249,7 @@ suite('AppHostLaunchService', () => {
 
             assert.strictEqual(resolveCliPathStub.calledOnce, true);
             assert.strictEqual(startDebuggingStub.called, false);
-            assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures('/repo/AppHost.csproj')[0]), {
+            assert.deepStrictEqual(failureWrites.read('/repo/AppHost.csproj')[0], {
                 stage: 'cliLaunch',
                 category: 'cliUnavailable',
                 controller: 'editor',
@@ -2671,9 +2675,9 @@ suite('AppHostLaunchService', () => {
         await assert.rejects(service.launch('/repo/AppHost.csproj', 'run', true), /did not start the Aspire run session/);
 
         assert.strictEqual(service.isLaunching('/repo/AppHost.csproj'), false);
-        const failures = readLatestLaunchFailures('/repo/AppHost.csproj');
+        const failures = failureWrites.read('/repo/AppHost.csproj');
         assert.strictEqual(failures.length, 1);
-        assert.deepStrictEqual(getFailureDetails(failures[0]), {
+        assert.deepStrictEqual(failures[0], {
             stage: 'cliLaunch',
             category: 'unknown',
             controller: 'editor',
@@ -2689,7 +2693,7 @@ suite('AppHostLaunchService', () => {
 
         await assert.rejects(service.launch(appHostPath, 'run', true), /did not start the Aspire run session/);
 
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+        assert.deepStrictEqual(failureWrites.read(appHostPath)[0], {
             stage: 'cliLaunch',
             category: 'unknown',
             controller: 'editor',
@@ -2712,9 +2716,9 @@ suite('AppHostLaunchService', () => {
 
         await assert.rejects(service.launch(appHostPath, 'run', true), /did not start the Aspire run session/);
 
-        const failures = readLatestLaunchFailures(appHostPath);
+        const failures = failureWrites.read(appHostPath);
         assert.strictEqual(failures.length, 1);
-        assert.deepStrictEqual(getFailureDetails(failures[0]), {
+        assert.deepStrictEqual(failures[0], {
             stage: 'discovery',
             category: 'unknown',
             controller: 'editor',
@@ -2743,9 +2747,9 @@ suite('AppHostLaunchService', () => {
 
             await assert.rejects(service.launch(appHostPath, 'run', true), /did not start the Aspire run session/);
 
-            const failures = readLatestLaunchFailures(appHostPath);
+            const failures = failureWrites.read(appHostPath);
             assert.strictEqual(failures.length, 2);
-            assert.deepStrictEqual(getFailureDetails(failures[0]), {
+            assert.deepStrictEqual(failures[0], {
                 stage: 'cliLaunch',
                 category: 'unknown',
                 controller: 'editor',
@@ -2753,7 +2757,7 @@ suite('AppHostLaunchService', () => {
                 providerKind: 'dotnet',
                 exitCodeBucket: 'none',
             });
-            assert.deepStrictEqual(getFailureDetails(failures[1]), {
+            assert.deepStrictEqual(failures[1], {
                 stage: 'validation',
                 category: 'invalidConfiguration',
                 controller: 'editor',
@@ -2845,9 +2849,9 @@ suite('AppHostLaunchService', () => {
         await assert.rejects(service.launch('/repo/AppHost.csproj', 'run', true), /boom/);
 
         assert.strictEqual(service.isLaunching('/repo/AppHost.csproj'), false);
-        const failures = readLatestLaunchFailures('/repo/AppHost.csproj');
+        const failures = failureWrites.read('/repo/AppHost.csproj');
         assert.strictEqual(failures.length, 1);
-        assert.deepStrictEqual(getFailureDetails(failures[0]), {
+        assert.deepStrictEqual(failures[0], {
             stage: 'cliLaunch',
             category: 'unknown',
             controller: 'editor',
@@ -2870,9 +2874,9 @@ suite('AppHostLaunchService', () => {
 
         await assert.rejects(service.launch(appHostPath, 'run', true), /provider rejected launch/);
 
-        const failures = readLatestLaunchFailures(appHostPath);
+        const failures = failureWrites.read(appHostPath);
         assert.strictEqual(failures.length, 1);
-        assert.deepStrictEqual(getFailureDetails(failures[0]), {
+        assert.deepStrictEqual(failures[0], {
             stage: 'discovery',
             category: 'unknown',
             controller: 'editor',
@@ -2909,7 +2913,7 @@ suite('AppHostLaunchService', () => {
 
         await assert.rejects(service.launch(appHostPath, 'deploy', true), /did not start the Aspire deploy session/);
 
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+        assert.deepStrictEqual(failureWrites.read(appHostPath)[0], {
             stage: 'cliLaunch',
             category: 'unknown',
             controller: 'editor',
@@ -2939,7 +2943,7 @@ suite('AppHostLaunchService', () => {
 
         await assert.rejects(service.launch(appHostPath, 'run', true), /did not start the Aspire run session/);
 
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures(appHostPath)[0]), {
+        assert.deepStrictEqual(failureWrites.read(appHostPath)[0], {
             stage: 'cliLaunch',
             category: 'unknown',
             controller: 'editor',
@@ -2954,7 +2958,7 @@ suite('AppHostLaunchService', () => {
 
         await assert.rejects(service.launch('/repo/AppHost.csproj', 'run', false), vscode.CancellationError);
 
-        assert.deepStrictEqual(getFailureDetails(readLatestLaunchFailures('/repo/AppHost.csproj')[0]), {
+        assert.deepStrictEqual(failureWrites.read('/repo/AppHost.csproj')[0], {
             stage: 'cliLaunch',
             category: 'canceled',
             controller: 'editor',
@@ -3029,18 +3033,6 @@ suite('AppHostLaunchService', () => {
         }
     });
 
-    function getFailureDetails(record: LaunchFailureRecord | undefined) {
-        assert.ok(record);
-        return {
-            stage: record.stage,
-            category: record.category,
-            controller: record.controller,
-            mode: record.mode,
-            providerKind: record.providerKind,
-            exitCodeBucket: record.exitCodeBucket,
-        };
-    }
-
     function createTerminalDiscoveryFailureProvider(launchService: AppHostLaunchService): AspireDebugConfigurationProvider {
         return new AspireDebugConfigurationProvider({
             resolveDebugTarget: async () => {
@@ -3057,7 +3049,7 @@ suite('AppHostLaunchService', () => {
     }
 
     async function launchWithUncorrelatedProviderFailure(
-        mutateConfiguration: (configuration: Record<string, unknown>) => void): Promise<readonly LaunchFailureRecord[]> {
+        mutateConfiguration: (configuration: Record<string, unknown>) => void): Promise<readonly SanitizedLaunchFailure[]> {
         const appHostPath = '/repo/AppHost.csproj';
         const provider = createTerminalDiscoveryFailureProvider(service);
         startDebuggingStub.callsFake(async (_folder, config) => {
@@ -3072,12 +3064,12 @@ suite('AppHostLaunchService', () => {
 
         await assert.rejects(service.launch(appHostPath, 'run', true), /did not start the Aspire run session/);
 
-        return readLatestLaunchFailures(appHostPath);
+        return failureWrites.read(appHostPath);
     }
 
-    function assertUncorrelatedProviderFailure(failures: readonly LaunchFailureRecord[]): void {
+    function assertUncorrelatedProviderFailure(failures: readonly SanitizedLaunchFailure[]): void {
         assert.strictEqual(failures.length, 2);
-        assert.deepStrictEqual(getFailureDetails(failures[0]), {
+        assert.deepStrictEqual(failures[0], {
             stage: 'cliLaunch',
             category: 'unknown',
             controller: 'editor',
@@ -3085,7 +3077,7 @@ suite('AppHostLaunchService', () => {
             providerKind: 'dotnet',
             exitCodeBucket: 'none',
         });
-        assert.deepStrictEqual(getFailureDetails(failures[1]), {
+        assert.deepStrictEqual(failures[1], {
             stage: 'discovery',
             category: 'unknown',
             controller: 'editor',

@@ -14,10 +14,10 @@ import * as cliModule from '../utils/process/cliProcess';
 import { deactivate as deactivateExtension } from '../extension';
 import { extensionLogOutputChannel } from '../utils/logging';
 import {
-    __resetLaunchFailureJournalForTests,
-    readLatestLaunchFailures,
+    resetLaunchFailureStore,
+    readLatestLaunchFailure,
     recordLaunchFailureForAppHostPath,
-} from '../services/launchFailureJournal';
+} from '../services/launchFailureStore';
 import {
     __resetAppHostIdentityRegistryForTests,
     getOrCreateIdentityForCurrentAppHostTarget,
@@ -39,7 +39,7 @@ suite('AspireExtensionContext', () => {
     });
 
     test('deactivation resets editor-assistance window state', async () => {
-        __resetLaunchFailureJournalForTests();
+        resetLaunchFailureStore();
         __resetAppHostIdentityRegistryForTests();
         const context = createContext([]);
 
@@ -54,17 +54,17 @@ suite('AspireExtensionContext', () => {
 
             assert.strictEqual(firstIdentity, 'apphost-1');
             assert.strictEqual(secondIdentity, 'apphost-2');
-            assert.strictEqual(readLatestLaunchFailures().length, 1);
+            assert.ok(readLatestLaunchFailure('/workspace/First/AppHost.csproj'));
 
             await deactivateContext(context);
 
-            assert.deepStrictEqual(readLatestLaunchFailures(), []);
             assert.strictEqual(
                 getOrCreateIdentityForCurrentAppHostTarget('/workspace/Third/AppHost.csproj'),
                 'apphost-1');
+            assert.strictEqual(readLatestLaunchFailure('/workspace/Third/AppHost.csproj'), undefined);
         }
         finally {
-            __resetLaunchFailureJournalForTests();
+            resetLaunchFailureStore();
             __resetAppHostIdentityRegistryForTests();
         }
     });

@@ -5,8 +5,9 @@ import * as sinon from 'sinon';
 
 import { SafeAppHostTargetResolver } from '../lm/safeAppHostTargetResolver';
 import {
-    __resetLaunchFailureJournalForTests,
-    LaunchFailureJournal,
+    resetLaunchFailureStore,
+    LaunchFailureStore,
+    getLaunchFailureMode,
     launchFailureCategories,
     launchFailureControllers,
     launchFailureExitCodeBuckets,
@@ -14,13 +15,15 @@ import {
     launchFailureProviderKinds,
     launchFailureStages,
     normalizeLaunchFailure,
-    readLatestLaunchFailures,
+    readLatestLaunchFailure,
     recordLaunchFailureForAppHostPath,
     type LaunchFailureInput,
-} from '../services/launchFailureJournal';
+    type SanitizedLaunchFailure,
+} from '../services/launchFailureStore';
 import {
     __resetAppHostIdentityRegistryForTests,
     getOrCreateIdentityForCurrentAppHostTarget,
+    type OpaqueAppHostIdentity,
 } from '../utils/appHostIdentity';
 import {
     appHostProjectContents,
@@ -35,7 +38,7 @@ suite('Editor assistance AppHost services', () => {
 
     setup(() => {
         __resetAppHostIdentityRegistryForTests();
-        __resetLaunchFailureJournalForTests();
+        resetLaunchFailureStore();
         workspaceRoot = createFixtureDirectory('workspace');
         appHostProjectPath = path.join(workspaceRoot, 'AppHost', 'AppHost.csproj');
         fs.mkdirSync(path.dirname(appHostProjectPath), { recursive: true });
@@ -45,12 +48,12 @@ suite('Editor assistance AppHost services', () => {
     });
 
     teardown(() => {
-        __resetLaunchFailureJournalForTests();
+        resetLaunchFailureStore();
         __resetAppHostIdentityRegistryForTests();
         fs.rmSync(workspaceRoot, { recursive: true, force: true });
     });
 
-    suite('LaunchFailureJournal', () => {
+    suite('LaunchFailureStore', () => {
         const createFailure = (overrides: Partial<LaunchFailureInput> = {}) => normalizeLaunchFailure({
             stage: 'debugSession',
             category: 'unknown',
@@ -90,12 +93,12 @@ suite('Editor assistance AppHost services', () => {
         });
 
         test('uses the shared opaque AppHost identity registry', () => {
-            const journalIdentity = getOrCreateIdentityForCurrentAppHostTarget(appHostProjectPath);
+            const storeIdentity = getOrCreateIdentityForCurrentAppHostTarget(appHostProjectPath);
             const resolverIdentity = resolver.getIdentityForAppHostPath(appHostProjectPath);
 
-            assert.strictEqual(journalIdentity, resolverIdentity);
-            assert.strictEqual(journalIdentity.startsWith('apphost-'), true);
-            assert.strictEqual(journalIdentity.includes(workspaceRoot), false);
+            assert.strictEqual(storeIdentity, resolverIdentity);
+            assert.strictEqual(storeIdentity.startsWith('apphost-'), true);
+            assert.strictEqual(storeIdentity.includes(workspaceRoot), false);
         });
 
         test('keeps opaque identities stable as sibling path shapes appear and disappear', () => {
@@ -147,12 +150,8 @@ suite('Editor assistance AppHost services', () => {
 
             fs.unlinkSync(secondProjectPath);
 
-            assert.deepStrictEqual(
-                readLatestLaunchFailures(projectPath).map(record => record.stage),
-                ['build']);
-            assert.deepStrictEqual(
-                readLatestLaunchFailures(sourcePath).map(record => record.stage),
-                ['dcpStartup']);
+            assert.strictEqual(readLatestLaunchFailure(projectPath)?.stage, 'build');
+            assert.strictEqual(readLatestLaunchFailure(sourcePath)?.stage, 'dcpStartup');
             assert.strictEqual(getOrCreateIdentityForCurrentAppHostTarget(projectPath), projectIdentity);
             assert.strictEqual(getOrCreateIdentityForCurrentAppHostTarget(sourcePath), sourceIdentity);
         });
@@ -183,7 +182,7 @@ suite('Editor assistance AppHost services', () => {
             fs.rmSync(linkedTarget);
             fs.symlinkSync(secondTarget, linkedTarget);
 
-            assert.deepStrictEqual(readLatestLaunchFailures(linkedTarget), []);
+            assert.strictEqual(readLatestLaunchFailure(linkedTarget), undefined);
         });
 
         test('preserves a failure when the same AppHost file is atomically replaced', () => {
@@ -197,46 +196,128 @@ suite('Editor assistance AppHost services', () => {
             fs.writeFileSync(replacementPath, '<Project />');
             fs.renameSync(replacementPath, appHostProjectPath);
 
-            assert.deepStrictEqual(
-                readLatestLaunchFailures(appHostProjectPath).map(record => record.stage),
-                ['build']);
+            assert.strictEqual(readLatestLaunchFailure(appHostProjectPath)?.stage, 'build');
         });
 
-        test('keeps the latest five failures per AppHost in latest-first order', () => {
-            let now = 1_000;
-            const journal = new LaunchFailureJournal({ now: () => now });
+        test('keeps only the latest failure per AppHost', () => {
+            const store = new LaunchFailureStore();
             const identity = getOrCreateIdentityForCurrentAppHostTarget(appHostProjectPath);
-
+            const latest = createFailure({ stage: 'build', category: 'buildFailed' });
             for (let index = 0; index < 6; index++) {
-                journal.record(identity, createFailure());
-                now++;
+                store.record(identity, createFailure());
             }
+            store.record(identity, latest);
 
-            assert.deepStrictEqual(journal.readLatest(identity).map(record => record.sequence), [6, 5, 4, 3, 2]);
+            assert.deepStrictEqual(store.read(identity), latest);
         });
 
-        test('keeps the latest fifty failures globally', () => {
-            const journal = new LaunchFailureJournal({ now: () => 1_000 });
+        for (const replaceOldest of [false, true]) {
+            test(`keeps at most fifty AppHosts in write order, replacing oldest: ${replaceOldest}`, () => {
+                const sizes: number[] = [];
+                const store = new LaunchFailureStore(
+                    { now: () => 1_000 },
+                    (_failure, size) => sizes.push(size));
+                const identities = Array.from({ length: 51 }, (_, index) =>
+                    getOrCreateIdentityForCurrentAppHostTarget(path.join(workspaceRoot, `AppHost${index}.csproj`)));
+                const failure = createFailure();
+                for (const identity of identities.slice(0, 50)) {
+                    store.record(identity, failure);
+                }
+                assert.deepStrictEqual(store.read(identities[0]), failure);
+                if (replaceOldest) {
+                    for (let index = 0; index < 6; index++) {
+                        store.record(identities[0], failure);
+                    }
+                }
+                store.record(identities[50], failure);
 
-            for (let index = 0; index < 51; index++) {
-                const identity = getOrCreateIdentityForCurrentAppHostTarget(path.join(workspaceRoot, `AppHost${index}.csproj`));
-                journal.record(identity, createFailure());
+                const evictedIndex = replaceOldest ? 1 : 0;
+                assert.deepStrictEqual(
+                    identities.map(identity => store.read(identity)),
+                    identities.map((_, index) => index === evictedIndex ? undefined : failure));
+                assert.deepStrictEqual(sizes, [
+                    ...Array.from({ length: 50 }, (_, index) => index + 1),
+                    ...Array(replaceOldest ? 7 : 1).fill(50),
+                ]);
+            });
+        }
+
+        test('replacement refreshes expiry but reading does not', () => {
+            let now = 1_000;
+            const store = new LaunchFailureStore({ now: () => now });
+            const identity = getOrCreateIdentityForCurrentAppHostTarget(appHostProjectPath);
+            store.record(identity, createFailure());
+            const latest = createFailure({ category: 'buildFailed' });
+            now += 60_000;
+            store.record(identity, latest);
+
+            now += 30 * 60_000 - 1;
+            assert.deepStrictEqual(store.read(identity), latest);
+            now++;
+            assert.strictEqual(store.read(identity), undefined);
+        });
+
+        test('input, callback, and read mutations cannot change retained failure state', () => {
+            const failure = { ...createFailure() };
+            const expected = { ...failure };
+            const store = new LaunchFailureStore(undefined, accepted => {
+                Object.assign(accepted, { category: 'timeout', secret: 'callback-secret' });
+            });
+            const identity = getOrCreateIdentityForCurrentAppHostTarget(appHostProjectPath);
+            store.record(identity, failure);
+            failure.category = 'buildFailed';
+            const firstRead = store.read(identity);
+            assert.deepStrictEqual(firstRead, expected);
+            assert.ok(firstRead);
+            Object.assign(firstRead, { category: 'permissionDenied', secret: 'read-secret' });
+
+            assert.deepStrictEqual(store.read(identity), expected);
+            store.clear();
+            assert.strictEqual(store.read(identity), undefined);
+        });
+
+        test('revalidates all fields and drops extra input at the storage boundary', () => {
+            const store = new LaunchFailureStore();
+            const identity = getOrCreateIdentityForCurrentAppHostTarget(appHostProjectPath);
+            const forged = {
+                stage: 'secret-stage',
+                category: 'secret-category',
+                controller: 'secret-controller',
+                mode: 'secret-mode',
+                providerKind: 'secret-provider',
+                exitCodeBucket: 'secret-exit',
+                rawError: 'secret-error',
+            };
+            store.record(identity, forged as unknown as SanitizedLaunchFailure);
+            assert.deepStrictEqual(store.read(identity), {
+                stage: 'debugSession',
+                category: 'unknown',
+                controller: 'editor',
+                mode: 'other',
+                providerKind: 'other',
+                exitCodeBucket: 'none',
+            });
+        });
+
+        test('uses one failure mode policy for all launch producers', () => {
+            for (const noDebug of [false, true]) {
+                assert.strictEqual(getLaunchFailureMode('run', noDebug), noDebug ? 'run' : 'debug');
+                assert.strictEqual(getLaunchFailureMode('deploy', noDebug), 'deploy');
+                assert.strictEqual(getLaunchFailureMode('publish', noDebug), 'publish');
+                assert.strictEqual(getLaunchFailureMode('do', noDebug), 'other');
+                assert.strictEqual(getLaunchFailureMode('unknown', noDebug), 'other');
+                assert.strictEqual(getLaunchFailureMode(undefined, noDebug), 'other');
             }
-
-            const records = journal.readLatest();
-            assert.strictEqual(records.length, 50);
-            assert.deepStrictEqual(records.map(record => record.sequence), Array.from({ length: 50 }, (_, index) => 51 - index));
         });
 
         test('prunes failures after the thirty minute window on reads', () => {
             let now = 1_000;
-            const journal = new LaunchFailureJournal({ now: () => now });
+            const store = new LaunchFailureStore({ now: () => now });
             const identity = getOrCreateIdentityForCurrentAppHostTarget(appHostProjectPath);
-            journal.record(identity, createFailure());
+            store.record(identity, createFailure());
 
             now += 30 * 60 * 1_000;
-            assert.deepStrictEqual(journal.readLatest(identity), []);
-            assert.deepStrictEqual(journal.readLatest(), []);
+            assert.strictEqual(store.read(identity), undefined);
         });
 
         for (const wallClockDelta of [-3_600_000, 3_600_000]) {
@@ -246,32 +327,34 @@ suite('Editor assistance AppHost services', () => {
                     try {
                         const wallClock = sandbox.stub(Date, 'now').returns(10_000_000);
                         const monotonicClock = sandbox.stub(performance, 'now').returns(1_000);
-                        const journal = new LaunchFailureJournal();
+                        const store = new LaunchFailureStore();
                         const identity = getOrCreateIdentityForCurrentAppHostTarget(appHostProjectPath);
-                        const records = [journal.record(identity, createFailure())];
-                        const globalRecords = [recordLaunchFailureForAppHostPath(appHostProjectPath, {
+                        const failure = createFailure();
+                        store.record(identity, failure);
+                        const globalInput: LaunchFailureInput = {
                             stage: 'build',
                             category: 'buildFailed',
                             controller: 'editor',
-                        })];
+                        };
+                        recordLaunchFailureForAppHostPath(appHostProjectPath, globalInput);
+                        const otherPath = path.join(workspaceRoot, 'Other.csproj');
+                        const otherIdentity = getOrCreateIdentityForCurrentAppHostTarget(otherPath);
 
                         wallClock.returns(10_000_000 + wallClockDelta);
                         monotonicClock.returns(1_000 + 30 * 60_000 - 1);
                         if (pruneOn === 'record') {
-                            records.unshift(journal.record(identity, createFailure()));
-                            globalRecords.unshift(recordLaunchFailureForAppHostPath(appHostProjectPath, {
-                                stage: 'build',
-                                category: 'buildFailed',
-                                controller: 'editor',
-                            }));
+                            store.record(otherIdentity, failure);
+                            recordLaunchFailureForAppHostPath(otherPath, globalInput);
                         }
 
-                        assert.deepStrictEqual(journal.readLatest(identity), records);
-                        assert.deepStrictEqual(readLatestLaunchFailures(appHostProjectPath), globalRecords);
+                        assert.deepStrictEqual(store.read(identity), failure);
+                        assert.deepStrictEqual(readLatestLaunchFailure(appHostProjectPath), normalizeLaunchFailure(globalInput));
 
                         monotonicClock.returns(1_000 + 30 * 60_000);
-                        assert.deepStrictEqual(journal.readLatest(identity), pruneOn === 'record' ? records.slice(0, 1) : []);
-                        assert.deepStrictEqual(readLatestLaunchFailures(appHostProjectPath), pruneOn === 'record' ? globalRecords.slice(0, 1) : []);
+                        assert.strictEqual(store.read(identity), undefined);
+                        assert.strictEqual(readLatestLaunchFailure(appHostProjectPath), undefined);
+                        assert.deepStrictEqual(store.read(otherIdentity), pruneOn === 'record' ? failure : undefined);
+                        assert.deepStrictEqual(readLatestLaunchFailure(otherPath), pruneOn === 'record' ? normalizeLaunchFailure(globalInput) : undefined);
                     }
                     finally {
                         sandbox.restore();
@@ -286,27 +369,31 @@ suite('Editor assistance AppHost services', () => {
                     const minute = 60_000;
                     let now = 40 * minute;
                     const acceptedSizes: number[] = [];
-                    const journal = new LaunchFailureJournal(
+                    const store = new LaunchFailureStore(
                         { now: () => now },
                         (_failure, size) => acceptedSizes.push(size));
                     const identity = getOrCreateIdentityForCurrentAppHostTarget(appHostProjectPath);
-                    const expected = [journal.record(identity, createFailure())];
+                    const otherIdentity = getOrCreateIdentityForCurrentAppHostTarget(path.join(workspaceRoot, 'Other.csproj'));
+                    const laterIdentity = getOrCreateIdentityForCurrentAppHostTarget(path.join(workspaceRoot, 'Later.csproj'));
+                    const failure = createFailure();
+                    store.record(identity, failure);
 
                     now = 0;
-                    journal.record(identity, createFailure());
+                    store.record(otherIdentity, failure);
                     if (includeLaterValidRecord) {
                         now = 2 * minute;
-                        expected.unshift(journal.record(identity, createFailure()));
+                        store.record(laterIdentity, failure);
                     }
 
                     now = 31 * minute;
                     if (pruneOn === 'record') {
-                        expected.unshift(journal.record(identity, createFailure()));
-                        assert.strictEqual(acceptedSizes.at(-1), expected.length);
+                        store.record(identity, failure);
+                        assert.strictEqual(acceptedSizes.at(-1), includeLaterValidRecord ? 2 : 1);
                     }
 
-                    assert.deepStrictEqual(journal.readLatest(identity), expected);
-                    assert.deepStrictEqual(journal.readLatest(), expected);
+                    assert.deepStrictEqual(store.read(identity), failure);
+                    assert.strictEqual(store.read(otherIdentity), undefined);
+                    assert.deepStrictEqual(store.read(laterIdentity), includeLaterValidRecord ? failure : undefined);
                 });
             }
         }
@@ -377,10 +464,10 @@ suite('Editor assistance AppHost services', () => {
                 ...secrets,
             } as unknown as LaunchFailureInput;
             const normalized = normalizeLaunchFailure(rawFailure);
-            const journal = new LaunchFailureJournal({ now: () => 123_456 });
+            const store = new LaunchFailureStore({ now: () => 123_456 });
             const identity = getOrCreateIdentityForCurrentAppHostTarget(appHostProjectPath);
-            journal.record(identity, normalized);
-            const records = journal.readLatest(identity);
+            store.record(identity, normalized);
+            const record = store.read(identity);
 
             assert.deepStrictEqual(normalized, {
                 stage: 'debugSession',
@@ -390,19 +477,18 @@ suite('Editor assistance AppHost services', () => {
                 providerKind: 'node',
                 exitCodeBucket: 'other',
             });
-            assert.deepStrictEqual(Object.keys(records[0]).sort(), [
-                'appHostIdentity',
+            assert.ok(record);
+            assert.deepStrictEqual(Object.keys(record).sort(), [
                 'category',
                 'controller',
                 'exitCodeBucket',
                 'mode',
                 'providerKind',
-                'recordedAt',
-                'sequence',
                 'stage',
             ]);
 
-            const serialized = JSON.stringify({ journal, normalized, records });
+            assert.deepStrictEqual(record, normalized);
+            const serialized = JSON.stringify({ normalized, record });
             for (const secret of [
                 secrets.message,
                 secrets.stack,
@@ -421,12 +507,16 @@ suite('Editor assistance AppHost services', () => {
             }
         });
 
-        test('rejects a forged opaque identity instead of retaining a path', () => {
-            const journal = new LaunchFailureJournal({ now: () => 123_456 });
+        test('rejects forged strings and coercible objects instead of retaining raw identity data', () => {
+            const store = new LaunchFailureStore({ now: () => 123_456 });
             const rawPath = '/private/forged-apphost-path';
 
-            assert.throws(() => journal.record(rawPath as any, createFailure()), /opaque AppHost identity/);
-            assert.strictEqual(JSON.stringify(journal).includes(rawPath), false);
+            for (const identity of [rawPath, { rawPath, toString: () => 'apphost-99' }]) {
+                assert.throws(
+                    () => store.record(identity as OpaqueAppHostIdentity, createFailure()),
+                    /opaque AppHost identity/);
+            }
+            assert.strictEqual(store.read('apphost-99' as OpaqueAppHostIdentity), undefined);
         });
     });
 });

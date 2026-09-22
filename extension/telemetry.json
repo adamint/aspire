@@ -120,12 +120,12 @@
       "stage": {
         "classification": "SystemMetaData",
         "purpose": "PerformanceAndHealth",
-        "comment": "The bounded launch stage accepted by the in-memory failure journal."
+        "comment": "The bounded launch stage accepted by the in-memory failure store."
       },
       "category": {
         "classification": "SystemMetaData",
         "purpose": "PerformanceAndHealth",
-        "comment": "The bounded sanitized launch failure category accepted by the journal."
+        "comment": "The bounded sanitized launch failure category accepted by the store."
       },
       "controller": {
         "classification": "SystemMetaData",
@@ -147,10 +147,10 @@
         "purpose": "PerformanceAndHealth",
         "comment": "The bounded exit-code category for the failed launch."
       },
-      "journal_size": {
+      "store_size": {
         "classification": "SystemMetaData",
         "purpose": "PerformanceAndHealth",
-        "comment": "The current global number of sanitized launch failures retained after capacity maintenance."
+        "comment": "The number of AppHosts with a retained latest failure after expiry and capacity maintenance."
       }
     },
     "aspire/vscode/cli/availability": {

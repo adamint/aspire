@@ -7,7 +7,7 @@ import * as vscode from 'vscode';
 import { EditorStateSnapshotService } from '../lm/editorStateSnapshotService';
 import { SafeAppHostTargetResolver } from '../lm/safeAppHostTargetResolver';
 import { getOrCreateIdentityForCurrentAppHostTarget } from '../utils/appHostIdentity';
-import { __resetLaunchFailureJournalForTests } from '../services/launchFailureJournal';
+import { resetLaunchFailureStore } from '../services/launchFailureStore';
 import {
     __resetAppHostIdentityRegistryForTests,
     compareAppHostIdentity,
@@ -51,7 +51,7 @@ suite('Editor assistance AppHost services', () => {
 
     setup(() => {
         __resetAppHostIdentityRegistryForTests();
-        __resetLaunchFailureJournalForTests();
+        resetLaunchFailureStore();
         workspaceRoot = createFixtureDirectory('workspace');
         outsideRoot = createFixtureDirectory('outside');
         appHostProjectPath = path.join(workspaceRoot, 'AppHost', 'AppHost.csproj');
@@ -73,7 +73,7 @@ suite('Editor assistance AppHost services', () => {
     });
 
     teardown(() => {
-        __resetLaunchFailureJournalForTests();
+        resetLaunchFailureStore();
         __resetAppHostIdentityRegistryForTests();
         workspaceFoldersStub.restore();
         fs.rmSync(workspaceRoot, { recursive: true, force: true });

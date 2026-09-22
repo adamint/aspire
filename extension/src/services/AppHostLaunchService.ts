@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { AspireCommandType, AspireExtendedDebugConfiguration, type AspireResourceDebugSession } from '../dcp/types';
 import { appHostLifecycleInvalidLaunchProfile, appHostLifecycleIsolationCapabilityCouldNotBeVerified, appHostLifecycleIsolationModeNotSupported, appHostLifecycleLaunchProfileCapabilityCouldNotBeVerified, appHostLifecycleLaunchProfileNotSupported, appHostLifecycleLaunchProfileRequiresRun, startDebuggingDeclined } from '../loc/strings';
 import { ensureIsolatedCliArg, getRootIsolatedCliArg, isLinkedGitWorktree } from '../utils/gitWorktree';
-import { getLaunchFailureProviderKindForAppHostPath, recordLaunchFailureForAppHostIdentity, type LaunchFailureCategory, type LaunchFailureMode } from './launchFailureJournal';
+import { getLaunchFailureMode, getLaunchFailureProviderKindForAppHostPath, recordLaunchFailureForAppHostIdentity, type LaunchFailureCategory } from './launchFailureStore';
 import { bindCurrentAppHostTarget, compareAppHostIdentity, getAppHostIdentityKeyInfo, getOrCreateIdentityForCurrentAppHostTarget, isAppHostPathWithinDirectory, type AppHostIdentityKeyInfo, type AppHostIdentityRelation, type OpaqueAppHostIdentity } from '../utils/appHostIdentity';
 import { isSameAppHostPath } from '../utils/paths/comparison';
 import { classifyError, isCommandCancellation, sendTelemetryEvent, type EventProperties } from '../utils/telemetry';
@@ -135,7 +135,7 @@ export class AppHostLaunchService implements vscode.Disposable {
     private readonly _debugSessionByLaunchToken = new Map<number, vscode.DebugSession>();
     private readonly _canceledDebugStartTokens = new Set<number>();
     // Attempt correlation stays process-local. These tokens must never be projected into
-    // the launch failure journal, telemetry, logs, tool results, or E2E state.
+    // the launch failure store, telemetry, logs, tool results, or E2E state.
     private readonly _appHostPathAwaitingDebugStartByToken = new Map<number, string>();
     private readonly _launchTokensWithSpecificFailure = new Set<number>();
     /**
@@ -1311,7 +1311,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             // AppHost this attempt was bound to. Everything above was awaited, so the entry the
             // caller chose can have been replaced in the meantime, and starting anyway would run
             // an AppHost the caller never selected - or the one they did select while the tree,
-            // the journal, and the tools all attribute it to something else. The configuration
+            // the store, and the tools all attribute it to something else. The configuration
             // already carries the bound physical path, so a retarget after this point can no
             // longer redirect the process VS Code starts.
             this.assertAppHostLaunchTargetCurrent(launchTarget);
@@ -1695,18 +1695,6 @@ function createTrackedRunLaunch(appHostPath: string, pendingLaunch?: TrackedRunL
         appHostIdentity: binding.identity,
     };
 }
-
-function getLaunchFailureMode(command: AspireCommandType, noDebug: boolean): LaunchFailureMode {
-    if (command === 'deploy' || command === 'publish') {
-        return command;
-    }
-    if (command === 'run') {
-        return noDebug ? 'run' : 'debug';
-    }
-
-    return 'other';
-}
-
 
 function throwIfCancelled(token: vscode.CancellationToken): void {
     if (token.isCancellationRequested) {

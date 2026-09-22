@@ -40,11 +40,11 @@ import {
 import { EditorUiHandoffService } from '../lm/editorUiHandoffService';
 import { EditorStateSnapshotService } from '../lm/editorStateSnapshotService';
 import {
-    __resetLaunchFailureJournalForTests,
+    resetLaunchFailureStore,
     normalizeLaunchFailure,
-    readLatestLaunchFailures,
+    readLatestLaunchFailure,
     type SanitizedLaunchFailure,
-} from '../services/launchFailureJournal';
+} from '../services/launchFailureStore';
 import { SafeAppHostTargetResolver } from '../lm/safeAppHostTargetResolver';
 import { type EditorResourceSessionSnapshot } from '../services/appHostLaunchContracts';
 import { AspireCliParseError, type AppHostDisplayInfo, type ResourceJson } from '../data/appHostCliContracts';
@@ -277,29 +277,29 @@ suite('Editor assistance AppHost services', () => {
         let snapshotService: EditorStateSnapshotService;
         let resourceRepository: FakeEditorAssistanceResourceRepository;
         let resourceSessions: EditorResourceSessionSnapshot[];
-        let failuresByAppHost: Map<string, readonly SanitizedLaunchFailure[]>;
+        let failuresByAppHost: Map<string, SanitizedLaunchFailure>;
         let failureReaderError: unknown;
         /**
-         * Runs while the launch failure journal is being read.
+         * Runs while the launch failure store is being read.
          *
-         * The journal read is the last step before an explanation is published, so mutating the
+         * The store read is the last step before an explanation is published, so mutating the
          * workspace from here reproduces a retarget at exactly that point rather than from a timer.
          */
         let beforeLaunchFailureRead: ((appHostPath: string) => void) | undefined;
         /**
-         * Runs once the journal read has produced its failures, before the caller resumes.
+         * Runs once the store read has produced its failures, before the caller resumes.
          *
-         * The journal resolves a path to an AppHost identity with its own filesystem calls, and
+         * The store resolves a path to an AppHost identity with its own filesystem calls, and
          * the caller revalidates its target with another. A second process can move a link
          * between those two calls and move it back, so both halves of that interleaving are
          * driven from here rather than from a timer.
          */
         let afterLaunchFailureRead: ((appHostPath: string) => void) | undefined;
         /**
-         * Maps a requested AppHost path onto the journal entry the read answers for.
+         * Maps a requested AppHost path onto the store entry the read answers for.
          *
          * Defaults to the lexical path so ordinary fixtures stay unaffected; retarget tests point
-         * it at the filesystem to model the identity resolution the real journal performs.
+         * it at the filesystem to model the identity resolution the real store performs.
          */
         let resolveLaunchFailureReadPath: (appHostPath: string) => string;
         let uiRepository: FakeEditorUiHandoffRepository;
@@ -312,7 +312,7 @@ suite('Editor assistance AppHost services', () => {
 
         setup(() => {
             __resetAppHostIdentityRegistryForTests();
-            __resetLaunchFailureJournalForTests();
+            resetLaunchFailureStore();
             workspaceRoot = createFixtureDirectory('tool-workspace');
             secondWorkspaceRoot = createFixtureDirectory('tool-second-workspace');
             appHostProjectPath = path.join(workspaceRoot, 'AppHost', 'AppHost.csproj');
@@ -367,15 +367,15 @@ suite('Editor assistance AppHost services', () => {
                 snapshotService,
                 resourceRepository,
                 getEditorResourceSessions: () => resourceSessions,
-                readLatestLaunchFailures: appHostPath => {
+                readLatestLaunchFailure: appHostPath => {
                     beforeLaunchFailureRead?.(appHostPath);
                     if (failureReaderError) {
                         throw failureReaderError;
                     }
 
-                    const failures = failuresByAppHost.get(resolveLaunchFailureReadPath(appHostPath)) ?? [];
+                    const failure = failuresByAppHost.get(resolveLaunchFailureReadPath(appHostPath));
                     afterLaunchFailureRead?.(appHostPath);
-                    return failures;
+                    return failure;
                 },
                 readHotReloadDiagnostics: () => {
                     hotReloadDiagnosticsReads++;
@@ -611,7 +611,7 @@ suite('Editor assistance AppHost services', () => {
         teardown(() => {
             isTrustedStub.restore();
             workspaceFoldersStub.restore();
-            __resetLaunchFailureJournalForTests();
+            resetLaunchFailureStore();
             __resetAppHostIdentityRegistryForTests();
             fs.rmSync(workspaceRoot, { recursive: true, force: true });
             fs.rmSync(secondWorkspaceRoot, { recursive: true, force: true });
@@ -1874,14 +1874,14 @@ suite('Editor assistance AppHost services', () => {
             ]);
 
             for (const [category, recommendedActions] of expectedActions) {
-                failuresByAppHost.set(path.resolve(appHostProjectPath), [normalizeLaunchFailure({
+                failuresByAppHost.set(path.resolve(appHostProjectPath), normalizeLaunchFailure({
                     stage: 'debugSession',
                     category,
                     controller: 'editor',
                     mode: 'debug',
                     providerKind: 'dotnet',
                     exitCode: 1,
-                })]);
+                }));
 
                 const result = await service.explainLaunchFailure(
                     { appHostPath: 'AppHost/AppHost.csproj' },
@@ -1896,7 +1896,7 @@ suite('Editor assistance AppHost services', () => {
             }
         });
 
-        test('returns only the latest sanitized journal entry and no raw metadata', async () => {
+        test('returns only the sanitized failure and no raw metadata', async () => {
             const latest = {
                 ...normalizeLaunchFailure({
                     stage: 'build',
@@ -1911,14 +1911,7 @@ suite('Editor assistance AppHost services', () => {
                 sequence: 42,
                 detail: `secret ${workspaceRoot}`,
             };
-            const older = normalizeLaunchFailure({
-                stage: 'dashboard',
-                category: 'unknown',
-                controller: 'editor',
-                mode: 'debug',
-                providerKind: 'browser',
-            });
-            failuresByAppHost.set(path.resolve(appHostProjectPath), [latest, older]);
+            failuresByAppHost.set(path.resolve(appHostProjectPath), latest);
 
             const result = await service.explainLaunchFailure(
                 { appHostPath: 'AppHost/AppHost.csproj' },
@@ -1945,7 +1938,7 @@ suite('Editor assistance AppHost services', () => {
             assert.strictEqual(serialized.includes('detail'), false);
         });
 
-        test('reports noRecordedFailure when the unexpired journal has no entry', async () => {
+        test('reports noRecordedFailure when the unexpired store has no entry', async () => {
             const result = await service.explainLaunchFailure(
                 { appHostPath: 'AppHost/AppHost.csproj' },
                 new vscode.CancellationTokenSource().token);
@@ -1982,8 +1975,8 @@ suite('Editor assistance AppHost services', () => {
             assert.strictEqual(JSON.stringify(failed).includes(workspaceRoot), false);
         });
 
-        test('refuses to publish an explanation for an AppHost that retargets while the journal is read', async function () {
-            // The journal is keyed by the AppHost's current filesystem identity and is read after
+        test('refuses to publish an explanation for an AppHost that retargets while the store is read', async function () {
+            // The store is keyed by the AppHost's current filesystem identity and is read after
             // an asynchronous resolution, so an alias repointed in between answers about the
             // replacement file. Publishing that answer under the resolved identity would describe
             // one AppHost's launch with another AppHost's recorded failure, so the whole result is
@@ -2007,21 +2000,21 @@ suite('Editor assistance AppHost services', () => {
 
             discoveryService.candidatesByFolder.set(workspaceRoot, []);
             addCandidate(discoveryService, workspaceRoot, linkedAppHostPath);
-            // The journal answers for whatever the selector currently names, which is what makes
+            // The store answers for whatever the selector currently names, which is what makes
             // an unrevalidated result publish the replacement's failure.
-            failuresByAppHost.set(path.resolve(linkedAppHostPath), [normalizeLaunchFailure({
+            failuresByAppHost.set(path.resolve(linkedAppHostPath), normalizeLaunchFailure({
                 stage: 'build',
                 category: 'buildFailed',
                 controller: 'editor',
                 mode: 'debug',
                 providerKind: 'dotnet',
                 exitCode: 1,
-            })]);
-            let journalReads = 0;
+            }));
+            let storeReads = 0;
             // The retarget is driven by the read itself, so the interleaving is reproduced on
             // every run rather than depending on a timer.
             beforeLaunchFailureRead = () => {
-                journalReads++;
+                storeReads++;
                 fs.rmSync(linkedAppHostPath);
                 fs.symlinkSync(secondTarget, linkedAppHostPath);
             };
@@ -2030,7 +2023,7 @@ suite('Editor assistance AppHost services', () => {
                 { appHostPath: 'ExplainLinked/AppHost.csproj' },
                 new vscode.CancellationTokenSource().token);
 
-            assert.strictEqual(journalReads, 1);
+            assert.strictEqual(storeReads, 1);
             assert.deepStrictEqual(result, {
                 success: false,
                 tool: aspireExplainLaunchFailureToolName,
@@ -2038,7 +2031,7 @@ suite('Editor assistance AppHost services', () => {
             });
         });
 
-        test('refuses to report an absent explanation for an AppHost that retargets while the journal is read', async function () {
+        test('refuses to report an absent explanation for an AppHost that retargets while the store is read', async function () {
             // "Nothing was recorded" is as much a statement about one file as a recorded failure
             // is, so the empty answer is refused on the same terms.
             const firstTarget = path.join(workspaceRoot, 'EmptyExplainFirst', 'AppHost.csproj');
@@ -2060,9 +2053,9 @@ suite('Editor assistance AppHost services', () => {
 
             discoveryService.candidatesByFolder.set(workspaceRoot, []);
             addCandidate(discoveryService, workspaceRoot, linkedAppHostPath);
-            let journalReads = 0;
+            let storeReads = 0;
             beforeLaunchFailureRead = () => {
-                journalReads++;
+                storeReads++;
                 fs.rmSync(linkedAppHostPath);
                 fs.symlinkSync(secondTarget, linkedAppHostPath);
             };
@@ -2071,7 +2064,7 @@ suite('Editor assistance AppHost services', () => {
                 { appHostPath: 'EmptyExplainLinked/AppHost.csproj' },
                 new vscode.CancellationTokenSource().token);
 
-            assert.strictEqual(journalReads, 1);
+            assert.strictEqual(storeReads, 1);
             assert.deepStrictEqual(result, {
                 success: false,
                 tool: aspireExplainLaunchFailureToolName,
@@ -3226,7 +3219,7 @@ suite('Editor assistance AppHost services', () => {
                 snapshotService,
                 resourceRepository,
                 getEditorResourceSessions: () => resourceSessions,
-                readLatestLaunchFailures: () => [],
+                readLatestLaunchFailure: () => undefined,
                 readHotReloadDiagnostics: () => hotReloadDiagnostics,
                 uiHandoffService: localUiService,
             });
@@ -4063,8 +4056,8 @@ suite('Editor assistance AppHost services', () => {
             assert.deepStrictEqual(resourceRepository.authoritativeRequests, []);
         });
 
-        test('explains only the failure of the AppHost it resolved when a selector retargets during the journal read', async function () {
-            // The journal resolves a path to an identity with its own filesystem calls, and the
+        test('explains only the failure of the AppHost it resolved when a selector retargets during the store read', async function () {
+            // The store resolves a path to an identity with its own filesystem calls, and the
             // caller revalidates with another. Those are separate syscalls, so a second process
             // can move a link between them and move it back: adjacency in this process is not
             // exclusion on the filesystem.
@@ -4074,20 +4067,20 @@ suite('Editor assistance AppHost services', () => {
                 return;
             }
 
-            failuresByAppHost.set(path.resolve(aba.firstTarget), [normalizeLaunchFailure({
+            failuresByAppHost.set(path.resolve(aba.firstTarget), normalizeLaunchFailure({
                 stage: 'build',
                 category: 'buildFailed',
                 controller: 'cli',
                 mode: 'run',
                 providerKind: 'node',
-            })]);
-            failuresByAppHost.set(path.resolve(aba.secondTarget), [normalizeLaunchFailure({
+            }));
+            failuresByAppHost.set(path.resolve(aba.secondTarget), normalizeLaunchFailure({
                 stage: 'dcpStartup',
                 category: 'portConflict',
                 controller: 'editor',
                 mode: 'debug',
                 providerKind: 'dotnet',
-            })]);
+            }));
             resolveLaunchFailureReadPath = aba.followLinks;
             beforeLaunchFailureRead = () => aba.retargetTo(aba.secondTarget);
             afterLaunchFailureRead = () => aba.retargetTo(aba.firstTarget);
@@ -5118,7 +5111,7 @@ suite('Editor assistance AppHost services', () => {
                     snapshotService,
                     resourceRepository,
                     getEditorResourceSessions: () => resourceSessions,
-                    readLatestLaunchFailures: () => [],
+                    readLatestLaunchFailure: () => undefined,
                     readHotReloadDiagnostics: getHotReloadDiagnostics,
                     uiHandoffService,
                 });

@@ -1,5 +1,5 @@
 import { resetAppHostIdentityRegistry } from '../utils/appHostIdentity';
-import { resetLaunchFailureJournal } from './launchFailureJournal';
+import { resetLaunchFailureStore } from './launchFailureStore';
 
 /**
  * Clears editor-assistance state whose lifetime is one extension-host activation.
@@ -9,6 +9,6 @@ import { resetLaunchFailureJournal } from './launchFailureJournal';
  * from being observed in the next extension window.
  */
 export function resetEditorAssistanceWindowState(): void {
-    resetLaunchFailureJournal();
+    resetLaunchFailureStore();
     resetAppHostIdentityRegistry();
 }

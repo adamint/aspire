@@ -9,7 +9,7 @@ import { compareAppHostIdentity, isAppHostProjectFile } from '../utils/appHostId
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
 import { getCliPathTargetForUri, getCliPathTargetKey, windowCliPathTarget, workspaceFolderCliPathTarget, type CliPathResolutionTarget } from '../utils/cliPathVariables';
 import { extensionLogOutputChannel } from '../utils/logging';
-import { getLaunchFailureProviderKindForAppHostPath, recordLaunchFailureForAppHostPath, type LaunchFailureMode } from '../services/launchFailureJournal';
+import { getLaunchFailureMode, getLaunchFailureProviderKindForAppHostPath, recordLaunchFailureForAppHostPath } from '../services/launchFailureStore';
 import { isAppHostSourceFile } from '../utils/paths/comparison';
 import { doesFileExist, isDirectory } from '../utils/io';
 import { isCommandCancellation } from '../utils/telemetry';
@@ -453,13 +453,13 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
                     // Another launch or operation already owns this AppHost. Abort this session
                     // rather than starting overlapping work against the same project.
                     // A directory-scoped reservation does not identify which AppHost the user
-                    // intended to launch, so it cannot safely be attributed in the journal.
+                    // intended to launch, so it cannot safely be attributed in the store.
                     if (isConcreteAppHostTarget(claimedPath)) {
                         recordLaunchFailureForAppHostPath(claimedPath, {
                             stage: 'validation',
                             category: 'invalidConfiguration',
                             controller: 'editor',
-                            mode: getLaunchFailureMode(aspireConfig),
+                            mode: getLaunchFailureMode(getAspireDebugConfigurationCommand(aspireConfig), aspireConfig.noDebug === true),
                             providerKind: getLaunchFailureProviderKindForAppHostPath(claimedPath),
                         });
                     }
@@ -558,7 +558,7 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
                 recordLaunchFailureForAppHostPath(filePath, {
                     stage: 'discovery',
                     controller: 'editor',
-                    mode: getLaunchFailureMode(config),
+                    mode: getLaunchFailureMode(getAspireDebugConfigurationCommand(config), config.noDebug === true),
                     providerKind: getLaunchFailureProviderKindForAppHostPath(filePath),
                     error,
                 });
@@ -696,18 +696,6 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
         markAspireDebugConfigurationWithResolvedCliPathScope(config, getCliPathTargetKey(target));
         return result.cliPath;
     }
-}
-
-function getLaunchFailureMode(config: AspireExtendedDebugConfiguration): LaunchFailureMode {
-    const command = getAspireDebugConfigurationCommand(config);
-    if (command === 'deploy' || command === 'publish') {
-        return command;
-    }
-    if (command === 'run') {
-        return config.noDebug === true ? 'run' : 'debug';
-    }
-
-    return 'other';
 }
 
 function isConcreteAppHostTarget(appHostPath: string): boolean {

@@ -787,13 +787,13 @@ suite('Aspire AppHost lifecycle E2E', function () {
                 180000);
             await waitForNoDebugSessions();
             await waitForNoRunningAppHost();
-            // The CLI awaits its stopDebugging RPC in ProcessExit. The journal entry follows
+            // The CLI awaits its stopDebugging RPC in ProcessExit. The store entry follows
             // that shutdown, so poll the public tool rather than treating DAP teardown as proof.
             const failure = await waitForToolResult<Record<string, unknown>>({
                 name: 'invokeLanguageModelTool',
                 toolName: explainToolName,
                 input: { appHostPath: relativeAppHostPath },
-            }, result => result.outcome === 'failureFound', 'the CLI startup-failure journal entry', 30000);
+            }, result => result.outcome === 'failureFound', 'the CLI startup-failure store entry', 30000);
             assert.deepStrictEqual({
                 outcome: failure.outcome,
                 category: failure.category,
