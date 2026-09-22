@@ -223,7 +223,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 // Launching again would start a second AppHost against the same project.
                 // Report it instead so the agent can decide, and never adopt or kill a
                 // process this extension does not own.
-                return createResult(aspireAppHostStartToolName, 'alreadyRunning', preflight.target.relativePath, 'external', requestedMode, undefined);
+                return createResult(aspireAppHostStartToolName, 'alreadyRunning', preflight.target.displayPath, 'external', requestedMode, undefined);
             }
 
             return await this._dependencies.launchService.runWithAppHostLifecycleLock(preflight.target.canonicalPath, token, async lockToken => {
@@ -236,7 +236,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 }
 
                 if (!this.isSameConfirmedAppHost(aspireAppHostStartToolName, preflight.target, recheck.target)) {
-                    return createResult(aspireAppHostStartToolName, 'failed', preflight.target.relativePath, 'none', requestedMode, undefined);
+                    return createResult(aspireAppHostStartToolName, 'failed', preflight.target.displayPath, 'none', requestedMode, undefined);
                 }
 
                 const current = recheck.target;
@@ -253,14 +253,14 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                     return createResult(
                         aspireAppHostStartToolName,
                         'alreadyRunning',
-                        current.relativePath,
+                        current.displayPath,
                         'editor',
                         requestedMode,
                         getSessionMode(runningSession));
                 }
 
                 if (this._dependencies.launchService.isLaunching(current.canonicalPath) || owned.sessions.length > 0) {
-                    return createResult(aspireAppHostStartToolName, 'alreadyStarting', current.relativePath, 'editor', requestedMode, undefined);
+                    return createResult(aspireAppHostStartToolName, 'alreadyStarting', current.displayPath, 'editor', requestedMode, undefined);
                 }
 
                 if (owned.ambiguous) {
@@ -268,13 +268,13 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                     // for example a sibling project file and a `Program.cs` in a directory
                     // holding several projects. Launching would risk a second process for
                     // an AppHost that is already running, so refuse instead of guessing.
-                    return createResult(aspireAppHostStartToolName, 'ambiguousSession', current.relativePath, 'editor', requestedMode, undefined);
+                    return createResult(aspireAppHostStartToolName, 'ambiguousSession', current.displayPath, 'editor', requestedMode, undefined);
                 }
 
                 // Authoritative ownership check immediately before launching. This is the
                 // one that matters: everything before it could be stale by now.
                 if (await this.isRunningOutsideEditor(current.canonicalPath, lockToken)) {
-                    return createResult(aspireAppHostStartToolName, 'alreadyRunning', current.relativePath, 'external', requestedMode, undefined);
+                    return createResult(aspireAppHostStartToolName, 'alreadyRunning', current.displayPath, 'external', requestedMode, undefined);
                 }
 
                 // An omitted isolation value follows linked-worktree state. That filesystem state
@@ -291,7 +291,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 // `startDebugging` without it, so this claim - not the checks above - is
                 // what makes "no second AppHost" hold against a concurrent editor launch.
                 if (!this._dependencies.launchService.tryReserveLaunch(current.canonicalPath)) {
-                    return createResult(aspireAppHostStartToolName, 'alreadyStarting', current.relativePath, 'editor', requestedMode, undefined);
+                    return createResult(aspireAppHostStartToolName, 'alreadyStarting', current.displayPath, 'editor', requestedMode, undefined);
                 }
 
                 try {
@@ -313,19 +313,19 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                         preparedAction !== undefined && input.isolated === undefined
                             ? preparedAction.isolated
                             : undefined);
-                    return createResult(aspireAppHostStartToolName, 'started', current.relativePath, 'editor', requestedMode, requestedMode, undefined, launchedIsolation?.effective);
+                    return createResult(aspireAppHostStartToolName, 'started', current.displayPath, 'editor', requestedMode, requestedMode, undefined, launchedIsolation?.effective);
                 }
                 catch (error) {
                     // The launch path clears its own reservation once it owns it, but a
                     // failure before that point (a disposed service, for example) would
                     // otherwise leave this AppHost reported as launching forever.
                     this._dependencies.launchService.clearLaunching(current.canonicalPath);
-                    return this.createErrorResult(aspireAppHostStartToolName, error, current.relativePath, 'editor', requestedMode, undefined);
+                    return this.createErrorResult(aspireAppHostStartToolName, error, current.displayPath, 'editor', requestedMode, undefined);
                 }
             });
         }
         catch (error) {
-            return this.createErrorResult(aspireAppHostStartToolName, error, preflight.target.relativePath, 'editor', requestedMode, undefined);
+            return this.createErrorResult(aspireAppHostStartToolName, error, preflight.target.displayPath, 'editor', requestedMode, undefined);
         }
     }
 
@@ -373,13 +373,13 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 }
 
                 if (!this.isSameConfirmedAppHost(aspireAppHostStopToolName, preflight.target, recheck.target)) {
-                    return createResult(aspireAppHostStopToolName, 'failed', preflight.target.relativePath, 'none', undefined, undefined);
+                    return createResult(aspireAppHostStopToolName, 'failed', preflight.target.displayPath, 'none', undefined, undefined);
                 }
 
                 const result = await this._dependencies.launchService.stopAppHostFromLifecycleOwner(
                     toAppHostLaunchTarget(recheck.target),
                     lockToken);
-                return this.createStopResult(recheck.target.relativePath, result);
+                return this.createStopResult(recheck.target.displayPath, result);
             });
         }
         catch (error) {
@@ -390,18 +390,18 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             const effectiveMode = stopError?.controller === 'editor'
                 ? stopError.noDebug ? 'run' : 'debug'
                 : undefined;
-            return this.createErrorResult(aspireAppHostStopToolName, error, preflight.target.relativePath, controller, undefined, effectiveMode);
+            return this.createErrorResult(aspireAppHostStopToolName, error, preflight.target.displayPath, controller, undefined, effectiveMode);
         }
     }
 
-    private createStopResult(relativePath: string, result: AppHostStopResult): AppHostLifecycleToolResult {
+    private createStopResult(displayPath: string, result: AppHostStopResult): AppHostLifecycleToolResult {
         const effectiveMode = result.outcome === 'stopped' && result.controller === 'editor'
             ? result.noDebug ? 'run' : 'debug'
             : undefined;
         return createResult(
             aspireAppHostStopToolName,
             result.outcome,
-            relativePath,
+            displayPath,
             result.controller,
             undefined,
             effectiveMode);
@@ -587,23 +587,23 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
     private createErrorResult(
         tool: string,
         error: unknown,
-        relativePath: string,
+        displayPath: string,
         controller: AppHostLifecycleController,
         requestedMode: AppHostLifecycleMode | undefined,
         effectiveMode: AppHostLifecycleMode | undefined,
     ): AppHostLifecycleToolResult {
         if (isCommandCancellation(error)) {
-            return createResult(tool, 'cancelled', relativePath, controller, requestedMode, effectiveMode);
+            return createResult(tool, 'cancelled', displayPath, controller, requestedMode, effectiveMode);
         }
 
         if (error instanceof AppHostLifecycleLockTimeoutError) {
-            return createResult(tool, 'busy', relativePath, controller, requestedMode, effectiveMode);
+            return createResult(tool, 'busy', displayPath, controller, requestedMode, effectiveMode);
         }
 
         // Model-triggered failures routinely contain absolute paths, CLI output, and
         // connection details. Keep this diagnostic bounded to the registered tool name.
         extensionLogOutputChannel.error(`Aspire language model tool ${tool} failed.`);
-        return createResult(tool, 'failed', relativePath, controller, requestedMode, effectiveMode);
+        return createResult(tool, 'failed', displayPath, controller, requestedMode, effectiveMode);
     }
 
 }

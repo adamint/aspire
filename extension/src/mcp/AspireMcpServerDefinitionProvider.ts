@@ -571,8 +571,8 @@ function selectWorkspacePinnedAppHosts(
 }
 
 /**
- * Builds the display label for a pinned server from the AppHost path and its owning folder's
- * name, both of which are fixed for the lifetime of the pin.
+ * Builds the display label for a pinned server from the AppHost path and its current owning
+ * folder's name.
  *
  * The label is always folder-qualified. Formatting it differently for a single-folder workspace
  * would rename - and so restart - an existing server the moment an unrelated folder is added.
@@ -586,7 +586,8 @@ function createPinnedServerLabel(pin: OwnedPinnedAppHost): string {
 }
 
 /**
- * Preserves every surviving pin's published label, then disambiguates only new collisions.
+ * Preserves each surviving pin's published label while its owner is unchanged, then
+ * disambiguates new collisions.
  *
  * VS Code uses the label as the server identity. Recomputing suffixes from the current peer set
  * would rename and restart an existing server whenever a colliding folder appears or disappears.
@@ -598,7 +599,13 @@ function createPinnedServerLabels(
     const baseLabels = pins.map(createPinnedServerLabel);
     const registeredLabels = new Set<string>();
     const labels = pins.map(pin => {
-        const existingLabel = existingDefinitionsByPin.get(pin.comparisonKey)?.definition.label;
+        const registered = existingDefinitionsByPin.get(pin.comparisonKey);
+        // Changing the owner already recreates the server for its new cwd. Its label must
+        // describe that owner rather than retain a folder that is no longer in the workspace.
+        const existingLabel = registered !== undefined
+            && registered.definition.cwd?.toString() === pin.owner.uri.toString()
+            ? registered.definition.label
+            : undefined;
         if (existingLabel !== undefined && !registeredLabels.has(existingLabel)) {
             registeredLabels.add(existingLabel);
             return existingLabel;

@@ -491,6 +491,44 @@ suite('AspireMcpServerDefinitionProvider pinned registration tests', () => {
         }
     });
 
+    test('regenerates the label when the owning workspace folder is removed', async () => {
+        const outerFolder = workspaceFolder('repo', '/repo', 0);
+        const innerFolder = workspaceFolder('app', '/repo/app', 1);
+        const folders = [outerFolder, innerFolder];
+        const appHostPath = path.join(innerFolder.uri.fsPath, 'AppHost.csproj');
+        const harness = new ProviderHarness({
+            folders,
+            cliPathFor: () => '/repo/aspire',
+            candidatesFor: async () => [{ path: appHostPath, language: 'csharp', status: 'buildable' }],
+        });
+
+        try {
+            await harness.provider.refresh();
+            const initialDefinition = harness.definitions()[0];
+            assert.strictEqual(initialDefinition.label, 'Aspire (repo: app/AppHost.csproj)');
+
+            folders.shift();
+            await harness.provider.refresh();
+            const updatedDefinition = harness.definitions()[0];
+            assert.notStrictEqual(updatedDefinition, initialDefinition);
+            assert.deepStrictEqual(harness.definitions().map(definition => ({
+                label: definition.label,
+                args: definition.args,
+                cwd: definition.cwd?.fsPath,
+            })), [{
+                label: 'Aspire (app: AppHost.csproj)',
+                args: ['agent', 'mcp', '--apphost', path.resolve(appHostPath)],
+                cwd: innerFolder.uri.fsPath,
+            }]);
+
+            await harness.provider.refresh();
+            assert.strictEqual(harness.definitions()[0], updatedDefinition);
+        }
+        finally {
+            harness.dispose();
+        }
+    });
+
     test('keeps a child path beginning with two dots workspace-relative in its label', async () => {
         const folder = workspaceFolder('repo', '/repo', 0);
         const appHostPath = path.join(folder.uri.fsPath, '..app', 'AppHost.csproj');

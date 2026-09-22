@@ -861,8 +861,9 @@ suite('AppHost lifecycle language model tools', () => {
             }
         });
 
-        test('resolves the workspace-folder-qualified selector in a multi-root workspace', async () => {
+        test('round-trips workspace-folder-qualified identities through lifecycle outcomes', async () => {
             const secondRoot = createFixtureDirectory('second-workspace');
+            const cancellation = new vscode.CancellationTokenSource();
             try {
                 const secondAppHost = path.join(secondRoot, 'AppHost', 'AppHost.csproj');
                 discoveryService.registeredPaths.push(secondAppHost);
@@ -871,13 +872,46 @@ suite('AppHost lifecycle language model tools', () => {
                     { uri: vscode.Uri.file(secondRoot), name: 'second', index: 1 },
                 ]);
 
-                const result = await service.start({ appHostPath: 'second/AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+                const result = await service.start({ appHostPath: 'second/AppHost/AppHost.csproj', mode: 'run' }, cancellation.token);
 
                 assert.strictEqual(result.outcome, 'started');
-                assert.strictEqual(result.appHostPath, 'AppHost/AppHost.csproj');
+                assert.strictEqual(result.appHostPath, 'second/AppHost/AppHost.csproj');
                 assert.deepStrictEqual(launchService.launchCalls, [{ appHostPath: secondAppHost, command: 'run', noDebug: true, isolated: undefined }]);
+
+                const starting = await service.start({ appHostPath: result.appHostPath, mode: 'run' }, cancellation.token);
+                launchService.clearLaunching(secondAppHost);
+                const session = new FakeEditorSession(secondAppHost, { noDebug: true });
+                session.onStopped = () => editorSessions.splice(editorSessions.indexOf(session), 1);
+                editorSessions.push(session);
+
+                const running = await service.start({ appHostPath: starting.appHostPath, mode: 'run' }, cancellation.token);
+                const stopped = await service.stop({ appHostPath: running.appHostPath }, cancellation.token);
+                const idle = await service.stop({ appHostPath: stopped.appHostPath }, cancellation.token);
+                launchService.runningAppHosts = [{ appHostPath: secondAppHost }];
+                const external = await service.start({ appHostPath: idle.appHostPath, mode: 'run' }, cancellation.token);
+                const externalStopped = await service.stop({ appHostPath: external.appHostPath }, cancellation.token);
+                launchService.runningAppHosts = [];
+                launchService.launchError = new Error('Launch failed.');
+                const failedStart = await service.start({ appHostPath: externalStopped.appHostPath, mode: 'run' }, cancellation.token);
+                launchService.stopError = new Error('Stop failed.');
+                const failedStop = await service.stop({ appHostPath: failedStart.appHostPath }, cancellation.token);
+
+                assert.deepStrictEqual(
+                    [starting, running, stopped, idle, external, externalStopped, failedStart, failedStop]
+                        .map(({ outcome, appHostPath }) => ({ outcome, appHostPath })),
+                    [
+                        { outcome: 'alreadyStarting', appHostPath: 'second/AppHost/AppHost.csproj' },
+                        { outcome: 'alreadyRunning', appHostPath: 'second/AppHost/AppHost.csproj' },
+                        { outcome: 'stopped', appHostPath: 'second/AppHost/AppHost.csproj' },
+                        { outcome: 'notRunning', appHostPath: 'second/AppHost/AppHost.csproj' },
+                        { outcome: 'alreadyRunning', appHostPath: 'second/AppHost/AppHost.csproj' },
+                        { outcome: 'stopped', appHostPath: 'second/AppHost/AppHost.csproj' },
+                        { outcome: 'failed', appHostPath: 'second/AppHost/AppHost.csproj' },
+                        { outcome: 'failed', appHostPath: 'second/AppHost/AppHost.csproj' },
+                    ]);
             }
             finally {
+                cancellation.dispose();
                 removeDirectorySafely(secondRoot);
             }
         });

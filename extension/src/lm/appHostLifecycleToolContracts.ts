@@ -69,7 +69,7 @@ export interface AppHostStopToolInput {
 export interface AppHostLifecycleToolResult {
     tool: string;
     outcome: AppHostLifecycleOutcome;
-    /** Path relative to the containing workspace folder, or empty when the input could not be resolved. */
+    /** Workspace-relative selector, folder-qualified in multi-root workspaces; empty when unresolved. */
     appHostPath: string;
     requestedMode?: AppHostLifecycleMode;
     effectiveMode?: AppHostLifecycleMode;
