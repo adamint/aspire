@@ -88,6 +88,7 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
         Assert.Equal("[]", resource.GetProperty("waiting_for").GetRawText());
         Assert.Equal("[]", resource.GetProperty("urls").GetRawText());
         Assert.Equal("[]", resource.GetProperty("relationships").GetRawText());
+        Assert.Equal("{}", resource.GetProperty("commands").GetRawText());
     }
 
     [Fact]
@@ -334,7 +335,280 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
         using var json = GetResourceData(result);
         var resources = json.RootElement;
 
-        Assert.Equal(["api-service", "redis", "postgres"], resources.EnumerateArray().Select(r => r.GetProperty("name").GetString()));
+        Assert.Equal(["api-service", "postgres", "redis"], resources.EnumerateArray().Select(r => r.GetProperty("name").GetString()));
+    }
+
+    [Fact]
+    public async Task ListResourcesTool_DescribesPaginationInputs()
+    {
+        var tool = new ListResourcesTool(new TestAuxiliaryBackchannelMonitor(), NullLogger<ListResourcesTool>.Instance);
+
+        await Verify(tool.GetInputSchema().GetRawText(), "json");
+    }
+
+    [Theory]
+    [InlineData("""{"offset":-1}""", "offset")]
+    [InlineData("""{"offset":2147483648}""", "offset")]
+    [InlineData("""{"offset":1.5}""", "offset")]
+    [InlineData("""{"offset":"64"}""", "offset")]
+    [InlineData("""{"offset":null}""", "offset")]
+    [InlineData("""{"offset":true}""", "offset")]
+    [InlineData("""{"limit":0}""", "limit")]
+    [InlineData("""{"limit":65}""", "limit")]
+    [InlineData("""{"limit":2147483648}""", "limit")]
+    [InlineData("""{"limit":1.5}""", "limit")]
+    [InlineData("""{"limit":"1"}""", "limit")]
+    [InlineData("""{"limit":null}""", "limit")]
+    [InlineData("""{"limit":[]}""", "limit")]
+    [InlineData("""{"unexpected":"value"}""", "unexpected")]
+    public async Task ListResourcesTool_RejectsInvalidPaginationBeforeReadingResources(string json, string invalidArgument)
+    {
+        using var arguments = JsonDocument.Parse(json);
+        var tool = new ListResourcesTool(new TestAuxiliaryBackchannelMonitor(), NullLogger<ListResourcesTool>.Instance);
+        var context = CallToolContextTestHelper.Create(
+            arguments.RootElement.EnumerateObject().ToDictionary(property => property.Name, property => property.Value));
+
+        var exception = await Assert.ThrowsAsync<McpProtocolException>(
+            () => tool.CallToolAsync(context, CancellationToken.None).AsTask()).DefaultTimeout();
+
+        Assert.Equal(McpErrorCode.InvalidParams, exception.ErrorCode);
+        Assert.Equal(invalidArgument switch
+        {
+            "offset" => "Argument 'offset' must be an integer from 0 through 2147483647.",
+            "limit" => "Argument 'limit' must be an integer from 1 through 64.",
+            _ => "Arguments may contain only 'offset' and 'limit'."
+        }, exception.Message);
+    }
+
+    [Fact]
+    public async Task ListResourcesTool_PagesThroughEveryVisibleResourceInStableOrder()
+    {
+        var names = Enumerable.Range(0, 140).Select(index => $"resource-{index:D3}").ToArray();
+        var connection = CreateConnection(names.Reverse().Select(name => new ResourceSnapshot
+        {
+            Name = name,
+            State = "Running"
+        }).ToArray());
+        connection.ResourceSnapshots.Insert(0, new ResourceSnapshot { Name = "hidden", IsHidden = true });
+        connection.ResourceSnapshots.Insert(1, new ResourceSnapshot { Name = "hidden-state", State = "Hidden" });
+        connection.ResourceSnapshots.Insert(2, new ResourceSnapshot
+        {
+            Name = "excluded",
+            Properties = new Dictionary<string, JsonNode?>
+            {
+                [KnownProperties.Resource.ExcludeFromMcp] = JsonValue.Create(true)
+            }
+        });
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+        monitor.AddConnection("hash1", "socket.hash1", connection);
+        var tool = new ListResourcesTool(monitor, NullLogger<ListResourcesTool>.Instance);
+        var returnedNames = new List<string?>();
+
+        foreach (var offset in new[] { 0, 64, 128 })
+        {
+            connection.ResourceSnapshots.Reverse();
+            var context = CallToolContextTestHelper.Create(new Dictionary<string, JsonElement>
+            {
+                ["offset"] = JsonSerializer.SerializeToElement(offset)
+            });
+            var result = await tool.CallToolAsync(context, CancellationToken.None).DefaultTimeout();
+
+            using var resources = GetResourceData(result);
+            using var pagination = GetPagination(result);
+            var pageNames = resources.RootElement.EnumerateArray().Select(resource => resource.GetProperty("name").GetString()).ToArray();
+            Assert.Equal(names.Skip(offset).Take(64), pageNames);
+            returnedNames.AddRange(pageNames);
+            Assert.Equal(offset, pagination.RootElement.GetProperty("offset").GetInt32());
+            Assert.Equal(64, pagination.RootElement.GetProperty("limit").GetInt32());
+            Assert.Equal(names.Length, pagination.RootElement.GetProperty("total").GetInt32());
+            Assert.Equal(offset < 128, pagination.RootElement.TryGetProperty("next_offset", out var nextOffset));
+            if (offset < 128)
+            {
+                Assert.Equal(offset + 64, nextOffset.GetInt32());
+            }
+        }
+
+        Assert.Equal(names, returnedNames);
+    }
+
+    [Theory]
+    [InlineData(0, 1, 1, 1)]
+    [InlineData(1, 1, 1, 2)]
+    [InlineData(1, 64, 2, null)]
+    [InlineData(3, 2, 0, null)]
+    [InlineData(int.MaxValue, 64, 0, null)]
+    public async Task ListResourcesTool_HonorsPageSizeAndHandlesOffsetsPastTheEnd(
+        int offset, int limit, int expectedCount, int? expectedNextOffset)
+    {
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+        monitor.AddConnection("hash1", "socket.hash1", CreateConnection(
+            new ResourceSnapshot { Name = "first" },
+            new ResourceSnapshot { Name = "second" },
+            new ResourceSnapshot { Name = "third" }));
+        var tool = new ListResourcesTool(monitor, NullLogger<ListResourcesTool>.Instance);
+        var context = CallToolContextTestHelper.Create(new Dictionary<string, JsonElement>
+        {
+            ["offset"] = JsonSerializer.SerializeToElement(offset),
+            ["limit"] = JsonSerializer.SerializeToElement(limit)
+        });
+
+        var result = await tool.CallToolAsync(context, CancellationToken.None).DefaultTimeout();
+
+        using var resources = GetResourceData(result);
+        using var pagination = GetPagination(result);
+        Assert.Equal(expectedCount, resources.RootElement.GetArrayLength());
+        Assert.Equal(
+            new[] { "first", "second", "third" }.Skip(offset).Take(limit),
+            resources.RootElement.EnumerateArray().Select(resource => resource.GetProperty("name").GetString()));
+        Assert.Equal(3, pagination.RootElement.GetProperty("total").GetInt32());
+        Assert.Equal(expectedNextOffset is not null, pagination.RootElement.TryGetProperty("next_offset", out var nextOffset));
+        if (expectedNextOffset is not null)
+        {
+            Assert.Equal(expectedNextOffset.Value, nextOffset.GetInt32());
+        }
+    }
+
+    [Fact]
+    public async Task ListResourcesTool_PreservesCrossPageRelationshipsAndHiddenReplicaIdentity()
+    {
+        var snapshots = Enumerable.Range(0, 300).Select(index => new ResourceSnapshot
+        {
+            Name = $"resource-{index:D3}"
+        }).ToList();
+        snapshots.Insert(0, new ResourceSnapshot
+        {
+            Name = "api",
+            WaitingFor = ["redis-visible", "redis-hidden"],
+            Relationships =
+            [
+                new ResourceSnapshotRelationship { ResourceName = "Redis", Type = "Reference" }
+            ]
+        });
+        snapshots.Add(new ResourceSnapshot { Name = "redis-visible", DisplayName = "Redis" });
+        snapshots.Add(new ResourceSnapshot { Name = "redis-hidden", DisplayName = "Redis", IsHidden = true });
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+        monitor.AddConnection("hash1", "socket.hash1", CreateConnection([.. snapshots]));
+        var tool = new ListResourcesTool(monitor, NullLogger<ListResourcesTool>.Instance);
+        var context = CallToolContextTestHelper.Create(new Dictionary<string, JsonElement>
+        {
+            ["limit"] = JsonSerializer.SerializeToElement(1)
+        });
+
+        var result = await tool.CallToolAsync(context, CancellationToken.None).DefaultTimeout();
+
+        await Verify(GetResultText(result), "txt");
+    }
+
+    [Fact]
+    public async Task ListResourcesTool_ListsCommandMetadataWithoutCurrentOrDefaultInputValues()
+    {
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+        monitor.AddConnection("hash1", "socket.hash1", CreateConnection(new ResourceSnapshot
+        {
+            Name = "api",
+            Commands =
+            [
+                new ResourceSnapshotCommand
+                {
+                    Name = "reload",
+                    State = "Enabled",
+                    Description = "Reload configuration.",
+                    ArgumentInputs =
+                    [
+                        new ResourceSnapshotCommandArgument
+                        {
+                            Name = "configuration",
+                            InputType = "Text",
+                            Description = "Configuration name.",
+                            Required = true,
+                            MaxLength = 100,
+                            Value = "private-default-configuration",
+                            Placeholder = "private-placeholder"
+                        },
+                        new ResourceSnapshotCommandArgument
+                        {
+                            Name = "password",
+                            InputType = "SecretText",
+                            Required = true,
+                            Value = "secret-password",
+                            Options = new Dictionary<string, string?> { ["secret-option"] = "secret-label" }
+                        },
+                        new ResourceSnapshotCommandArgument
+                        {
+                            Name = "environment",
+                            InputType = "Choice",
+                            Required = true,
+                            AllowCustomChoice = true,
+                            Options = new Dictionary<string, string?> { ["staging"] = "Staging", ["production"] = "Production" },
+                            Value = "private-current-environment",
+                            DynamicLoading = new ResourceSnapshotCommandArgumentDynamicLoading
+                            {
+                                AlwaysLoadOnStart = true,
+                                DependsOnInputs = ["configuration"]
+                            }
+                        },
+                        new ResourceSnapshotCommandArgument { Name = "force", InputType = "Boolean", Value = "true" },
+                        new ResourceSnapshotCommandArgument { Name = "attempts", InputType = "Number", Value = "5", Disabled = true }
+                    ]
+                },
+                new ResourceSnapshotCommand { Name = "disabled", State = "disabled", Visibility = "api" },
+                new ResourceSnapshotCommand { Name = "hidden", State = "Hidden" },
+                new ResourceSnapshotCommand { Name = "ui-only", State = "Enabled", Visibility = "UI" },
+                new ResourceSnapshotCommand { Name = "none", State = "Enabled", Visibility = "None" }
+            ]
+        }));
+        var tool = new ListResourcesTool(monitor, NullLogger<ListResourcesTool>.Instance);
+
+        var result = await tool.CallToolAsync(CallToolContextTestHelper.Create(), CancellationToken.None).DefaultTimeout();
+
+        using var json = GetResourceData(result);
+        await Verify(json.RootElement[0].GetProperty("commands").GetRawText(), "json");
+    }
+
+    [Fact]
+    public async Task ListResourcesTool_BoundsCommandDescriptionsWithoutTruncatingInvocationMetadata()
+    {
+        var description = new string('x', 255) + "\U0001F680\ntrailing text";
+        var commands = Enumerable.Range(0, 40).Select(index => new ResourceSnapshotCommand
+        {
+            Name = $"command-{index:D3}",
+            State = "Enabled",
+            Description = description,
+            ArgumentInputs = index == 39
+                ? Enumerable.Range(0, 40).Select(argumentIndex => new ResourceSnapshotCommandArgument
+                {
+                    Name = $"argument-{argumentIndex:D3}",
+                    InputType = "Choice",
+                    Description = description,
+                    Options = argumentIndex == 39
+                        ? Enumerable.Range(0, 40).ToDictionary(optionIndex => $"option-{optionIndex:D3}", _ => (string?)description)
+                        : null
+                }).ToArray()
+                : []
+        }).ToArray();
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+        monitor.AddConnection("hash1", "socket.hash1", CreateConnection(new ResourceSnapshot { Name = "api", Commands = commands }));
+        var tool = new ListResourcesTool(monitor, NullLogger<ListResourcesTool>.Instance);
+        var context = CallToolContextTestHelper.Create(new Dictionary<string, JsonElement>
+        {
+            ["limit"] = JsonSerializer.SerializeToElement(1)
+        });
+
+        var result = await tool.CallToolAsync(context, CancellationToken.None).DefaultTimeout();
+
+        using var json = GetResourceData(result);
+        var metadata = json.RootElement[0].GetProperty("commands");
+        Assert.Equal(commands.Select(command => command.Name), metadata.EnumerateObject().Select(command => command.Name));
+        var command = metadata.GetProperty("command-039");
+        Assert.Equal(new string('x', 255) + "\U0001F680", command.GetProperty("description").GetString());
+        var arguments = command.GetProperty("argument_inputs");
+        Assert.Equal(commands[39].ArgumentInputs.Select(input => input.Name),
+            arguments.EnumerateArray().Select(input => input.GetProperty("name").GetString()));
+        var argument = arguments[39];
+        Assert.Equal(new string('x', 255) + "\U0001F680", argument.GetProperty("description").GetString());
+        var options = argument.GetProperty("options");
+        Assert.Equal(commands[39].ArgumentInputs[39].Options!.Keys, options.EnumerateObject().Select(option => option.Name));
+        Assert.All(options.EnumerateObject(), option => Assert.Equal(new string('x', 255) + "\U0001F680", option.Value.GetString()));
     }
 
     [Theory]
@@ -423,10 +697,9 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
 
         using var json = GetResourceData(result);
         Assert.Equal(64, json.RootElement.GetArrayLength());
-        Assert.Contains(
-            "Resource data is truncated to 64 of 70 visible resources.",
-            GetResultText(result),
-            StringComparison.Ordinal);
+        using var pagination = GetPagination(result);
+        Assert.Equal(70, pagination.RootElement.GetProperty("total").GetInt32());
+        Assert.Equal(64, pagination.RootElement.GetProperty("next_offset").GetInt32());
         var firstResource = json.RootElement[0];
         foreach (var propertyName in new[] { "display_name", "resource_type", "state_style", "health_status" })
         {
@@ -694,7 +967,7 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
         var resource = resources[0];
 
         Assert.Equal(
-            ["name", "display_name", "resource_type", "state", "waiting_for", "source", "dashboard_url", "urls", "relationships"],
+            ["name", "display_name", "resource_type", "state", "waiting_for", "source", "dashboard_url", "urls", "relationships", "commands"],
             resource.EnumerateObject().Select(p => p.Name));
         Assert.Equal(["Redis"], resource.GetProperty("waiting_for").EnumerateArray().Select(value => value.GetString()));
         Assert.Equal("Api.csproj", resource.GetProperty("source").GetString());
@@ -711,10 +984,11 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
         Assert.Equal(
             "https://dashboard.localhost:18888?view=resources&resource=api-service",
             resource.GetProperty("dashboard_url").GetString());
-        Assert.Equal("redis:8", resources[1].GetProperty("source").GetString());
-        Assert.Equal("worker", resources[2].GetProperty("source").GetString());
-        Assert.False(resources[3].TryGetProperty("source", out _));
-        Assert.False(resources[4].TryGetProperty("source", out _));
+        Assert.False(resources[1].TryGetProperty("source", out _));
+        Assert.False(resources[2].TryGetProperty("source", out _));
+        Assert.Equal("redis:8", resources[3].GetProperty("source").GetString());
+        Assert.Equal("worker", resources[4].GetProperty("source").GetString());
+        await Verify(resource.GetProperty("commands").GetRawText(), "json");
     }
 
     [Fact]
@@ -742,7 +1016,7 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
 
         using var json = GetResourceData(result);
         Assert.Equal(
-            ["name", "resource_type", "state", "waiting_for", "dashboard_url", "urls", "relationships"],
+            ["name", "resource_type", "state", "waiting_for", "dashboard_url", "urls", "relationships", "commands"],
             json.RootElement[0].EnumerateObject().Select(property => property.Name));
     }
 
@@ -874,6 +1148,18 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
         Assert.StartsWith("[", jsonText, StringComparison.Ordinal);
 
         return JsonDocument.Parse(jsonText);
+    }
+
+    private static JsonDocument GetPagination(CallToolResult result)
+    {
+        // Responses contain "# PAGINATION", its JSON object, then "# RESOURCE DATA" and its array.
+        var text = GetResultText(result);
+        const string marker = "# PAGINATION";
+        var start = text.IndexOf(marker, StringComparison.Ordinal);
+        var end = text.IndexOf("# RESOURCE DATA", StringComparison.Ordinal);
+        Assert.True(start >= 0 && end > start, "Response should contain pagination before resource data.");
+
+        return JsonDocument.Parse(text[(start + marker.Length)..end].Trim());
     }
 
     private static string GetResultText(CallToolResult result)

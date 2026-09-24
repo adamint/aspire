@@ -9,6 +9,8 @@ using System.Text.Json.Serialization;
 using Aspire.Cli.Backchannel;
 using Aspire.Dashboard.Model;
 using Aspire.Dashboard.Utils;
+using Aspire.Shared;
+using Aspire.Shared.Model.Serialization;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
@@ -29,6 +31,28 @@ internal sealed class McpResourceRelationshipJson
     public string? ResourceName { get; init; }
 }
 
+internal sealed class McpResourceCommandArgumentJson
+{
+    public required string Name { get; init; }
+    public required string InputType { get; init; }
+    public string? Description { get; init; }
+    public bool Required { get; init; }
+    public Dictionary<string, string?>? Options { get; init; }
+    public bool AllowCustomChoice { get; init; }
+    public bool Disabled { get; init; }
+    public int? MaxLength { get; init; }
+    public ResourceCommandArgumentDynamicLoadingJson? DynamicLoading { get; init; }
+}
+
+internal sealed class McpResourceCommandJson
+{
+    public required string State { get; init; }
+    public string? Description { get; init; }
+    public McpResourceCommandArgumentJson[] ArgumentInputs { get; init; } = [];
+}
+
+internal sealed record McpResourcePageJson(int Offset, int Limit, int Total, int? NextOffset);
+
 internal sealed class McpResourceJson
 {
     public string? Name { get; init; }
@@ -43,11 +67,13 @@ internal sealed class McpResourceJson
     public string? DashboardUrl { get; init; }
     public McpResourceUrlJson[] Urls { get; init; } = [];
     public McpResourceRelationshipJson[] Relationships { get; init; } = [];
+    public Dictionary<string, McpResourceCommandJson> Commands { get; init; } = [];
 }
 
 [JsonSerializable(typeof(McpResourceJson[]))]
 [JsonSerializable(typeof(McpResourceUrlJson[]))]
 [JsonSerializable(typeof(McpResourceRelationshipJson[]))]
+[JsonSerializable(typeof(McpResourcePageJson))]
 [JsonSourceGenerationOptions(
     WriteIndented = true,
     PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
@@ -75,23 +101,47 @@ internal sealed partial class ListResourcesToolJsonContext : JsonSerializerConte
 internal sealed class ListResourcesTool(IAuxiliaryBackchannelMonitor auxiliaryBackchannelMonitor, ILogger<ListResourcesTool> logger) : CliMcpTool
 {
     private const int MaxResources = 64;
-    private const int MaxIdentityResources = 256;
     private const int MaxUrlsPerResource = 16;
     private const int MaxRelationshipsPerResource = 32;
     private const int MaxWaitingForPerResource = 32;
     private const int MaxTextLength = 256;
 
+    private static readonly JsonElement s_inputSchema = JsonDocument.Parse(
+        $$"""
+        {
+          "type": "object",
+          "properties": {
+            "offset": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": {{int.MaxValue}},
+              "default": 0,
+              "description": "Zero-based offset in the visible resources ordered by runtime name. Use next_offset from the previous response to continue."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": {{MaxResources}},
+              "default": {{MaxResources}},
+              "description": "Maximum number of resources to return in this page."
+            }
+          },
+          "additionalProperties": false
+        }
+        """).RootElement;
+
     public override string Name => KnownMcpTools.ListResources;
 
-    public override string Description => "List the application resources for the selected AppHost. Includes bounded runtime information such as resource type, state, source, endpoints, health status, and relationships.";
+    public override string Description => "List the application resources for the selected AppHost. Includes runtime information such as resource type, state, source, endpoints, health status, relationships, and API-visible command metadata without current or default argument values. Returns up to 64 resources ordered by runtime name; use offset and limit to page through all visible resources.";
 
     public override JsonElement GetInputSchema()
     {
-        return JsonDocument.Parse("{ \"type\": \"object\", \"properties\": {} }").RootElement;
+        return s_inputSchema;
     }
 
     public override async ValueTask<CallToolResult> CallToolAsync(CallToolContext context, CancellationToken cancellationToken)
     {
+        var (offset, limit) = ParseArguments(context.Arguments);
         IAppHostAuxiliaryBackchannel? connection;
         try
         {
@@ -146,30 +196,22 @@ internal sealed class ListResourcesTool(IAuxiliaryBackchannelMonitor auxiliaryBa
             var eligibleSnapshots = allSnapshots
                 .Where(snapshot => !McpToolHelpers.IsExcludedFromMcp(snapshot))
                 .ToList();
-            var identitySnapshots = eligibleSnapshots
-                .Take(MaxIdentityResources)
-                .ToList();
             var visibleSnapshots = eligibleSnapshots
                 .Where(snapshot => !ResourceSnapshotMapper.IsHiddenResource(snapshot))
-                .Take(MaxResources)
+                .OrderBy(snapshot => snapshot.Name, StringComparer.Ordinal)
                 .ToList();
-            var visibleResourceCount = eligibleSnapshots.Count(snapshot => !ResourceSnapshotMapper.IsHiddenResource(snapshot));
-            foreach (var visibleSnapshot in visibleSnapshots)
-            {
-                if (!identitySnapshots.Contains(visibleSnapshot))
-                {
-                    identitySnapshots.Add(visibleSnapshot);
-                }
-            }
+            var pageSnapshots = visibleSnapshots.Skip(offset).Take(limit).ToList();
 
             // Use the dashboard base URL if available
             var dashboardBaseUrl = McpToolHelpers.StripLoginPath(dashboardUrls?.BaseUrlWithLoginToken);
-            var resourceIdentities = CreateResourceIdentityMap(identitySnapshots);
+            // Resolve references against the whole snapshot, not just the current page: a
+            // dependency on another page must retain its identity and replica ambiguity.
+            var resourceIdentities = CreateResourceIdentityMap(eligibleSnapshots);
             var relationshipTargets = CreateRelationshipTargetMap(visibleSnapshots);
 
-            // Project directly from the snapshot so unrelated properties, volumes, commands,
-            // environment values, and health details never enter the MCP serialization boundary.
-            var boundedResources = visibleSnapshots.Select(snapshot => new McpResourceJson
+            // Project directly from the snapshot so unrelated properties, volumes, command
+            // argument values, environment values, and health details never enter serialization.
+            var boundedResources = pageSnapshots.Select(snapshot => new McpResourceJson
             {
                 Name = GetBoundedText(snapshot.Name),
                 DisplayName = GetBoundedText(snapshot.DisplayName),
@@ -188,17 +230,27 @@ internal sealed class ListResourcesTool(IAuxiliaryBackchannelMonitor auxiliaryBa
                     Url = GetBoundedText(McpToolHelpers.SanitizeResourceUrl(url.Url)),
                     IsInternal = url.IsInternal
                 }).ToArray(),
-                Relationships = GetBoundedRelationships(snapshot, relationshipTargets)
+                Relationships = GetBoundedRelationships(snapshot, relationshipTargets),
+                Commands = GetCommandMetadata(snapshot)
             }).ToArray();
             var resourceGraphData = JsonSerializer.Serialize(boundedResources, ListResourcesToolJsonContext.RelaxedEscaping.McpResourceJsonArray);
-            var truncationNotice = visibleResourceCount > boundedResources.Length
-                ? $"Resource data is truncated to {boundedResources.Length} of {visibleResourceCount} visible resources."
+            int? nextOffset = offset < visibleSnapshots.Count - boundedResources.Length
+                ? offset + boundedResources.Length
                 : null;
+            var pagination = JsonSerializer.Serialize(
+                new McpResourcePageJson(offset, limit, visibleSnapshots.Count, nextOffset),
+                ListResourcesToolJsonContext.RelaxedEscaping.McpResourcePageJson);
 
             var response = $"""
             resource_name is the identifier of resources.
             Console logs for a resource can provide more information about why a resource is not in a running state.
-            {truncationNotice}
+            Command names and argument names can be passed to execute_resource_command. Current and default argument values are never included.
+            Use next_offset with the same limit to retrieve the next page. An absent next_offset means there are no more resources.
+            Each page reads current state; restart from offset 0 if resource membership changes while paging.
+
+            # PAGINATION
+
+            {pagination}
 
             # RESOURCE DATA
 
@@ -220,6 +272,75 @@ internal sealed class ListResourcesTool(IAuxiliaryBackchannelMonitor auxiliaryBa
                 "Unable to retrieve resources from the selected AppHost.",
                 McpErrorCode.InternalError);
         }
+    }
+
+    private static (int Offset, int Limit) ParseArguments(IReadOnlyDictionary<string, JsonElement>? arguments)
+    {
+        // MCP pagination arguments use { "offset": 64, "limit": 64 }. Omitted fields retain
+        // the first-page defaults; strings, nulls, fractions, and out-of-range values are errors.
+        if (arguments?.Keys.Any(static name => name is not ("offset" or "limit")) == true)
+        {
+            throw new McpProtocolException(
+                "Arguments may contain only 'offset' and 'limit'.",
+                McpErrorCode.InvalidParams);
+        }
+
+        var offset = 0;
+        if (arguments?.TryGetValue("offset", out var offsetElement) == true &&
+            (offsetElement.ValueKind != JsonValueKind.Number ||
+                !offsetElement.TryGetInt32(out offset) || offset < 0))
+        {
+            throw new McpProtocolException(
+                $"Argument 'offset' must be an integer from 0 through {int.MaxValue}.",
+                McpErrorCode.InvalidParams);
+        }
+
+        var limit = MaxResources;
+        if (arguments?.TryGetValue("limit", out var limitElement) == true &&
+            (limitElement.ValueKind != JsonValueKind.Number ||
+                !limitElement.TryGetInt32(out limit) || limit is < 1 or > MaxResources))
+        {
+            throw new McpProtocolException(
+                $"Argument 'limit' must be an integer from 1 through {MaxResources}.",
+                McpErrorCode.InvalidParams);
+        }
+
+        return (offset, limit);
+    }
+
+    private static Dictionary<string, McpResourceCommandJson> GetCommandMetadata(ResourceSnapshot snapshot)
+    {
+        // The general CLI mapper retains non-secret input values. MCP instead exposes only
+        // invocation metadata, including disabled API commands but never hidden or UI-only ones.
+        // Keep identifiers and choice keys exact, and keep their complete collections: truncating
+        // them would advertise a different command or an incomplete invocation contract.
+        return snapshot.Commands
+            .Where(command => ResourceSnapshotMapper.IsCommandVisibleToApi(command.Visibility) &&
+                ResourceSnapshotMapper.IsCommandVisibleToConsumer(command.State, includeDisabledCommands: true))
+            .OrderBy(command => command.Name, StringComparer.Ordinal)
+            .ToDistinctDictionary(
+                command => command.Name,
+                command => new McpResourceCommandJson
+                {
+                    State = string.Equals(command.State, KnownCommandState.Enabled, StringComparison.OrdinalIgnoreCase)
+                        ? KnownCommandState.Enabled
+                        : KnownCommandState.Disabled,
+                    Description = GetBoundedText(command.Description),
+                    ArgumentInputs = command.ArgumentInputs.Select(input => new McpResourceCommandArgumentJson
+                    {
+                        Name = input.Name,
+                        InputType = GetBoundedText(input.InputType)!,
+                        Description = GetBoundedText(input.Description),
+                        Required = input.Required,
+                        Options = string.Equals(input.InputType, nameof(InputType.Choice), StringComparison.OrdinalIgnoreCase)
+                            ? input.Options?.ToDictionary(option => option.Key, option => GetBoundedText(option.Value))
+                            : null,
+                        AllowCustomChoice = input.AllowCustomChoice,
+                        Disabled = input.Disabled,
+                        MaxLength = input.MaxLength,
+                        DynamicLoading = ResourceSnapshotMapper.MapDynamicLoading(input.DynamicLoading)
+                    }).ToArray()
+                });
     }
 
     private static Dictionary<string, (string WaitingForName, string RelationshipName)> CreateResourceIdentityMap(
