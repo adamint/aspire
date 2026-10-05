@@ -23,6 +23,7 @@ The individual tests need to create projects from templates just like a user wou
 - Then, with a custom `nuget.config` which points to the built NuGet packages in `artifacts`, the SDK is configured to use local packages
     - which installs the components using the NuGet packages from the `artifacts` into `artifacts/bin/dotnet-tests`
 - This simulates the SDK being installed on a user's machine, and being independent of the aspire repo.
+- The test command helper removes inherited `MSBuildSDKsPath` and `MSBuildExtensionsPath` before launching tools. Otherwise, tests started by the repository's MSBuild can load its SDK targets into an older test SDK; solution restore can then fail to load NuGet tasks or their runtime dependencies.
 - At this point the SDK is usable from outside the repo by using `source /path-to-aspire-repo/dogfood.sh`
 - The nuget versions for the locally built packages are like `8.0.0-dev` or `8.0.0-ci`.
 
@@ -62,6 +63,8 @@ Each class runs 51 cases across the SDK/target-framework matrix. Keeping them se
 lets CI shard all 153 cases without tripling a single job's runtime. The framework
 tests check generated package names, versions, and executable output where required
 before building, so update these expectations when changing starter test dependencies.
+The internal pipeline runs all `basic-build` cases in one process, so that invocation
+uses a 30-minute session timeout while the class-sharded runs retain the 20-minute timeout.
 
 - The sdk+workload is never updated automatically. In other words, once installed the workload packs don't get overwritten even when the source binaries changes in `artifacts`. This may change in future.
 

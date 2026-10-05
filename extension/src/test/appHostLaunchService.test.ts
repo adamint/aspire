@@ -3517,6 +3517,7 @@ suite('AppHostLaunchService', () => {
 
     test('a non-Run launch reports a pending then active operation and clears on termination', async () => {
         const appHostPath = path.resolve('/repo/AppHost.csproj');
+        assert.strictEqual(service.hasPendingOrActiveNonRunOperation, false);
         let changeCount = 0;
         let signalCliResolutionStarted: (() => void) | undefined;
         let releaseCliResolution: (() => void) | undefined;
@@ -3531,6 +3532,7 @@ suite('AppHostLaunchService', () => {
 
         const launch = service.launch(appHostPath, 'publish', true);
         await cliResolutionStarted;
+        assert.strictEqual(service.hasPendingOrActiveNonRunOperation, true);
 
         assert.deepStrictEqual(service.getActiveOperation(appHostPath), {
             appHostPath,
@@ -3548,6 +3550,7 @@ suite('AppHostLaunchService', () => {
         const publishSession = { id: 'publish', configuration: publishConfiguration } as unknown as vscode.DebugSession;
         assert.ok(onDidStartDebugSessionCallback);
         onDidStartDebugSessionCallback(publishSession);
+        assert.strictEqual(service.hasPendingOrActiveNonRunOperation, true);
 
         assert.deepStrictEqual(service.getActiveOperation(appHostPath), {
             appHostPath,
@@ -3559,6 +3562,7 @@ suite('AppHostLaunchService', () => {
 
         assert.ok(onDidTerminateDebugSessionCallback);
         onDidTerminateDebugSessionCallback(publishSession);
+        assert.strictEqual(service.hasPendingOrActiveNonRunOperation, false);
 
         assert.strictEqual(service.getActiveOperation(appHostPath), undefined);
         assert.strictEqual(changeCount, 2);
@@ -3592,6 +3596,7 @@ suite('AppHostLaunchService', () => {
     test('an external non-Run reservation blocks duplicate operations but not Run', async () => {
         const appHostPath = path.resolve('/repo/AppHost.csproj');
         const reservationId = service.tryReserveExternalOperation(appHostPath, 'deploy', true, 'infra');
+        assert.strictEqual(service.hasPendingOrActiveNonRunOperation, true);
         assert.strictEqual(typeof reservationId, 'string');
         assert.deepStrictEqual(service.getActiveOperation(appHostPath), {
             appHostPath,
@@ -3625,6 +3630,7 @@ suite('AppHostLaunchService', () => {
         assert.strictEqual(service.getActiveOperation(appHostPath)?.command, 'deploy');
         assert.ok(onDidTerminateDebugSessionCallback);
         onDidTerminateDebugSessionCallback(externalSession);
+        assert.strictEqual(service.hasPendingOrActiveNonRunOperation, false);
         assert.strictEqual(service.getActiveOperation(appHostPath), undefined);
     });
 
