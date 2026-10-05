@@ -498,6 +498,14 @@ internal sealed class ListResourcesTool(IAuxiliaryBackchannelMonitor auxiliaryBa
 
     private static string? GetBoundedSource(ResourceSnapshot snapshot)
     {
+        if (snapshot.Properties.TryGetValue(KnownProperties.Resource.Source, out var explicitSourceNode) &&
+            explicitSourceNode is JsonValue explicitSourceValue &&
+            explicitSourceValue.TryGetValue<string>(out var explicitSource) &&
+            explicitSource.Length == 0)
+        {
+            return null;
+        }
+
         if (string.Equals(snapshot.ResourceType, KnownResourceTypes.Project, StringComparisons.ResourceType))
         {
             var projectPath = GetStringProperty(snapshot, KnownProperties.Project.Path);

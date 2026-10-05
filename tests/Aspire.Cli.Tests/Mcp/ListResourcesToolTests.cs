@@ -752,6 +752,56 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task ListResourcesTool_ExplicitEmptySourceSuppressesInferredSource()
+    {
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+        monitor.AddConnection(
+            "hash1",
+            "socket.hash1",
+            CreateConnection(
+                new ResourceSnapshot
+                {
+                    Name = "project",
+                    ResourceType = KnownResourceTypes.Project,
+                    State = "Running",
+                    Properties = new Dictionary<string, JsonNode?>
+                    {
+                        [KnownProperties.Resource.Source] = JsonValue.Create(string.Empty),
+                        [KnownProperties.Project.Path] = JsonValue.Create("/repo/Project/Project.csproj")
+                    }
+                },
+                new ResourceSnapshot
+                {
+                    Name = "executable",
+                    ResourceType = KnownResourceTypes.Executable,
+                    State = "Running",
+                    Properties = new Dictionary<string, JsonNode?>
+                    {
+                        [KnownProperties.Resource.Source] = JsonValue.Create(string.Empty),
+                        [KnownProperties.Executable.Path] = JsonValue.Create("/repo/bin/worker")
+                    }
+                },
+                new ResourceSnapshot
+                {
+                    Name = "container",
+                    ResourceType = KnownResourceTypes.Container,
+                    State = "Running",
+                    Properties = new Dictionary<string, JsonNode?>
+                    {
+                        [KnownProperties.Resource.Source] = JsonValue.Create(string.Empty),
+                        [KnownProperties.Container.Image] = JsonValue.Create("redis:8")
+                    }
+                }));
+        var tool = new ListResourcesTool(monitor, NullLogger<ListResourcesTool>.Instance);
+
+        var result = await tool.CallToolAsync(CallToolContextTestHelper.Create(), CancellationToken.None).DefaultTimeout();
+
+        using var json = GetResourceData(result);
+        Assert.Equal(["container", "executable", "project"], json.RootElement.EnumerateArray().Select(resource => resource.GetProperty("name").GetString()));
+        Assert.All(json.RootElement.EnumerateArray(), resource => Assert.False(resource.TryGetProperty("source", out _)));
+    }
+
+    [Fact]
     public async Task ListResourcesTool_BoundsSourceByUnicodeScalarsAndSanitizesControls()
     {
         const string AstralRune = "\U0001F680";
