@@ -169,7 +169,11 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
 
         const preparedAction = this.consumePreparedAction(aspireAppHostStartToolName, getStartInputKey(input));
         if (preparedAction === undefined) {
-            return this.createUnconfirmedInvocationResult(aspireAppHostStartToolName, input.mode);
+            return await this.rejectUnconfirmedInvocation(
+                aspireAppHostStartToolName,
+                input.appHostPath,
+                token,
+                input.mode);
         }
 
         return await this.runPreparedAction(
@@ -337,7 +341,11 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
 
         const preparedAction = this.consumePreparedAction(aspireAppHostStopToolName, getStopInputKey(input));
         if (preparedAction === undefined) {
-            return this.createUnconfirmedInvocationResult(aspireAppHostStopToolName, undefined);
+            return await this.rejectUnconfirmedInvocation(
+                aspireAppHostStopToolName,
+                input.appHostPath,
+                token,
+                undefined);
         }
 
         return await this.runPreparedAction(
@@ -493,6 +501,20 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         requestedMode: AppHostLifecycleMode | undefined): AppHostLifecycleToolResult {
         extensionLogOutputChannel.warn(`Aspire language model tool ${tool} refused an invocation that did not match a current prepared action.`);
         return createResult(tool, 'failed', '', 'none', requestedMode, undefined);
+    }
+
+    private async rejectUnconfirmedInvocation(
+        tool: PreparedLifecycleAction['tool'],
+        rawAppHost: unknown,
+        token: vscode.CancellationToken,
+        requestedMode: AppHostLifecycleMode | undefined): Promise<AppHostLifecycleToolResult> {
+        // Preparation records no action when target resolution fails. Re-run only the read-only
+        // preflight so invocation can return that bounded recovery result; if the target now
+        // resolves, keep failing closed because the user never confirmed that target.
+        const preflight = await this.preflight(tool, rawAppHost, token, requestedMode);
+        return preflight.rejected
+            ? preflight.result
+            : this.createUnconfirmedInvocationResult(tool, requestedMode);
     }
 
     /**

@@ -1923,6 +1923,27 @@ suite('AppHost lifecycle language model tools', () => {
     });
 
     suite('confirmation', () => {
+        async function prepareAndInvoke(
+            operation: 'start' | 'stop',
+            appHostPath: string,
+            token: vscode.CancellationToken): Promise<AppHostLifecycleToolResult> {
+            if (operation === 'start') {
+                const input = { appHostPath, mode: 'run' } as const;
+                const tool = new AppHostStartLanguageModelTool(service);
+                await tool.prepareInvocation({ input }, token);
+                return readToolResultPayload(await tool.invoke(
+                    { input, toolInvocationToken: undefined },
+                    token));
+            }
+
+            const input = { appHostPath };
+            const tool = new AppHostStopLanguageModelTool(service);
+            await tool.prepareInvocation({ input }, token);
+            return readToolResultPayload(await tool.invoke(
+                { input, toolInvocationToken: undefined },
+                token));
+        }
+
         test('always confirms a start with the action, relative path, and requested mode', async () => {
             const tool = new AppHostStartLanguageModelTool(service);
             const discoverCallsBeforePreparation = discoveryService.discoverCalls;
@@ -1965,6 +1986,61 @@ suite('AppHost lifecycle language model tools', () => {
             assert.strictEqual(prepared?.confirmationMessages?.title, 'Stop Aspire AppHost');
             assert.strictEqual(prepared?.confirmationMessages?.message, 'Stop the Aspire AppHost AppHost/AppHost.csproj?');
         });
+
+        for (const operation of ['start', 'stop'] as const) {
+            test(`${operation} invocation returns an unknown target after unresolved preparation`, async () => {
+                const result = await prepareAndInvoke(
+                    operation,
+                    'AppHost/Missing.csproj',
+                    new vscode.CancellationTokenSource().token);
+
+                assert.strictEqual(result.outcome, 'unknownAppHost');
+                assert.deepStrictEqual(result.knownAppHosts, ['AppHost/AppHost.csproj']);
+                assert.strictEqual(launchService.launchCalls.length, 0);
+                assert.strictEqual(launchService.stopCalls.length, 0);
+            });
+
+            test(`${operation} invocation returns a discovery failure after unresolved preparation`, async () => {
+                discoveryService.discoverError = new Error('aspire ls failed');
+
+                const result = await prepareAndInvoke(
+                    operation,
+                    'AppHost/AppHost.csproj',
+                    new vscode.CancellationTokenSource().token);
+
+                assert.strictEqual(result.outcome, 'discoveryFailed');
+                assert.strictEqual(result.knownAppHosts, undefined);
+                assert.strictEqual(launchService.launchCalls.length, 0);
+                assert.strictEqual(launchService.stopCalls.length, 0);
+            });
+
+            test(`${operation} invocation returns an ambiguous target after unresolved preparation`, async () => {
+                const secondRoot = createFixtureDirectory('second-workspace');
+                try {
+                    const secondAppHost = path.join(secondRoot, 'AppHost', 'AppHost.csproj');
+                    discoveryService.registeredPaths.push(secondAppHost);
+                    workspaceFoldersStub.value([
+                        { uri: vscode.Uri.file(workspaceRoot), name: 'workspace', index: 0 },
+                        { uri: vscode.Uri.file(secondRoot), name: 'second', index: 1 },
+                    ]);
+
+                    const result = await prepareAndInvoke(
+                        operation,
+                        'AppHost/AppHost.csproj',
+                        new vscode.CancellationTokenSource().token);
+
+                    assert.strictEqual(result.outcome, 'ambiguousAppHost');
+                    assert.deepStrictEqual(
+                        result.knownAppHosts,
+                        ['workspace/AppHost/AppHost.csproj', 'second/AppHost/AppHost.csproj']);
+                    assert.strictEqual(launchService.launchCalls.length, 0);
+                    assert.strictEqual(launchService.stopCalls.length, 0);
+                }
+                finally {
+                    removeDirectorySafely(secondRoot);
+                }
+            });
+        }
 
         test('rejects a start whose target changes after preparation', async () => {
             const otherAppHostPath = path.join(workspaceRoot, 'Other', 'AppHost.csproj');

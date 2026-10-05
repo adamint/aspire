@@ -1117,6 +1117,29 @@ public class ListResourcesToolTests(ITestOutputHelper outputHelper)
         Assert.DoesNotContain(pinnedAppHostPath, exception.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ListResourcesTool_PreservesDuplicatePinnedAppHostDiagnosis()
+    {
+        const string pinnedAppHostPath = "/repo/Pinned/Pinned.AppHost.csproj";
+        var monitor = new TestAuxiliaryBackchannelMonitor
+        {
+            SelectedAppHostPath = pinnedAppHostPath
+        };
+        monitor.AddConnection("hash1", "socket.hash1", CreateConnection(pinnedAppHostPath));
+        monitor.AddConnection("hash2", "socket.hash2", CreateConnection(pinnedAppHostPath));
+
+        var tool = new ListResourcesTool(monitor, NullLogger<ListResourcesTool>.Instance);
+
+        var exception = await Assert.ThrowsAsync<McpProtocolException>(
+            () => tool.CallToolAsync(CallToolContextTestHelper.Create(), CancellationToken.None).AsTask()).DefaultTimeout();
+
+        Assert.Equal(McpErrorCode.InternalError, exception.ErrorCode);
+        Assert.Equal(
+            "Multiple running AppHost instances match the selected path. Stop the extra instance and retry.",
+            exception.Message);
+        Assert.DoesNotContain(pinnedAppHostPath, exception.Message, StringComparison.Ordinal);
+    }
+
     private static TestAppHostAuxiliaryBackchannel CreateConnection(params ResourceSnapshot[] snapshots)
         => CreateConnection(AppHostPath, snapshots);
 

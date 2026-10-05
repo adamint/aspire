@@ -142,22 +142,10 @@ internal sealed class ListResourcesTool(IAuxiliaryBackchannelMonitor auxiliaryBa
     public override async ValueTask<CallToolResult> CallToolAsync(CallToolContext context, CancellationToken cancellationToken)
     {
         var (offset, limit) = ParseArguments(context.Arguments);
-        IAppHostAuxiliaryBackchannel? connection;
-        try
-        {
-            connection = await AppHostConnectionHelper.GetSelectedConnectionAsync(
-                auxiliaryBackchannelMonitor,
-                logger,
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch (McpProtocolException) when (auxiliaryBackchannelMonitor.SelectedAppHostPath is not null)
-        {
-            // The selector is internal routing state. AppHostConnectionHelper logs the unavailable
-            // identity for maintainers, but model-facing errors must not echo its absolute path.
-            throw new McpProtocolException(
-                "The selected AppHost is not available. Start that AppHost and retry.",
-                McpErrorCode.InternalError);
-        }
+        var connection = await AppHostConnectionHelper.GetSelectedConnectionAsync(
+            auxiliaryBackchannelMonitor,
+            logger,
+            cancellationToken).ConfigureAwait(false);
 
         if (connection is null)
         {
