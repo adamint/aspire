@@ -19,6 +19,12 @@ export function createBoundedResource(resource: ResourceJson): EditorAssistanceR
 // from properties tied to known resource kinds so a custom resource cannot place arbitrary text in
 // the canonical source field and have it copied into a tool result.
 function getModelSafeResourceSource(resource: ResourceJson): string | null {
+    // Match the dashboard contract: an explicitly empty canonical source is an opt-out
+    // from inferring project, executable, or container source metadata.
+    if (resource.properties?.['resource.source'] === '') {
+        return null;
+    }
+
     let source: string | null | undefined;
     let useFileName = false;
     switch (resource.resourceType) {

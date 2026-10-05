@@ -3500,6 +3500,18 @@ suite('Editor assistance AppHost services', () => {
                     omittedSourceParts: [privateCanonicalSource],
                 },
                 {
+                    label: 'Explicitly empty source suppresses inferred source metadata',
+                    resource: {
+                        ...createResource('api', projectPath, {
+                            'resource.source': '',
+                            ...forbidden,
+                        }),
+                        source: privateCanonicalSource,
+                    },
+                    expectedSource: null,
+                    omittedSourceParts: [privateCanonicalSource, path.basename(projectPath)],
+                },
+                {
                     label: 'Executable uses only the executable path filename',
                     resource: {
                         ...createResource('api', projectPath, {
