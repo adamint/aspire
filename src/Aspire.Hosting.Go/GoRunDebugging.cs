@@ -150,8 +150,10 @@ internal static class GoRunDebugging
         catch (Exception exception) when (!context.CancellationToken.IsCancellationRequested &&
             exception is Win32Exception or IOException or InvalidOperationException or JsonException or KeyNotFoundException)
         {
-            context.Logger.LogWarning(exception, "Could not read GOFLAGS using 'go env -json GOFLAGS'. Continuing with default Go debugger flags.");
-            return resourceFlags ?? string.Empty;
+            context.Logger.LogWarning(exception, "Could not read GOFLAGS using 'go env -json GOFLAGS'. Continuing with available GOFLAGS and default Go debugger flags.");
+            // DCP inherits the AppHost environment, so a failed probe must not mask flags
+            // already available without Go. An explicitly empty resource value still wins.
+            return resourceFlags ?? Environment.GetEnvironmentVariable("GOFLAGS") ?? string.Empty;
         }
     }
 

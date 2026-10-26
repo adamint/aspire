@@ -91,7 +91,8 @@ and receive defaults that retain symbols and DWARF information. Explicit `-s` an
 authoritative, including the rule that `-s` implies `-w` unless overridden with `-w=false`.
 A binary without the required symbols cannot support source attachment.
 If the `go env` settings probe fails, a warning is logged and startup continues with the default
-debugger flags instead of failing environment evaluation.
+debugger flags, preserving inherited `GOFLAGS` unless the resource explicitly overrides it.
+Settings stored only in Go's persisted environment file cannot be recovered when the probe fails.
 If a valid linker flag contains both single and double quotes, `GOFLAGS` is left unchanged and a
 warning is logged rather than preventing startup. Automatic debug-information retention is skipped
 for that resource.

@@ -11,6 +11,7 @@ using Aspire.Hosting.Diagnostics;
 using Aspire.Hosting.Tests.Utils;
 using Aspire.Hosting.Utils;
 using Aspire.TestUtilities;
+using Microsoft.DotNet.RemoteExecutor;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -68,52 +69,74 @@ public class GoRunDebuggingTests(ITestOutputHelper outputHelper)
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task GoFlagsProbeFailureDoesNotPreventResourceEnvironmentEvaluation(bool processStarted)
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, true, true)]
+    public void GoFlagsProbeFailureDoesNotPreventResourceEnvironmentEvaluation(
+        bool processStarted, bool hasAmbientFlags, bool emptyResourceFlags)
     {
-        using var builder = TestDistributedApplicationBuilder.Create();
-        var runner = new TestProcessRunner();
-        var startFailure = new Win32Exception(2, "The configured Go command could not be started.");
-        if (processStarted)
+        var options = new RemoteInvokeOptions();
+        options.StartInfo.Environment.Remove("GOFLAGS");
+        if (hasAmbientFlags)
         {
-            runner.EnqueueResult(exitCode: 1, output: ["""{"GOFLAGS":"-ldflags=-s"}"""]);
-        }
-        else
-        {
-            runner.EnqueueException(startFailure);
+            options.StartInfo.Environment["GOFLAGS"] = "-tags=ambient";
         }
 
-        builder.Services.AddSingleton<IProcessRunner>(runner);
-        var sink = new TestSink(writeEnabled: context => context.LogLevel is LogLevel.Warning or LogLevel.Debug);
-        var logger = new TestLogger(nameof(GoRunDebuggingTests), sink, enabled: true);
-        var go = builder.AddGoApp("api", builder.AppHostDirectory)
-            .WithEnvironment("PUBLIC_VALUE", "unchanged");
-
-        await using var app = builder.Build();
-        await builder.Eventing.PublishAsync(new BeforeStartEvent(
-            app.Services, app.Services.GetRequiredService<DistributedApplicationModel>()));
-        var configuration = await ExecutionConfigurationBuilder.Create(go.Resource)
-            .WithEnvironmentVariablesConfig()
-            .BuildAsync(builder.ExecutionContext, logger);
-
-        Assert.Null(configuration.Exception);
-        Assert.Equal("\"-ldflags=-s=false -w=false\"", Assert.Single(
-            configuration.EnvironmentVariables, variable => variable.Key == "GOFLAGS").Value?.Trim());
-        Assert.Equal("unchanged", Assert.Single(
-            configuration.EnvironmentVariables, variable => variable.Key == "PUBLIC_VALUE").Value);
-        var diagnostic = Assert.Single(sink.Writes);
-        if (processStarted)
+        RemoteExecutor.Invoke(static async (processStartedValue, hasAmbientFlagsValue, emptyResourceFlagsValue) =>
         {
-            Assert.IsType<InvalidOperationException>(diagnostic.Exception);
-            Assert.Equal(1, Assert.Single(runner.Disposables).DisposeCallCount);
-        }
-        else
-        {
-            Assert.Same(startFailure, diagnostic.Exception);
-        }
+            using var builder = TestDistributedApplicationBuilder.Create();
+            var runner = new TestProcessRunner();
+            var started = bool.Parse(processStartedValue);
+            var startFailure = new Win32Exception(2, "The configured Go command could not be started.");
+            if (started)
+            {
+                runner.EnqueueResult(exitCode: 1, output: ["""{"GOFLAGS":"-ldflags=-s"}"""]);
+            }
+            else
+            {
+                runner.EnqueueException(startFailure);
+            }
 
-        Assert.Contains("GOFLAGS", diagnostic.Message, StringComparison.Ordinal);
+            builder.Services.AddSingleton<IProcessRunner>(runner);
+            var sink = new TestSink(writeEnabled: context => context.LogLevel is LogLevel.Warning or LogLevel.Debug);
+            var logger = new TestLogger(nameof(GoRunDebuggingTests), sink, enabled: true);
+            var go = builder.AddGoApp("api", builder.AppHostDirectory)
+                .WithEnvironment("PUBLIC_VALUE", "unchanged");
+            var emptyFlags = bool.Parse(emptyResourceFlagsValue);
+            if (emptyFlags)
+            {
+                go.WithEnvironment("GOFLAGS", "");
+            }
+
+            await using var app = builder.Build();
+            await builder.Eventing.PublishAsync(new BeforeStartEvent(
+                app.Services, app.Services.GetRequiredService<DistributedApplicationModel>()));
+            var configuration = await ExecutionConfigurationBuilder.Create(go.Resource)
+                .WithEnvironmentVariablesConfig()
+                .BuildAsync(builder.ExecutionContext, logger);
+
+            var expectedFlags = bool.Parse(hasAmbientFlagsValue) && !emptyFlags
+                ? "\"-ldflags=-s=false -w=false\" -tags=ambient"
+                : "\"-ldflags=-s=false -w=false\"";
+            Assert.Null(configuration.Exception);
+            Assert.Equal(expectedFlags, Assert.Single(
+                configuration.EnvironmentVariables, variable => variable.Key == "GOFLAGS").Value?.Trim());
+            Assert.Equal("unchanged", Assert.Single(
+                configuration.EnvironmentVariables, variable => variable.Key == "PUBLIC_VALUE").Value);
+            var diagnostic = Assert.Single(sink.Writes);
+            if (started)
+            {
+                Assert.IsType<InvalidOperationException>(diagnostic.Exception);
+                Assert.Equal(1, Assert.Single(runner.Disposables).DisposeCallCount);
+            }
+            else
+            {
+                Assert.Same(startFailure, diagnostic.Exception);
+            }
+
+            Assert.Contains("GOFLAGS", diagnostic.Message, StringComparison.Ordinal);
+        }, processStarted.ToString(), hasAmbientFlags.ToString(), emptyResourceFlags.ToString(), options).Dispose();
     }
 
     [Theory]
@@ -121,18 +144,24 @@ public class GoRunDebuggingTests(ITestOutputHelper outputHelper)
     [InlineData("{}")]
     [InlineData("""{"GOFLAGS":null}""")]
     [InlineData("""{"GOFLAGS":42}""")]
-    public async Task InvalidGoFlagsProbeOutputDoesNotPreventEnvironmentEvaluation(string output)
+    public void InvalidGoFlagsProbeOutputDoesNotPreventEnvironmentEvaluation(string output)
     {
-        using var builder = TestDistributedApplicationBuilder.Create();
-        var runner = new TestProcessRunner();
-        runner.EnqueueResult(output: [output]);
-        builder.Services.AddSingleton<IProcessRunner>(runner);
-        var go = builder.AddGoApp("api", builder.AppHostDirectory);
+        var options = new RemoteInvokeOptions();
+        options.StartInfo.Environment.Remove("GOFLAGS");
 
-        var environment = await GetEnvironmentAsync(builder, go.Resource);
+        RemoteExecutor.Invoke(static async probeOutput =>
+        {
+            using var builder = TestDistributedApplicationBuilder.Create();
+            var runner = new TestProcessRunner();
+            runner.EnqueueResult(output: [probeOutput]);
+            builder.Services.AddSingleton<IProcessRunner>(runner);
+            var go = builder.AddGoApp("api", builder.AppHostDirectory);
 
-        Assert.Equal("\"-ldflags=-s=false -w=false\"", environment["GOFLAGS"].Trim());
-        Assert.Equal(1, Assert.Single(runner.Disposables).DisposeCallCount);
+            var environment = await GetEnvironmentAsync(builder, go.Resource);
+
+            Assert.Equal("\"-ldflags=-s=false -w=false\"", environment["GOFLAGS"].Trim());
+            Assert.Equal(1, Assert.Single(runner.Disposables).DisposeCallCount);
+        }, output, options).Dispose();
     }
 
     [Theory]
