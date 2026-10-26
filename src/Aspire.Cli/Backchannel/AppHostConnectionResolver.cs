@@ -4,6 +4,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using Aspire.Cli.Git;
+using Aspire.Cli.Configuration;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Projects;
 using Aspire.Cli.Resources;
@@ -49,6 +50,7 @@ internal sealed class AppHostConnectionResolver(
     ICliHostEnvironment hostEnvironment,
     ILogger<AppHostConnectionResolver> logger,
     ProfilingTelemetry profilingTelemetry,
+    ConfigSourceService configSources,
     Func<string, string, int, ILogger, IReadOnlyList<IAppHostSocket>>? findSockets = null)
 {
     private readonly Func<string, string, int, ILogger, IReadOnlyList<IAppHostSocket>> _findSockets =
@@ -153,6 +155,9 @@ internal sealed class AppHostConnectionResolver(
                 };
             }
 
+            // Resolving a project for dynamic resource help may also check its configuration
+            // source. This is intentional: the check is advisory and does not apply settings.
+            configSources.CheckForConfigSourceUpdates(projectFile.Directory!, cancellationToken);
             var matchingSockets = _findSockets(
                 projectFile.FullName,
                 executionContext.HomeDirectory.FullName,
@@ -291,6 +296,10 @@ internal sealed class AppHostConnectionResolver(
         }
 
         var selectedResult = new AppHostConnectionResult { Connection = selectedConnection };
+        if (selectedConnection.AppHostInfo?.AppHostPath is { Length: > 0 } selectedPath)
+        {
+            configSources.CheckForConfigSourceUpdates(new FileInfo(selectedPath).Directory!, cancellationToken);
+        }
         StoreAppHostCliLogFilePath(selectedResult);
         return selectedResult;
     }
