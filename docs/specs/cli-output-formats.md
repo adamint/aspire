@@ -543,6 +543,8 @@ For recognized IDE-managed .NET project launches, `project.launchCommand` is `id
 
 ### `aspire docs api`
 
+The `language` field in `aspire docs api` output is one of `csharp`, `typescript`, or `go`.
+
 `aspire docs api list <scope> --format json` emits an array of API items:
 
 ```json
