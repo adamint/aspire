@@ -164,13 +164,11 @@ public class AppHostConnectionResolverTests(ITestOutputHelper outputHelper)
             appHostPid: 2222);
 
         Assert.True(result.Success);
-        Assert.Equal(2222, result.Connection.AppHostInfo?.ProcessId);
+        using var connection = result.Connection;
+        Assert.Equal(2222, connection.AppHostInfo?.ProcessId);
         await otherServer.WaitForClientDisconnectAsync().WaitAsync(TimeSpan.FromSeconds(5));
-        var appHostInfo = await result.Connection.GetAppHostInfoV2Async(TestContext.Current.CancellationToken);
+        var appHostInfo = await connection.GetAppHostInfoV2Async(TestContext.Current.CancellationToken);
         Assert.Equal("2222", appHostInfo?.Pid);
-
-        result.Connection.Dispose();
-        await requestedServer.WaitForClientDisconnectAsync().WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     [Fact]
@@ -679,18 +677,18 @@ public class AppHostConnectionResolverTests(ITestOutputHelper outputHelper)
     private sealed class TestResolverBackchannelServer : IDisposable
     {
         private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
-        private readonly CancellationTokenSource _cancellationSource = new();
-        private readonly List<IDisposable> _disposables = [];
+        private readonly TestResolverRpcTarget _target;
         private readonly TaskCompletionSource _clientDisconnected = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private JsonRpc? _rpc;
 
         private TestResolverBackchannelServer(string appHostPath, int processId)
         {
+            _target = new TestResolverRpcTarget(appHostPath, processId);
             _listener.Start();
             AppHostSocket = new TestAppHostSocket($"test-socket-{processId}")
             {
                 ConnectAsyncCallback = ConnectAsync
             };
-            _ = AcceptClientAsync(appHostPath, processId);
         }
 
         public TestAppHostSocket AppHostSocket { get; }
@@ -702,14 +700,8 @@ public class AppHostConnectionResolverTests(ITestOutputHelper outputHelper)
 
         public void Dispose()
         {
-            _cancellationSource.Cancel();
-            foreach (var disposable in _disposables)
-            {
-                disposable.Dispose();
-            }
-
+            _rpc?.Dispose();
             _listener.Stop();
-            _cancellationSource.Dispose();
         }
 
         private async ValueTask<Socket> ConnectAsync(CancellationToken cancellationToken)
@@ -718,6 +710,15 @@ public class AppHostConnectionResolverTests(ITestOutputHelper outputHelper)
             try
             {
                 await socket.ConnectAsync((IPEndPoint)_listener.LocalEndpoint, cancellationToken);
+                var serverSocket = await _listener.AcceptSocketAsync(cancellationToken);
+                var stream = new NetworkStream(serverSocket, ownsSocket: true);
+                var messageHandler = new HeaderDelimitedMessageHandler(
+                    stream,
+                    stream,
+                    BackchannelJsonSerializerContext.CreateRpcMessageFormatter());
+                _rpc = new JsonRpc(messageHandler, _target);
+                _rpc.Disconnected += (_, _) => _clientDisconnected.TrySetResult();
+                _rpc.StartListening();
                 return socket;
             }
             catch
@@ -725,22 +726,6 @@ public class AppHostConnectionResolverTests(ITestOutputHelper outputHelper)
                 socket.Dispose();
                 throw;
             }
-        }
-
-        private async Task AcceptClientAsync(string appHostPath, int processId)
-        {
-            var socket = await _listener.AcceptSocketAsync(_cancellationSource.Token);
-            var stream = new NetworkStream(socket, ownsSocket: true);
-            var messageHandler = new HeaderDelimitedMessageHandler(
-                stream,
-                stream,
-                BackchannelJsonSerializerContext.CreateRpcMessageFormatter());
-            var rpc = new JsonRpc(messageHandler, new TestResolverRpcTarget(appHostPath, processId));
-            rpc.Disconnected += (_, _) => _clientDisconnected.TrySetResult();
-            rpc.StartListening();
-            _disposables.Add(rpc);
-            _disposables.Add(messageHandler);
-            _disposables.Add(stream);
         }
     }
 
